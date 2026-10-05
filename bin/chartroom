@@ -1,0 +1,594 @@
+#!/usr/bin/env bash
+# chartroom - deterministic mechanics for the chartroom skill.
+#
+# The first mate (an agent) owns judgment: what to delegate, to whom, what to tell
+# the captain. This script owns everything that can be exact: task records, worktrees,
+# launching and steering workers, liveness, and the wake stream. It never decides
+# meaning; when the world surprises it, it stops and says so.
+#
+# State lives in $CHARTROOM_HOME (default ~/.chartroom), never in chat memory:
+#   tasks/<id>/meta.json    machine record (project, backend, worktree, pids, thread ids)
+#   tasks/<id>/brief.md     the worker's contract (intent, spec, authority, protocol)
+#   tasks/<id>/events.log   append-only "<ts> <kind>: <text>" lines from workers + chartroom
+#   tasks/<id>/report.md    the worker's final report
+#
+# Usage: chartroom <command> [args]   (chartroom help for the list)
+set -euo pipefail
+
+CHARTROOM_HOME="${CHARTROOM_HOME:-$HOME/.chartroom}"
+CR_BIN="$(readlink -f "${BASH_SOURCE[0]}")"
+CR_SKILL_DIR="$(cd "$(dirname "$CR_BIN")/.." && pwd)"
+CHARTROOM_PROJECT_ROOTS="${CHARTROOM_PROJECT_ROOTS:-$HOME/code}"
+CHARTROOM_WORKSPACE="${CHARTROOM_WORKSPACE:-chartroom-crew}"
+WAKE_KINDS='decision|blocked|done|failed|exited|lost'
+EVENT_KINDS='progress|decision|blocked|done|failed|note'
+
+die() { printf 'chartroom: %s\n' "$*" >&2; exit 1; }
+now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+tdir() { printf '%s/tasks/%s' "$CHARTROOM_HOME" "$1"; }
+need_task() { [[ -f "$(tdir "$1")/meta.json" ]] || die "no such task: $1"; }
+meta() { jq -r --arg k "$2" '.[$k] // empty' "$(tdir "$1")/meta.json"; }
+meta_set() { # meta_set <id> <key> <string-value>
+  local f; f="$(tdir "$1")/meta.json"
+  jq --arg k "$2" --arg v "$3" '.[$k]=$v | .updated=(now|todate)' "$f" >"$f.tmp" && mv "$f.tmp" "$f"
+}
+log_event() { printf '%s %s: %s\n' "$(now)" "$2" "$3" >>"$(tdir "$1")/events.log"; }
+pid_alive() { [[ -n "${1:-}" ]] && kill -0 "$1" 2>/dev/null; }
+
+slugify() {
+  local s
+  s="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-24 | sed -E 's/-+$//')"
+  [[ "$s" =~ ^[a-z] ]] || s="t-$s"
+  printf '%s' "${s:-task}"
+}
+
+# ---------------------------------------------------------------- init / project
+
+cmd_init() {
+  mkdir -p "$CHARTROOM_HOME/tasks" "$CHARTROOM_HOME/worktrees"
+  local f
+  f="$CHARTROOM_HOME/captain.md"
+  [[ -f "$f" ]] || cat >"$f" <<'EOF'
+# Captain preferences
+
+Durable preferences the first mate must honor. The first mate updates this file
+(inspect, then edit) whenever the captain states a lasting preference.
+
+- Delivery default: commit on a task branch in an isolated worktree; never push, open a PR, or merge without my word in the moment.
+- Escalate only decisions I must make. Batch status; never report "still working".
+- Backend default: pick per the chartroom skill rubric unless I name one.
+EOF
+  f="$CHARTROOM_HOME/projects.md"
+  [[ -f "$f" ]] || cat >"$f" <<'EOF'
+# Project registry
+
+Optional per-project overrides. `chartroom project <name>` resolves any repo under
+$CHARTROOM_PROJECT_ROOTS and detects its forge; add a line here only to change a default.
+Format: `- <name>: <key>=<value>; <key>=<value>` (keys: path, base, delivery, pr, notes)
+
+EOF
+  for f in "$CHARTROOM_HOME/CLAUDE.md" "$CHARTROOM_HOME/AGENTS.md"; do
+    [[ -f "$f" ]] || cat >"$f" <<'EOF'
+# Captain home
+
+This directory is the captain's command deck. A session started here is the first mate:
+load the `chartroom` skill (`/chartroom` in Claude Code, `$chartroom` in Codex) before doing
+anything else, and follow it. Never do project work from here; delegate it.
+EOF
+  done
+  echo "chartroom home ready: $CHARTROOM_HOME"
+}
+
+cmd_project() {
+  [[ $# -ge 1 ]] || die "usage: chartroom project <name-or-path>"
+  local q="$1" hits=() p
+  if [[ -d "$q/.git" || -f "$q/.git" ]]; then hits=("$(cd "$q" && pwd)")
+  else
+    local root
+    for root in ${CHARTROOM_PROJECT_ROOTS//:/ }; do
+      while IFS= read -r p; do hits+=("$p"); done < <(find "$root" -mindepth 2 -maxdepth 2 -type d -iname "$q" 2>/dev/null)
+    done
+    if [[ ${#hits[@]} -eq 0 ]]; then
+      for root in ${CHARTROOM_PROJECT_ROOTS//:/ }; do
+        while IFS= read -r p; do hits+=("$p"); done < <(find "$root" -mindepth 2 -maxdepth 2 -type d -iname "*$q*" 2>/dev/null)
+      done
+    fi
+  fi
+  [[ ${#hits[@]} -gt 0 ]] || die "no project matches '$q' under $CHARTROOM_PROJECT_ROOTS"
+  printf 'name\tpath\tforge\tbase\tregistry\n'
+  for p in "${hits[@]}"; do
+    [[ -e "$p/.git" ]] || continue
+    local url forge base name reg
+    name="$(basename "$p")"
+    url="$(git -C "$p" remote get-url origin 2>/dev/null || true)"
+    case "$url" in
+      *github.com*) forge=github ;;
+      *dev.azure.com*|*visualstudio.com*) forge=azure-devops ;;
+      "") forge=none ;;
+      *) forge=other ;;
+    esac
+    base="$(git -C "$p" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)"
+    [[ -n "$base" ]] || base="$(git -C "$p" branch --show-current 2>/dev/null || echo main)"
+    reg="$(grep -E "^- ${name}:" "$CHARTROOM_HOME/projects.md" 2>/dev/null | sed -E "s/^- ${name}: *//" || true)"
+    printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$p" "$forge" "$base" "${reg:--}"
+  done
+}
+
+# ---------------------------------------------------------------- new / worktree
+
+cmd_new() {
+  local project="" title="" kind="ship" backend="" base="" id="" plan_gate=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --project) project="$2"; shift 2 ;;
+      --title) title="$2"; shift 2 ;;
+      --kind) kind="$2"; shift 2 ;;
+      --backend) backend="$2"; shift 2 ;;
+      --base) base="$2"; shift 2 ;;
+      --id) id="$2"; shift 2 ;;
+      --plan-gate) plan_gate=1; shift ;;
+      *) die "new: unknown arg $1" ;;
+    esac
+  done
+  [[ -n "$project" && -n "$title" && -n "$backend" ]] || die "usage: chartroom new --project PATH --title TEXT --backend codex|herdr-claude|herdr-codex|subagent [--kind ship|scout] [--base REF] [--plan-gate]"
+  [[ "$kind" =~ ^(ship|scout)$ ]] || die "kind must be ship or scout (got $kind)"
+  [[ "$backend" =~ ^(codex|herdr-claude|herdr-codex|subagent)$ ]] || die "unknown backend $backend"
+  project="$(cd "$project" 2>/dev/null && pwd)" || die "project path not found"
+  git -C "$project" rev-parse --git-dir >/dev/null 2>&1 || die "$project is not a git repo"
+  mkdir -p "$CHARTROOM_HOME/tasks"
+
+  if [[ -z "$base" ]]; then
+    base="$(git -C "$project" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+    if [[ -n "$base" ]]; then git -C "$project" fetch --quiet origin "${base#origin/}" 2>/dev/null || echo "chartroom: fetch of $base failed; using local ref" >&2
+    else base="$(git -C "$project" branch --show-current)"; fi
+  fi
+  local base_sha
+  base_sha="$(git -C "$project" rev-parse --verify --quiet "$base^{commit}")" || die "base ref '$base' not found in $project"
+
+  [[ -n "$id" ]] || id="$(slugify "$title")-$(openssl rand -hex 2)"
+  [[ "$id" =~ ^[a-z][a-z0-9_-]{0,31}$ ]] || die "id '$id' must match [a-z][a-z0-9_-]{0,31}"
+  local d; d="$(tdir "$id")"
+  [[ ! -e "$d" ]] || die "task $id already exists"
+  mkdir -p "$d"
+
+  local branch=""
+  [[ "$kind" == ship ]] && branch="chartroom/$id"
+  jq -n --arg id "$id" --arg title "$title" --arg kind "$kind" --arg backend "$backend" \
+    --arg project "$project" --arg base "$base" --arg base_sha "$base_sha" --arg branch "$branch" \
+    --argjson plan_gate "$plan_gate" \
+    '{id:$id,title:$title,kind:$kind,backend:$backend,project:$project,base:$base,base_sha:$base_sha,
+      branch:$branch,plan_gate:$plan_gate,worktree:"",created:(now|todate),updated:(now|todate)}' >"$d/meta.json"
+  : >"$d/events.log"
+  log_event "$id" note "created ($kind via $backend)"
+  write_brief "$id"
+  printf 'id=%s\nbrief=%s\n' "$id" "$d/brief.md"
+}
+
+write_brief() {
+  local id="$1" d kind branch title
+  d="$(tdir "$id")"; kind="$(meta "$id" kind)"; branch="$(meta "$id" branch)"; title="$(meta "$id" title)"
+  local delivery plan=""
+  if [[ "$(meta "$id" plan_gate)" == 1 ]]; then
+    plan="
+- Plan gate: before changing any project file, investigate, then write \`$d/plan.md\` (approach, files to touch,
+  risks, test strategy, open questions). Record a \`decision\` event \"plan ready for approval\" and STOP.
+  Build only after the first mate relays approval; fold any requested changes into plan.md first."
+  fi
+  if [[ "$kind" == ship ]]; then
+    delivery="Commit your finished work on branch \`$branch\` with conventional-commit messages and leave the worktree clean. Do NOT push, open a pull request, merge, rebase shared branches, or delete branches."
+  else
+    delivery="This is a scout task: produce knowledge, not code. Do not commit, push, or change project files except throwaway experiments you revert. Your deliverable is the report."
+  fi
+  cat >"$d/brief.md" <<EOF
+# $title
+
+## Captain's intent
+
+<!-- The captain's own words, verbatim. Append later asks here as they arrive. -->
+
+## Spec
+
+<!-- First mate: what done looks like, acceptance criteria, non-goals, constraints,
+     pointers to relevant files/docs/tickets. Keep it short and concrete. -->
+
+## Authority
+
+- Delivery: $delivery$plan
+- Additional grants: none. Anything destructive, irreversible, outward-facing (push, PR, messages, tickets, deploys), or security-sensitive needs a \`decision\` event, not your judgment.
+
+## Worker protocol
+
+You are a crew worker. Your only audience is the first mate who wrote this brief; never
+address the human directly. Task id: \`$id\`.
+
+1. Work only inside your worktree (your current directory). Never touch the primary checkout
+   or other worktrees. Follow the repo's own AGENTS.md / CLAUDE.md conventions.
+2. Report status by appending events. Prefer the helper:
+     CHARTROOM_HOME=$CHARTROOM_HOME $CR_BIN event $id <kind> "<one line>"
+   Fallback if the helper fails:
+     printf '%s <kind>: <text>\n' "\$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $d/events.log
+   Kinds: \`progress\` (sparingly, milestones only), \`decision\` (a choice only the human can make:
+   state the options and your recommendation, then STOP), \`blocked\` (cannot proceed: say exactly
+   what is needed, then STOP), \`done\` (one-line outcome), \`failed\` (could not do it, why).
+3. Before \`done\` or \`failed\`, write $d/report.md containing: outcome; what changed
+   (files, commits) or what you found; validation you actually ran with real results (never claim
+   a check you did not run); risks and open questions.
+4. When you STOP for a decision or blocker, end your turn. The first mate will resume you
+   with an answer in this same session.
+EOF
+}
+
+worktree_path() {
+  local id="$1" project name
+  project="$(meta "$id" project)"; name="$(basename "$project")"
+  if git -C "$project" check-ignore -q .worktrees/probe 2>/dev/null; then
+    printf '%s/.worktrees/cap_%s' "$project" "$id"
+  else
+    printf '%s/worktrees/%s/%s' "$CHARTROOM_HOME" "$name" "$id"
+  fi
+}
+
+cmd_worktree() {
+  local id="$1"; need_task "$id"
+  local wt; wt="$(meta "$id" worktree)"
+  if [[ -n "$wt" && -d "$wt" ]]; then echo "$wt"; return; fi
+  local project base_sha kind branch
+  project="$(meta "$id" project)"; base_sha="$(meta "$id" base_sha)"; kind="$(meta "$id" kind)"; branch="$(meta "$id" branch)"
+  wt="$(worktree_path "$id")"
+  mkdir -p "$(dirname "$wt")"
+  if [[ "$kind" == ship ]]; then
+    git -C "$project" worktree add --quiet -b "$branch" "$wt" "$base_sha" >&2
+  else
+    git -C "$project" worktree add --quiet --detach "$wt" "$base_sha" >&2
+  fi
+  meta_set "$id" worktree "$wt"
+  log_event "$id" note "worktree $wt"
+  echo "$wt"
+}
+
+# ---------------------------------------------------------------- dispatch
+
+# Codex sandbox per task: meta "sandbox" wins; else scouts get workspace-write (network on,
+# writes limited to the worktree + task record) and ship tasks get danger-full-access.
+# Why ship is unsandboxed: from codex 0.160, workspace-write refuses every .git write (even a
+# plain clone's own .git/index.lock), so a sandboxed worker cannot commit. Full access is the
+# documented default; the brief's worktree-only rule is the control.
+codex_sandbox_args() { # <id> <wt>
+  local d mode
+  d="$(tdir "$1")"
+  mode="$(meta "$1" sandbox)"
+  [[ -n "$mode" ]] || { [[ "$(meta "$1" kind)" == scout ]] && mode=workspace-write || mode=danger-full-access; }
+  case "$mode" in
+    workspace-write) printf '%s\n' -s workspace-write -c sandbox_workspace_write.network_access=true --add-dir "$d" ;;
+    danger-full-access|read-only) printf '%s\n' -s "$mode" ;;
+    *) die "unknown sandbox '$mode' in meta for $1" ;;
+  esac
+}
+
+launch_codex() { # <id> <wt> <prompt> [resume-thread]
+  local id="$1" wt="$2" prompt="$3" thread="${4:-}" d args=()
+  d="$(tdir "$id")"
+  mapfile -t args < <(codex_sandbox_args "$id" "$wt")
+  args=(exec --json -C "$wt" "${args[@]}" -o "$d/final.md")
+  [[ -n "$(meta "$id" model)" ]] && args+=(-m "$(meta "$id" model)")
+  [[ -n "$(meta "$id" effort)" ]] && args+=(-c "model_reasoning_effort=$(meta "$id" effort)")
+  if [[ -n "$thread" ]]; then args+=(resume "$thread" "$prompt"); else args+=("$prompt"); fi
+  # Detached on purpose: the worker must outlive the first mate's session.
+  CR_T="$d" nohup bash -c 'codex "$@" </dev/null >>"$CR_T/codex.jsonl" 2>>"$CR_T/codex.err"; rc=$?
+    printf "%s exited: codex process ended (exit %s)\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$rc" >>"$CR_T/events.log"' \
+    _ "${args[@]}" >/dev/null 2>&1 &
+  local pid=$!; disown || true
+  meta_set "$id" pid "$pid"
+  if [[ -z "$thread" ]]; then
+    local i t=""
+    for i in $(seq 1 60); do
+      t="$(grep -m1 '"thread.started"' "$d/codex.jsonl" 2>/dev/null | jq -r .thread_id 2>/dev/null || true)"
+      [[ -n "$t" ]] && break
+      pid_alive "$pid" || break
+      sleep 0.5
+    done
+    [[ -n "$t" ]] || die "codex did not report a thread id; see $d/codex.err"
+    meta_set "$id" thread_id "$t"
+  fi
+  echo "codex worker running (pid $pid, thread $(meta "$id" thread_id))"
+}
+
+crew_workspace() { # sets CREW_WS; when it creates the workspace, also CREW_FRESH_PANE/TAB (its unused root tab)
+  CREW_FRESH_PANE=""; CREW_FRESH_TAB=""
+  CREW_WS="$(herdr workspace list | jq -r --arg l "$CHARTROOM_WORKSPACE" '.result.workspaces[] | select(.label==$l) | .workspace_id' | head -1)"
+  if [[ -z "$CREW_WS" ]]; then
+    local r; r="$(herdr workspace create --cwd "$1" --label "$CHARTROOM_WORKSPACE" --no-focus)"
+    CREW_WS="$(jq -r .result.workspace.workspace_id <<<"$r")"
+    CREW_FRESH_PANE="$(jq -r .result.root_pane.pane_id <<<"$r")"
+    CREW_FRESH_TAB="$(jq -r .result.tab.tab_id <<<"$r")"
+  fi
+}
+
+herdr_deliver() { # <agent> <text> - submit and confirm the agent actually took the prompt
+  local name="$1" text="$2" i st
+  for i in 1 2 3 4; do
+    herdr agent prompt "$name" "$text" >/dev/null 2>&1 || true
+    sleep 3
+    st="$(herdr agent get "$name" 2>/dev/null | jq -r '.result.agent.agent_status // empty')"
+    if [[ "$st" == working ]] || herdr agent read "$name" --source recent --lines 80 2>/dev/null | grep -qF "${text:0:40}"; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+launch_herdr() { # <id> <wt> <kind>
+  command -v herdr >/dev/null || die "herdr not installed"
+  local id="$1" wt="$2" kind="$3" ws pane tab
+  crew_workspace "$wt"; ws="$CREW_WS"
+  if [[ -n "$CREW_FRESH_PANE" ]]; then
+    pane="$CREW_FRESH_PANE"; tab="$CREW_FRESH_TAB"; herdr tab rename "$tab" "$id" >/dev/null
+  else
+    local r; r="$(herdr tab create --workspace "$ws" --cwd "$wt" --label "$id" --no-focus)"
+    pane="$(jq -r .result.root_pane.pane_id <<<"$r")"; tab="$(jq -r .result.tab.tab_id <<<"$r")"
+  fi
+  meta_set "$id" herdr_workspace "$ws"; meta_set "$id" herdr_tab "$tab"; meta_set "$id" herdr_pane "$pane"; meta_set "$id" agent "$id"
+
+  local start=(agent start "$id" --kind "$kind" --pane "$pane" --timeout 60000) extra=() out i
+  if [[ "$kind" == codex ]]; then # no self-update prompt mid-dispatch
+    mapfile -t extra < <(codex_sandbox_args "$id" "$wt"); start+=(-- -c check_for_update_on_startup=false "${extra[@]}"); fi
+  for i in $(seq 1 40); do
+    if out="$(herdr "${start[@]}" 2>&1)"; then break; fi
+    grep -q agent_pane_busy <<<"$out" || die "herdr agent start failed: $out"
+    sleep 0.5
+  done
+  # Claude gates a never-seen folder behind a trust dialog (cursor on "No, exit").
+  # Only answer it for the worktree chartroom itself just created for this task.
+  sleep 1
+  if herdr agent read "$id" --source visible --lines 40 2>/dev/null | grep -q "trust this folder"; then
+    herdr agent send-keys "$id" down >/dev/null; sleep 0.3; herdr agent send-keys "$id" enter >/dev/null
+    log_event "$id" note "accepted workspace trust for its own worktree"
+    sleep 4
+  fi
+  herdr agent wait "$id" --until idle --until done --timeout 30000 >/dev/null 2>&1 || true
+  local prompt="Read the brief at $(tdir "$id")/brief.md and follow it exactly. Your task id is $id."
+  herdr_deliver "$id" "$prompt" || die "agent started but did not take the brief; inspect tab $tab"
+  echo "herdr $kind worker running (workspace $CHARTROOM_WORKSPACE, tab $tab)"
+}
+
+cmd_dispatch() {
+  local id="$1"; need_task "$id"
+  local backend kind wt=""
+  backend="$(meta "$id" backend)"; kind="$(meta "$id" kind)"
+  grep -qE '^## Spec' "$(tdir "$id")/brief.md" || die "brief is missing its Spec section"
+  if ! grep -A3 "^## Captain's intent" "$(tdir "$id")/brief.md" | grep -qvE "^(## |<!--|\s*$)"; then
+    die "brief has no captain's intent yet; fill it before dispatch"
+  fi
+  if [[ "$backend" != subagent || "$kind" == ship ]]; then wt="$(cmd_worktree "$id")"; fi
+  log_event "$id" note "dispatched via $backend"
+  meta_set "$id" dispatched "$(now)"
+  case "$backend" in
+    codex) launch_codex "$id" "$wt" "Read the brief at $(tdir "$id")/brief.md and follow it exactly. Your task id is $id." ;;
+    herdr-claude) launch_herdr "$id" "$wt" claude ;;
+    herdr-codex) launch_herdr "$id" "$wt" codex ;;
+    subagent)
+      cat <<EOF
+subagent task recorded. Launch it yourself with the Agent tool:
+  name: $id
+  run_in_background: true
+  prompt: Read the brief at $(tdir "$id")/brief.md and follow it exactly. Your task id is $id.${wt:+ Your worktree is $wt; cd into it before any command.}
+Steer it later with SendMessage to "$id". It dies with this session; if the session restarts, re-dispatch.
+EOF
+      ;;
+  esac
+}
+
+# ---------------------------------------------------------------- event / status / peek
+
+cmd_event() {
+  [[ $# -ge 3 ]] || die "usage: chartroom event <id> <kind> <text>"
+  local id="$1" kind="$2"; shift 2
+  need_task "$id"
+  [[ "$kind" =~ ^($EVENT_KINDS)$ ]] || die "event kind must be one of: ${EVENT_KINDS//|/, }"
+  log_event "$id" "$kind" "$*"
+}
+
+live_of() { # <id> -> liveness word
+  local id="$1" backend pid st
+  backend="$(meta "$id" backend)"
+  case "$backend" in
+    codex) pid="$(meta "$id" pid)"; if [[ -z "$pid" ]]; then echo not-started; elif pid_alive "$pid"; then echo running; else echo stopped; fi ;;
+    herdr-*) [[ -n "$(meta "$id" herdr_pane)" ]] || { echo not-started; return; }
+      st="$(herdr agent get "$id" 2>/dev/null | jq -r '.result.agent.agent_status // empty' || true)"; echo "${st:-gone}" ;;
+    subagent) [[ -n "$(meta "$id" dispatched)" ]] && echo in-session || echo not-started ;;
+  esac
+}
+
+state_of() { # derived from the last wake-worthy event; a restart re-derives the same answer
+  local id="$1" last
+  [[ -n "$(meta "$id" closed)" ]] && { echo closed; return; }
+  last="$(grep -E " ($WAKE_KINDS): " "$(tdir "$id")/events.log" | grep -vE ' exited: ' | tail -1 | awk '{print $2}' | tr -d :)"
+  local lastany; lastany="$(grep -E " (steered|$WAKE_KINDS|note): " "$(tdir "$id")/events.log" | tail -1 | awk '{print $2}' | tr -d :)"
+  if [[ -z "$(meta "$id" dispatched)" ]]; then echo drafting
+  elif [[ "$lastany" == steered ]]; then echo working
+  elif [[ -n "$last" ]]; then echo "$last"
+  else echo working; fi
+}
+
+cmd_status() {
+  local json=0 all=0
+  for a in "$@"; do case "$a" in --json) json=1 ;; --all) all=1 ;; esac; done
+  local rows=() id st
+  shopt -s nullglob
+  for d in "$CHARTROOM_HOME"/tasks/*/; do
+    id="$(basename "$d")"; [[ -f "$d/meta.json" ]] || continue
+    st="$(state_of "$id")"
+    [[ $all -eq 1 || "$st" != closed ]] || continue
+    local live last
+    live="$(live_of "$id")"
+    [[ "$st" == working && "$live" =~ ^(stopped|gone|idle|done)$ ]] && st="stopped-silent"
+    last="$(grep -vE ' note: ' "$d/events.log" | tail -1 | cut -c22- || true)"
+    rows+=("$(jq -c --arg st "$st" --arg live "$live" --arg last "$last" '{id,title,kind,backend,project:(.project|split("/")|last),state:$st,live:$live,created,last:$last}' "$d/meta.json")")
+  done
+  if [[ $json -eq 1 ]]; then printf '%s\n' "${rows[@]+"${rows[@]}"}" | jq -s .; return; fi
+  [[ ${#rows[@]} -gt 0 ]] || { echo "no open tasks"; return; }
+  printf '%s\n' "${rows[@]}" | jq -r '[.id,.state,.live,.backend,.project,.kind,(.last|.[0:70])] | @tsv' |
+    { printf 'ID\tSTATE\tLIVE\tBACKEND\tPROJECT\tKIND\tLAST\n'; cat; } | column -t -s $'\t'
+}
+
+cmd_peek() {
+  local id="$1" n="${2:-15}"; need_task "$id"
+  local d; d="$(tdir "$id")"
+  echo "== events"; tail -n "$n" "$d/events.log"
+  case "$(meta "$id" backend)" in
+    codex)
+      echo "== codex (recent)"
+      jq -r 'select(.type=="item.completed") | .item |
+        if .type=="agent_message" then "msg: \(.text|gsub("\n";" ")|.[0:300])"
+        elif .type=="command_execution" then "cmd[\(.exit_code)]: \(.command|.[0:160])"
+        elif .type=="file_change" then "edit: \(.changes // [] | map(.path) | join(", "))"
+        else empty end' "$d/codex.jsonl" 2>/dev/null | tail -n "$n" ;;
+    herdr-*) echo "== pane (recent)"; herdr agent read "$id" --source recent --lines "$((n * 3))" 2>/dev/null | grep -v '^\s*$' | tail -n "$((n * 2))" ;;
+  esac
+  [[ -f "$d/report.md" ]] && echo "== report: $d/report.md"
+  return 0
+}
+
+# ---------------------------------------------------------------- steer / stop / close
+
+cmd_steer() {
+  [[ $# -ge 2 ]] || die "usage: chartroom steer <id> <message>"
+  local id="$1"; shift; local msg="$*"; need_task "$id"
+  local wt; wt="$(meta "$id" worktree)"
+  case "$(meta "$id" backend)" in
+    codex)
+      pid_alive "$(meta "$id" pid)" && die "codex worker is mid-run; headless runs take input only between runs. Wait for its stop, or 'chartroom stop $id' first."
+      [[ -n "$(meta "$id" thread_id)" ]] || die "no codex thread recorded for $id"
+      log_event "$id" steered "$msg"
+      launch_codex "$id" "$wt" "$msg" "$(meta "$id" thread_id)" ;;
+    herdr-*)
+      log_event "$id" steered "$msg"
+      herdr_deliver "$id" "$msg" || die "agent did not take the message; check: chartroom peek $id"
+      echo "delivered" ;;
+    subagent) log_event "$id" steered "$msg"; echo "use SendMessage to \"$id\" with the message" ;;
+  esac
+}
+
+cmd_stop() {
+  local id="$1"; need_task "$id"
+  case "$(meta "$id" backend)" in
+    codex) local pid; pid="$(meta "$id" pid)"
+      if pid_alive "$pid"; then pkill -TERM -P "$pid" 2>/dev/null || true; kill -TERM "$pid" 2>/dev/null || true; fi ;;
+    herdr-*) herdr agent send-keys "$id" esc >/dev/null 2>&1 || true ;;
+    subagent) echo "stop the subagent with TaskStop" ;;
+  esac
+  log_event "$id" note "stopped by first mate"
+  echo "stopped $id"
+}
+
+cmd_close() {
+  local id="$1" discard=0; need_task "$id"
+  [[ "${2:-}" == --discard ]] && discard=1
+  local wt project branch base_sha
+  wt="$(meta "$id" worktree)"; project="$(meta "$id" project)"; branch="$(meta "$id" branch)"; base_sha="$(meta "$id" base_sha)"
+  [[ "$(meta "$id" backend)" == codex ]] && pid_alive "$(meta "$id" pid)" && die "worker still running; 'chartroom stop $id' first"
+  if [[ -n "$wt" && -d "$wt" ]]; then
+    local dirty; dirty="$(git -C "$wt" status --porcelain)"
+    if [[ -n "$dirty" && $discard -eq 0 ]]; then
+      printf 'chartroom: refusing to close %s: uncommitted work in %s\n%s\n' "$id" "$wt" "$dirty" >&2
+      echo "Only 'chartroom close $id --discard' removes it, and only on the captain's explicit word." >&2
+      exit 2
+    fi
+    git -C "$project" worktree remove ${dirty:+--force} "$wt"
+  fi
+  if [[ -n "$branch" ]] && git -C "$project" rev-parse --verify --quiet "$branch" >/dev/null; then
+    local ahead; ahead="$(git -C "$project" rev-list --count "$base_sha..$branch")"
+    echo "branch $branch kept ($ahead commit(s) ahead of base; branches are never deleted by chartroom)"
+  fi
+  local tab; tab="$(meta "$id" herdr_tab)"
+  [[ -n "$tab" ]] && herdr tab close "$tab" >/dev/null 2>&1 || true
+  meta_set "$id" closed "$(now)"
+  if [[ $discard -eq 1 ]]; then log_event "$id" note "closed (uncommitted work discarded on captain's order)"
+  else log_event "$id" note "closed"; fi
+  echo "closed $id"
+}
+
+# ---------------------------------------------------------------- watch
+
+# One stream for the whole fleet, meant to run under Claude Code's Monitor tool.
+# Every stdout line is a wake: a worker decision/blocker/done/failure, a codex process
+# ending, a herdr agent stopping or hitting a prompt, or a worker vanishing. Routine
+# progress is never printed. Starts at current EOF; `chartroom status` covers anything older.
+cmd_watch() {
+  local interval="${CHARTROOM_WATCH_INTERVAL:-3}"
+  declare -A off=() hst=() lost=() term=()
+  shopt -s nullglob
+  local d id f size
+  for d in "$CHARTROOM_HOME"/tasks/*/; do f="$d/events.log"; [[ -f "$f" ]] && off[$(basename "$d")]=$(wc -c <"$f"); done
+  while true; do
+    for d in "$CHARTROOM_HOME"/tasks/*/; do
+      id="$(basename "$d")"; f="$d/events.log"
+      [[ -f "$d/meta.json" && -f "$f" ]] || continue
+      [[ -n "$(meta "$id" closed)" ]] && continue
+      size=$(wc -c <"$f")
+      if (( size > ${off[$id]:-0} )); then
+        local line kind
+        while IFS= read -r line; do
+          kind="$(awk '{print $2}' <<<"$line")"; kind="${kind%:}"
+          case "$kind" in
+            steered) term[$id]="" ;;
+            note) [[ "$line" == *" note: dispatched via "* ]] && term[$id]="" ;;
+            # A run ending, or a turn stopping, right after the worker reported is not news.
+            exited) [[ -z "${term[$id]:-}" ]] && echo "[$id] $line" ;;
+            decision|blocked|done|failed) term[$id]=1; echo "[$id] $line" ;;
+          esac
+        done < <(tail -c +"$(( ${off[$id]:-0} + 1 ))" "$f")
+        off[$id]=$size
+      fi
+      case "$(meta "$id" backend)" in
+        herdr-*)
+          [[ -n "$(meta "$id" herdr_pane)" ]] || continue
+          local st; st="$(herdr agent get "$id" 2>/dev/null | jq -r '.result.agent.agent_status // empty' || true)"; st="${st:-gone}"
+          if [[ "$st" != "${hst[$id]:-}" ]]; then
+            case "$st" in
+              blocked) echo "[$id] herdr: agent is waiting on an approval or question prompt" ;;
+              idle|done) [[ "${hst[$id]:-}" == working && -z "${term[$id]:-}" ]] && echo "[$id] herdr: agent stopped its turn without reporting" ;;
+              gone) [[ -n "${hst[$id]:-}" ]] && echo "[$id] lost: herdr agent is no longer running" ;;
+            esac
+            hst[$id]="$st"
+          fi ;;
+        codex)
+          local pid; pid="$(meta "$id" pid)"
+          if [[ -n "$pid" ]] && ! pid_alive "$pid" && [[ -z "${lost[$id]:-}" ]] && ! tail -n 3 "$f" | grep -q ' exited: '; then
+            echo "[$id] lost: codex process vanished without an exit record"; lost[$id]=1
+          fi ;;
+      esac
+    done
+    sleep "$interval"
+  done
+}
+
+cmd_help() {
+  cat <<'EOF'
+chartroom - mechanics for the chartroom skill (state in $CHARTROOM_HOME, default ~/.chartroom)
+
+  chartroom init                               create the captain home
+  chartroom project <name|path>                resolve a repo: path, forge, default base, registry overrides
+  chartroom new --project P --title T --backend B [--kind ship|scout] [--base REF] [--plan-gate]
+                                         create a task record + brief scaffold (backends: codex,
+                                         herdr-claude, herdr-codex, subagent)
+  chartroom worktree <id>                      create (or print) the task's isolated worktree
+  chartroom dispatch <id>                      launch the worker on its backend
+  chartroom steer <id> <message>               deliver an answer or follow-up to the worker
+  chartroom stop <id>                          interrupt a worker
+  chartroom event <id> <kind> <text>           append a status event (workers use this)
+  chartroom status [--json] [--all]            fleet view, derived from disk + live backends
+  chartroom peek <id> [n]                      recent events and worker output
+  chartroom watch                              wake stream for Monitor (one line per wake)
+  chartroom close <id> [--discard]             remove a clean worktree, close its tab, mark closed
+                                         (--discard only on the captain's explicit word)
+EOF
+}
+
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+  init|project|new|worktree|dispatch|event|status|peek|steer|stop|close|watch|help) "cmd_$cmd" "$@" ;;
+  ls) cmd_status "$@" ;;
+  *) die "unknown command '$cmd' (try: chartroom help)" ;;
+esac

@@ -1,0 +1,4 @@
+# test and runtime scratch
+/tmp/
+*.tmp
+.DS_Store
