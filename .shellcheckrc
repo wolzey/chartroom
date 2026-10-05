@@ -1,0 +1,4 @@
+# lib/*.sh are sourced into bin/chartroom and share globals (config, maps), which
+# shellcheck cannot see across the dynamic `source` loop.
+disable=SC2034
+external-sources=true

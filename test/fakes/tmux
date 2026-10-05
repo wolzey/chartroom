@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# fake tmux: enough of the CLI for chartroom's tmux runner. State in $FAKE_TMUX_DIR.
+# Pressing Enter simulates Claude's UserPromptSubmit hook for task $FAKE_TMUX_TASK.
+S="${FAKE_TMUX_DIR:?}"; mkdir -p "$S/panes"
+[[ "${1:-}" == -L ]] && shift 2
+printf '%s\n' "$*" >>"$S/calls.log"
+cmd="${1:-}"; shift || true
+target() { local a; while [[ $# -gt 0 ]]; do [[ "$1" == -t ]] && { a="$2"; break; }; shift; done; printf '%s' "${a:-}"; }
+case "$cmd" in
+  -V) echo "tmux ${FAKE_TMUX_VERSION:-3.4}" ;;
+  has-session) [[ -f "$S/session" ]] ;;
+  new-session|new-window)
+    touch "$S/session"; n=$(( $(ls "$S/panes" | wc -l) + 1 )); echo "%$n" >"$S/panes/$n"; echo "%$n" ;;
+  pipe-pane) : ;;
+  display-message) t="$(target "$@")"; [[ -f "$S/panes/${t#%}" ]] && echo "$t" ;;
+  capture-pane) cat "$S/screen" 2>/dev/null || printf '❯ \n' ;;
+  send-keys)
+    last="${*: -1}"
+    if [[ "$last" == Enter && -n "${FAKE_TMUX_TASK:-}" ]]; then "${CHARTROOM_BIN:?}" hook "$FAKE_TMUX_TASK" prompt-submit; fi ;;
+  kill-pane) t="$(target "$@")"; rm -f "$S/panes/${t#%}" ;;
+  switch-client|attach-session) : ;;
+  *) : ;;
+esac

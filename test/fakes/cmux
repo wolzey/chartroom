@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# fake cmux: the subset of the manaflow-ai/cmux CLI chartroom uses. State in $FAKE_CMUX_DIR.
+# `send-key enter` simulates Claude's UserPromptSubmit hook for task $FAKE_CMUX_TASK.
+S="${FAKE_CMUX_DIR:?}"; mkdir -p "$S/surfaces"
+printf '%s\n' "$*" >>"$S/calls.log"
+while [[ "${1:-}" == --json || "${1:-}" == --id-format ]]; do [[ "$1" == --id-format ]] && shift; shift; done
+arg() { local k="$1"; shift; while [[ $# -gt 0 ]]; do [[ "$1" == "$k" ]] && { printf '%s' "$2"; return; }; shift; done; }
+newsf() { local n; n=$(( $(ls "$S/surfaces" | wc -l) + 1 )); echo "sf-$n" >"$S/surfaces/sf-$n"; printf 'sf-%s' "$n"; }
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  ping) [[ -z "${FAKE_CMUX_DOWN:-}" ]] && echo PONG || { echo "Error: socket not found" >&2; exit 1; } ;;
+  socket-status) echo '{"mode":"cmuxOnly"}' ;;
+  workspace)
+    sub="$1"; shift
+    case "$sub" in
+      list) if [[ -f "$S/ws" ]]; then printf '{"workspaces":[{"id":"ws-1","title":"%s"}]}\n' "$(cat "$S/ws")"; else echo '{"workspaces":[]}'; fi ;;
+      create) arg --name "$@" >"$S/ws"; printf '{"workspace_id":"ws-1","surface_id":"%s"}\n' "$(newsf)" ;;
+      close) rm -f "$S/ws" "$S"/surfaces/* ;;
+      select) : ;;
+    esac ;;
+  new-surface) [[ -f "$S/ws" ]] || { echo "Error: not_found" >&2; exit 1; }; printf '{"surface_id":"%s"}\n' "$(newsf)" ;;
+  read-screen) sf="$(arg --surface "$@")"; [[ -f "$S/surfaces/$sf" ]] || { echo "Error: not_found" >&2; exit 1; }; cat "$S/screen" 2>/dev/null || printf '❯ \n' ;;
+  send) : ;;
+  send-key) [[ "${*: -1}" == enter && -n "${FAKE_CMUX_TASK:-}" ]] && "${CHARTROOM_BIN:?}" hook "$FAKE_CMUX_TASK" prompt-submit ;;
+  close-surface) rm -f "$S/surfaces/$(arg --surface "$@")" ;;
+  rename-tab|focus-panel|list-pane-surfaces) : ;;
+  *) echo "Error: unknown command $cmd" >&2; exit 2 ;;
+esac
+exit 0

@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# stub-agent - a fake crew worker for tests and demos. It follows the worker protocol
+# without any AI: reads its task id, records events, writes a report, and exits.
+#   usage (command backend):  --command 'test/stub-agent {id}'
+# Behaviour (env):
+#   STUB_MODE=done       progress, then report + done (default)
+#   STUB_MODE=decision   raise a decision and stop; when re-run with CHARTROOM_STEER set,
+#                        record the answer and finish with done
+#   STUB_MODE=fail       report + failed
+#   STUB_MODE=silent     exit without any event
+#   STUB_SLEEP=N         sleep N seconds before acting
+#   STUB_COMMIT=1        commit a file on the task branch (ship tasks)
+set -euo pipefail
+id="${1:-${CHARTROOM_TASK:-}}"
+[[ -n "$id" ]] || { echo "stub-agent: no task id" >&2; exit 2; }
+ev() { "${CHARTROOM_BIN:-chartroom}" event "$id" "$@"; }
+d="$CHARTROOM_HOME/tasks/$id"
+[[ -f "$d/brief.md" ]] || { echo "stub-agent: no brief for $id" >&2; exit 2; }
+sleep "${STUB_SLEEP:-0}"
+if [[ -n "${CHARTROOM_STEER:-}" ]]; then
+  printf 'outcome: answered\nsteer: %s\nvalidation: none (stub)\n' "$CHARTROOM_STEER" >"$d/report.md"
+  ev done "finished after steer: $CHARTROOM_STEER"; exit 0
+fi
+case "${STUB_MODE:-done}" in
+  done)
+    ev progress "read the brief"
+    if [[ "${STUB_COMMIT:-0}" == 1 ]]; then echo stub >stub.txt; git add stub.txt; git -c user.name=stub -c user.email=stub@example.invalid commit -qm "feat: stub change"; fi
+    printf 'outcome: done\nvalidation: none (stub)\n' >"$d/report.md"
+    ev done "stub finished" ;;
+  decision) ev decision "pick A or B (recommend A)" ;;
+  fail) printf 'outcome: failed\n' >"$d/report.md"; ev failed "stub failed on purpose" ;;
+  silent) : ;;
+esac

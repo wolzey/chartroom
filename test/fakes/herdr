@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# fake herdr: a server that is not running.
+echo "herdr: could not connect to server socket" >&2; exit 1
