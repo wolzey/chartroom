@@ -116,6 +116,15 @@ setup() { common_setup; }
   [[ "$output" == *"user: live note"* ]]
 }
 
+@test "headless:claude that ignores stdin EOF is ended by chartroom after its final result" {
+  use_fake claude
+  export FAKE_TURN=0 FAKE_NO_EXIT=1
+  id="$(new_task --backend headless:claude)"
+  cr dispatch "$id" >/dev/null
+  wait_event "$id" ' exited: claude process ended \(exit [0-9]+, ended by chartroom after its final result\)' 20
+  [ "$(cat "$CHARTROOM_HOME/tasks/$id/final.md")" = "fake result" ]
+}
+
 @test "tmux:claude: window per task, hooks settings, trust left alone without one, confirmed delivery" {
   use_fake tmux claude
   export FAKE_TMUX_DIR="$BATS_TEST_TMPDIR/tmux"

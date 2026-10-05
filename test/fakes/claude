@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # fake claude: `-p --input-format stream-json` only. Replays each stdin user line and
-# answers it with a result after FAKE_TURN seconds; exits when stdin closes.
+# answers it with a result after FAKE_TURN seconds; exits when stdin closes, unless
+# FAKE_NO_EXIT=1 (real claude 2.1.289 stays alive after a late EOF).
 printf '%s\n' "$*" >>"${FAKE_LOG:-/dev/null}"
 [[ " $* " == *" -p "* ]] || { echo "fake claude: interactive mode not simulated" >&2; exit 2; }
 printf '{"type":"system","subtype":"init"}\n'
@@ -10,3 +11,5 @@ while IFS= read -r line; do
   printf '{"type":"assistant","message":{"content":[{"type":"text","text":"fake reply"}]}}\n'
   printf '{"type":"result","subtype":"success","result":"fake result"}\n'
 done
+[[ -n "${FAKE_NO_EXIT:-}" ]] && sleep 60
+exit 0
