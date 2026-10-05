@@ -1,0 +1,14 @@
+{
+  "name": "chartroom",
+  "owner": { "name": "wolzey", "url": "https://github.com/wolzey" },
+  "description": "chartroom: run a crew of coding agents from one agent session",
+  "plugins": [
+    {
+      "name": "chartroom",
+      "source": "./",
+      "description": "The chartroom and bearings skills. The plugin ships the skills; put the chartroom CLI on PATH with install.sh (or call bin/chartroom from the plugin directory).",
+      "version": "0.1.0",
+      "license": "MIT"
+    }
+  ]
+}

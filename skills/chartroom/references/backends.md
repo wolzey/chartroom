@@ -1,67 +1,141 @@
-# Worker backends
+# Backends
 
-What `chartroom` does for each backend, and the facts behind it. They were last verified against codex-cli 0.158 and herdr 0.9.1. Codex changed sandbox semantics between 0.157 and 0.160
-within an hour of that verification, so re-verify after any upgrade.
+A backend is `<runner>:<agent>`: **where** the worker runs × **which** agent runs. Runners are
+`herdr`, `cmux`, `tmux` (session runners: a terminal you can watch), `headless` (no terminal),
+`command` (any CLI) and `subagent` (the host harness). Agents are `claude` and `codex`. Old
+names still work: `codex` = `headless:codex`, `herdr-claude` = `herdr:claude`,
+`herdr-codex` = `herdr:codex`.
+
+`chartroom doctor` shows every backend, whether it can run here, why not, and how it steers.
+Last verified against: claude 2.1.289, codex-cli 0.158.0, herdr 0.9.1, tmux 3.x (October 2026).
+cmux is implemented against its documented CLI but **unverified on a real cmux install**.
+
+## Selection and fallback
+
+- `chartroom new` without `--backend` (or `--backend auto`) picks at dispatch time: the first
+  available entry in `CHARTROOM_BACKEND_ORDER` (default
+  `herdr:claude cmux:claude tmux:claude headless:codex headless:claude command`). Skipping
+  the first entry writes a `note: backend fallback: ...` event and prints it, because falling
+  from a session runner to headless changes what the commander can watch and steer.
+- An explicit `--backend` never downgrades. If it is unavailable, dispatch exits non-zero with
+  the reason and the next viable backend.
+- `CI=true` disables session runners. herdr needs its server reachable; cmux needs macOS and a
+  running app that accepts our socket connection; tmux needs tmux ≥ 3.0; `subagent` needs
+  `CHARTROOM_HARNESS=claude`; `command` needs a template.
 
 ## Common to all
 
-- Every ship task gets its own git worktree on branch `chartroom/<id>`, branched from the base
-  ref's commit at `chartroom new` time. Scouts get a detached worktree (codex/herdr) or none
-  (subagent). The worktree lives at `<repo>/.worktrees/cap_<id>` when the repo gitignores
-  `.worktrees`. Otherwise it lives at `~/.chartroom/worktrees/<repo>/<id>`.
+- Every ship task gets its own git worktree on branch `chartroom/<id>` (prefix:
+  `CHARTROOM_BRANCH_PREFIX`), branched from the base ref's commit at `new` time. Scouts get
+  a detached worktree, or none for `subagent`. The worktree lives at
+  `<repo>/.worktrees/chartroom_<id>` when the repo gitignores `.worktrees`, otherwise at
+  `$CHARTROOM_HOME/worktrees/<repo>/<id>`.
 - The worker gets one line: "Read the brief at … and follow it exactly." The brief carries
-  the worker protocol: events, report, stop at decisions, no push.
-- Workers write `~/.chartroom/tasks/<id>/events.log`. `chartroom watch` turns the lines that need a
-  wake into notifications.
+  the protocol: events, report, stop at decisions, no push.
+- Workers append to `tasks/<id>/events.log`; `chartroom watch` turns the lines that need you
+  into wakes.
 - New worktrees have no `node_modules` or other build products. The worker installs
-  dependencies itself (network is allowed). Say so in the spec when it matters.
+  dependencies itself. Say so in the spec when it matters.
 
-## codex: headless `codex exec`
+## Steering modes
 
-- Launched detached (`nohup`) with `--json`, `-C <worktree>`, and `-o final.md`, plus a sandbox
-  chosen per task (the `sandbox` key in `meta.json` wins):
-  - **scout** defaults to `workspace-write`, with network on and `--add-dir <task record>`.
-    Writes outside the worktree and the task record fail.
-  - **ship** defaults to `danger-full-access`. From 0.160, `workspace-write` refuses *every* `.git`
-    write (verified: a worktree's `.git/worktrees/<name>/index.lock` and a plain clone's own
-    `.git/index.lock` are both denied), so a sandboxed worker cannot commit. The brief's worktree-only rule is the control.
-  - Herdr Codex sessions get the same flags, plus `-c check_for_update_on_startup=false`.
-    Interactive Codex otherwise self-updates on launch and exits, which loses the brief.
-- The thread id comes from the first `thread.started` event in `codex.jsonl` and is stored in
-  `meta.json`.
-- A headless run can't take input mid-run. `chartroom steer` refuses while it is running. Once it has
-  stopped, `chartroom steer` runs `codex exec … resume <thread> "<message>"`, which keeps the full
-  conversation (verified).
-- When the process ends, the wrapper appends `exited: … (exit N)`. If the process dies with no
-  record, `chartroom watch` reports `lost`.
-- `chartroom peek` summarises the JSON stream: agent messages, commands with exit codes, and file edits.
-- Optional per task: `model` and `effort` keys in `meta.json` map to `-m` and `model_reasoning_effort`.
+| Mode | Backends | What `steer` does |
+|---|---|---|
+| live | herdr, cmux, tmux, headless:claude | Delivers now and confirms it was taken (agent hook, replayed message, or screen state) |
+| between-runs | headless:codex, command | Refuses while running; afterwards resumes (`codex exec resume`) or re-runs the template with the message. `command` also has `steer --inbox` (best effort) |
+| host | subagent | Records it; you deliver it with your harness's message tool |
 
-## herdr-claude / herdr-codex: a full interactive session in Herdr
+## First-launch trust dialogs
 
-- All workers share one Herdr workspace labelled `captain-crew` (override with
-  `CAP_CREW_WORKSPACE`). It is created unfocused, with one tab per task labelled by task id.
-  The agent name is the task id.
-- A brand-new pane is not an "available shell" for a moment, so `chartroom` retries `agent start`
-  on `agent_pane_busy`. Herdr reports errors on stderr with a nonzero exit.
-- Claude shows a workspace-trust dialog for a never-seen folder, with the cursor on "No, exit".
-  `chartroom` answers it (`down`, `enter`) only for the worktree it just created for this task.
-  It never edits `~/.claude.json`.
-- A prompt sent while Claude's startup splash is still up is silently dropped. `chartroom` waits for
-  idle, then confirms delivery (status `working`, or the text visible in the pane) and retries
-  up to 4 times.
-- herdr-codex passes the same sandbox flags as headless codex after `--`, and turns off the update check.
-- Steering is a typed prompt (`chartroom steer`). Interrupt with `chartroom stop` (sends `esc`).
-- Herdr lifecycle states: `idle`/`done` mean the turn ended, `blocked` means an approval or
-  question UI is up, and `unknown` is not proof of completion. `chartroom watch` reports transitions
-  into `blocked`, a `working` agent going `idle` or `done`, and an agent that is `gone`.
-- The captain can watch or take over any tab. Typing there directly is authoritative.
+Claude Code and Codex both gate a never-seen folder behind a "trust this folder" dialog in
+interactive mode. Policy, identical on every session runner: chartroom reads the dialog and
+answers it **only** for a worktree it created itself for this task (`worktree_created=1` in
+meta). Claude's cursor starts on "No, exit" (answer: Down, Enter); Codex's on "1. Trust and
+continue" (answer: Enter). Any other dialog, or any folder chartroom did not create, is left
+alone and raised as `agent: awaiting-input`. chartroom never edits `~/.claude.json` or
+`~/.codex/config.toml` to pre-trust a path. (Verified on codex 0.158: a per-run
+`-c projects."<path>".trust_level="trusted"` override does **not** suppress the dialog.)
+Headless runs (`claude -p`, `codex exec`) show no dialog.
 
-## subagent: the Agent tool in this session
+## herdr:<agent> (first class)
 
-- `chartroom dispatch` records the task and prints the Agent call. Make it with
-  `run_in_background: true` and `name: <id>`, and prefer a specialist `subagent_type` that fits.
-- Completion arrives as a task notification. Steer with `SendMessage` to `<id>`. Stop it with `TaskStop`.
-- It dies with this session, so the brief and record survive and a restarted first mate re-dispatches it.
-- Best for read-only scouts. For ship work, the printed prompt names the worktree, but the
-  subagent shares this session's permissions. Prefer codex or herdr for ship work.
+- All workers share one herdr workspace labelled `$CHARTROOM_WORKSPACE` (default
+  `chartroom-crew`), one unfocused tab per task; the herdr agent name is the task id.
+- A brand-new pane is briefly not an "available shell", so `agent start` is retried on
+  `agent_pane_busy`. Extra agent flags (sandbox, model, `--add-dir`) are passed after `--`.
+- A prompt sent while Claude's startup splash is still up is dropped. chartroom waits for idle,
+  then confirms delivery (status `working`, or the text visible) and retries up to 4 times.
+- Wakes come from herdr's own agent state: `blocked` (prompt up), a `working` agent going
+  `idle`/`done` without a report, and an agent that is `gone`.
+- `stop` sends Esc; `close` closes the tab; `attach` focuses it.
+
+## tmux:<agent>
+
+- One tmux session `$CHARTROOM_WORKSPACE`, one window per task, running
+  `tasks/<id>/launch.sh` (cd into the worktree, exec the agent, record `exited` when it ends).
+  `CHARTROOM_TMUX_SOCKET=<name>` uses a separate tmux server (`tmux -L`).
+- Output is piped to `tasks/<id>/pane.log` from the start (`pipe-pane`); `peek` shows the live
+  screen, or the log once the window is gone.
+- Turn ends and prompts come from the agent, not the screen: Claude is launched with
+  `--settings tasks/<id>/claude-settings.json` adding `Stop`, `Notification` and
+  `UserPromptSubmit` hooks that run `chartroom hook`; Codex gets
+  `-c notify=[chartroom, hook, <id>, codex-notify]`. Delivery is confirmed by the
+  `prompt-received` hook (Claude) or Codex's "esc to interrupt" working line.
+- Codex has no prompt-submitted or approval hook, so for Codex sessions delivery confirmation
+  reads the screen, and approval prompts are not signalled. This is weaker than Claude, and
+  Codex may report an intermediate turn end while it is still working.
+- `attach` = `tmux attach` (or `switch-client` inside tmux). `close` kills the window.
+
+## cmux:<agent> (macOS; implemented, unverified on real cmux)
+
+- manaflow-ai/cmux. One cmux workspace titled `$CHARTROOM_WORKSPACE`, one surface (tab) per
+  task (`workspace create --cwd --command`, then `new-surface`), created unfocused.
+- Same launcher, hooks and confirmation as tmux. Keys go through `send-key --force` so a
+  trust dialog can be answered. `peek` reads the screen (`read-screen --scrollback`); there is no
+  pipe-pane, so `close` snapshots the scrollback into `pane.log` before closing the surface.
+- cmux's default socket mode only accepts commands from processes started inside cmux. If
+  the XO runs elsewhere, enable automation mode (cmux Settings, or
+  `automation.socketControlMode` in `~/.config/cmux/cmux.json`). `doctor` reports a refused socket.
+
+## headless:codex
+
+- Detached (`nohup`) `codex exec --json -C <worktree> -o final.md`, plus the sandbox per task:
+  scouts `workspace-write` with network on and `--add-dir <task record>`; ship tasks
+  `$CHARTROOM_CODEX_SHIP_SANDBOX` (default `danger-full-access`, because `workspace-write`
+  refuses `.git` writes in recent codex, so a sandboxed worker cannot commit). The `sandbox`
+  key in `meta.json` wins.
+- Thread id from the first `thread.started` event; `steer` after the run runs
+  `codex exec … resume <thread> "<message>"` with the full conversation (verified).
+- `model` / `effort` in meta map to `-m` and `model_reasoning_effort`.
+- The wrapper appends `exited: … (exit N)`; a process that dies without one is reported `lost`.
+
+## headless:claude
+
+- Detached `claude -p --input-format stream-json --output-format stream-json --verbose
+  --replay-user-messages --session-id <uuid>` (the id is pre-assigned and stored in meta), with
+  `--permission-mode` (default `acceptEdits`), `--allowedTools` (`CHARTROOM_CLAUDE_ALLOWED_TOOLS`)
+  and `--add-dir <task record>`.
+- stdin is a FIFO the wrapper holds open, so `steer` mid-run writes another user message; it
+  counts as delivered when claude replays it on stdout (verified; a message queued mid-turn is
+  folded into that turn). When the stream ends on a `result` with nothing new for 3s, the
+  wrapper closes stdin. claude 2.1.289 does not exit on that late EOF, so after 5s the wrapper
+  ends it (`exited: … ended by chartroom after its final result`). The session is already saved:
+  a later `steer` runs `claude -p --resume <uuid>` (verified to keep context).
+- `final.md` gets the last `result` text; `peek` summarises messages, tool calls and results.
+
+## command
+
+- `meta.command` (or `CHARTROOM_COMMAND`) with `{brief} {prompt} {worktree} {task_dir} {id}`
+  placeholders, shell-quoted. Runs detached in the worktree with `CHARTROOM_HOME`,
+  `CHARTROOM_TASK`, `CHARTROOM_BIN` exported; output in `output.log`; `exited (exit N)` at the end.
+- `steer` re-runs it with `{prompt}` = the message and `CHARTROOM_STEER` set.
+  `steer --inbox` appends to `inbox.md` while it runs; the brief tells workers to read it after
+  each milestone, but nothing guarantees they do.
+- This is also the test backend: `test/stub-agent` drives the whole lifecycle with no AI.
+
+## subagent
+
+- Only when `CHARTROOM_HARNESS=claude`. `dispatch` records the task and prints the call to make
+  (`run_in_background: true`, `name: <id>`). It dies with your session; the brief and record
+  survive, so a restarted XO re-dispatches it. Best for read-only scouts: it shares your
+  session's permissions.
