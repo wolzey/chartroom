@@ -224,3 +224,12 @@ setup() { common_setup; }
   grep -q "CHARTROOM_HOME=$CHARTROOM_HOME $CHARTROOM event $id" "$b"
   grep -q "Do NOT push" "$b"
 }
+
+@test "dispatch returns at once even when its output is captured (worker detached)" {
+  id="$(new_task --backend command --command "STUB_SLEEP=6 $STUB {id}")"
+  s=$(date +%s)
+  out="$(cr dispatch "$id")"
+  [ $(( $(date +%s) - s )) -lt 3 ]
+  [[ "$out" == *"command worker running"* ]]
+  cr stop "$id" >/dev/null
+}

@@ -67,20 +67,21 @@ launch_claude_headless() { # <id> <wt> <prompt> [resume]
   if [[ -n "$resume" ]]; then args+=(--resume "$sid"); else args+=(--session-id "$sid"); fi
   rm -f "$d/stdin.fifo"; mkfifo "$d/stdin.fifo"
   claude_user_line "$prompt" >"$d/stdin.first"
-  # The wrapper holds the FIFO open (fd 3) so steer can write more user turns, and closes
+  # The wrapper holds the FIFO open (fd 9) so steer can write more user turns, and closes
   # it once the stream ends on a `result` with nothing new for 3s - then claude exits.
-  (cd "$wt" && CR_T="$d" CR_CLAUDE="$b" nohup bash -c '
+  (cd "$wt" || exit 1
+  CR_T="$d" CR_CLAUDE="$b" nohup bash -c '
     "$CR_CLAUDE" "$@" <"$CR_T/stdin.fifo" >>"$CR_T/claude.jsonl" 2>>"$CR_T/claude.err" &
     cpid=$!
-    exec 3>"$CR_T/stdin.fifo"
-    cat "$CR_T/stdin.first" >&3
+    exec 9>"$CR_T/stdin.fifo"
+    cat "$CR_T/stdin.first" >&9
     quiet=0; last=""
     while kill -0 "$cpid" 2>/dev/null; do
       sleep 1
       cur="$(tail -n 1 "$CR_T/claude.jsonl" 2>/dev/null)"
       if [[ "$cur" == *"\"type\":\"result\""* && "$cur" == "$last" ]]; then quiet=$((quiet+1)); else quiet=0; fi
       last="$cur"
-      if (( quiet >= 3 )); then exec 3>&-; break; fi
+      if (( quiet >= 3 )); then exec 9>&-; break; fi
     done
     wait "$cpid"; rc=$?
     jq -r "select(.type==\"result\") | .result // empty" "$CR_T/claude.jsonl" 2>/dev/null | tail -n 1 >"$CR_T/final.md"

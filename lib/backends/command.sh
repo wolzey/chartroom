@@ -32,7 +32,8 @@ command_render() { # <id> <prompt> -> the shell command line
 command_run() { # <id> <wt> <prompt> [steer-message]
   local id="$1" wt="$2" prompt="$3" steer="${4:-}" d line
   d="$(tdir "$id")"; line="$(command_render "$id" "$prompt")"
-  (cd "${wt:-$d}" && CHARTROOM_HOME="$CR_HOME" CHARTROOM_TASK="$id" CHARTROOM_STEER="$steer" CHARTROOM_BIN="$CR_BIN" CR_T="$d" CR_LINE="$line" \
+  (cd "${wt:-$d}" || exit 1
+  CHARTROOM_HOME="$CR_HOME" CHARTROOM_TASK="$id" CHARTROOM_STEER="$steer" CHARTROOM_BIN="$CR_BIN" CR_T="$d" CR_LINE="$line" \
     nohup bash -c 'bash -c "$CR_LINE" </dev/null >>"$CR_T/output.log" 2>&1; rc=$?
       printf "%s exited: command ended (exit %s)\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$rc" >>"$CR_T/events.log"' >/dev/null 2>&1 &
     echo $! >"$d/pid.tmp"; disown || true)

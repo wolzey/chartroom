@@ -46,9 +46,9 @@ new_task() {
 events() { cat "$CHARTROOM_HOME/tasks/$1/events.log"; }
 meta_of() { jq -r --arg k "$2" '.[$k] // empty' "$CHARTROOM_HOME/tasks/$1/meta.json"; }
 
-# Wait (max ~10s) until the task's events.log matches a regex.
+# Wait (default ~10s, or <secs>) until the task's events.log matches a regex.
 wait_event() {
-  local id="$1" re="$2" i
-  for i in $(seq 1 40); do grep -qE "$re" "$CHARTROOM_HOME/tasks/$id/events.log" && return 0; sleep 0.25; done
+  local id="$1" re="$2" i n=$(( ${3:-10} * 4 ))
+  for i in $(seq 1 "$n"); do grep -qE "$re" "$CHARTROOM_HOME/tasks/$id/events.log" && return 0; sleep 0.25; done
   echo "timed out waiting for /$re/ in:" >&2; events "$id" >&2; return 1
 }

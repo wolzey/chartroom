@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # fake tmux: enough of the CLI for chartroom's tmux runner. State in $FAKE_TMUX_DIR.
 # Pressing Enter simulates Claude's UserPromptSubmit hook for task $FAKE_TMUX_TASK.
-S="${FAKE_TMUX_DIR:?}"; mkdir -p "$S/panes"
 [[ "${1:-}" == -L ]] && shift 2
+[[ "${1:-}" == -V ]] && { echo "tmux ${FAKE_TMUX_VERSION:-3.4}"; exit 0; }
+S="${FAKE_TMUX_DIR:?}"; mkdir -p "$S/panes"
 printf '%s\n' "$*" >>"$S/calls.log"
 cmd="${1:-}"; shift || true
 target() { local a; while [[ $# -gt 0 ]]; do [[ "$1" == -t ]] && { a="$2"; break; }; shift; done; printf '%s' "${a:-}"; }

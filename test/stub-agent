@@ -19,14 +19,14 @@ d="$CHARTROOM_HOME/tasks/$id"
 sleep "${STUB_SLEEP:-0}"
 if [[ -n "${CHARTROOM_STEER:-}" ]]; then
   printf 'outcome: answered\nsteer: %s\nvalidation: none (stub)\n' "$CHARTROOM_STEER" >"$d/report.md"
-  ev done "finished after steer: $CHARTROOM_STEER"; exit 0
+  ev "done" "finished after steer: $CHARTROOM_STEER"; exit 0
 fi
 case "${STUB_MODE:-done}" in
   done)
     ev progress "read the brief"
     if [[ "${STUB_COMMIT:-0}" == 1 ]]; then echo stub >stub.txt; git add stub.txt; git -c user.name=stub -c user.email=stub@example.invalid commit -qm "feat: stub change"; fi
     printf 'outcome: done\nvalidation: none (stub)\n' >"$d/report.md"
-    ev done "stub finished" ;;
+    ev "done" "stub finished" ;;
   decision) ev decision "pick A or B (recommend A)" ;;
   fail) printf 'outcome: failed\n' >"$d/report.md"; ev failed "stub failed on purpose" ;;
   silent) : ;;
