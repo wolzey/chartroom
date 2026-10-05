@@ -1,0 +1,38 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y jq shellcheck bats
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install bash jq shellcheck bats-core
+      - name: shellcheck
+        run: shellcheck -x -S warning bin/chartroom lib/*.sh lib/backends/*.sh install.sh scripts/*.sh test/stub-agent test/fakes/*
+      - name: no personal data
+        run: scripts/privacy-gate.sh
+      - name: bats
+        run: bats test/
+      - name: doctor with only bash, jq and git
+        run: |
+          export CHARTROOM_HOME="$RUNNER_TEMP/home"
+          bin/chartroom doctor
+      - name: install.sh smoke test into a temp HOME
+        run: |
+          export HOME="$RUNNER_TEMP/h" CHARTROOM_REPO="$GITHUB_WORKSPACE"
+          mkdir -p "$HOME"
+          git -C "$GITHUB_WORKSPACE" branch -f ci-install HEAD
+          CHARTROOM_REF=ci-install bash install.sh
+          "$HOME/.local/bin/chartroom" version

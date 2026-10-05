@@ -39,7 +39,8 @@ setup() { common_setup; }
   id="$(new_task --command "$STUB {id}")"
   run cr dispatch "$id"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"backend fallback: herdr:claude unavailable (herdr not on PATH) tmux:claude unavailable (tmux not found); using command (steering: between-runs)"* ]]
+  # (tmux may exist on a CI image; then tmux:claude is skipped because claude is missing)
+  [[ "$output" == *"backend fallback: herdr:claude unavailable (herdr not on PATH) tmux:claude unavailable ("*"); using command (steering: between-runs)"* ]]
   [ "$(meta_of "$id" backend)" = command ]
   events "$id" | grep -q "note: backend fallback"
 }
