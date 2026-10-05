@@ -4,7 +4,7 @@ All notable changes to chartroom. Versions follow SemVer. Before 1.0, minor vers
 change CLI flags. The event-log line format, the brief protocol, and `meta.json` `schema` 1
 are stable from 0.1.0.
 
-## [Unreleased] - 0.1.0
+## [0.1.0] - 2026-10-05
 
 First public cut, extracted from a private tool and generalized.
 
@@ -40,3 +40,4 @@ First public cut, extracted from a private tool and generalized.
 - `claude -p` with stream-json input doesn't exit on a late stdin EOF; the wrapper ends it
   after its final result.
 - Requires bash ≥ 4 explicitly, with a clear error on macOS's bash 3.2.
+- The privacy gate also scans symlink targets and every commit's metadata.
