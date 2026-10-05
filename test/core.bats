@@ -22,7 +22,7 @@ setup() { common_setup; }
 @test "init creates a generic home" {
   run cr init
   [ "$status" -eq 0 ]
-  for f in captain.md projects.md AGENTS.md CLAUDE.md; do [ -f "$CHARTROOM_HOME/$f" ]; done
+  for f in commander.md projects.md AGENTS.md CLAUDE.md; do [ -f "$CHARTROOM_HOME/$f" ]; done
   grep -q chartroom "$CHARTROOM_HOME/AGENTS.md"
   [[ "$output" == *"No project roots set"* ]]
 }
@@ -68,12 +68,12 @@ setup() { common_setup; }
   [ "$status" -ne 0 ]
 }
 
-@test "dispatch refuses a brief without the captain's intent" {
+@test "dispatch refuses a brief without the commander's intent" {
   out="$(cr new --project "$PROJECT" --title x --backend command --command "$STUB {id}")"
   id="$(sed -n 's/^id=//p' <<<"$out")"
   run cr dispatch "$id"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"no captain's intent"* ]]
+  [[ "$output" == *"no commander's intent"* ]]
 }
 
 @test "command backend end to end: dispatch, watch --once, status, close keeps branch" {
@@ -195,7 +195,7 @@ setup() { common_setup; }
   run cr close "$id" --discard
   [ "$status" -eq 0 ]
   [ ! -d "$wt" ]
-  events "$id" | grep -q "discarded on captain's order"
+  events "$id" | grep -q "discarded on commander's order"
 }
 
 @test "scout worktrees are detached; worktree_created is recorded" {
@@ -216,6 +216,20 @@ setup() { common_setup; }
   CHARTROOM_PROJECT_ROOTS="$BATS_TEST_TMPDIR" run cr project proj
   [ "$status" -eq 0 ]
   [[ "$output" == *"$PROJECT"* ]]
+}
+
+@test "init keeps a legacy captain.md instead of adding commander.md" {
+  mkdir -p "$CHARTROOM_HOME"; echo "# old prefs" >"$CHARTROOM_HOME/captain.md"
+  cr init >/dev/null
+  [ ! -f "$CHARTROOM_HOME/commander.md" ]
+  grep -q "old prefs" "$CHARTROOM_HOME/captain.md"
+}
+
+@test "dispatch accepts a legacy Captain's intent heading" {
+  id="$(new_task --backend command --command "$STUB {id}")"
+  sed -i.bak "s/## Commander's intent/## Captain's intent/" "$CHARTROOM_HOME/tasks/$id/brief.md"
+  run cr dispatch "$id"
+  [ "$status" -eq 0 ]
 }
 
 @test "the brief carries the protocol with the event helper path" {

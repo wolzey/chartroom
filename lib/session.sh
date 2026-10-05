@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # session.sh - shared logic for session runners (herdr, cmux, tmux): an interactive agent
-# in a terminal the captain can watch. A runner provides:
+# in a terminal the commander can watch. A runner provides:
 #   <r>_open <id> <wt> <launcher>   create the tab/window running <launcher>; record handles in meta
 #   <r>_screen <id>                 print the visible screen
 #   <r>_keys <id> <key>...          send named keys: enter, esc, down

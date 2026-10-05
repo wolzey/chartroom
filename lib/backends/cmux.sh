@@ -10,7 +10,7 @@
 # <task>/pane.log first.
 #
 # Socket access: cmux's default mode only accepts commands from processes started inside
-# cmux. A first mate running elsewhere needs automation mode (Settings, or
+# cmux. A XO running elsewhere needs automation mode (Settings, or
 # automation.socketControlMode in ~/.config/cmux/cmux.json). doctor reports this.
 
 cmuxc() { CMUX_QUIET=1 "$(cmux_bin)" "$@"; }

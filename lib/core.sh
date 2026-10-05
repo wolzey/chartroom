@@ -6,7 +6,7 @@ CR_SCHEMA=1
 WORKER_KINDS='progress|decision|blocked|done|failed'
 # Core kinds: written by chartroom itself or by agent-native hooks, never by a worker by hand.
 #   note     bookkeeping (created, dispatched, worktree, fallbacks)
-#   steered  the first mate sent the worker a message
+#   steered  the XO sent the worker a message
 #   exited   a headless/command process ended (exit N)
 #   agent    an agent-native signal: "turn-ended", "awaiting-input: <why>", "prompt-received"
 CORE_KINDS='note|steered|exited|agent'

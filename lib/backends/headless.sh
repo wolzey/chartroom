@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # headless runner: the agent CLI with no terminal at all, detached with nohup so it
-# outlives the first mate. Needs nothing but the agent CLI.
+# outlives the XO. Needs nothing but the agent CLI.
 #   headless:codex   `codex exec --json`, thread id from `thread.started`; steer = `exec resume`
 #                    after the run stops (codex takes no input mid-run).
 #   headless:claude  `claude -p` with stream-json in and out and a pre-assigned --session-id.
@@ -31,7 +31,7 @@ launch_codex() { # <id> <wt> <prompt> [resume-thread]
   mapfile -t mo < <(codex_model_args "$id")
   args=(exec --json -C "$wt" "${sb[@]}" "${mo[@]}" -o "$d/final.md")
   if [[ -n "$thread" ]]; then args+=(resume "$thread" "$prompt"); else args+=("$prompt"); fi
-  # Detached on purpose: the worker must outlive the first mate's session.
+  # Detached on purpose: the worker must outlive the XO's session.
   CR_T="$d" nohup bash -c 'codex "$@" </dev/null >>"$CR_T/codex.jsonl" 2>>"$CR_T/codex.err"; rc=$?
     printf "%s exited: codex process ended (exit %s)\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$rc" >>"$CR_T/events.log"' \
     _ "${args[@]}" >/dev/null 2>&1 &
@@ -68,7 +68,7 @@ launch_claude_headless() { # <id> <wt> <prompt> [resume]
   rm -f "$d/stdin.fifo"; mkfifo "$d/stdin.fifo"
   claude_user_line "$prompt" >"$d/stdin.first"
   # The wrapper holds the FIFO open (fd 9) so steer can write more user turns, and closes
-  # it once the stream ends on a `result` with nothing new for 3s - then claude exits.
+  # it once the stream ends on a `result` with nothing new for 3s, then ends claude.
   (cd "$wt" || exit 1
   CR_T="$d" CR_CLAUDE="$b" nohup bash -c '
     "$CR_CLAUDE" "$@" <"$CR_T/stdin.fifo" >>"$CR_T/claude.jsonl" 2>>"$CR_T/claude.err" &
@@ -83,10 +83,15 @@ launch_claude_headless() { # <id> <wt> <prompt> [resume]
       last="$cur"
       if (( quiet >= 3 )); then exec 9>&-; break; fi
     done
+    # claude -p (stream-json input) does not exit on a late stdin EOF (verified on 2.1.289):
+    # give it 5s, then end it. The session is already persisted, so --resume still works.
+    for _ in 1 2 3 4 5; do kill -0 "$cpid" 2>/dev/null || break; sleep 1; done
+    why=""
+    if kill -0 "$cpid" 2>/dev/null; then kill -TERM "$cpid" 2>/dev/null; why=", ended by chartroom after its final result"; fi
     wait "$cpid"; rc=$?
     jq -r "select(.type==\"result\") | .result // empty" "$CR_T/claude.jsonl" 2>/dev/null | tail -n 1 >"$CR_T/final.md"
     rm -f "$CR_T/stdin.fifo"
-    printf "%s exited: claude process ended (exit %s)\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$rc" >>"$CR_T/events.log"' \
+    printf "%s exited: claude process ended (exit %s%s)\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$rc" "$why" >>"$CR_T/events.log"' \
     _ "${args[@]}" >/dev/null 2>&1 &
     echo $! >"$d/pid.tmp"; disown || true)
   local pid; pid="$(cat "$d/pid.tmp")"; rm -f "$d/pid.tmp"

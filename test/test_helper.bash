@@ -34,12 +34,12 @@ use_fake() { local f; for f in "$@"; do ln -sf "$REPO_ROOT/test/fakes/$f" "$BIN/
 
 cr() { "$CHARTROOM" "$@"; }
 
-# Create a task and give its brief a captain's intent; prints the id.
+# Create a task and give its brief a commander's intent; prints the id.
 new_task() {
   local out id
   out="$(cr new --project "$PROJECT" --title "${TITLE:-stub task}" "$@")"
   id="$(sed -n 's/^id=//p' <<<"$out")"
-  perl -0pi -e "s/(## Captain's intent\n\n)/\$1Please do the thing.\n/" "$CHARTROOM_HOME/tasks/$id/brief.md"
+  perl -0pi -e "s/(## Commander's intent\n\n)/\$1Please do the thing.\n/" "$CHARTROOM_HOME/tasks/$id/brief.md"
   printf '%s' "$id"
 }
 

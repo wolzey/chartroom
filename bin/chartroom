@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # chartroom - deterministic mechanics for the chartroom skill.
 #
-# The first mate (an agent) owns judgment: what to delegate, to whom, what to tell the
-# captain. This script owns everything that can be exact: task records, worktrees,
+# The XO (an agent) owns judgment: what to delegate, to whom, what to tell the
+# commander. This script owns everything that can be exact: task records, worktrees,
 # launching and steering workers, liveness, and the wake stream. It never decides
 # meaning; when the world surprises it, it stops and says so.
 #
@@ -111,9 +111,9 @@ cmd_init() {
   mkdir -p "$CR_HOME/tasks" "$CR_HOME/worktrees"
   ensure_cursor
   local f t
-  for t in captain.md projects.md; do
-    f="$CR_HOME/$t"; [[ -f "$f" ]] || cp "$CR_ROOT/templates/$t" "$f"
-  done
+  # Standing preferences: commander.md (a legacy captain.md is kept and still read).
+  [[ -f "$CR_HOME/commander.md" || -f "$CR_HOME/captain.md" ]] || cp "$CR_ROOT/templates/commander.md" "$CR_HOME/commander.md"
+  [[ -f "$CR_HOME/projects.md" ]] || cp "$CR_ROOT/templates/projects.md" "$CR_HOME/projects.md"
   for f in "$CR_HOME/CLAUDE.md" "$CR_HOME/AGENTS.md"; do
     [[ -f "$f" ]] || cp "$CR_ROOT/templates/home-AGENTS.md" "$f"
   done
@@ -233,7 +233,7 @@ write_brief() {
     plan="
 - Plan gate: before changing any project file, investigate, then write \`$d/plan.md\` (approach, files to touch,
   risks, test strategy, open questions). Record a \`decision\` event \"plan ready for approval\" and STOP.
-  Build only after the first mate relays approval; fold any requested changes into plan.md first."
+  Build only after the XO relays approval; fold any requested changes into plan.md first."
   fi
   if [[ "$kind" == ship ]]; then
     delivery="Commit your finished work on branch \`$branch\` with conventional-commit messages and leave the worktree clean. Do NOT push, open a pull request, merge, rebase shared branches, or delete branches."
@@ -243,13 +243,13 @@ write_brief() {
   cat >"$d/brief.md" <<EOF
 # $title
 
-## Captain's intent
+## Commander's intent
 
-<!-- The captain's own words, verbatim. Append later asks here as they arrive. -->
+<!-- The commander's own words, verbatim. Append later asks here as they arrive. -->
 
 ## Spec
 
-<!-- First mate: what done looks like, acceptance criteria, non-goals, constraints,
+<!-- XO: what done looks like, acceptance criteria, non-goals, constraints,
      pointers to relevant files/docs/tickets. Keep it short and concrete. -->
 
 ## Authority
@@ -259,7 +259,7 @@ write_brief() {
 
 ## Worker protocol
 
-You are a crew worker. Your only audience is the first mate who wrote this brief; never
+You are a crew worker. Your only audience is the XO who wrote this brief; never
 address the human directly. Task id: \`$id\`.
 
 1. Work only inside your worktree (your current directory). Never touch the primary checkout
@@ -275,7 +275,7 @@ address the human directly. Task id: \`$id\`.
    (files, commits) or what you found; validation you actually ran with real results (never claim
    a check you did not run); risks and open questions.
 4. When you STOP for a decision or blocker, end your turn (or exit, if you are a one-shot
-   process). The first mate answers in this same session, or by resuming or re-running you
+   process). The XO answers in this same session, or by resuming or re-running you
    with the answer as your next prompt. If \`$d/inbox.md\` exists, read it after each milestone.
 EOF
 }
@@ -319,8 +319,8 @@ cmd_dispatch() {
   local kind wt="" runner agent
   kind="$(meta "$id" kind)"
   grep -qE '^## Spec' "$(tdir "$id")/brief.md" || die "brief is missing its Spec section"
-  if ! grep -A3 "^## Captain's intent" "$(tdir "$id")/brief.md" | grep -qvE "^(## |<!--|\s*$)"; then
-    die "brief has no captain's intent yet; fill it before dispatch"
+  if ! grep -A3 -E "^## (Commander|Captain)'s intent" "$(tdir "$id")/brief.md" | grep -qvE "^(## |<!--|\s*$)"; then
+    die "brief has no commander's intent yet; fill it before dispatch"
   fi
   select_backend "$id"
   meta_set "$id" backend "$SELECTED"
@@ -356,6 +356,7 @@ cmd_hook() {
       log_event "$id" agent "awaiting-input: ${msg:-agent needs input}" ;;
     codex-notify)
       payload="${3:-}"
+      printf '%s %s\n' "$(now)" "$payload" >>"$(tdir "$id")/hooks.log"
       case "$(jq -r '.type // empty' <<<"$payload" 2>/dev/null)" in
         agent-turn-complete) log_event "$id" agent "turn-ended" ;;
         "") ;;
@@ -430,7 +431,7 @@ cmd_steer() {
 cmd_stop() {
   local id="${1:-}"; [[ -n "$id" ]] || die "usage: chartroom stop <id>"; need_task "$id"
   "$(backend_runner "$id")_stop" "$id"
-  log_event "$id" note "stopped by first mate"
+  log_event "$id" note "stopped by XO"
   echo "stopped $id"
 }
 
@@ -450,7 +451,7 @@ cmd_close() {
     local dirty; dirty="$(git -C "$wt" status --porcelain)"
     if [[ -n "$dirty" && $discard -eq 0 ]]; then
       printf 'chartroom: refusing to close %s: uncommitted work in %s\n%s\n' "$id" "$wt" "$dirty" >&2
-      echo "Only 'chartroom close $id --discard' removes it, and only on the captain's explicit word." >&2
+      echo "Only 'chartroom close $id --discard' removes it, and only on the commander's explicit word." >&2
       exit 2
     fi
     if [[ -n "$dirty" ]]; then git -C "$project" worktree remove --force "$wt"; else git -C "$project" worktree remove "$wt"; fi
@@ -461,7 +462,7 @@ cmd_close() {
   fi
   if [[ -n "$r" && "$r" =~ ^($SESSION_RUNNERS)$ ]]; then "${r}_close" "$id" || true; fi
   meta_set "$id" closed "$(now)"
-  if [[ $discard -eq 1 ]]; then log_event "$id" note "closed (uncommitted work discarded on captain's order)"
+  if [[ $discard -eq 1 ]]; then log_event "$id" note "closed (uncommitted work discarded on commander's order)"
   else log_event "$id" note "closed"; fi
   echo "closed $id"
 }
@@ -650,10 +651,10 @@ cmd_install_skills() {
 
 cmd_help() {
   cat <<'EOF'
-chartroom - run a crew of coding agents from one agent session
+chartroom - run a crew of coding agents from one agent session (the XO)
 (state in $CHARTROOM_HOME, default ~/.chartroom)
 
-  chartroom init                          create the home (captain.md, projects.md, AGENTS.md)
+  chartroom init                          create the home (commander.md, projects.md, AGENTS.md)
   chartroom doctor [--json]               what can run here: backends, why not, steering mode
   chartroom project <name|path>           resolve a repo: path, forge, default base, overrides
   chartroom new --project P --title T [--backend B] [--kind ship|scout] [--base REF] [--plan-gate]
@@ -670,9 +671,9 @@ chartroom - run a crew of coding agents from one agent session
   chartroom event <id> <kind> <text>      append a status event (workers use this)
   chartroom status [--json] [--all]       fleet view, derived from disk + live backends
   chartroom peek <id> [n]                 recent events and worker output
-  chartroom watch [--once [--timeout S]]  wake stream: one line per event that needs the first mate
+  chartroom watch [--once [--timeout S]]  wake stream: one line per event that needs the XO
   chartroom close <id> [--discard]        remove a clean worktree, close its tab, mark closed
-                                          (--discard only on the captain's explicit word)
+                                          (--discard only on the commander's explicit word)
   chartroom install-skills [--claude|--agents|--pi|--all|--dir D] [--uninstall] [--dry-run]
   chartroom version
 EOF
