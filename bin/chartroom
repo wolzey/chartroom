@@ -496,15 +496,15 @@ cmd_inbox() {
     add) # add <text>: a dated, tagged "Waiting" item at the end of that section; prints its id
       [[ $# -ge 1 && -n "$*" ]] || die "usage: chartroom inbox add <text>"
       local out; out="$(mktemp)"
-      inbox_rewrite '
-        function put() { if (!done) { t = newtag(); print "- [" t "] " date " — " text; print t > out; done = 1 } }
+      INBOX_TEXT="$*" inbox_rewrite '
+        function put() { if (!done) { t = newtag(); print "- [" t "] " date " — " ENVIRON["INBOX_TEXT"]; print t > out; done = 1 } }
         function flush() { while (blank > 0) { print ""; blank-- } }
         /^## / { if (w) put(); flush(); w = ($0 ~ /^## Waiting/); seen = seen || w; print; next }
         w && /^- \(none\)/ { next }
         w && /^[[:space:]]*$/ { blank++; next }
         { flush(); print }
         END { if (w) put(); flush(); if (!seen) { print ""; print "## Waiting on the commander"; put() } }' \
-        -v text="$*" -v date="$(date +%F)" -v out="$out"
+        -v date="$(date +%F)" -v out="$out"
       cat "$out"; rm -f "$out"
       ;;
     *) die "usage: chartroom inbox add <text> | inbox tag" ;;

@@ -441,3 +441,10 @@ shorts() { cr status --all --json | jq -r 'map("\(.id)=\(.short_id)") | join(" "
   [ "$(sed -n '/^## Waiting/,$p' "$CHARTROOM_HOME/inbox.md" | sed -n 2p)" = "- [$id] $(date +%F) — first question" ]
   grep -q '^- n$' "$CHARTROOM_HOME/inbox.md"
 }
+
+@test "inbox add: the text is stored verbatim (backslashes, quotes, ampersands)" {
+  cr init >/dev/null
+  id="$(cr inbox add 'use C:\new\tdir & "quotes"?')"
+  grep -qxF -- "- [$id] $(date +%F) — use C:\\new\\tdir & \"quotes\"?" "$CHARTROOM_HOME/inbox.md"
+  [ "$(cr resolve "$id" --json | jq -r .text)" = 'use C:\new\tdir & "quotes"?' ]
+}
