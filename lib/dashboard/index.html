@@ -565,7 +565,10 @@ function render(d) {
     tween(n, items.length);
     const limit = SHOW[k] && !expanded[k] ? SHOW[k] : Infinity;
     const want = items.slice(0, limit).map((c) => {
-      const key = c.id, sig = k + "\n" + JSON.stringify(c), old = nodes.get(key);
+      // inbox ids are positional (inbox-0, inbox-1, ...), so key them by content to keep animations on the right card
+      let key = c.type === "inbox" ? "inbox:" + (c.date || "") + ":" + c.title : c.id;
+      while (next.has(key)) key += "'";
+      const sig = k + "\n" + JSON.stringify(c), old = nodes.get(key);
       if (old && old._sig === sig) { next.set(key, old); return old; }
       const m = card(c, k);
       m._sig = sig; m._lane = k; m._last = c.last_event || c.waiting_on || ""; m._at = ms(c.last_at);
@@ -659,7 +662,10 @@ function renderLog(d) {
     if ((c.files || []).includes("events.log")) {
       const href = "/task/" + encodeURIComponent(c.id) + "/events.log";
       li.classList.add("open");
+      li.tabIndex = 0;
+      li.setAttribute("role", "button");
       li.addEventListener("click", () => view(c, "events.log", href));
+      li.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); view(c, "events.log", href); } });
     }
     return li;
   });
