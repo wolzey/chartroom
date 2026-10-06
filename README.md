@@ -131,6 +131,7 @@ raised as a wake. It never edits your agent config to pre-trust paths.
 ```
 $CHARTROOM_HOME/                    default ~/.chartroom
   commander.md  projects.md         standing preferences, per-project overrides
+  inbox.md                          questions waiting on the commander, chat approvals not yet in a brief
   AGENTS.md  CLAUDE.md              "a session here is the XO"
   tasks/<id>/meta.json              {"schema":1, id, kind, backend, project, base_sha, branch, worktree, ...}
   tasks/<id>/brief.md  report.md  plan.md  final.md

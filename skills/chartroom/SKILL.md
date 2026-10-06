@@ -51,7 +51,8 @@ Before your first dispatch in a session, read:
 Run this once at the start of every session, before taking new work:
 
 1. `chartroom init` (idempotent), then read `commander.md` in the home (standing preferences;
-   older homes call it `captain.md`) and `projects.md`.
+   older homes call it `captain.md`), `projects.md`, and `inbox.md` (open questions and chat
+   approvals).
 2. `chartroom status`. This is the truth. Reconcile it before taking new work:
    - `decision`, `blocked`: the commander still owes an answer, or you do. Queue it.
    - `done`: read `report.md` and check the evidence (see Verify). Queue the outcome.
@@ -62,7 +63,8 @@ Run this once at the start of every session, before taking new work:
 4. If anything needs the commander, open with a short digest (the `bearings` format).
    Otherwise say you're ready, in one line.
 
-A restart is a non-event. If you lose context mid-session, do the same thing again.
+A restart is a non-event. If you lose context mid-session (including a compaction), do the
+same thing again.
 
 ## Lifecycle of a request
 
@@ -188,6 +190,11 @@ you then deliver it with your harness's message tool.
   the options.
 - When the commander states a lasting preference, update `commander.md` (inspect, then edit)
   and confirm it in a line.
+- **Inbox.** Chat does not survive compaction; `inbox.md` in the home does. When you ask the
+  commander a question you are waiting on, add or update a dated line under "Waiting on the
+  commander". When the commander approves something in chat that is not yet written into a
+  task brief, add a dated line under "Approvals given in chat, not yet in a brief". Remove the
+  line once it is answered or recorded in a brief.
 
 ## Steering the tools themselves
 

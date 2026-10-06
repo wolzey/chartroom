@@ -22,9 +22,49 @@ setup() { common_setup; }
 @test "init creates a generic home" {
   run cr init
   [ "$status" -eq 0 ]
-  for f in commander.md projects.md AGENTS.md CLAUDE.md; do [ -f "$CHARTROOM_HOME/$f" ]; done
+  for f in commander.md projects.md inbox.md AGENTS.md CLAUDE.md; do [ -f "$CHARTROOM_HOME/$f" ]; done
   grep -q chartroom "$CHARTROOM_HOME/AGENTS.md"
+  grep -q '^## Waiting on the commander' "$CHARTROOM_HOME/inbox.md"
   [[ "$output" == *"No project roots set"* ]]
+}
+
+@test "init never overwrites an existing inbox" {
+  cr init >/dev/null
+  echo "- 2026-01-01 — kept across init" >>"$CHARTROOM_HOME/inbox.md"
+  cp "$CHARTROOM_HOME/inbox.md" "$BATS_TEST_TMPDIR/before"
+  run cr init
+  [ "$status" -eq 0 ]
+  cmp "$CHARTROOM_HOME/inbox.md" "$BATS_TEST_TMPDIR/before"
+}
+
+@test "status counts open inbox items; json shape is unchanged" {
+  cr init >/dev/null
+  run cr status
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"inbox:"* ]] # the empty template has nothing open
+  cat >"$CHARTROOM_HOME/inbox.md" <<'EOF'
+# Inbox
+
+## Waiting on the commander
+- 2026-01-01 — merge the parser PR?
+- 2026-01-02 — which region for staging?
+
+## Approvals given in chat, not yet in a brief
+- 2026-01-02 — ok to rotate the test key
+
+## Notes
+- a note is not an open item
+EOF
+  run cr status
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no open tasks"* ]]
+  [[ "$output" == *"inbox: 2 waiting on the commander, 1 approval not yet in a brief"* ]]
+  [ "$(cr status --json | jq length)" -eq 0 ]
+  new_task --backend codex >/dev/null
+  run cr status
+  [[ "${lines[0]}" == ID* ]]
+  [[ "${lines[${#lines[@]}-1]}" == "inbox: 2 waiting"* ]]
+  [ "$(cr status --json | jq 'type')" = '"array"' ]
 }
 
 @test "home resolution: env, legacy CAP_HOME, legacy ~/.captain, default" {
