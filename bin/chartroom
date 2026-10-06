@@ -782,7 +782,7 @@ cmd_install_skills() {
   local t s src dst cur seen=" "
   for t in "${targets[@]}"; do
     [[ "$seen" == *" $t "* ]] && continue; seen+="$t "
-    for s in chartroom bearings dashboard continue; do
+    for s in chartroom bearings dashboard continue captain; do
       src="$CR_ROOT/skills/$s"; dst="$t/$s"
       if [[ $uninstall -eq 1 ]]; then
         if [[ -L "$dst" && "$(realpath_f "$dst")" == "$(realpath_f "$src")" ]]; then

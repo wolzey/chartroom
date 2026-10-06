@@ -7,6 +7,12 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- A `captain` skill: the chartroom skill under its older name, with a table of the older
+  words (captain, `captain.md`, `cap`, the old backend names). `install-skills` links it with
+  the others, so `/captain` and a legacy home whose `AGENTS.md` asks for it keep working.
+- README: updating chartroom, running it on several machines (what to share, what stays per
+  machine), and moving a home from before chartroom (config, skills, a helper shim for briefs
+  already handed out).
 - Dashboard themes: `chartroom` (the default) and `hud`, a machine-vision look in red and
   amber with scanlines, a header radar and a reticle that locks onto cards. Same lanes and
   cards in both, each with light and dark variants and reduced-motion support. Pick the
@@ -56,6 +62,10 @@ are stable from 0.1.0.
   the XO skill keeps it current, and `bearings` folds its waiting items into "Needs you".
 
 ### Changed
+- README reads on its own: the comparison with another project is gone; the differences that
+  matter are listed under Design.
+- Skills: the `chartroom` skill points at the dashboard and `board`; `continue` appends the
+  commander's words to the brief's intent when it relays an answer.
 - The dashboard page moves: working tasks show a heartbeat, a wake and ticking timers, waiting
   ones ride at anchor with a countdown, needs-you cards glow, cards glide between lanes, new
   events wash in, and counts tick. A ship's log strip shows the newest events. Cards are keyed

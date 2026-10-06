@@ -9,9 +9,10 @@ You don't juggle tabs.
 
 chartroom has two parts: a small bash CLI (`chartroom`) that does the exact work (task
 records, worktrees, launching, steering, liveness, a wake stream), and Agent Skills
-(`chartroom`, `bearings`, `dashboard` to open the board, and `continue` to jump to one item by
-its short id) that tell your agent how to be the XO. State is plain files under
-`~/.chartroom`. There is no daemon (an optional local dashboard can show the fleet in a browser).
+(`chartroom`, `bearings`, `dashboard` to open the board, `continue` to jump to one item by its
+short id, and `captain`, the chartroom skill under its older name) that tell your agent how to
+be the XO. State is plain files under `~/.chartroom`. There is no daemon (an optional local
+dashboard can show the fleet in a browser).
 
 ```
             you (commander)
@@ -26,19 +27,11 @@ its short id) that tell your agent how to be the XO. State is plain files under
      └────── each in its own git worktree; events → ~/.chartroom/tasks/<id>/events.log
 ```
 
-## Why another one?
+## Design
 
-[kunchenguid/firstmate](https://github.com/kunchenguid/firstmate) solves the same problem with
-a similar metaphor and is much further along. It supports more harnesses, more session
-backends, secondmates on other hosts, Relay, Gerrit/GitLab flows, and has a larger community.
-**If you want the full-featured system, use firstmate.**
-
-chartroom is the small one. The differences that are real:
-
-- **It installs into your existing setup instead of being one.** firstmate is an "agent distro":
-  you clone it and launch your agent inside it. chartroom is a CLI on your PATH plus four skills
-  linked into the agents you already use. Your home directory, config and other skills stay as
-  they are.
+- **It installs into your existing setup instead of being one.** chartroom is a CLI on your PATH
+  plus a few skills linked into the agents you already use. Your home directory, config and other
+  skills stay as they are.
 - **No multiplexer required.** Headless workers (`claude -p` with live steering over a stream,
   `codex exec` with resume) are first-class backends. So are plain commands: any CLI can be a
   worker through a template. It degrades from herdr to cmux to tmux to headless to a command,
@@ -73,6 +66,59 @@ Per agent:
 | Gemini CLI | `chartroom install-skills --agents` (Gemini reads `~/.agents/skills`), or `gemini skills link <checkout>/skills/chartroom` | same as Codex |
 | pi | `chartroom install-skills --pi` | same as Codex |
 | opencode, Cursor, Amp, Copilot, others | paste [`adapters/agents-md/AGENTS.md`](adapters/agents-md/AGENTS.md) into the agent's instructions, or start it in `~/.chartroom` (its `AGENTS.md` points at the skill) | same as Codex |
+
+### Updating, and running on several machines
+
+Each machine has its own install and its own home. To set one up, or to update it:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/wolzey/chartroom/main/install.sh | bash   # update = re-run
+chartroom install-skills --claude --agents   # once; the links follow the checkout, so updates need no re-link
+chartroom doctor
+```
+
+- **Share settings, not state.** `~/.config/chartroom/config` (home path, project roots,
+  workspace name, branch prefix, harness) and your standing preferences (`commander.md`,
+  `projects.md`) are safe to keep in your dotfiles. Everything else in the home is per machine:
+  `tasks/` records hold local worktree paths, process ids and session handles, and `worktrees/`
+  holds the checkouts themselves. Never sync `tasks/`, `worktrees/`, `inbox.md`, `.watch-cursor`
+  or `.dashboard.*` between machines.
+- **Write the config before installing.** `install.sh` runs `chartroom init` on whichever home
+  the config names, and `init` never overwrites an existing file.
+
+### A home from before chartroom
+
+A home made by chartroom's predecessor (`~/.captain`, with `captain.md`, "Captain's intent"
+briefs and `codex` / `herdr-claude` / `herdr-codex` backends) works as is. On each machine
+that has one:
+
+1. Point chartroom at it, and keep its old defaults if you want new tasks to look like the old
+   ones, in `~/.config/chartroom/config`:
+
+   ```
+   CHARTROOM_HOME=~/.captain
+   CHARTROOM_WORKSPACE=captain-crew
+   CHARTROOM_BRANCH_PREFIX=cap/
+   CHARTROOM_PROJECT_ROOTS=~/code
+   CHARTROOM_HARNESS=claude
+   ```
+
+2. Move any older copies of the `captain`, `bearings`, `dashboard` and `continue` skills out of
+   your agents' skill directories (`install-skills` never replaces a real directory), then run
+   `chartroom install-skills`. It also links a `captain` skill: the chartroom skill under its old
+   name, so `/captain` and a home whose `AGENTS.md` asks for it keep working.
+3. Briefs already handed to workers name the old helper's path. Leave an executable at that
+   path that hands over to chartroom, so running workers can still report:
+
+   ```bash
+   #!/usr/bin/env bash
+   export CHARTROOM_HOME="${CAP_HOME:-$HOME/.captain}"
+   [[ "${1:-}" == dashboard ]] && { shift; set -- dashboard open "$@"; }
+   exec "$(command -v chartroom || echo "$HOME/.local/bin/chartroom")" "$@"
+   ```
+
+4. Check: `chartroom status` lists the old tasks with their states, and `chartroom board`
+   shows the same lanes as the dashboard.
 
 ## Quickstart
 

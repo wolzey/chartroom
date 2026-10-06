@@ -8,7 +8,7 @@ setup() { common_setup; }
   run cr install-skills --claude --agents --pi
   [ "$status" -eq 0 ]
   for d in .claude/skills .agents/skills .pi/agent/skills; do
-    for s in chartroom bearings dashboard continue; do
+    for s in chartroom bearings dashboard continue captain; do
       [ -L "$HOME/$d/$s" ]
       [ -f "$HOME/$d/$s/SKILL.md" ]
     done
@@ -68,7 +68,19 @@ setup() { common_setup; }
   for f in $(grep -oE 'references/[a-z-]+\.md' "$REPO_ROOT/skills/chartroom/SKILL.md" | sort -u); do
     [ -f "$REPO_ROOT/skills/chartroom/$f" ]
   done
-  ! grep -rniE 'first mate' "$REPO_ROOT/skills"
+  ! grep -rniE 'first mate|firstmate' "$REPO_ROOT/skills" "$REPO_ROOT/README.md"
+}
+
+@test "the captain skill is a legacy alias that defers to the chartroom skill" {
+  f="$REPO_ROOT/skills/captain/SKILL.md"
+  grep -q '^name: captain$' "$f"
+  grep -q 'Load the `chartroom` skill and follow it exactly' "$f"
+  [ -f "$REPO_ROOT/skills/captain/../chartroom/SKILL.md" ]
+  run cr install-skills --dir "$HOME/skills"
+  [[ "$output" == *"link $HOME/skills/captain -> $REPO_ROOT/skills/captain"* ]]
+  run cr install-skills --dir "$HOME/skills" --uninstall
+  [[ "$output" == *"removed $HOME/skills/captain"* ]]
+  [ ! -e "$HOME/skills/captain" ]
 }
 
 @test "privacy gate passes on the tracked tree" {

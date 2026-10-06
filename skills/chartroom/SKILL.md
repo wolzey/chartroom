@@ -181,6 +181,11 @@ On a wake:
   is yours: check the thing (CI, the review) yourself, then re-run it with `chartroom steer`.
   Escalate only if the wait is on the commander or another person who has gone quiet.
 
+The dashboard shows the same fleet in a browser: `waiting` tasks under In progress, overdue
+ones under On hold. `chartroom dashboard open` (or the `dashboard` skill, `/dashboard`) opens
+it, starting it if needed; `chartroom board` prints the same lanes in the terminal, short id
+first.
+
 Answer a worker with `chartroom steer <id> "<answer>"`. Live backends type it in (or write it
 to the stream) and confirm it was taken. Between-runs backends refuse while the worker is
 running, then resume or re-run it with your message. For subagents it records the answer, and

@@ -22,8 +22,8 @@ not on PATH, use `../../bin/chartroom` relative to this skill's directory.)
      terms, with your agent's question tool (AskUserQuestion in Claude Code; otherwise one short
      message): the worker's recommended option first, marked as recommended, then the others.
      Then carry out the answer exactly as the chartroom skill says: `chartroom steer` it to the
-     worker, write approvals into the brief, record lasting preferences in `commander.md`, and
-     remove the answered `inbox.md` line.
+     worker (and append the commander's words to the brief's intent), write approvals into the
+     brief, record lasting preferences in `commander.md`, and remove the answered `inbox.md` line.
    - `done`: Verify (chartroom skill step 7) if you have not already, then give the outcome,
      the risk and the evidence in two or three lines, with full PR URLs, and ask how to land it
      (merge locally / open a PR / leave it).
