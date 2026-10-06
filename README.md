@@ -211,6 +211,12 @@ bats test/                 # no herdr/tmux/cmux/claude/codex needed: fakes and a
 scripts/privacy-gate.sh    # no personal data in tracked files
 ```
 
+Maintainers: merge by fast-forward pushing `main` from a local clone whose commits use the
+GitHub noreply identity as both author and committer. Never merge through the GitHub web UI:
+squash, rebase and merge-commit merges all stamp the merging account's name and primary email
+on the commit, which the privacy gate (rightly) rejects on `main`. The PR shows as merged once
+its commits land on `main`.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
