@@ -6,83 +6,309 @@
 <title>chartroom</title>
 <link rel="icon" href="data:,">
 <style>
+  /* Chartroom: a chart table on the bridge. Paper chart by day, night watch by dark.
+     Work under way moves (a heartbeat and a wake), waiting rides at anchor, what needs
+     you glows like a beacon. Every loop animates transform/opacity only, and
+     prefers-reduced-motion turns all of it off. */
   :root {
-    --bg: #f6f7f9; --panel: #ffffff; --ink: #1b1f24; --muted: #5d6570; --line: #dfe3e8;
-    --chip: #eef1f4; --link: #0a5bd3;
-    --needs: #c2410c; --prog: #1d6fd1; --hold: #8a6d00; --ready: #13803d; --recent: #6b7280;
-    --shadow: 0 1px 2px rgba(0,0,0,.06);
+    --display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    --body: "Avenir Next", Avenir, "Segoe UI Variable Text", "Segoe UI", "Gill Sans", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --bg: #efe7d6; --bg2: #e4d9c1; --panel: #fbf7ee; --panel2: #f4ecdc; --ink: #14243a; --muted: #5d6976;
+    --faint: #8c9196; --line: rgba(20,36,58,.15); --line2: rgba(20,36,58,.07); --chip: rgba(20,36,58,.06);
+    --link: #0d5a8a;
+    --needs: #c2412b; --prog: #0f7490; --wait: #9c6c0c; --hold: #7a6a55; --ready: #2e7d4c; --recent: #7b848c;
+    --sweep: rgba(15,116,144,.18); --contour: .5; --grid: rgba(20,36,58,.045);
+    --shadow: 0 1px 0 rgba(255,255,255,.7) inset, 0 1px 2px rgba(20,36,58,.08), 0 10px 24px -18px rgba(20,36,58,.45);
+    color-scheme: light;
   }
   @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #0f1215; --panel: #171b20; --ink: #e6e9ed; --muted: #9aa3ad; --line: #2a3038;
-      --chip: #222830; --link: #6aa8ff;
-      --needs: #fb923c; --prog: #60a5fa; --hold: #facc15; --ready: #4ade80; --recent: #9ca3af;
-      --shadow: none;
+    :root:not([data-theme=light]) {
+      --bg: #061420; --bg2: #0a1d2d; --panel: #0d2133; --panel2: #0a1b2a; --ink: #e2ebf1; --muted: #8fa4b5;
+      --faint: #5f7586; --line: rgba(150,200,230,.15); --line2: rgba(150,200,230,.07); --chip: rgba(150,200,230,.08);
+      --link: #7cc7ec;
+      --needs: #ff7b5c; --prog: #41c9e2; --wait: #e9b956; --hold: #ab9c88; --ready: #5ed592; --recent: #71879a;
+      --sweep: rgba(65,201,226,.13); --contour: .28; --grid: rgba(150,200,230,.035);
+      --shadow: 0 1px 0 rgba(255,255,255,.04) inset, 0 12px 30px -18px rgba(0,0,0,.9);
+      color-scheme: dark;
     }
   }
+  :root[data-theme=dark] {
+    --bg: #061420; --bg2: #0a1d2d; --panel: #0d2133; --panel2: #0a1b2a; --ink: #e2ebf1; --muted: #8fa4b5;
+    --faint: #5f7586; --line: rgba(150,200,230,.15); --line2: rgba(150,200,230,.07); --chip: rgba(150,200,230,.08);
+    --link: #7cc7ec;
+    --needs: #ff7b5c; --prog: #41c9e2; --wait: #e9b956; --hold: #ab9c88; --ready: #5ed592; --recent: #71879a;
+    --sweep: rgba(65,201,226,.13); --contour: .28; --grid: rgba(150,200,230,.035);
+    --shadow: 0 1px 0 rgba(255,255,255,.04) inset, 0 12px 30px -18px rgba(0,0,0,.9);
+    color-scheme: dark;
+  }
+  [data-lane=needs_you] { --accent: var(--needs); }
+  [data-lane=in_progress] { --accent: var(--prog); }
+  [data-lane=on_hold] { --accent: var(--hold); }
+  [data-lane=ready] { --accent: var(--ready); }
+  [data-lane=recent] { --accent: var(--recent); }
+
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--ink);
-         font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-  header { position: sticky; top: 0; z-index: 2; background: var(--bg); border-bottom: 1px solid var(--line);
-           padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
-  header h1 { font-size: 16px; margin: 0; letter-spacing: .02em; }
-  header .meta { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-  .counts { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
-  .count { background: var(--chip); border-radius: 999px; padding: 2px 10px; font-size: 12px; white-space: nowrap; }
-  .count b { font-variant-numeric: tabular-nums; }
-  .banner { margin: 10px 16px 0; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--needs);
-            color: var(--needs); display: none; overflow-wrap: anywhere; }
-  main { display: grid; gap: 12px; padding: 12px 16px 32px;
-         grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); align-items: start; }
-  section.lane { background: transparent; min-width: 0; }
-  .lane h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; margin: 4px 0 8px;
-             display: flex; align-items: center; gap: 8px; }
-  .lane h2 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); flex: none; }
-  .lane h2 .n { color: var(--muted); font-weight: 500; }
-  .lane[data-lane=needs_you] { --accent: var(--needs); }
-  .lane[data-lane=in_progress] { --accent: var(--prog); }
-  .lane[data-lane=on_hold] { --accent: var(--hold); }
-  .lane[data-lane=ready] { --accent: var(--ready); }
-  .lane[data-lane=recent] { --accent: var(--recent); }
-  .card { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent);
-          border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; box-shadow: var(--shadow); min-width: 0; }
-  .card.inbox { border-style: dashed; border-left-style: solid; }
-  .card .title { font-weight: 600; overflow-wrap: anywhere; }
-  .card .sub { color: var(--muted); font-size: 12px; margin-top: 2px; display: flex; flex-wrap: wrap; gap: 0 8px; }
-  .badge { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 4px; background: var(--chip);
-           color: var(--ink); border: 1px solid var(--line); }
-  .badge.accent { color: var(--accent); border-color: var(--accent); }
-  .card .last { margin-top: 4px; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .card .waiting { margin-top: 4px; font-size: 12.5px; overflow-wrap: anywhere; }
-  .card .waiting .until { color: var(--muted); }
-  .card .links { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; }
+  html { background: var(--bg); }
+  body { margin: 0; min-height: 100vh; color: var(--ink); background:
+           radial-gradient(1200px 700px at 85% -10%, var(--bg2), transparent 70%),
+           linear-gradient(var(--grid) 1px, transparent 1px) 0 0 / 100% 64px,
+           linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 64px 100%,
+           var(--bg);
+         font: 14px/1.45 var(--body); -webkit-font-smoothing: antialiased; overflow-x: hidden; }
   a { color: var(--link); text-decoration: none; }
   a:hover { text-decoration: underline; }
-  .empty { color: var(--muted); font-size: 12px; padding: 6px 2px 12px; }
-  .more { background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 6px; width: 100%;
-          padding: 6px; cursor: pointer; font: inherit; font-size: 12px; }
-  .approvals { margin-top: 4px; font-size: 12px; color: var(--muted); }
+  :focus-visible { outline: 2px solid var(--prog); outline-offset: 2px; border-radius: 4px; }
+
+  /* ambient sea: drifting depth contours and a slow sonar sweep, both fixed, transform-only */
+  .sea { position: fixed; inset: -25%; z-index: -1; pointer-events: none; opacity: var(--contour);
+         background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="640" height="640"><g fill="none" stroke="%236e8da3" stroke-width="1"><path d="M178 170L179 173L180 176L179 178L177 181L174 183L171 184L168 185L166 186L163 187L160 188L158 189L155 189L153 190L150 190L147 189L145 189L142 189L139 188L136 188L133 187L130 187L127 185L124 183L123 181L122 178L123 175L124 172L126 170L128 168L129 166L130 164L130 162L130 160L131 157L132 155L133 153L135 151L138 149L141 148L144 148L147 147L150 147L153 147L156 148L159 148L162 150L164 152L165 154L166 156L167 159L168 161L169 162L171 164L173 166L176 168Z"/><path d="M195 170L197 174L197 179L196 183L193 187L188 190L183 192L178 193L174 194L170 196L166 197L162 198L158 200L154 201L150 202L146 202L141 202L137 201L132 200L128 199L123 198L118 196L114 194L110 191L108 187L107 182L108 178L110 174L113 170L115 167L117 164L118 161L119 158L119 154L119 150L120 146L123 142L126 139L130 136L135 135L140 134L145 134L150 135L155 135L159 136L164 137L168 139L171 142L174 145L176 149L178 152L179 155L181 158L184 160L188 163L191 166Z"/><path d="M211 170L214 176L215 182L213 188L208 193L202 197L195 199L188 201L181 202L176 203L171 205L166 208L161 210L156 213L150 215L144 215L137 215L131 214L125 213L119 211L113 208L107 205L101 202L97 197L94 192L93 186L93 181L96 175L99 170L103 166L105 162L107 158L107 153L107 148L107 142L109 136L111 130L116 126L122 122L129 121L136 121L143 121L150 123L156 124L162 126L168 128L173 130L178 133L183 136L186 140L189 144L192 149L195 152L198 156L203 160L207 165Z"/><path d="M228 170L231 177L231 185L229 193L223 199L215 204L206 207L197 209L189 210L182 211L175 213L170 216L164 220L157 224L150 228L142 230L133 230L125 229L117 226L110 223L103 219L96 214L90 209L85 203L81 197L80 190L80 183L82 176L86 170L90 164L93 159L95 154L95 148L95 142L95 134L97 126L100 119L106 113L114 108L123 107L132 107L142 109L150 111L158 114L165 117L172 119L179 121L185 124L191 128L197 132L201 137L205 141L209 147L214 152L218 157L223 163Z"/><path d="M244 170L246 179L246 188L243 197L237 204L228 210L217 214L206 216L196 217L188 219L180 222L174 226L167 231L159 237L150 242L140 245L129 246L118 244L109 241L100 235L93 229L86 223L80 216L75 209L71 201L68 193L68 185L69 177L72 170L75 163L79 157L81 150L82 143L82 135L83 126L85 116L89 107L96 100L106 95L117 93L129 93L140 96L150 101L159 105L167 108L175 111L183 113L192 116L200 119L208 123L214 128L220 134L226 140L231 147L235 154L240 162Z"/><path d="M259 170L261 180L260 191L256 200L249 209L239 216L228 221L215 224L204 226L194 228L186 231L178 235L170 242L161 249L150 256L138 260L124 262L112 260L100 255L90 248L83 239L76 231L71 222L66 213L61 205L58 196L56 188L56 179L57 170L60 162L63 154L66 146L67 137L68 128L70 118L73 107L78 96L87 87L98 81L111 79L125 80L138 84L150 90L160 96L169 100L178 104L188 106L198 108L208 110L219 113L229 119L237 125L243 133L249 142L253 151L257 160Z"/><path d="M508 420L506 423L504 426L502 429L500 432L498 434L495 437L493 439L490 440L487 442L483 443L480 443L477 444L473 445L470 447L466 448L462 449L457 450L453 450L449 448L445 445L443 442L442 438L442 434L442 431L442 428L442 425L441 423L440 420L439 417L438 414L438 411L439 408L440 405L442 402L445 399L447 397L450 394L454 392L458 391L462 390L466 390L470 391L474 393L477 395L480 397L482 399L485 401L488 402L491 402L496 403L500 405L504 407L507 409L508 413L509 416Z"/><path d="M525 420L522 425L518 429L515 433L511 436L508 440L505 443L502 446L498 449L494 452L490 454L485 455L480 457L475 458L470 460L464 461L458 462L452 463L445 462L439 460L435 456L432 451L431 446L431 440L431 435L431 431L431 427L429 424L427 420L425 416L423 411L422 406L423 401L425 397L428 393L433 389L437 386L442 384L447 381L453 380L458 378L464 378L470 379L475 381L480 384L484 387L488 390L492 392L496 393L501 394L507 396L514 398L519 400L524 405L526 409L527 415Z"/><path d="M542 420L537 426L532 432L526 436L521 440L517 444L514 449L511 453L507 458L502 462L497 466L491 468L484 471L477 472L470 474L462 475L455 475L446 475L438 474L431 471L425 466L421 460L420 453L419 446L420 440L420 434L419 429L417 425L414 420L410 414L407 408L406 402L406 395L409 389L414 383L420 379L427 376L434 373L441 371L448 369L456 368L463 368L470 369L477 370L483 373L489 376L494 379L499 382L505 384L512 386L520 388L528 390L535 394L541 400L544 406L545 413Z"/><path d="M558 420L552 428L545 434L538 439L531 444L526 449L522 454L519 460L515 467L511 473L504 478L497 483L488 486L479 487L470 488L461 488L451 488L441 487L432 484L424 481L417 475L412 468L409 460L408 452L408 444L408 438L407 432L405 426L400 420L395 413L391 405L389 397L389 388L393 380L399 374L407 369L417 365L426 363L436 362L445 360L453 359L462 359L470 359L478 360L486 362L494 365L501 368L508 371L515 374L523 376L532 379L542 383L551 388L557 395L561 403L562 412Z"/><path d="M574 420L567 429L558 436L549 443L541 448L535 454L531 460L528 467L524 476L519 484L512 492L503 498L493 502L481 503L470 503L459 502L448 500L437 498L427 494L417 489L409 483L403 475L398 467L396 458L396 449L395 441L394 434L391 427L386 420L380 412L375 402L371 392L372 381L376 372L384 364L395 358L407 355L419 353L431 353L441 352L451 351L460 350L470 349L480 349L490 350L499 352L508 355L517 359L526 362L535 366L545 371L556 376L565 382L573 391L577 400L578 410Z"/><path d="M588 420L580 430L571 439L560 446L552 452L545 459L540 466L537 475L533 485L528 496L520 505L510 513L497 518L484 520L470 519L457 516L444 512L433 507L422 502L411 496L402 490L394 482L389 473L385 464L383 455L381 446L379 437L375 429L370 420L364 410L358 399L355 387L355 375L360 363L370 354L383 348L397 345L412 344L426 344L438 345L449 344L459 342L470 340L481 338L493 338L505 339L516 341L527 345L538 350L549 356L559 362L569 369L579 377L587 387L591 397L592 409Z"/><path d="M538 110L538 112L537 113L536 115L535 116L534 117L532 118L531 119L530 120L529 121L527 123L526 124L524 126L522 127L520 127L518 127L515 127L513 126L512 124L511 122L510 121L509 119L508 118L507 117L505 116L504 115L503 113L502 112L502 110L502 108L502 107L502 105L503 103L503 101L504 100L506 98L507 97L509 96L512 96L514 96L516 97L518 97L520 98L522 98L523 98L525 98L527 97L530 97L532 97L534 98L536 100L537 101L538 103L538 105L538 107L538 108Z"/><path d="M552 110L551 113L550 116L549 118L548 121L546 123L544 125L541 127L539 129L536 131L534 134L531 136L528 139L524 141L520 142L516 142L511 141L508 138L505 135L503 132L502 129L500 126L499 124L496 122L494 120L491 118L489 116L487 113L486 110L485 107L486 104L487 100L488 97L490 95L492 92L495 89L498 87L501 86L505 85L509 85L513 86L517 87L520 88L523 88L526 88L530 87L534 86L538 86L543 87L547 88L550 90L552 93L553 97L553 100L553 104L552 107Z"/><path d="M564 110L563 114L562 118L561 122L560 126L558 130L556 133L552 137L549 140L545 142L541 146L536 149L532 152L526 154L520 155L514 155L508 154L503 150L499 146L496 141L494 137L492 133L489 130L486 127L482 125L478 122L473 119L470 115L468 110L467 105L468 100L471 96L474 92L477 88L480 84L484 81L489 78L494 76L499 75L505 74L510 75L515 76L520 77L525 77L529 77L534 76L540 75L547 75L554 75L560 77L564 81L568 86L569 91L568 96L567 101L565 106Z"/><path d="M575 110L574 115L573 120L573 125L572 131L571 136L568 142L564 146L560 151L554 155L548 158L542 161L535 164L528 167L520 168L512 168L504 166L498 162L493 157L489 151L486 145L483 140L480 136L476 133L470 130L464 126L458 122L453 116L449 110L449 103L450 97L454 91L459 86L464 81L470 77L475 73L481 70L487 67L494 65L500 64L507 64L514 64L520 65L526 65L533 65L539 64L547 64L556 63L564 64L572 67L579 72L583 78L584 85L583 92L581 99L578 105Z"/><path d="M586 110L584 116L584 122L584 128L585 136L584 143L582 150L578 157L572 163L564 168L556 171L547 174L539 177L529 179L520 180L511 179L501 177L493 172L487 167L482 160L478 154L474 148L470 143L465 139L458 135L450 130L442 125L435 118L430 110L429 102L432 93L437 86L444 80L452 75L460 71L467 67L474 63L481 59L488 56L496 54L504 52L512 52L520 52L528 52L536 52L545 52L554 51L565 52L575 54L584 57L592 63L597 70L598 79L597 88L594 96L590 104Z"/><path d="M598 110L595 117L595 124L596 132L597 141L598 150L596 160L591 168L584 176L575 181L564 185L553 188L542 189L531 190L520 190L509 189L499 186L489 182L481 176L474 170L469 163L464 156L459 150L452 145L444 140L435 134L425 128L417 120L412 110L410 100L413 90L420 81L430 74L440 69L451 65L460 61L468 57L476 52L483 48L492 44L501 40L510 38L520 37L530 37L540 37L551 38L562 39L573 41L585 43L596 48L604 55L610 64L612 74L610 84L607 94L602 102Z"/><path d="M181 520L180 522L179 524L178 525L177 527L176 528L176 530L176 533L175 535L173 537L171 539L169 540L166 541L163 540L160 539L158 538L155 536L153 535L152 534L150 534L148 533L146 532L144 531L142 529L141 528L140 526L139 524L138 522L137 520L136 518L136 515L136 513L137 511L139 509L142 508L144 507L147 507L150 507L152 507L154 506L156 505L158 504L160 503L162 502L165 501L168 501L171 502L173 503L175 505L177 506L178 508L179 510L180 512L181 514L182 516L181 518Z"/><path d="M195 520L194 523L192 526L191 529L190 532L189 535L188 538L187 542L185 546L182 549L179 552L175 554L170 554L165 554L160 552L156 549L153 547L149 545L146 543L143 542L140 541L136 540L132 538L129 536L126 533L124 530L123 527L121 524L121 520L120 516L120 513L121 509L123 505L126 502L130 500L134 499L139 498L143 498L147 498L150 497L153 495L156 493L160 491L164 489L169 488L174 487L179 488L183 491L186 494L188 497L190 500L191 504L193 507L194 510L195 514L195 517Z"/><path d="M208 520L208 524L207 529L206 533L204 537L202 542L200 546L198 551L195 556L191 561L186 565L180 567L173 568L166 567L160 564L154 560L150 557L146 554L141 552L137 550L132 549L126 548L120 546L115 543L110 540L107 535L105 530L104 525L104 520L105 515L106 510L107 505L110 500L114 496L119 493L124 491L130 489L136 489L141 488L146 487L150 485L155 482L160 479L166 476L173 474L180 473L187 475L192 478L196 483L199 488L201 493L203 498L204 503L205 507L207 511L208 516Z"/><path d="M222 520L223 526L223 532L221 538L219 543L216 549L213 555L210 561L205 566L200 572L193 577L185 579L177 580L168 579L160 576L153 571L147 567L142 563L136 560L131 558L124 557L116 556L107 554L100 551L93 546L89 540L87 534L87 527L88 520L90 514L92 507L95 501L99 496L103 491L108 486L115 483L122 481L129 479L135 478L141 476L147 473L153 470L160 466L168 462L177 460L186 459L195 461L202 465L207 472L210 479L212 486L213 493L214 499L216 504L218 509L220 514Z"/><path d="M235 520L238 527L239 535L239 543L236 550L232 557L227 564L221 570L215 577L208 582L199 587L190 590L180 592L170 590L160 587L151 582L144 577L138 573L131 569L124 567L115 566L105 565L95 563L84 559L76 553L71 546L68 537L69 528L71 520L75 512L80 505L84 498L88 492L93 486L99 480L105 475L113 471L121 468L128 466L136 464L143 460L151 457L160 452L170 449L181 446L192 446L202 448L211 453L217 461L221 470L223 479L223 487L224 495L225 501L228 507L232 513Z"/><path d="M249 520L254 529L257 538L257 548L254 557L249 566L242 574L234 580L225 586L215 592L205 597L194 600L183 601L171 601L160 598L150 593L141 588L133 583L125 579L116 577L106 575L94 574L81 571L69 567L59 560L52 551L49 541L51 530L55 520L61 511L68 503L74 495L80 488L85 481L90 474L96 468L104 462L112 457L121 453L130 450L140 446L149 443L160 439L172 435L184 433L197 433L209 436L220 442L227 451L231 461L233 472L233 482L234 491L235 498L239 505L244 512Z"/></g></svg>') 0 0 / 640px 640px;
+         animation: drift 140s linear infinite alternate; will-change: transform; }
+  .sweep { position: fixed; z-index: -1; pointer-events: none; width: 1100px; height: 1100px; right: -520px; top: -520px;
+           border-radius: 50%; will-change: transform;
+           background: conic-gradient(from 0deg, transparent 0deg 292deg, var(--sweep) 359deg, transparent 360deg),
+                       repeating-radial-gradient(circle, transparent 0 109px, var(--line2) 110px 111px);
+           animation: spin 18s linear infinite; }
+  @keyframes drift { from { transform: translate3d(0,0,0); } to { transform: translate3d(-6%, -4%, 0); } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* the bridge */
+  header.bridge { position: sticky; top: 0; z-index: 3; padding: 12px 20px 10px;
+                  background: color-mix(in srgb, var(--bg) 82%, transparent);
+                  -webkit-backdrop-filter: blur(10px) saturate(1.2); backdrop-filter: blur(10px) saturate(1.2);
+                  border-bottom: 1px solid var(--line);
+                  display: grid; grid-template-columns: auto 1fr auto; gap: 10px 20px; align-items: center; }
+  .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .rose { width: 42px; height: 42px; flex: none; color: var(--ink); }
+  .rose .needle { transform-origin: 32px 32px; animation: swing 6s ease-in-out infinite; }
+  .rose .needle .n { fill: var(--needs); }
+  .rose .needle .s { fill: var(--muted); }
+  body.alert .rose .needle { animation-duration: 2s; }
+  @keyframes swing { 0%,100% { transform: rotate(-9deg); } 50% { transform: rotate(7deg); } }
+  .brand h1 { margin: 0; font: italic 600 26px/1 var(--display); letter-spacing: .01em; }
+  .brand h1 small { font: 600 10px/1 var(--body); letter-spacing: .22em; text-transform: uppercase; color: var(--muted);
+                    font-style: normal; margin-left: 8px; vertical-align: 4px; }
+  .meta { color: var(--muted); font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
+  .instruments { grid-column: 3; display: flex; align-items: center; gap: 14px; font: 12px var(--mono); color: var(--muted); }
+  .watch b { color: var(--ink); font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: .04em; }
+  .sounding { display: flex; align-items: center; gap: 6px; position: relative; }
+  .sounding svg { width: 20px; height: 20px; transform: rotate(-90deg); flex: none; }
+  .sounding .track { stroke: var(--line); }
+  .sounding .arc { stroke: var(--prog); stroke-dasharray: 50.27; stroke-dashoffset: 0; }
+  .sounding .ping { position: absolute; left: 0; top: 50%; width: 20px; height: 20px; margin-top: -10px; border-radius: 50%;
+                    border: 1.5px solid var(--prog); pointer-events: none; opacity: 0; }
+  .sounding span { font-variant-numeric: tabular-nums; min-width: 7ch; }
+  .theme { font: inherit; color: var(--muted); background: var(--chip); border: 1px solid var(--line); border-radius: 999px;
+           padding: 3px 10px; cursor: pointer; }
+  .theme:hover { color: var(--ink); }
+
+  .counts { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+  .gauge { position: relative; display: flex; align-items: baseline; gap: 8px; padding: 6px 10px 8px; border-radius: 8px;
+           background: var(--chip); border: 1px solid var(--line2); color: var(--ink); overflow: hidden; }
+  .gauge:hover { text-decoration: none; border-color: var(--line); }
+  .gauge .lbl { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); flex: 1;
+                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .gauge b { font: 600 22px/1 var(--display); font-variant-numeric: tabular-nums lining-nums; display: inline-block; }
+  .gauge .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: var(--accent);
+                transform-origin: left; transform: scaleX(0); transition: transform .9s cubic-bezier(.2,.8,.2,1); }
+  .gauge .lamp { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); align-self: center; flex: none;
+                 opacity: .35; }
+  .gauge.hot .lamp { opacity: 1; animation: beacon 2s ease-in-out infinite; animation-delay: var(--sync, 0s); }
+  .gauge.hot { border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+
+  /* ship's log: the newest signals across the fleet */
+  .log { margin: 12px 20px 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; align-items: start; }
+  .log h3 { margin: 2px 0 0; font: italic 600 15px/1.2 var(--display); color: var(--muted); white-space: nowrap; }
+  .log ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; min-width: 0; }
+  .log li { display: grid; grid-template-columns: 7ch minmax(0, 14rem) minmax(0, 1fr); gap: 10px; align-items: baseline;
+            font-size: 12.5px; padding: 2px 8px; border-radius: 6px; cursor: default; position: relative; }
+  .log li.open { cursor: pointer; }
+  .log li.open:hover { background: var(--chip); }
+  .log .t { font: 11.5px var(--mono); color: var(--faint); font-variant-numeric: tabular-nums; text-align: right; }
+  .log .who { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .log .what { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .log li.fresh { animation: logIn .7s cubic-bezier(.2,.8,.2,1) both; }
+  .log li.fresh::before { content: ""; position: absolute; inset: 0; border-radius: 6px; background: var(--prog);
+                          opacity: 0; animation: wash 2.6s ease-out; pointer-events: none; }
+  @keyframes logIn { from { opacity: 0; transform: translateY(-10px); } }
+  @keyframes wash { 0% { opacity: .22; } 100% { opacity: 0; } }
+  .kind { font: 600 10.5px/1 var(--mono); letter-spacing: .04em; text-transform: uppercase; padding: 2px 5px;
+          border-radius: 4px; margin-right: 6px; background: var(--chip); color: var(--muted); vertical-align: 1px; }
+  .kind.progress, .kind.steered { color: var(--prog); }
+  .kind.decision, .kind.blocked, .kind.failed { color: var(--needs); }
+  .kind.waiting { color: var(--wait); }
+  .kind.done { color: var(--ready); }
+
+  .banner { margin: 12px 20px 0; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--needs);
+            color: var(--needs); background: color-mix(in srgb, var(--needs) 8%, transparent); display: none; overflow-wrap: anywhere; }
+
+  /* lanes */
+  main { display: grid; gap: 18px; padding: 16px 20px 48px; grid-template-columns: repeat(auto-fit, minmax(256px, 1fr));
+         align-items: start; }
+  section.lane { min-width: 0; animation: rise .7s cubic-bezier(.2,.8,.2,1) both; animation-delay: calc(var(--i) * 70ms); }
+  @keyframes rise { from { opacity: 0; transform: translateY(14px); } }
+  .lane h2 { margin: 2px 0 10px; display: flex; align-items: center; gap: 9px; font: 600 12px/1 var(--body);
+             letter-spacing: .16em; text-transform: uppercase; padding-bottom: 8px;
+             border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+  .lane h2 .n { margin-left: auto; font: 600 18px/1 var(--display); letter-spacing: 0; color: var(--accent);
+                font-variant-numeric: tabular-nums lining-nums; display: inline-block; }
+  .lane h2 .sig { width: 10px; height: 10px; }
+  .cards { display: grid; gap: 10px; }
+  .foot:empty { display: none; }
+  .foot { margin-top: 10px; }
+  .empty { color: var(--faint); font: italic 13px var(--display); padding: 4px 2px 10px; }
+  .more { background: none; border: 1px dashed var(--line); color: var(--muted); border-radius: 8px; width: 100%;
+          padding: 7px; cursor: pointer; font: inherit; font-size: 12px; }
+  .more:hover { color: var(--ink); border-color: var(--accent); }
+  .approvals { margin-top: 6px; font-size: 12px; color: var(--muted); }
+  .approvals ul { margin: 4px 0 0; padding-left: 18px; }
   .approvals li { margin: 2px 0; overflow-wrap: anywhere; }
+
+  /* cards */
+  .card { position: relative; min-width: 0; padding: 10px 12px 11px 14px; border-radius: 9px;
+          background: linear-gradient(180deg, var(--panel), var(--panel2)); border: 1px solid var(--line);
+          box-shadow: var(--shadow); transition: transform .25s ease; }
+  .card::before { content: ""; position: absolute; left: -1px; top: 8px; bottom: 8px; width: 3px; border-radius: 3px;
+                  background: var(--accent); }
+  .card:hover { transform: translateY(-2px); }
+  .card.inbox { border-style: dashed; }
+  .card .head { display: flex; gap: 9px; align-items: flex-start; }
+  .card .title { font-weight: 600; overflow-wrap: anywhere; line-height: 1.3; flex: 1; min-width: 0; }
+  .card .sub { color: var(--muted); font-size: 12px; margin-top: 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; }
+  .badge { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 4px; background: var(--chip);
+           color: var(--ink); border: 1px solid var(--line); white-space: nowrap; }
+  .badge.accent { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+  .clock { margin-top: 6px; font: 11.5px/1.3 var(--mono); color: var(--muted); display: flex; flex-wrap: wrap; gap: 2px 12px;
+           font-variant-numeric: tabular-nums; }
+  .clock b { color: var(--ink); font-weight: 500; }
+  .clock .lbl { color: var(--faint); margin-right: 4px; }
+  .card .last { margin-top: 6px; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-radius: 4px; }
+  .card .waiting { margin-top: 6px; font-size: 12.5px; overflow-wrap: anywhere; }
+  .card .waiting .until { color: var(--muted); font-family: var(--mono); font-size: 11.5px; }
+  .card .waiting .until.over { color: var(--needs); }
+  .card .links { margin-top: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 12px; }
+
+  /* signal glyphs, one per state */
+  .sig { position: relative; flex: none; width: 12px; height: 12px; margin-top: 3px; color: var(--accent); }
+  .sig.dot::before, .sig.dot::after { content: ""; position: absolute; inset: 1px; border-radius: 50%; background: var(--accent); }
+  .sig.dot::after { opacity: 0; }
+  .sig.ring::before { content: ""; position: absolute; inset: 1px; border-radius: 50%; border: 2px solid var(--accent); }
+  .sig svg { position: absolute; inset: -2px; width: 16px; height: 16px; }
+
+  /* under way: a heartbeat that ripples out, and a wake running along the keel */
+  .m-underway .sig.dot::after { animation: ripple 2s cubic-bezier(.2,.6,.3,1) infinite; animation-delay: var(--sync, 0s); }
+  .m-underway.fresh .sig.dot::after { animation-duration: 1.2s; }
+  .m-underway .sig.dot::before { animation: beat 2s ease-in-out infinite; animation-delay: var(--sync, 0s); }
+  .m-underway.fresh .sig.dot::before { animation-duration: 1.2s; }
+  .wake { position: absolute; left: 12px; right: 12px; bottom: 0; height: 2px; overflow: hidden; border-radius: 2px; }
+  .wake::before { content: ""; position: absolute; inset: 0; background: var(--accent); opacity: .12; }
+  .wake i { position: absolute; top: 0; bottom: 0; left: 0; width: 38%;
+            background: linear-gradient(90deg, transparent, var(--accent), transparent);
+            animation: wake 2.4s cubic-bezier(.45,0,.35,1) infinite; animation-delay: var(--sync, 0s); }
+  .m-draft .sig.dot::before { animation: blink 1.2s steps(2, jump-none) infinite; animation-delay: var(--sync, 0s); }
+  @keyframes ripple { 0% { opacity: .65; transform: scale(1); } 100% { opacity: 0; transform: scale(2.8); } }
+  @keyframes beat { 0%,100% { transform: scale(.85); } 15% { transform: scale(1.15); } 30% { transform: scale(.92); } 45% { transform: scale(1.05); } }
+  @keyframes wake { from { transform: translateX(-100%); } to { transform: translateX(270%); } }
+  @keyframes blink { 0% { opacity: 1; } 100% { opacity: .25; } }
+
+  /* waiting: riding at anchor, patient and slow */
+  .card.m-anchor { --accent: var(--wait); }
+  .m-anchor .sig svg { animation: bob 4s ease-in-out infinite; animation-delay: var(--sync, 0s); }
+  .m-anchor .wake { opacity: .6; }
+  .m-anchor .wake::before { background: repeating-linear-gradient(90deg, var(--accent) 0 6px, transparent 6px 12px); opacity: .35;
+                            animation: none; }
+  @keyframes bob { 0%,100% { transform: translateY(-1.5px) rotate(-6deg); } 50% { transform: translateY(1.5px) rotate(6deg); } }
+
+  /* needs you: a beacon, a soft glow and a slow gleam; noticed, never shouting */
+  .m-attn .sig.dot::before { animation: beacon 2s ease-in-out infinite; animation-delay: var(--sync, 0s); }
+  .m-attn .sig.dot::after { animation: ripple 2s ease-out infinite; animation-delay: var(--sync, 0s); }
+  .m-attn .glow { position: absolute; inset: -1px; border-radius: 10px; pointer-events: none; opacity: .45;
+                  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent),
+                              0 0 22px -2px color-mix(in srgb, var(--accent) 55%, transparent);
+                  animation: glow 4s ease-in-out infinite; animation-delay: var(--sync, 0s); }
+  .gleam { position: absolute; inset: 0; border-radius: 9px; overflow: hidden; pointer-events: none; }
+  .gleam::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 45%; opacity: 0;
+                  background: linear-gradient(100deg, transparent, color-mix(in srgb, var(--accent) 16%, transparent), transparent);
+                  transform: translateX(-120%); }
+  .m-attn .gleam::after { animation: gleam 6s ease-in-out infinite; animation-delay: var(--sync, 0s); }
+  @keyframes beacon { 0%,100% { opacity: .45; transform: scale(.9); } 50% { opacity: 1; transform: scale(1.1); } }
+  @keyframes glow { 0%,100% { opacity: .2; } 50% { opacity: .85; } }
+  @keyframes gleam { 0%,55% { transform: translateX(-120%); opacity: 1; } 85%,100% { transform: translateX(260%); opacity: 1; } }
+
+  /* on hold, ready, logged: still water */
+  .m-hold { background: linear-gradient(180deg, var(--panel2), var(--panel2)); }
+  .m-hold .title { color: color-mix(in srgb, var(--ink) 80%, var(--muted)); }
+  .m-logged { opacity: .78; box-shadow: none; background: transparent; border-style: solid; border-color: var(--line2); }
+  .m-logged:hover { opacity: 1; }
+  .m-logged .title { font-weight: 500; }
+
+  /* a new signal on a card: a gleam across it and the line washed in */
+  .card.flash .gleam::after { animation: gleam-once 1.4s ease-out 1; }
+  .card.flash .last, .card.flash .waiting { animation: ink 2.6s ease-out 1; }
+  @keyframes gleam-once { from { transform: translateX(-120%); opacity: 1; } to { transform: translateX(260%); opacity: 1; } }
+  @keyframes ink { 0% { background: color-mix(in srgb, var(--accent) 22%, transparent); } 100% { background: transparent; } }
+
+  .ghost { position: fixed; z-index: 2; pointer-events: none; margin: 0; }
+
   dialog { width: min(900px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; border: 1px solid var(--line);
-           border-radius: 8px; background: var(--panel); color: var(--ink); }
-  dialog::backdrop { background: rgba(0,0,0,.45); }
-  dialog .bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line);
+           border-radius: 12px; background: var(--panel); color: var(--ink); box-shadow: 0 30px 80px -30px rgba(0,0,0,.6); }
+  dialog[open] { animation: unfurl .35s cubic-bezier(.2,.8,.2,1); }
+  @keyframes unfurl { from { opacity: 0; transform: translateY(12px) scale(.98); } }
+  dialog::backdrop { background: rgba(4,12,20,.5); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
+  dialog .bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line);
                 position: sticky; top: 0; background: var(--panel); }
-  dialog .bar b { flex: 1; overflow-wrap: anywhere; font-size: 13px; }
-  dialog button { font: inherit; background: var(--chip); color: var(--ink); border: 1px solid var(--line);
+  dialog .bar b { flex: 1; overflow-wrap: anywhere; font: italic 600 15px var(--display); }
+  dialog button { font: inherit; font-size: 12px; background: var(--chip); color: var(--ink); border: 1px solid var(--line);
                   border-radius: 6px; padding: 2px 10px; cursor: pointer; }
-  dialog pre { margin: 0; padding: 12px; white-space: pre-wrap; overflow-wrap: anywhere;
-               font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  dialog pre { margin: 0; padding: 14px; white-space: pre-wrap; overflow-wrap: anywhere;
+               font: 12.5px/1.55 var(--mono); }
+
+  @media (max-width: 760px) {
+    header.bridge { position: static; grid-template-columns: 1fr; padding: 10px 16px; }
+    .instruments { grid-column: 1; flex-wrap: wrap; }
+    .counts { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+    .log { margin: 10px 16px 0; grid-template-columns: 1fr; }
+    .log li { grid-template-columns: 6ch minmax(0, 1fr); }
+    .log .who { display: none; }
+    .banner { margin: 10px 16px 0; }
+    main { padding: 14px 16px 40px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+    .sea, .sweep { display: none; }
+  }
 </style>
 </head>
 <body>
-<header>
-  <h1>chartroom</h1>
-  <span class="meta" id="meta">loading…</span>
-  <div class="counts" id="counts"></div>
+<div class="sea" aria-hidden="true"></div>
+<div class="sweep" aria-hidden="true"></div>
+<header class="bridge">
+  <div class="brand">
+    <svg class="rose" viewBox="0 0 64 64" aria-hidden="true">
+      <circle cx="32" cy="32" r="29" fill="none" stroke="currentColor" stroke-opacity=".35"/>
+      <circle cx="32" cy="32" r="23" fill="none" stroke="currentColor" stroke-opacity=".18" stroke-dasharray="1 3.2"/>
+      <path d="M32 5 35 29 59 32 35 35 32 59 29 35 5 32 29 29Z" fill="currentColor" fill-opacity=".12" stroke="currentColor" stroke-opacity=".4" stroke-width=".8"/>
+      <g class="needle"><path class="n" d="M32 11 35.2 32H28.8Z"/><path class="s" d="M32 53 35.2 32H28.8Z"/><circle cx="32" cy="32" r="2.4" fill="currentColor"/></g>
+    </svg>
+    <div>
+      <h1>Chartroom<small>fleet</small></h1>
+      <div class="meta" id="meta">loading…</div>
+    </div>
+  </div>
+  <div class="instruments">
+    <span class="watch" title="local time">watch <b id="clock">--:--:--</b></span>
+    <span class="sounding" id="sounding" title="the board refreshes every few seconds">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><circle class="track" cx="10" cy="10" r="8" fill="none" stroke-width="2"/><circle class="arc" id="arc" cx="10" cy="10" r="8" fill="none" stroke-width="2" stroke-linecap="round"/></svg>
+      <span id="sounded">sounding…</span>
+    </span>
+    <button class="theme" id="theme" type="button">auto</button>
+  </div>
+  <nav class="counts" id="counts" aria-label="lane counts"></nav>
 </header>
+<section class="log" id="log" hidden><h3>Ship’s log</h3><ol id="log-list"></ol></section>
 <div class="banner" id="banner"></div>
 <main id="lanes"></main>
+<div id="ghosts"></div>
 <dialog id="viewer">
   <div class="bar"><b id="viewer-title"></b><a id="viewer-raw" target="_blank" rel="noopener">raw</a><button id="viewer-close" type="button">close</button></div>
   <pre id="viewer-body"></pre>
@@ -99,6 +325,9 @@ const LANES = [
 const SHOW = { recent: 8 };
 const expanded = {};
 const POLL_MS = 5000;
+const LOG_ROWS = 5;
+const SYNC_MS = 12000; // every looping animation's period divides this, so rebuilt cards stay in step
+const reduced = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : { matches: false };
 
 function el(tag, attrs, ...kids) {
   const n = document.createElement(tag);
@@ -110,9 +339,28 @@ function el(tag, attrs, ...kids) {
   return n;
 }
 
+const ICONS = {
+  anchor: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="5" r="2.3"/><path d="M12 7.3V21M7.5 11h9M4.5 14.5c.8 3.6 3.8 6.5 7.5 6.5s6.7-2.9 7.5-6.5"/></svg>',
+  flag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V3M5 4h12l-3 4.5 3 4.5H5"/></svg>',
+  logged: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>',
+};
+function icon(name) { const t = document.createElement("template"); t.innerHTML = ICONS[name]; return t.content.firstChild; }
+
+function ms(iso) { if (!iso) return NaN; return Date.parse(iso); }
+
+// Durations that tick: "42s", "12m 04s", "5h 12m", "3d 4h".
+function dur(msec) {
+  let s = Math.max(0, Math.floor(msec / 1000));
+  if (s < 60) return s + "s";
+  let m = Math.floor(s / 60); s %= 60;
+  if (m < 60) return m + "m " + String(s).padStart(2, "0") + "s";
+  let h = Math.floor(m / 60); m %= 60;
+  if (h < 48) return h + "h " + String(m).padStart(2, "0") + "m";
+  return Math.floor(h / 24) + "d " + (h % 24) + "h";
+}
+// The coarse form for things that do not need to tick: "42s", "12m", "5h", "3d".
 function ago(iso) {
-  if (!iso) return "";
-  const t = Date.parse(iso);
+  const t = ms(iso);
   if (isNaN(t)) return "";
   let s = Math.max(0, (Date.now() - t) / 1000);
   if (s < 60) return Math.floor(s) + "s";
@@ -120,12 +368,23 @@ function ago(iso) {
   if ((s /= 60) < 48) return Math.floor(s) + "h";
   return Math.floor(s / 24) + "d";
 }
+function sinceText(t) { return dur(Date.now() - t); }
+function untilText(t) { const now = Date.now(); return t >= now ? "in " + dur(t - now) : dur(now - t) + " overdue"; }
 
-// "in 25m" / "12m ago" for a time that may be in the future.
-function until(iso) {
-  const t = Date.parse(iso);
-  if (isNaN(t)) return "";
-  return t >= Date.now() ? "in " + ago(new Date(2 * Date.now() - t).toISOString()) : ago(iso) + " ago";
+// A span whose text the 1s tick keeps current. kind: "since" (elapsed) or "until" (countdown).
+function ticker(kind, iso, suffix) {
+  const t = ms(iso);
+  if (isNaN(t)) return null;
+  const n = el("b", { title: iso, "data-suffix": suffix || null });
+  n.dataset[kind] = String(t);
+  paint(n, Date.now());
+  return n;
+}
+function paint(n, now) {
+  let txt;
+  if (n.dataset.since) txt = dur(now - +n.dataset.since) + (n.dataset.suffix || "");
+  else { const t = +n.dataset.until; txt = t >= now ? "in " + dur(t - now) : dur(now - t) + " overdue"; n.classList.toggle("over", t < now); }
+  if (n.textContent !== txt) n.textContent = txt;
 }
 
 function prLabel(url) {
@@ -135,24 +394,81 @@ function prLabel(url) {
 
 function safeHref(url) { return /^https?:\/\//.test(url) ? url : null; }
 
-function card(c) {
+// "progress: text" -> [kind tag, text]
+function eventLine(ev) {
+  const m = /^([a-z][a-z-]{1,15}): ([\s\S]*)$/.exec(ev || "");
+  if (!m) return [null, ev || ""];
+  return [el("span", { class: "kind " + m[1], text: m[1] }), m[2]];
+}
+
+function motionOf(c, lane) {
+  if (lane === "needs_you") return "attn";
+  if (lane === "in_progress") return c.state === "waiting" ? "anchor" : c.state === "drafting" ? "draft" : "underway";
+  return { on_hold: "hold", ready: "ready", recent: "logged" }[lane];
+}
+
+function signal(motion) {
+  if (motion === "anchor") return el("span", { class: "sig", "aria-hidden": "true" }, icon("anchor"));
+  if (motion === "ready") return el("span", { class: "sig", "aria-hidden": "true" }, icon("flag"));
+  if (motion === "logged") return el("span", { class: "sig", "aria-hidden": "true" }, icon("logged"));
+  if (motion === "hold") return el("span", { class: "sig ring", "aria-hidden": "true" });
+  return el("span", { class: "sig dot", "aria-hidden": "true" });
+}
+
+function clockRow(c, motion) {
+  const row = el("div", { class: "clock" });
+  const add = (label, node) => { if (node) row.append(el("span", {}, el("span", { class: "lbl", text: label }), node)); };
+  if (c.type !== "task") {
+    if (c.date) add("since", el("b", { text: c.date }));
+    return row.childNodes.length ? row : null;
+  }
+  if (motion === "underway" || motion === "draft") {
+    add(motion === "draft" ? "drafting" : "under way", ticker("since", c.created));
+    add("last signal", ticker("since", c.last_at, " ago"));
+  } else if (motion === "anchor") {
+    add("at anchor", ticker("since", c.last_at));
+    add("age", el("b", { text: ago(c.created), title: c.created }));
+  } else if (motion === "attn") {
+    add("waiting on you", ticker("since", c.last_at));
+    add("age", el("b", { text: ago(c.created), title: c.created }));
+  } else if (motion === "hold") {
+    add("quiet for", ticker("since", c.last_at));
+    add("age", el("b", { text: ago(c.created), title: c.created }));
+  } else if (motion === "ready") {
+    add("ready", ticker("since", c.last_at, " ago"));
+    add("age", el("b", { text: ago(c.created), title: c.created }));
+  } else {
+    add("finished", ticker("since", c.finished_at || c.closed || c.last_at, " ago"));
+  }
+  return row.childNodes.length ? row : null;
+}
+
+function card(c, lane) {
+  const motion = motionOf(c, lane);
+  const fresh = c.type === "task" && Date.now() - ms(c.last_at) < 120000;
   const sub = el("div", { class: "sub" });
   if (c.type === "task") {
     if (c.project) sub.append(el("span", { text: c.project }));
-    sub.append(el("span", { text: "age " + ago(c.created), title: c.created }));
-    if (c.last_at) sub.append(el("span", { text: "last " + ago(c.last_at), title: c.last_at }));
     sub.append(el("span", { class: "badge accent", text: c.reason || c.state }));
   } else {
-    if (c.date) sub.append(el("span", { text: c.date }));
     sub.append(el("span", { class: "badge accent", text: "inbox" }));
   }
-  const node = el("div", { class: "card" + (c.type === "inbox" ? " inbox" : "") },
-    el("div", { class: "title", text: c.title || c.id, title: c.id }), sub);
+  const node = el("article", { class: "card m-" + motion + (c.type === "inbox" ? " inbox" : "") + (fresh ? " fresh" : "") },
+    el("div", { class: "gleam", "aria-hidden": "true" }),
+    motion === "attn" ? el("div", { class: "glow", "aria-hidden": "true" }) : null,
+    el("div", { class: "head" }, signal(motion), el("div", { class: "title", text: c.title || c.id, title: c.id })),
+    sub, clockRow(c, motion));
   if (c.type === "task" && c.waiting_on) {
     const w = el("div", { class: "waiting", text: "waiting on: " + c.waiting_on });
-    if (c.waiting_until) w.append(el("span", { class: "until", text: " · until " + until(c.waiting_until), title: c.waiting_until }));
+    if (c.waiting_until) {
+      const u = ticker("until", c.waiting_until);
+      if (u) { u.classList.add("until"); w.append(el("span", { class: "until", text: " · until " }), u); }
+    }
     node.append(w);
-  } else if (c.type === "task" && c.last_event) node.append(el("div", { class: "last", text: c.last_event, title: c.last_event }));
+  } else if (c.type === "task" && c.last_event) {
+    const [tag, text] = eventLine(c.last_event);
+    node.append(el("div", { class: "last", title: c.last_event }, tag, text));
+  }
   const links = el("div", { class: "links" });
   for (const p of c.prs || []) {
     const href = safeHref(p.url);
@@ -171,35 +487,184 @@ function card(c) {
     links.append(a);
   }
   if (links.childNodes.length) node.append(links);
+  if (motion === "underway" || motion === "draft" || motion === "anchor") node.append(el("div", { class: "wake", "aria-hidden": "true" }, el("i")));
   return node;
+}
+
+function sync(n) { n.style.setProperty("--sync", -(performance.now() % SYNC_MS) + "ms"); }
+
+// Count tick: ease from the old number to the new one, with a small bump.
+function tween(node, to) {
+  const from = node.dataset.v == null ? 0 : +node.dataset.v;
+  node.dataset.v = String(to);
+  if (from === to) { node.textContent = String(to); return; }
+  if (reduced.matches || document.hidden) { node.textContent = String(to); return; }
+  const t0 = performance.now(), D = 800;
+  const step = (t) => {
+    const p = Math.min(1, (t - t0) / D), e = 1 - Math.pow(1 - p, 3);
+    node.textContent = String(Math.round(from + (to - from) * e));
+    if (p < 1 && node.dataset.v === String(to)) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+  node.animate([{ transform: "translateY(-4px) scale(1.18)" }, { transform: "none" }], { duration: 600, easing: "cubic-bezier(.2,.8,.2,1)" });
+}
+
+// ---------------------------------------------------------------- board
+
+const lanesEl = document.getElementById("lanes");
+const sections = {};   // lane -> {sec, n, cards, foot}
+const gauges = {};     // lane -> {a, b, bar}
+let nodes = new Map(); // card key -> node (node._sig, node._lane, node._last)
+let firstRender = true;
+let seenLog = null;
+
+function buildFrame() {
+  const counts = document.getElementById("counts");
+  LANES.forEach(([k, label], i) => {
+    const n = el("span", { class: "n", text: "0" });
+    const cards = el("div", { class: "cards" });
+    const foot = el("div", { class: "foot" });
+    const sec = el("section", { class: "lane", "data-lane": k, id: "lane-" + k, style: "--i:" + i },
+      el("h2", {}, el("span", { class: "sig dot", "aria-hidden": "true" }), label, n), cards, foot);
+    if (k === "in_progress") sec.querySelector("h2").classList.add("m-underway");
+    if (k === "needs_you") sec.querySelector("h2").classList.add("m-attn");
+    sections[k] = { sec, n, cards, foot };
+    lanesEl.append(sec);
+    const b = el("b", { text: "0" });
+    const bar = el("i", { class: "bar" });
+    const a = el("a", { class: "gauge", href: "#lane-" + k, "data-lane": k },
+      el("span", { class: "lamp", "aria-hidden": "true" }), el("span", { class: "lbl", text: label }), b, bar);
+    sync(a);
+    gauges[k] = { a, b, bar };
+    counts.append(a);
+  });
 }
 
 function render(d) {
   document.getElementById("meta").textContent =
     d.home + " · updated " + new Date(d.generated_at).toLocaleTimeString() +
     (d.pr_enrichment && d.pr_enrichment.enabled ? " · PR states via gh" : "");
-  const counts = document.getElementById("counts");
-  counts.replaceChildren(...LANES.map(([k, label]) => el("span", { class: "count" }, label + " ", el("b", { text: String(d.counts[k] || 0) }))));
-  const main = document.getElementById("lanes");
-  main.replaceChildren(...LANES.map(([k, label]) => {
+  const max = Math.max(1, ...LANES.map(([k]) => d.counts[k] || 0));
+  for (const [k] of LANES) {
+    const v = d.counts[k] || 0, g = gauges[k];
+    tween(g.b, v);
+    g.bar.style.transform = "scaleX(" + (v / max).toFixed(3) + ")";
+    if (k === "needs_you") g.a.classList.toggle("hot", v > 0);
+  }
+  document.body.classList.toggle("alert", (d.counts.needs_you || 0) > 0);
+
+  // First: where every card is now.
+  const animate = !firstRender && !reduced.matches && !document.hidden;
+  const before = new Map();
+  if (animate) for (const [key, n] of nodes) if (n.isConnected) before.set(key, n.getBoundingClientRect());
+
+  const next = new Map(), entering = [], flashing = [];
+  for (const [k] of LANES) {
     const items = d.lanes[k] || [];
-    const sec = el("section", { class: "lane", "data-lane": k },
-      el("h2", {}, el("span", { class: "dot" }), label, el("span", { class: "n", text: String(items.length) })));
+    const { n, cards, foot } = sections[k];
+    tween(n, items.length);
     const limit = SHOW[k] && !expanded[k] ? SHOW[k] : Infinity;
-    items.slice(0, limit).forEach((c) => sec.append(card(c)));
-    if (!items.length) sec.append(el("div", { class: "empty", text: k === "needs_you" ? "Nothing needs you." : "None." }));
+    const want = items.slice(0, limit).map((c) => {
+      const key = c.id, sig = k + "\n" + JSON.stringify(c), old = nodes.get(key);
+      if (old && old._sig === sig) { next.set(key, old); return old; }
+      const m = card(c, k);
+      m._sig = sig; m._lane = k; m._last = c.last_event || c.waiting_on || ""; m._at = ms(c.last_at);
+      if (!old) entering.push(m);
+      else if (old._last !== m._last) flashing.push(m);
+      next.set(key, m);
+      return m;
+    });
+    // Place the wanted nodes in order, moving only what is out of place.
+    let ref = cards.firstChild;
+    for (const m of want) {
+      if (m === ref) { ref = ref.nextSibling; continue; }
+      sync(m);
+      cards.insertBefore(m, ref);
+    }
+    while (ref) { const nx = ref.nextSibling; ref.remove(); ref = nx; }
+
+    foot.replaceChildren();
+    if (!items.length) foot.append(el("div", { class: "empty", text: k === "needs_you" ? "Nothing needs you. Fair winds." : "None." }));
     if (items.length > limit) {
       const b = el("button", { class: "more", type: "button", text: "show all " + items.length });
       b.addEventListener("click", () => { expanded[k] = true; render(d); });
-      sec.append(b);
+      foot.append(b);
     }
     if (k === "needs_you" && d.inbox && d.inbox.approvals && d.inbox.approvals.length) {
-      sec.append(el("div", { class: "approvals", text: "Approvals given in chat, not yet in a brief:" },
+      foot.append(el("div", { class: "approvals", text: "Approvals given in chat, not yet in a brief:" },
         el("ul", {}, ...d.inbox.approvals.map((a) => el("li", { text: (a.date ? a.date + " — " : "") + a.text })))));
     }
-    return sec;
-  }));
+  }
+
+  // Cards that left the board fade out where they were.
+  const ghosts = document.getElementById("ghosts");
+  for (const [key, old] of nodes) {
+    if (next.has(key)) { if (next.get(key) !== old) old.remove(); continue; }
+    old.remove();
+    const r = before.get(key);
+    if (!animate || !r) continue;
+    const g = el("div", { class: "ghost", "data-lane": old._lane,
+      style: "left:" + r.left + "px;top:" + r.top + "px;width:" + r.width + "px" }, old);
+    ghosts.append(g);
+    g.animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateX(18px) scale(.96)" }],
+      { duration: 520, easing: "cubic-bezier(.4,0,.6,1)" }).onfinish = () => g.remove();
+  }
+  nodes = next;
+
+  if (animate) {
+    // Last, invert, play: cards that moved glide from where they were.
+    for (const [key, n] of nodes) {
+      const a = before.get(key);
+      if (!a) continue;
+      const b = n.getBoundingClientRect();
+      const dx = a.left - b.left, dy = a.top - b.top;
+      if (Math.abs(dx) + Math.abs(dy) < 1) continue;
+      n.animate([{ transform: "translate(" + dx + "px," + dy + "px)" }, { transform: "none" }],
+        { duration: 650, easing: "cubic-bezier(.2,.8,.2,1)" });
+    }
+    for (const m of entering) {
+      m.animate([{ opacity: 0, transform: "translateY(-10px) scale(.97)" }, { opacity: 1, transform: "none" }],
+        { duration: 600, easing: "cubic-bezier(.2,.8,.2,1)", fill: "backwards" });
+    }
+    for (const m of flashing) { m.classList.add("flash"); setTimeout(() => m.classList.remove("flash"), 2700); }
+  } else if (firstRender && !reduced.matches) {
+    let i = 0;
+    for (const [k] of LANES) for (const m of sections[k].cards.children) {
+      m.animate([{ opacity: 0, transform: "translateY(12px)" }, { opacity: 1, transform: "none" }],
+        { duration: 600, delay: 120 + Math.min(i++, 24) * 35, easing: "cubic-bezier(.2,.8,.2,1)", fill: "backwards" });
+    }
+  }
+  renderLog(d);
+  firstRender = false;
   document.title = (d.counts.needs_you ? "(" + d.counts.needs_you + ") " : "") + "chartroom";
+}
+
+// Ship's log: the newest events across every task, new ones washing in.
+function renderLog(d) {
+  const all = [];
+  for (const [k] of LANES) for (const c of d.lanes[k] || []) if (c.type === "task" && c.last_event && c.last_at) all.push(c);
+  all.sort((a, b) => ms(b.last_at) - ms(a.last_at));
+  const rows = all.slice(0, LOG_ROWS);
+  const box = document.getElementById("log");
+  box.hidden = !rows.length;
+  const keys = new Set();
+  const list = rows.map((c) => {
+    const key = c.id + "\n" + c.last_at + "\n" + c.last_event;
+    keys.add(key);
+    const [tag, text] = eventLine(c.last_event);
+    const t = ticker("since", c.last_at);
+    const li = el("li", { title: c.last_event }, el("span", { class: "t" }, t), el("span", { class: "who", text: c.title || c.id, title: c.id }),
+      el("span", { class: "what" }, tag, text));
+    if (seenLog && !seenLog.has(key) && !reduced.matches) li.classList.add("fresh");
+    if ((c.files || []).includes("events.log")) {
+      const href = "/task/" + encodeURIComponent(c.id) + "/events.log";
+      li.classList.add("open");
+      li.addEventListener("click", () => view(c, "events.log", href));
+    }
+    return li;
+  });
+  document.getElementById("log-list").replaceChildren(...list);
+  seenLog = keys;
 }
 
 function banner(msg) {
@@ -208,18 +673,47 @@ function banner(msg) {
   b.style.display = msg ? "block" : "none";
 }
 
-let last = null;
+// ---------------------------------------------------------------- refresh and the ticking clock
+
+let last = null, lastOk = 0, arcAnim = null;
+function sounding() {
+  const arc = document.getElementById("arc");
+  if (arcAnim) arcAnim.cancel();
+  if (reduced.matches || !arc.animate) return;
+  arcAnim = arc.animate([{ strokeDashoffset: 0 }, { strokeDashoffset: 50.27 }], { duration: POLL_MS, easing: "linear", fill: "forwards" });
+}
+function ping() {
+  if (reduced.matches) return;
+  const p = el("span", { class: "ping", "aria-hidden": "true" });
+  document.getElementById("sounding").append(p);
+  p.animate([{ opacity: .8, transform: "scale(.5)" }, { opacity: 0, transform: "scale(2.4)" }],
+    { duration: 1100, easing: "cubic-bezier(.2,.6,.3,1)" }).onfinish = () => p.remove();
+}
+
 async function refresh() {
+  sounding();
   try {
     const r = await fetch("/api/dashboard", { cache: "no-store" });
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || r.statusText);
-    last = d;
+    last = d; lastOk = Date.now();
     banner("");
     render(d);
+    ping();
   } catch (e) {
     banner("Could not refresh: " + e.message + (last ? " (showing the last good view)" : ""));
   }
+  tick();
+}
+
+function tick() {
+  const now = Date.now();
+  for (const n of document.querySelectorAll("[data-since],[data-until]")) paint(n, now);
+  // a heartbeat quickens while a worker's last signal is under two minutes old
+  for (const n of nodes.values()) if (n._lane === "in_progress") n.classList.toggle("fresh", now - n._at < 120000);
+  const c = document.getElementById("clock"), t = new Date(now).toLocaleTimeString([], { hour12: false });
+  if (c.textContent !== t) c.textContent = t;
+  document.getElementById("sounded").textContent = lastOk ? "sounded " + ago(new Date(lastOk).toISOString()) + " ago" : "sounding…";
 }
 
 async function view(c, f, href) {
@@ -236,8 +730,27 @@ async function view(c, f, href) {
 }
 document.getElementById("viewer-close").addEventListener("click", () => document.getElementById("viewer").close());
 
+// Theme: auto (the system's), light, or dark; remembered in this browser only.
+const THEMES = ["auto", "light", "dark"];
+let theme = "auto";
+try { theme = THEMES.includes(localStorage.getItem("chartroom-theme")) ? localStorage.getItem("chartroom-theme") : "auto"; } catch (e) { /* storage blocked: stay on auto */ }
+function applyTheme() {
+  if (theme === "auto") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = theme;
+  const btn = document.getElementById("theme");
+  btn.textContent = theme === "auto" ? "◐ auto" : theme === "light" ? "☼ day" : "☾ night";
+  btn.title = "theme: " + theme + " (click to change)";
+}
+document.getElementById("theme").addEventListener("click", () => {
+  theme = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
+  try { localStorage.setItem("chartroom-theme", theme); } catch (e) { /* not remembered, still applied */ }
+  applyTheme();
+});
+applyTheme();
+
+buildFrame();
 refresh();
 setInterval(() => { if (!document.hidden) refresh(); }, POLL_MS);
+setInterval(() => { if (!document.hidden) tick(); }, 1000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
 </script>
 </body>
