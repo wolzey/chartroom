@@ -302,9 +302,8 @@ start_daemon() {
   [ "$(jq -r .pr_enrichment.enabled <<<"$j")" = true ]
   grep -q "gh pr view https://github.com/acme/todo-cli/pull/8" "$FAKE_LOG"
   cr dashboard stop >/dev/null
-  # no gh on PATH: still serves, says why
-  rm "$BIN/gh"
-  start_daemon
+  # no gh: still serves, says why (CI images ship a real gh, so name one that does not exist)
+  CHARTROOM_GH=gh-not-installed start_daemon
   j="$(get "$URL/api/dashboard")"
   [ "$(jq -r .pr_enrichment.error <<<"$j")" = "gh not on PATH" ]
   [ "$(jq -r '.lanes.ready[0].id' <<<"$j")" = t-review ]

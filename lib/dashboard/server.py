@@ -43,7 +43,7 @@ class Board:
         fd, self.pr_file = tempfile.mkstemp(prefix="chartroom-dashboard-prs-", suffix=".json")
         os.close(fd)
         self.pr_states = {}
-        self.gh = shutil.which("gh") if use_gh else None
+        self.gh = shutil.which(os.environ.get("CHARTROOM_GH") or "gh") if use_gh else None
         self.gh_status = {"enabled": bool(self.gh), "error": None if self.gh or not use_gh else "gh not on PATH",
                           "checked_at": None}
         if not use_gh:
