@@ -67,6 +67,9 @@ dashboard_running() { # -> prints "pid port" when a dashboard for this home is u
   [[ -f "$f" ]] || return 1
   read -r pid port <"$f" || true
   pid_alive "$pid" || return 1
+  # A stale file's pid may now belong to something else (after a reboot): never claim or
+  # signal a process that is not this server.
+  ps -p "$pid" -o command= 2>/dev/null | grep -q 'dashboard/server\.py' || return 1
   printf '%s %s\n' "$pid" "$port"
 }
 
@@ -94,11 +97,11 @@ cmd_dashboard() {
   esac
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --port) port="${2:-}"; shift 2 ;;
+      --port) [[ $# -ge 2 ]] || die "--port needs a value"; port="$2"; shift 2 ;;
       --open) open=1; shift ;;
       --daemon) daemon=1; shift ;;
       --json) json=1; shift ;;
-      --pr-states) prs_file="${2:-}"; shift 2 ;;
+      --pr-states) [[ $# -ge 2 ]] || die "--pr-states needs a file"; prs_file="$2"; shift 2 ;;
       --no-gh) gh=0; shift ;;
       *) die "dashboard: unknown arg $1 (usage: chartroom dashboard [--port N] [--open] [--daemon] [--no-gh] | --json | stop | status)" ;;
     esac

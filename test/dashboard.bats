@@ -257,6 +257,21 @@ start_daemon() {
   [ "$status" -eq 1 ]
 }
 
+@test "server: a stale pid file never makes stop signal an unrelated process" {
+  sleep 60 &
+  local other=$!
+  echo "$other 4517" >"$CHARTROOM_HOME/.dashboard.pid"
+  run cr dashboard status
+  [ "$status" -eq 1 ]
+  run cr dashboard stop
+  [ "$status" -eq 0 ]; [ "$output" = "dashboard not running" ]
+  kill -0 "$other"
+  [ ! -e "$CHARTROOM_HOME/.dashboard.pid" ]
+  kill "$other"
+  run cr dashboard --port
+  [ "$status" -eq 1 ]; [[ "$output" == *"--port needs a value"* ]]
+}
+
 @test "server: foreground mode serves until stopped" {
   need_python
   # in a subshell so the server is not our child: a killed child would linger as a zombie
