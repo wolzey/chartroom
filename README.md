@@ -10,7 +10,7 @@ You don't juggle tabs.
 chartroom has two parts: a small bash CLI (`chartroom`) that does the exact work (task
 records, worktrees, launching, steering, liveness, a wake stream), and two Agent Skills
 (`chartroom`, `bearings`) that tell your agent how to be the XO. State is plain files under
-`~/.chartroom`. There is no daemon.
+`~/.chartroom`. There is no daemon (an optional local dashboard can show the fleet in a browser).
 
 ```
             you (commander)
@@ -44,8 +44,8 @@ chartroom is the small one. The differences that are real:
   writes down every fallback, and never fails just because herdr isn't there.
 - **Agent-native signals instead of screen scraping.** Turn ends, approval prompts and prompt
   receipt come from Claude Code hooks and Codex `notify`, not from pattern-matching the TUI.
-- **Small surface.** About 1,600 lines of bash across a few files, with `jq` and `git`. No `gh`,
-  no worktree manager, no Node.
+- **Small surface.** About 1,600 lines of bash across a few files, with `jq` and `git`. No `gh`
+  required, no worktree manager, no Node.
 - **The contract is files.** Briefs, an append-only event log with a documented line format, and
   reports. Any worker in any language can take part with `printf >>`.
 
@@ -85,6 +85,50 @@ why the test suite takes four minutes."* The XO resolves the project, writes two
 **ship**, one **scout**), dispatches them on the best available backends, and goes quiet until
 something needs you. Ask *"bearings"* at any time for a four-part digest: needs you, ready,
 under way, trouble.
+
+## Dashboard
+
+```bash
+chartroom dashboard                  # http://127.0.0.1:4517, Ctrl-C to stop
+chartroom dashboard --daemon --open  # in the background, and open the browser
+chartroom dashboard stop             # (or: status)
+chartroom dashboard --json           # the same lanes, no server
+```
+
+A one-page, read-only view of the fleet that refreshes every 5 seconds, so you can see what
+to pull from. It works on a phone-width window and follows your light/dark setting. It has
+five lanes, each with a count in the header:
+
+| Lane | What lands there |
+|---|---|
+| **Needs you** | tasks in `decision`, `blocked`, `failed` or `awaiting-input` (in that order), then the "Waiting on ..." items in `inbox.md` with their question text |
+| **In progress** | `working` and `drafting` tasks |
+| **On hold** | `stopped-silent` tasks; tasks whose last event says they wait on a person ("waiting on/for", "awaiting review", "pending approval", "on hold"); done tasks whose open PR still needs someone's review |
+| **Ready for you** | `done` tasks that are not closed: a PR to review or a report to read |
+| **Recently finished** | tasks closed in the last 48 hours (`CHARTROOM_DASHBOARD_RECENT_HOURS`), and done tasks whose PRs are all merged |
+
+Each card shows the title, project, age, the last worker event, PR/MR links found in
+`events.log` and `report.md`, and links that open the task's brief, report, plan and event log
+as plain text. Approvals given in chat but not yet in a brief are listed under Needs you.
+
+How it is built, and what it promises:
+
+- **Loopback only, read-only.** A Python standard-library server (`python3`, nothing to
+  install) bound to `127.0.0.1`, with no setting to change that. It answers `GET` only, serves
+  just the page, the lanes JSON (`/api/dashboard`) and the five task files above, and refuses
+  requests whose `Host` is not `127.0.0.1` or `localhost` (DNS rebinding). No auth, because
+  nothing off the machine can reach it.
+- **No external requests from the page.** CSS and JS are inline; no CDNs, fonts or analytics.
+- **Same answer as the CLI.** The lanes come from `chartroom dashboard --json`, built from the
+  rows `chartroom status` uses, so the page and the terminal never disagree.
+- **PR states are optional.** If `gh` is on your PATH, the server looks up the state of the PR
+  links it found (cached, refreshed every 5 minutes) to move a merged PR to Recently finished and
+  one awaiting review to On hold. That is the only network traffic, and it is GitHub's API with
+  your own `gh` login. `--no-gh` turns it off; without `gh`, or offline, the page just shows the
+  links.
+- `--daemon` writes `.dashboard.pid` (pid and port) and `.dashboard.log` in the home. One
+  dashboard per home; `--port 0` picks a free port.
+- A legacy home works the same: `CHARTROOM_HOME=~/.captain chartroom dashboard`.
 
 ## Concepts
 
@@ -136,6 +180,7 @@ $CHARTROOM_HOME/                    default ~/.chartroom
   tasks/<id>/meta.json              {"schema":1, id, kind, backend, project, base_sha, branch, worktree, ...}
   tasks/<id>/brief.md  report.md  plan.md  final.md
   tasks/<id>/events.log             one line per event
+  .dashboard.pid  .dashboard.log    only while `chartroom dashboard --daemon` runs
   worktrees/<repo>/<id>/            task worktrees (unless the repo ignores .worktrees/)
 ```
 
@@ -185,6 +230,7 @@ Environment variables win. Otherwise chartroom reads `~/.config/chartroom/config
 | `CHARTROOM_CLAUDE_HEADLESS_PERMISSION` | `acceptEdits` | |
 | `CHARTROOM_CLAUDE_ALLOWED_TOOLS` | `Bash Read Edit Write Glob Grep WebFetch WebSearch` | headless Claude |
 | `CHARTROOM_WATCH_INTERVAL` | `3` | seconds |
+| `CHARTROOM_DASHBOARD_RECENT_HOURS` | `48` | how far back the dashboard's Recently finished lane reaches |
 
 `CAP_PROJECT_ROOTS`, `CAP_CREW_WORKSPACE` and `CAP_WATCH_INTERVAL` are read as legacy fallbacks.
 

@@ -31,6 +31,8 @@ source "$CR_ROOT/lib/core.sh"
 source "$CR_ROOT/lib/agents.sh"
 # shellcheck source=../lib/session.sh
 source "$CR_ROOT/lib/session.sh"
+# shellcheck source=../lib/dashboard.sh
+source "$CR_ROOT/lib/dashboard.sh"
 for _f in "$CR_ROOT"/lib/backends/*.sh; do
   # shellcheck source=/dev/null
   source "$_f"
@@ -384,22 +386,32 @@ state_of() { # derived from the last wake-worthy event; a restart re-derives the
     END { print (s=="" ? "working" : s) }' "$(tdir "$id")/events.log"
 }
 
-cmd_status() {
-  local json=0 all=0 a
-  for a in "$@"; do case "$a" in --json) json=1 ;; --all) all=1 ;; esac; done
-  local rows=() id st d
+# One JSON object per line per task: the fleet view that `status` and `dashboard` share.
+# last/last_at are the newest non-note event; updated/closed/branch/has_report feed the dashboard.
+status_rows() { # [--all]
+  local all=0 id st d live lastline
+  [[ "${1:-}" == --all ]] && all=1
   shopt -s nullglob
   for d in "$CR_HOME"/tasks/*/; do
     id="$(basename "$d")"; [[ -f "$d/meta.json" ]] || continue
     st="$(state_of "$id")"
     [[ $all -eq 1 || "$st" != closed ]] || continue
-    local live last
     if [[ "$st" == closed ]]; then live=-; else live="$(live_of "$id")"; fi
     [[ "$st" == working && "$live" =~ ^(stopped|gone|idle|done)$ ]] && st="stopped-silent"
     [[ "$st" == working && "$live" == blocked ]] && st="awaiting-input"
-    last="$(grep -vE ' note: ' "$d/events.log" | tail -1 | cut -c22- || true)"
-    rows+=("$(jq -c --arg st "$st" --arg live "$live" --arg last "$last" '{id,title,kind,backend:(if .backend=="" then "auto" else .backend end),project:(.project|split("/")|last),state:$st,live:$live,created,last:$last}' "$d/meta.json")")
+    lastline="$(grep -vE ' note: ' "$d/events.log" 2>/dev/null | tail -1 || true)"
+    jq -c --arg st "$st" --arg live "$live" --arg last "${lastline:21}" --arg last_at "${lastline:0:20}" \
+      --argjson has_report "$([[ -s "$d/report.md" ]] && echo true || echo false)" \
+      '{id,title,kind,backend:(if (.backend//"")=="" then "auto" else .backend end),project:((.project//"")|split("/")|last),
+        state:$st,live:$live,created,last:$last,last_at:(if $last_at=="" then null else $last_at end),
+        updated,dispatched,closed,branch,has_report:$has_report}' "$d/meta.json"
   done
+}
+
+cmd_status() {
+  local json=0 all=0 a rows=() row
+  for a in "$@"; do case "$a" in --json) json=1 ;; --all) all=1 ;; esac; done
+  while IFS= read -r row; do rows+=("$row"); done < <(if [[ $all -eq 1 ]]; then status_rows --all; else status_rows; fi)
   if [[ $json -eq 1 ]]; then printf '%s\n' "${rows[@]+"${rows[@]}"}" | jq -s .; return; fi
   if [[ ${#rows[@]} -eq 0 ]]; then echo "no open tasks"
   else
@@ -693,6 +705,11 @@ chartroom - run a crew of coding agents from one agent session (the XO)
   chartroom status [--json] [--all]       fleet view, derived from disk + live backends
   chartroom peek <id> [n]                 recent events and worker output
   chartroom watch [--once [--timeout S]]  wake stream: one line per event that needs the XO
+  chartroom dashboard [--port N] [--open] [--daemon] [--no-gh]
+                                          local read-only web view (127.0.0.1 only, default
+                                          port 4517): needs you / in progress / on hold /
+                                          ready / recently finished. Needs python3.
+  chartroom dashboard stop|status|--json  stop a --daemon one, is it up, or print the lanes
   chartroom close <id> [--discard]        remove a clean worktree, close its tab, mark closed
                                           (--discard only on the commander's explicit word)
   chartroom install-skills [--claude|--agents|--pi|--all|--dir D] [--uninstall] [--dry-run]
@@ -702,7 +719,7 @@ EOF
 
 cmd="${1:-help}"; shift || true
 case "$cmd" in
-  init|project|new|worktree|dispatch|event|hook|status|peek|steer|stop|attach|close|watch|doctor|version|help) "cmd_$cmd" "$@" ;;
+  init|project|new|worktree|dispatch|event|hook|status|peek|steer|stop|attach|close|watch|dashboard|doctor|version|help) "cmd_$cmd" "$@" ;;
   install-skills) cmd_install_skills "$@" ;;
   ls) cmd_status "$@" ;;
   -h|--help) cmd_help ;;

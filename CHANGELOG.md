@@ -7,6 +7,14 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- `chartroom dashboard [--port N] [--open] [--daemon] [--no-gh]`, `dashboard stop|status`, and
+  `dashboard --json`: a local, read-only web page of the fleet in five lanes (needs you, in
+  progress, on hold, ready for you, recently finished) with counts, last events, PR links and
+  the task files. A Python standard-library server bound to 127.0.0.1 only, with a Host-header
+  check, inline CSS/JS and no external requests; optional PR states from `gh`, cached, and
+  harmless when `gh` is missing or offline. Works on a legacy `~/.captain` home.
+- `chartroom status --json` rows also carry `last_at`, `updated`, `dispatched`, `closed`,
+  `branch` and `has_report` (existing fields unchanged).
 - `inbox.md` in the home: questions waiting on the commander and approvals given in chat
   that are not yet in a brief, so they survive a compaction or restart. `chartroom init`
   creates it (never overwrites), `chartroom status` prints a one-line count of open items,

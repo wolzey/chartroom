@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>chartroom</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #1b1f24; --muted: #5d6570; --line: #dfe3e8;
+    --chip: #eef1f4; --link: #0a5bd3;
+    --needs: #c2410c; --prog: #1d6fd1; --hold: #8a6d00; --ready: #13803d; --recent: #6b7280;
+    --shadow: 0 1px 2px rgba(0,0,0,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1215; --panel: #171b20; --ink: #e6e9ed; --muted: #9aa3ad; --line: #2a3038;
+      --chip: #222830; --link: #6aa8ff;
+      --needs: #fb923c; --prog: #60a5fa; --hold: #facc15; --ready: #4ade80; --recent: #9ca3af;
+      --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  header { position: sticky; top: 0; z-index: 2; background: var(--bg); border-bottom: 1px solid var(--line);
+           padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+  header h1 { font-size: 16px; margin: 0; letter-spacing: .02em; }
+  header .meta { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+  .counts { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+  .count { background: var(--chip); border-radius: 999px; padding: 2px 10px; font-size: 12px; white-space: nowrap; }
+  .count b { font-variant-numeric: tabular-nums; }
+  .banner { margin: 10px 16px 0; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--needs);
+            color: var(--needs); display: none; overflow-wrap: anywhere; }
+  main { display: grid; gap: 12px; padding: 12px 16px 32px;
+         grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); align-items: start; }
+  section.lane { background: transparent; min-width: 0; }
+  .lane h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; margin: 4px 0 8px;
+             display: flex; align-items: center; gap: 8px; }
+  .lane h2 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); flex: none; }
+  .lane h2 .n { color: var(--muted); font-weight: 500; }
+  .lane[data-lane=needs_you] { --accent: var(--needs); }
+  .lane[data-lane=in_progress] { --accent: var(--prog); }
+  .lane[data-lane=on_hold] { --accent: var(--hold); }
+  .lane[data-lane=ready] { --accent: var(--ready); }
+  .lane[data-lane=recent] { --accent: var(--recent); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+          border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; box-shadow: var(--shadow); min-width: 0; }
+  .card.inbox { border-style: dashed; border-left-style: solid; }
+  .card .title { font-weight: 600; overflow-wrap: anywhere; }
+  .card .sub { color: var(--muted); font-size: 12px; margin-top: 2px; display: flex; flex-wrap: wrap; gap: 0 8px; }
+  .badge { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 4px; background: var(--chip);
+           color: var(--ink); border: 1px solid var(--line); }
+  .badge.accent { color: var(--accent); border-color: var(--accent); }
+  .card .last { margin-top: 4px; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card .links { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; }
+  a { color: var(--link); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .empty { color: var(--muted); font-size: 12px; padding: 6px 2px 12px; }
+  .more { background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 6px; width: 100%;
+          padding: 6px; cursor: pointer; font: inherit; font-size: 12px; }
+  .approvals { margin-top: 4px; font-size: 12px; color: var(--muted); }
+  .approvals li { margin: 2px 0; overflow-wrap: anywhere; }
+  dialog { width: min(900px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; border: 1px solid var(--line);
+           border-radius: 8px; background: var(--panel); color: var(--ink); }
+  dialog::backdrop { background: rgba(0,0,0,.45); }
+  dialog .bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line);
+                position: sticky; top: 0; background: var(--panel); }
+  dialog .bar b { flex: 1; overflow-wrap: anywhere; font-size: 13px; }
+  dialog button { font: inherit; background: var(--chip); color: var(--ink); border: 1px solid var(--line);
+                  border-radius: 6px; padding: 2px 10px; cursor: pointer; }
+  dialog pre { margin: 0; padding: 12px; white-space: pre-wrap; overflow-wrap: anywhere;
+               font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+</style>
+</head>
+<body>
+<header>
+  <h1>chartroom</h1>
+  <span class="meta" id="meta">loading…</span>
+  <div class="counts" id="counts"></div>
+</header>
+<div class="banner" id="banner"></div>
+<main id="lanes"></main>
+<dialog id="viewer">
+  <div class="bar"><b id="viewer-title"></b><a id="viewer-raw" target="_blank" rel="noopener">raw</a><button id="viewer-close" type="button">close</button></div>
+  <pre id="viewer-body"></pre>
+</dialog>
+<script>
+"use strict";
+const LANES = [
+  ["needs_you", "Needs you"],
+  ["in_progress", "In progress"],
+  ["on_hold", "On hold"],
+  ["ready", "Ready for you"],
+  ["recent", "Recently finished"],
+];
+const SHOW = { recent: 8 };
+const expanded = {};
+const POLL_MS = 5000;
+
+function el(tag, attrs, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null) continue;
+    if (k === "class") n.className = v; else if (k === "text") n.textContent = v; else n.setAttribute(k, v);
+  }
+  for (const k of kids) if (k != null) n.append(k);
+  return n;
+}
+
+function ago(iso) {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (isNaN(t)) return "";
+  let s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 60) return Math.floor(s) + "s";
+  if ((s /= 60) < 60) return Math.floor(s) + "m";
+  if ((s /= 60) < 48) return Math.floor(s) + "h";
+  return Math.floor(s / 24) + "d";
+}
+
+function prLabel(url) {
+  const m = url.match(/^https?:\/\/[^/]+\/(.+?)\/(?:-\/)?(?:pull|pulls|merge_requests|pullrequest)\/(\d+)$/);
+  return m ? m[1].split("/").slice(-1)[0] + "#" + m[2] : url;
+}
+
+function safeHref(url) { return /^https?:\/\//.test(url) ? url : null; }
+
+function card(c) {
+  const sub = el("div", { class: "sub" });
+  if (c.type === "task") {
+    if (c.project) sub.append(el("span", { text: c.project }));
+    sub.append(el("span", { text: "age " + ago(c.created), title: c.created }));
+    if (c.last_at) sub.append(el("span", { text: "last " + ago(c.last_at), title: c.last_at }));
+    sub.append(el("span", { class: "badge accent", text: c.reason || c.state }));
+  } else {
+    if (c.date) sub.append(el("span", { text: c.date }));
+    sub.append(el("span", { class: "badge accent", text: "inbox" }));
+  }
+  const node = el("div", { class: "card" + (c.type === "inbox" ? " inbox" : "") },
+    el("div", { class: "title", text: c.title || c.id, title: c.id }), sub);
+  if (c.type === "task" && c.last_event) node.append(el("div", { class: "last", text: c.last_event, title: c.last_event }));
+  const links = el("div", { class: "links" });
+  for (const p of c.prs || []) {
+    const href = safeHref(p.url);
+    if (!href) continue;
+    const a = el("a", { href, target: "_blank", rel: "noopener noreferrer", text: prLabel(p.url) });
+    links.append(a);
+    if (p.state && p.state !== "UNKNOWN") {
+      const st = p.isDraft ? "draft" : p.state.toLowerCase() + (p.reviewDecision && p.state === "OPEN" ? " · " + p.reviewDecision.toLowerCase().replace(/_/g, " ") : "");
+      links.append(el("span", { class: "badge", text: st }));
+    }
+  }
+  for (const f of c.files || []) {
+    const href = "/task/" + encodeURIComponent(c.id) + "/" + encodeURIComponent(f);
+    const a = el("a", { href, text: f.replace(/\.(md|log)$/, "") });
+    a.addEventListener("click", (e) => { if (e.metaKey || e.ctrlKey) return; e.preventDefault(); view(c, f, href); });
+    links.append(a);
+  }
+  if (links.childNodes.length) node.append(links);
+  return node;
+}
+
+function render(d) {
+  document.getElementById("meta").textContent =
+    d.home + " · updated " + new Date(d.generated_at).toLocaleTimeString() +
+    (d.pr_enrichment && d.pr_enrichment.enabled ? " · PR states via gh" : "");
+  const counts = document.getElementById("counts");
+  counts.replaceChildren(...LANES.map(([k, label]) => el("span", { class: "count" }, label + " ", el("b", { text: String(d.counts[k] || 0) }))));
+  const main = document.getElementById("lanes");
+  main.replaceChildren(...LANES.map(([k, label]) => {
+    const items = d.lanes[k] || [];
+    const sec = el("section", { class: "lane", "data-lane": k },
+      el("h2", {}, el("span", { class: "dot" }), label, el("span", { class: "n", text: String(items.length) })));
+    const limit = SHOW[k] && !expanded[k] ? SHOW[k] : Infinity;
+    items.slice(0, limit).forEach((c) => sec.append(card(c)));
+    if (!items.length) sec.append(el("div", { class: "empty", text: k === "needs_you" ? "Nothing needs you." : "None." }));
+    if (items.length > limit) {
+      const b = el("button", { class: "more", type: "button", text: "show all " + items.length });
+      b.addEventListener("click", () => { expanded[k] = true; render(d); });
+      sec.append(b);
+    }
+    if (k === "needs_you" && d.inbox && d.inbox.approvals && d.inbox.approvals.length) {
+      sec.append(el("div", { class: "approvals", text: "Approvals given in chat, not yet in a brief:" },
+        el("ul", {}, ...d.inbox.approvals.map((a) => el("li", { text: (a.date ? a.date + " — " : "") + a.text })))));
+    }
+    return sec;
+  }));
+  document.title = (d.counts.needs_you ? "(" + d.counts.needs_you + ") " : "") + "chartroom";
+}
+
+function banner(msg) {
+  const b = document.getElementById("banner");
+  b.textContent = msg || "";
+  b.style.display = msg ? "block" : "none";
+}
+
+let last = null;
+async function refresh() {
+  try {
+    const r = await fetch("/api/dashboard", { cache: "no-store" });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || r.statusText);
+    last = d;
+    banner("");
+    render(d);
+  } catch (e) {
+    banner("Could not refresh: " + e.message + (last ? " (showing the last good view)" : ""));
+  }
+}
+
+async function view(c, f, href) {
+  const dlg = document.getElementById("viewer");
+  document.getElementById("viewer-title").textContent = (c.title || c.id) + " — " + f;
+  document.getElementById("viewer-raw").href = href;
+  const body = document.getElementById("viewer-body");
+  body.textContent = "loading…";
+  if (!dlg.open) dlg.showModal();
+  try {
+    const r = await fetch(href, { cache: "no-store" });
+    body.textContent = r.ok ? await r.text() : "could not load " + f + " (" + r.status + ")";
+  } catch (e) { body.textContent = "could not load " + f + ": " + e.message; }
+}
+document.getElementById("viewer-close").addEventListener("click", () => document.getElementById("viewer").close());
+
+refresh();
+setInterval(() => { if (!document.hidden) refresh(); }, POLL_MS);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+</script>
+</body>
+</html>
