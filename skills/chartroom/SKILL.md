@@ -63,6 +63,8 @@ Run this once at the start of every session, before taking new work:
    - `in-session` subagents from a dead session are gone. Re-dispatch them; the brief survives.
 3. Start waiting for wakes (see Supervision) whenever any task is in flight.
 4. If anything needs the commander, open with a short digest (the `bearings` format).
+   `/continue <id>` (the `continue` skill) jumps to one item by the short id the dashboard
+   shows; `chartroom resolve <id>` maps it back.
    Otherwise say you're ready, in one line.
 
 A restart is a non-event. If you lose context mid-session (including a compaction), do the
@@ -199,8 +201,9 @@ you then deliver it with your harness's message tool.
 - When the commander states a lasting preference, update `commander.md` (inspect, then edit)
   and confirm it in a line.
 - **Inbox.** Chat does not survive compaction; `inbox.md` in the home does. When you ask the
-  commander a question you are waiting on, add or update a dated line under "Waiting on the
-  commander". When the commander approves something in chat that is not yet written into a
+  commander a question you are waiting on, add it with `chartroom inbox add "<question>"`
+  (a dated line under "Waiting on the commander" with a stable short id the dashboard shows;
+  after hand-editing that section, run `chartroom inbox tag`). When the commander approves something in chat that is not yet written into a
   task brief, add a dated line under "Approvals given in chat, not yet in a brief". Remove the
   line once it is answered or recorded in a brief.
 

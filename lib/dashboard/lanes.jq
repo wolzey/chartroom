@@ -30,7 +30,7 @@ now as $now
     | (($t.closed | ts) // null) as $closed_at
     | ($pr | length > 0 and all(.[]; .state == "MERGED" or .state == "CLOSED") and any(.[]; .state == "MERGED")) as $merged
     | ($pr | any(.[]; .state == "OPEN" and (.reviewDecision == "REVIEW_REQUIRED" or .reviewDecision == "CHANGES_REQUESTED"))) as $in_review
-    | {type: "task", id, title, project, kind, backend, state, live, created, closed,
+    | {type: "task", id, short_id: ($t.short_id // $t.id), title, project, kind, backend, state, live, created, closed,
        last_event: $ev, last_at: ($t.last_event_at // $t.last_at // $t.dispatched // $t.created),
        prs: $pr, files, has_report, waiting_on: ($t.waiting_on // null), waiting_until: ($t.waiting_until // null)}
     | .lane = (
@@ -55,7 +55,7 @@ now as $now
         else .live end)
     | select(.lane != null))
 | . as $tasks
-| ($inbox.waiting | to_entries | map({type: "inbox", id: ("inbox-" + (.key | tostring)), title: .value.text,
+| ($inbox.waiting | to_entries | map({type: "inbox", id: ("inbox-" + (.key | tostring)), short_id: (.value.short_id // null), title: .value.text,
      date: .value.date, last_at: (if .value.date then .value.date + "T00:00:00Z" else null end),
      lane: "needs_you", state: "inbox", reason: "waiting on you (inbox)", prs: [], files: []})) as $waiting
 | def by_recent: sort_by(.last_at // "") | reverse;

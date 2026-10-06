@@ -11,8 +11,9 @@ CR_DASHBOARD_FILES='brief.md report.md plan.md final.md events.log'
 
 dashboard_pidfile() { printf '%s/.dashboard.pid' "$CR_HOME"; }
 
-# Open inbox.md items as JSON: {waiting:[{date,text}], approvals:[...]}. Same rules as
-# inbox_line: bullets under "## Waiting ..." / "## Approvals ...", "(none)" excluded.
+# Open inbox.md items as JSON: {waiting:[{short_id,date,text}], approvals:[...]}. Same rules
+# as inbox_line: bullets under "## Waiting ..." / "## Approvals ...", "(none)" excluded.
+# short_id is the item's "[i-xxxx]" tag (null when untagged), split off the text.
 dashboard_inbox() {
   local f="$CR_HOME/inbox.md"
   [[ -f "$f" ]] || { echo '{"waiting":[],"approvals":[]}'; return 0; }
@@ -21,6 +22,8 @@ dashboard_inbox() {
     s != "" && /^- / && $0 !~ /^- \(none\)/ { sub(/^- /, ""); print s "\t" $0 }' "$f" |
     jq -R -s '
       [split("\n")[] | select(length > 0) | split("\t") | {section: .[0], text: (.[1:] | join("\t"))}
+       | ([.text | capture("^\\[(?<id>i-[0-9a-f]{4,})\\] +(?<rest>.*)$")] | first) as $tag
+       | if $tag then .short_id = $tag.id | .text = $tag.rest else .short_id = null end
        | . + (if (.text | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}"))
               then {date: .text[0:10], text: (.text[10:] | sub("^[\\s—–:-]+"; ""))} else {date: null} end)]
       | {waiting: map(select(.section == "waiting") | del(.section)),

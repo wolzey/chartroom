@@ -164,3 +164,25 @@ waiting_info() { # <id>
        announced: ($ev[$i + 1:] | any(.kind == "note" and (.text | startswith("waiting overdue"))))}
   ' "$(tdir "$1")/events.log"
 }
+
+# ---------------------------------------------------------------- short ids
+
+# Short ids: for a generated id (ending in -<4 hex>), the shortest suffix of it (at least 4
+# characters, never starting with "-") that no other id in its pool ends with, so the 4-hex
+# suffix is the short id and a shared one grows until it differs (foo-21ba / bar-21ba ->
+# o-21ba / r-21ba). Any other id (given with `new --id`) is its own short id.
+# An open task's pool is the open tasks, so history never changes it; a closed task's pool
+# is every task, so no two short ids are ever equal. Prints {"<id>": "<short>", ...}.
+short_ids_json() {
+  local metas=("$CR_HOME"/tasks/*/meta.json)
+  [[ -e "${metas[0]}" ]] || { echo '{}'; return 0; }
+  jq -n -c '
+    def short($pool): . as $id
+      | if ($id | test("-[0-9a-f]{4}$") | not) then $id else
+        ([range(4; $id | length) | $id[-.:] | select(startswith("-") | not)
+          | . as $s | select(all($pool[]; . == $id or (endswith($s) | not)))] | first) // $id end;
+    [inputs | {id, closed: ((.closed // "") != "")}] as $t
+    | ([$t[] | select(.closed | not) | .id]) as $open
+    | ($t | map(.id)) as $all
+    | [$t[] | (if .closed then $all else $open end) as $pool | {key: .id, value: (.id | short($pool))}] | from_entries' "${metas[@]}"
+}

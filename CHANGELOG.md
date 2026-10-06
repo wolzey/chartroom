@@ -7,6 +7,19 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- Short ids. Every task has one: its 4-hex suffix (`fix-login-21ba` -> `21ba`), grown to the
+  shortest unique suffix when two open tasks share it (`n-21ba`, `g-21ba`); an id given with
+  `new --id` is its own short id. Items under "Waiting on the commander" in `inbox.md` carry a
+  stable `[i-7f3a]` tag right after the bullet, written once by `chartroom inbox add <text>` or
+  `chartroom inbox tag` (for hand-written lines; idempotent), so adding or removing items never
+  moves them. `chartroom resolve <id> [--json]` maps a full or short id back to the task or
+  inbox item and fails on an unknown or ambiguous one. `status --json` rows and every
+  dashboard card gain `short_id` (existing fields unchanged); the dashboard shows it on each
+  card and copies `/continue <id>` on click.
+- A `continue` skill (`/continue <id>`): the XO resolves the id and takes the commander
+  straight to the point: the pending question (asked with the agent's question tool,
+  recommendation first), the outcome and landing options, or a one-line status.
+  `install-skills` links it with the others.
 - A `waiting` worker event: a worker records it right before ending a turn to wait on
   something (CI, a review, a timer, a person), with an optional `until <UTC time>`. A stopped
   worker whose newest report is `waiting` is `waiting` in `status` (In progress on the
