@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>chartroom</title>
-<link rel="icon" href="data:,">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cstyle%3E.i%7Bfill:%2314243a%7D.r%7Bstroke:%2314243a%7D.b%7Bfill:%23fbf7ee%7D%40media %28prefers-color-scheme:dark%29%7B.i%7Bfill:%23e2ebf1%7D.r%7Bstroke:%23e2ebf1%7D.b%7Bfill:%230d2133%7D%7D%3C/style%3E%3Ccircle class='b r' cx='16' cy='16' r='14.5' stroke-width='2'/%3E%3Cpath class='i' d='M16 27 18.2 18.2 27 16 18.2 13.8 16 16 13.8 18.2 5 16 13.8 13.8Z'/%3E%3Cpath fill='%23c2412b' d='M16 3 18.2 13.8 16 16 13.8 13.8Z'/%3E%3Ccircle class='b r' cx='16' cy='16' r='1.8' stroke-width='1.2'/%3E%3C/svg%3E">
 <style>
   /* Two themes over one layout, picked by <html data-theme> (the server writes its configured
      default there; the header switcher overrides it per browser). Each has light and dark
@@ -85,15 +85,49 @@
                   border-bottom: 1px solid var(--line);
                   display: grid; grid-template-columns: auto 1fr auto; gap: 10px 20px; align-items: center; }
   .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
-  .rose { width: 42px; height: 42px; flex: none; color: var(--ink); }
-  .rose .needle { transform-origin: 32px 32px; animation: swing 6s ease-in-out infinite; }
-  .rose .needle .n { fill: var(--needs); }
-  .rose .needle .s { fill: var(--muted); }
-  body.alert .rose .needle { animation-duration: 2s; }
-  @keyframes swing { 0%,100% { transform: rotate(-9deg); } 50% { transform: rotate(7deg); } }
-  .brand h1 { margin: 0; font: italic 600 26px/1 var(--display); letter-spacing: .01em; }
+  /* the mark: a chart-table compass. A 5-degree bezel, a compass card that swings and settles
+     on load (then drifts a hair), a course plotted in red pencil, and depth contours under it
+     that roll like a slow swell. Static and complete under reduced motion. */
+  .rose { width: 48px; height: 48px; flex: none; color: var(--ink); overflow: visible; }
+  .rose .bezel { fill: none; stroke: currentColor; stroke-width: 1.4; }
+  .rose .ticks { fill: none; stroke: currentColor; stroke-width: 2.2; stroke-opacity: .55; }
+  .rose .cards { fill: none; stroke: currentColor; stroke-width: 4.2; }
+  .rose .disc { fill: color-mix(in srgb, var(--prog) 8%, var(--panel)); stroke: currentColor; stroke-width: .6; stroke-opacity: .45; }
+  .rose .depths path { fill: none; stroke: var(--prog); stroke-width: 1.1; stroke-opacity: .45; stroke-linecap: round; }
+  .rose .swell { animation: swell 7s ease-in-out infinite alternate; }
+  .rose .course { fill: none; stroke: var(--needs); stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round;
+                  stroke-dasharray: 1; animation: plot 1.6s cubic-bezier(.5,0,.3,1) .5s both; }
+  .rose .fix { fill: var(--panel); stroke: var(--needs); stroke-width: 1.1; animation: fix .4s ease-out both; }
+  .rose .fix.f1 { animation-delay: .95s; } .rose .fix.f2 { animation-delay: 1.45s; }
+  .rose .card { transform-origin: 32px 32px; transform-box: view-box;
+                animation: settle 2.6s cubic-bezier(.3,.6,.3,1) both, drift 9s ease-in-out 2.6s infinite; }
+  body.alert .rose .card { animation: settle 2.6s cubic-bezier(.3,.6,.3,1) both, drift 3s ease-in-out 2.6s infinite; }
+  .rose .pd { fill: currentColor; }
+  .rose .pl { fill: var(--panel); stroke: currentColor; stroke-width: .7; stroke-linejoin: round; }
+  .rose .pd.n { fill: var(--needs); }
+  .rose .pl.n { stroke: var(--needs); }
+  .rose .hub { fill: var(--panel); stroke: currentColor; stroke-width: 1; }
+  @keyframes settle { 0% { transform: rotate(-42deg); } 28% { transform: rotate(17deg); } 48% { transform: rotate(-8deg); }
+                      64% { transform: rotate(4deg); } 80% { transform: rotate(-1.5deg); } 100% { transform: rotate(0); } }
+  @keyframes drift { 0%,100% { transform: rotate(0); } 50% { transform: rotate(2.5deg); } }
+  @keyframes plot { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+  @keyframes fix { from { opacity: 0; transform: scale(.2); } }
+  @keyframes swell { from { transform: translateX(-4px); } to { transform: translateX(4px); } }
+  .rose .fix { transform-box: fill-box; transform-origin: center; }
+
+  /* the wordmark: an old chart's title, italic "Chart" and roman "room", over a graduated
+     latitude bar that runs out from the left on load */
+  .brand h1 { margin: 0; position: relative; display: inline-flex; align-items: baseline; padding-bottom: 8px;
+              font: 600 27px/1 var(--display); letter-spacing: .005em; }
+  .brand h1 .w1 { font-style: italic; }
+  .brand h1 .w2 { font-weight: 500; letter-spacing: .03em; }
+  .brand h1::after { content: ""; position: absolute; left: 1px; right: 0; bottom: 0; height: 4px; box-sizing: border-box;
+                     border: .75px solid currentColor; transform-origin: left;
+                     background: repeating-linear-gradient(90deg, currentColor 0 9px, transparent 9px 18px);
+                     animation: graduate 1.2s cubic-bezier(.2,.8,.2,1) .25s both; }
+  @keyframes graduate { from { transform: scaleX(0); } }
   .brand h1 small { font: 600 10px/1 var(--body); letter-spacing: .22em; text-transform: uppercase; color: var(--muted);
-                    font-style: normal; margin-left: 8px; vertical-align: 4px; }
+                    font-style: normal; margin-left: 9px; align-self: center; }
   .meta { color: var(--muted); font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
   .instruments { grid-column: 3; display: flex; align-items: center; gap: 14px; font: 12px var(--mono); color: var(--muted); }
   .watch b { color: var(--ink); font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: .04em; }
@@ -338,6 +372,9 @@
   @keyframes hit { 0% { opacity: 1; transform: var(--at) scale(1.8); } 30%,100% { opacity: .45; transform: var(--at); } }
   [data-theme=hud] .brand h1 { font: 700 27px/1 var(--display); letter-spacing: .16em; text-transform: uppercase; color: var(--needs); }
   [data-theme=hud] .brand h1 small { font-family: var(--mono); letter-spacing: .18em; }
+  [data-theme=hud] .brand h1 { padding-bottom: 0; }
+  [data-theme=hud] .brand h1 span { font: inherit; letter-spacing: inherit; }
+  [data-theme=hud] .brand h1::after { display: none; }
   [data-theme=hud] .meta, [data-theme=hud] .instruments { font-family: var(--mono); text-transform: uppercase; letter-spacing: .04em; }
   [data-theme=hud] .theme, [data-theme=hud] .gauge, [data-theme=hud] .badge, [data-theme=hud] .sid,
   [data-theme=hud] .more, [data-theme=hud] .kind, [data-theme=hud] .banner { border-radius: 2px; }
@@ -423,14 +460,24 @@
 <header class="bridge">
   <div class="brand">
     <svg class="rose" viewBox="0 0 64 64" aria-hidden="true">
-      <circle cx="32" cy="32" r="29" fill="none" stroke="currentColor" stroke-opacity=".35"/>
-      <circle cx="32" cy="32" r="23" fill="none" stroke="currentColor" stroke-opacity=".18" stroke-dasharray="1 3.2"/>
-      <path d="M32 5 35 29 59 32 35 35 32 59 29 35 5 32 29 29Z" fill="currentColor" fill-opacity=".12" stroke="currentColor" stroke-opacity=".4" stroke-width=".8"/>
-      <g class="needle"><path class="n" d="M32 11 35.2 32H28.8Z"/><path class="s" d="M32 53 35.2 32H28.8Z"/><circle cx="32" cy="32" r="2.4" fill="currentColor"/></g>
+      <defs><clipPath id="mark-disc"><circle cx="32" cy="32" r="24.6"/></clipPath></defs>
+      <circle class="bezel" cx="32" cy="32" r="30.6"/>
+      <circle class="ticks" cx="32" cy="32" r="27.6" pathLength="360" stroke-dasharray=".7 4.3" stroke-dashoffset=".35"/>
+      <circle class="cards" cx="32" cy="32" r="27.4" pathLength="360" stroke-dasharray="1.4 88.6" stroke-dashoffset=".7"/>
+      <circle class="disc" cx="32" cy="32" r="24.6"/>
+      <g clip-path="url(#mark-disc)">
+        <g class="depths"><g class="swell">
+          <path d="M-6 44c6-3 11-3 16 0s11 3 16 0 11-3 16 0 11 3 16 0 11-3 16 0"/>
+          <path d="M-6 51c6-3 11-3 16 0s11 3 16 0 11-3 16 0 11 3 16 0 11-3 16 0"/>
+        </g></g>
+        <g class="card"><path class="pd" d="M41.5 22.5L32.0 29.4L32 32Z"/><path class="pl" d="M41.5 22.5L34.6 32.0L32 32Z"/><path class="pd" d="M41.5 41.5L34.6 32.0L32 32Z"/><path class="pl" d="M41.5 41.5L32.0 34.6L32 32Z"/><path class="pd" d="M22.5 41.5L32.0 34.6L32 32Z"/><path class="pl" d="M22.5 41.5L29.4 32.0L32 32Z"/><path class="pd" d="M22.5 22.5L29.4 32.0L32 32Z"/><path class="pl" d="M22.5 22.5L32.0 29.4L32 32Z"/><path class="pd" d="M53.5 32.0L34.4 29.6L32 32Z"/><path class="pl" d="M53.5 32.0L34.4 34.4L32 32Z"/><path class="pd" d="M32.0 53.5L34.4 34.4L32 32Z"/><path class="pl" d="M32.0 53.5L29.6 34.4L32 32Z"/><path class="pd" d="M10.5 32.0L29.6 34.4L32 32Z"/><path class="pl" d="M10.5 32.0L29.6 29.6L32 32Z"/><path class="pd n" d="M32.0 10.5L29.6 29.6L32 32Z"/><path class="pl n" d="M32.0 10.5L34.4 29.6L32 32Z"/><circle class="hub" cx="32" cy="32" r="2.2"/></g>
+        <path class="course" pathLength="1" d="M9.5 45.5 21 41.5 34 40 47.5 33M47.5 33l-4.4-.2M47.5 33l-2.3 3.7"/>
+        <circle class="fix f1" cx="21" cy="41.5" r="1.6"/><circle class="fix f2" cx="34" cy="40" r="1.6"/>
+      </g>
     </svg>
     <div class="radar" id="radar" title="each dot is a task; the inner ring needs you" aria-hidden="true"><div class="rsweep" id="rsweep"></div></div>
     <div>
-      <h1>Chartroom<small id="brand-sub">fleet</small></h1>
+      <h1><span class="w1">Chart</span><span class="w2">room</span><small id="brand-sub">fleet</small></h1>
       <div class="meta" id="meta">loading…</div>
     </div>
   </div>
