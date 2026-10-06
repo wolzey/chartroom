@@ -418,3 +418,57 @@ start_daemon() {
   [ "$(jq -r .pr_enrichment.error <<<"$j")" = "gh not on PATH" ]
   [ "$(jq -r '.lanes.ready[0].id' <<<"$j")" = t-review ]
 }
+
+@test "short ids: every card carries short_id; inbox items their tag; existing fields unchanged" {
+  fixture fix-login-21ba subagent <<<"600 decision: pick A or B"
+  fixture add-flag-21ba subagent <<<"120 progress: going"
+  fixture docs-7f3a subagent closed=3600 <<<"3700 done: shipped"
+  cat >"$CHARTROOM_HOME/inbox.md" <<'EOF2'
+# Inbox
+
+## Waiting on the commander
+- [i-7f3a] 2026-01-02 — merge the parser PR?
+- which region for staging?
+
+## Approvals given in chat, not yet in a brief
+- 2026-01-03 — ok to rotate the test key
+EOF2
+  BOARD="$(cr dashboard --json)"
+  [ "$(card fix-login-21ba | jq -r .short_id)" = n-21ba ]
+  [ "$(card add-flag-21ba | jq -r .short_id)" = g-21ba ]
+  [ "$(card docs-7f3a | jq -r .short_id)" = 7f3a ]
+  # inbox cards keep their positional id and gain the tag (null when the line has none)
+  [ "$(card inbox-0 | jq -c '[.short_id, .title, .date]')" = '["i-7f3a","merge the parser PR?","2026-01-02"]' ]
+  [ "$(card inbox-1 | jq -c '[.short_id, .title]')" = '[null,"which region for staging?"]' ]
+  [ "$(jq -r '.inbox.approvals[0].text' <<<"$BOARD")" = "ok to rotate the test key" ]
+  # the short id a card shows resolves back to its task / item
+  [ "$(cr resolve "$(card fix-login-21ba | jq -r .short_id)")" = fix-login-21ba ]
+  [ "$(cr resolve i-7f3a)" = i-7f3a ]
+  # a closed task's 4-hex suffix is the same as an inbox tag's hex, but i- keeps them apart
+  [ "$(cr resolve 7f3a)" = docs-7f3a ]
+}
+
+@test "board: the dashboard's lanes in the terminal, short id first; plain when piped; --json is the board" {
+  build_fleet
+  fixture fix-login-21ba subagent <<<"60 decision: pick A or B (recommend A)"
+  perl -0pi -e 's/- 2026-01-02 — merge/- [i-7f3a] 2026-01-02 — merge/' "$CHARTROOM_HOME/inbox.md"
+  run cr board
+  [ "$status" -eq 0 ]
+  [[ "$output" != *$'\e['* ]]   # piped: no color
+  # the same lanes, counts and order as dashboard --json
+  [ "$(grep -E '^[A-Z]' <<<"$output" | tr '\n' '|')" = "Needs you (6)|In progress (2)|On hold (2)|Ready for you (2)|Recently finished (1)|" ]
+  local want got
+  want="$(cr dashboard --json | jq -r '.lanes[][] | .short_id // "-"' | tr '\n' ' ')"
+  got="$(grep -E '^  [^ ]' <<<"$output" | grep -v '^  none$' | awk '{print $1}' | tr '\n' ' ')"
+  [ "$got" = "$want" ]
+  grep -qE '^  21ba +Task fix-login-21ba  \[decision\]  decision: pick A or B \(recommend A\)$' <<<"$output"
+  grep -qE '^  i-7f3a +merge the parser PR\?  \[waiting on you \(inbox\)\]  since 2026-01-02$' <<<"$output"
+  grep -qE '^  - +which region for staging\?' <<<"$output"   # an untagged inbox line has no id yet
+  # color on request
+  [[ "$(cr board --color)" == *$'\e[1;31mNeeds you'* ]]
+  [ "$(NO_COLOR=1 cr board | grep -c $'\e')" -eq 0 ]
+  # --json is the dashboard's JSON
+  [ "$(cr board --json | jq -c '[.counts, [.lanes[][] | .short_id]]')" = "$(cr dashboard --json | jq -c '[.counts, [.lanes[][] | .short_id]]')" ]
+  run cr board --bogus
+  [ "$status" -ne 0 ]
+}

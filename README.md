@@ -9,7 +9,8 @@ You don't juggle tabs.
 
 chartroom has two parts: a small bash CLI (`chartroom`) that does the exact work (task
 records, worktrees, launching, steering, liveness, a wake stream), and Agent Skills
-(`chartroom`, `bearings`, and `dashboard` to open the board) that tell your agent how to be the XO. State is plain files under
+(`chartroom`, `bearings`, `dashboard` to open the board, and `continue` to jump to one item by
+its short id) that tell your agent how to be the XO. State is plain files under
 `~/.chartroom`. There is no daemon (an optional local dashboard can show the fleet in a browser).
 
 ```
@@ -35,7 +36,7 @@ backends, secondmates on other hosts, Relay, Gerrit/GitLab flows, and has a larg
 chartroom is the small one. The differences that are real:
 
 - **It installs into your existing setup instead of being one.** firstmate is an "agent distro":
-  you clone it and launch your agent inside it. chartroom is a CLI on your PATH plus three skills
+  you clone it and launch your agent inside it. chartroom is a CLI on your PATH plus four skills
   linked into the agents you already use. Your home directory, config and other skills stay as
   they are.
 - **No multiplexer required.** Headless workers (`claude -p` with live steering over a stream,
@@ -95,6 +96,7 @@ chartroom dashboard open             # reuse the running one (or start it), then
 chartroom dashboard --theme hud      # start with the HUD theme as the default
 chartroom dashboard stop             # (or: status)
 chartroom dashboard --json           # the same lanes, no server
+chartroom board                      # the same lanes in the terminal, one line per item
 ```
 
 A one-page, read-only view of the fleet that refreshes every 5 seconds, so you can see what
@@ -144,6 +146,15 @@ How it is built, and what it promises:
   theme menu in the header overrides it for that browser only ("default" goes back to the
   server's). The default is set when the server starts: restart a running dashboard to change it.
 - A legacy home works the same: `CHARTROOM_HOME=~/.captain chartroom dashboard`.
+- **Short ids.** Each card shows a short id: a task's 4-hex suffix (`21ba`, grown to the
+  shortest unique suffix such as `n-21ba` when two open tasks share one), or an inbox item's
+  `i-7f3a` tag. Clicking it copies `/continue <id>`; paste that into the XO session and the
+  `continue` skill takes you straight to what the item needs from you.
+  `chartroom resolve <id>` maps any short or full id back. `chartroom board` prints the same
+  lanes in the terminal (short id, title, state, last event; color only on a terminal,
+  `--json` for the lanes JSON). Inbox items get their tag from
+  `chartroom inbox add <text>` (or `chartroom inbox tag` for lines written by hand); it never
+  changes as other items come and go.
 
 ## Concepts
 

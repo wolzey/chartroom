@@ -12,8 +12,9 @@ CR_DASHBOARD_FILES='brief.md report.md plan.md final.md events.log'
 
 dashboard_pidfile() { printf '%s/.dashboard.pid' "$CR_HOME"; }
 
-# Open inbox.md items as JSON: {waiting:[{date,text}], approvals:[...]}. Same rules as
-# inbox_line: bullets under "## Waiting ..." / "## Approvals ...", "(none)" excluded.
+# Open inbox.md items as JSON: {waiting:[{short_id,date,text}], approvals:[...]}. Same rules
+# as inbox_line: bullets under "## Waiting ..." / "## Approvals ...", "(none)" excluded.
+# short_id is the item's "[i-xxxx]" tag (null when untagged), split off the text.
 dashboard_inbox() {
   local f="$CR_HOME/inbox.md"
   [[ -f "$f" ]] || { echo '{"waiting":[],"approvals":[]}'; return 0; }
@@ -22,6 +23,8 @@ dashboard_inbox() {
     s != "" && /^- / && $0 !~ /^- \(none\)/ { sub(/^- /, ""); print s "\t" $0 }' "$f" |
     jq -R -s '
       [split("\n")[] | select(length > 0) | split("\t") | {section: .[0], text: (.[1:] | join("\t"))}
+       | ([.text | capture("^\\[(?<id>i-[0-9a-f]{4,})\\] +(?<rest>.*)$")] | first) as $tag
+       | if $tag then .short_id = $tag.id | .text = $tag.rest else .short_id = null end
        | . + (if (.text | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}"))
               then {date: .text[0:10], text: (.text[10:] | sub("^[\\s—–:-]+"; ""))} else {date: null} end)]
       | {waiting: map(select(.section == "waiting") | del(.section)),
@@ -192,4 +195,41 @@ cmd_dashboard() {
   tail -n 20 "$log" >&2 2>/dev/null || true
   pid_alive "$child" && kill "$child" 2>/dev/null
   die "dashboard did not start"
+}
+
+# `chartroom board`: the dashboard's lanes in the terminal, from the same dashboard_json, so
+# the two never disagree. One line per item: short id, title, state, a snippet of the last
+# event. Color only when stdout is a terminal (and NO_COLOR is unset); --json is the lanes JSON.
+cmd_board() {
+  local json=0 color=0 a
+  [[ -t 1 && -z "${NO_COLOR:-}" ]] && color=1
+  for a in "$@"; do
+    case "$a" in
+      --json) json=1 ;;
+      --color) color=1 ;;
+      --no-color) color=0 ;;
+      *) die "board: unknown arg $a (usage: chartroom board [--json] [--color|--no-color])" ;;
+    esac
+  done
+  if [[ $json -eq 1 ]]; then dashboard_json; return; fi
+  dashboard_json | jq -r --argjson color "$color" '
+    def c($code): if $color == 1 then "\u001b[" + $code + "m" + . + "\u001b[0m" else . end;
+    def cut($n): if length > $n then .[0:$n - 1] + "…" else . end;
+    def pad($n): . + (" " * ([$n - length, 0] | max));
+    [["needs_you", "Needs you", "1;31"], ["in_progress", "In progress", "1;36"], ["on_hold", "On hold", "1;33"],
+     ["ready", "Ready for you", "1;32"], ["recent", "Recently finished", "1;90"]] as $lanes
+    | . as $b
+    | ([$b.lanes[][] | (.short_id // "-") | length] | max // 4) as $w
+    | $lanes[] as [$k, $name, $col]
+    | ($b.lanes[$k] // []) as $items
+    | ("\($name) (\($items | length))" | c($col)),
+      (if ($items | length) == 0 then "  none" | c("2")
+       else $items[]
+         | ((.short_id // "-") | pad($w) | c("1")) + "  " + ((.title // .id) | cut(60))
+           + "  " + ("[" + (.reason // .state // "") + "]" | c("2"))
+           + (if .type == "inbox" then (if .date then "  since " + .date else "" end)
+              elif .waiting_on then "  waiting on: " + (.waiting_on | cut(60))
+              elif .last_event then "  " + (.last_event | gsub("\n"; " ") | cut(70)) else "" end)
+         | "  " + . end),
+      ""'
 }

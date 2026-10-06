@@ -337,3 +337,114 @@ EOF
   [[ "$out" == *"command worker running"* ]]
   cr stop "$id" >/dev/null
 }
+
+# A bare task record (no project or dispatch needed): <id> [closed]
+bare_task() {
+  local d="$CHARTROOM_HOME/tasks/$1"; mkdir -p "$d"
+  jq -n --arg id "$1" --arg c "${2:-}" '{schema:1,id:$id,title:("T " + $id),kind:"ship",backend:"subagent",project:"/srv/p",created:"2026-01-01T00:00:00Z"}
+    + (if $c != "" then {closed:$c} else {} end)' >"$d/meta.json"
+  : >"$d/events.log"
+}
+shorts() { cr status --all --json | jq -r 'map("\(.id)=\(.short_id)") | join(" ")'; }
+
+@test "short ids: the 4-hex suffix; a shared suffix grows until unique; closed never shadow open" {
+  cr init >/dev/null
+  bare_task fix-login-21ba
+  bare_task docs-7f3a
+  bare_task custom
+  [ "$(shorts)" = "custom=custom docs-7f3a=7f3a fix-login-21ba=21ba" ]
+  # a second open task with the same suffix: both extend to the shortest unique suffix
+  bare_task add-flag-21ba
+  [ "$(shorts)" = "add-flag-21ba=g-21ba custom=custom docs-7f3a=7f3a fix-login-21ba=n-21ba" ]
+  # a closed task does not change an open one's short id, and takes a longer one itself
+  bare_task old-7f3a 2026-01-02T00:00:00Z
+  [ "$(cr status --all --json | jq -r '.[] | select(.id == "docs-7f3a") | .short_id')" = 7f3a ]
+  [ "$(cr status --all --json | jq -r '.[] | select(.id == "old-7f3a") | .short_id')" = d-7f3a ]
+  # every short id is distinct
+  [ "$(cr status --all --json | jq '[.[].short_id] | (unique | length) == length')" = true ]
+  # status --json keeps every existing field and only adds short_id
+  [ "$(cr status --json | jq -c '.[0] | keys')" = '["backend","branch","closed","created","dispatched","has_report","id","kind","last","last_at","live","project","short_id","state","title","updated","waiting_on","waiting_since","waiting_until"]' ]
+}
+
+@test "short ids: an id whose suffix would start with a dash grows past it" {
+  cr init >/dev/null
+  bare_task a-b-21ba
+  bare_task c-b-21ba
+  [ "$(shorts)" = "a-b-21ba=a-b-21ba c-b-21ba=c-b-21ba" ]
+  bare_task q-21ba
+  [ "$(shorts)" = "a-b-21ba=a-b-21ba c-b-21ba=c-b-21ba q-21ba=q-21ba" ]
+}
+
+@test "resolve: full id, short id, suffix; ambiguous and unknown fail" {
+  cr init >/dev/null
+  bare_task fix-login-21ba
+  bare_task add-flag-21ba
+  bare_task docs-7f3a
+  bare_task old-7f3a 2026-01-02T00:00:00Z
+  [ "$(cr resolve fix-login-21ba)" = fix-login-21ba ]
+  [ "$(cr resolve n-21ba)" = fix-login-21ba ]
+  [ "$(cr resolve 7f3a)" = docs-7f3a ]       # the open task wins over a closed one
+  [ "$(cr resolve d-7f3a)" = old-7f3a ]
+  [ "$(cr resolve ' [DOCS-7F3A] ')" = docs-7f3a ]
+  [ "$(cr resolve login-21ba)" = fix-login-21ba ]   # a unique suffix still works
+  run cr resolve 21ba
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"ambiguous id '21ba': add-flag-21ba fix-login-21ba"* ]]
+  run cr resolve 9999
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"unknown id '9999'"* ]]
+  run cr resolve
+  [ "$status" -ne 0 ]
+  run cr resolve 7f3a --json
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '"\(.type) \(.id) \(.short_id) \(.state)"' <<<"$output")" = "task docs-7f3a 7f3a drafting" ]
+}
+
+@test "inbox ids: add and tag write stable ids; resolve finds items; ids survive edits" {
+  cr init >/dev/null
+  run cr inbox add "which region for staging?"
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ ^i-[0-9a-f]{4}$ ]]
+  local a="$output"
+  grep -qx -- "- \[$a\] $(date +%F) — which region for staging?" "$CHARTROOM_HOME/inbox.md"
+  ! grep -q -- '- (none)' <(sed -n '/^## Waiting/,/^## Approvals/p' "$CHARTROOM_HOME/inbox.md")
+  local b; b="$(cr inbox add "merge the parser PR?")"
+  [ "$a" != "$b" ]
+  # a hand-written line gets an id from `inbox tag`; tagging again changes nothing
+  perl -0pi -e 's/(## Approvals)/- 2026-01-03 — hand written\n\n$1/' "$CHARTROOM_HOME/inbox.md"
+  run cr inbox tag
+  [[ "$output" =~ ^tagged\ (i-[0-9a-f]{4}):\ 2026-01-03\ —\ hand\ written$ ]]
+  local c="${BASH_REMATCH[1]}"
+  cp "$CHARTROOM_HOME/inbox.md" "$BATS_TEST_TMPDIR/before"
+  [ -z "$(cr inbox tag)" ]
+  cmp "$CHARTROOM_HOME/inbox.md" "$BATS_TEST_TMPDIR/before"
+  # the sections and their order survive; approvals and notes are never tagged
+  [ "$(grep '^## ' "$CHARTROOM_HOME/inbox.md" | tr '\n' '|')" = "## Waiting on the commander|## Approvals given in chat, not yet in a brief|## Notes|" ]
+  [ "$(grep -c '^- \[i-' "$CHARTROOM_HOME/inbox.md")" -eq 3 ]
+  # removing an item and adding another leaves the others' ids alone
+  sed -i.bak "/\[$a\]/d" "$CHARTROOM_HOME/inbox.md"
+  cr inbox add "a newer question" >/dev/null
+  [ "$(cr resolve "$b")" = "$b" ]
+  [ "$(cr resolve "$c" --json | jq -r '"\(.type) \(.date) \(.text)"')" = "inbox 2026-01-03 hand written" ]
+  [ "$(cr resolve "$b" --json | jq -r .text)" = "merge the parser PR?" ]
+  run cr resolve "$a"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"unknown id '$a'"* ]]
+  # the inbox line count is unaffected by the tags
+  [[ "$(cr status)" == *"inbox: 3 waiting on the commander"* ]]
+}
+
+@test "inbox add: creates the Waiting section when the file has none" {
+  cr init >/dev/null
+  printf '# Inbox\n\n## Notes\n- n\n' >"$CHARTROOM_HOME/inbox.md"
+  id="$(cr inbox add "first question")"
+  [ "$(sed -n '/^## Waiting/,$p' "$CHARTROOM_HOME/inbox.md" | sed -n 2p)" = "- [$id] $(date +%F) — first question" ]
+  grep -q '^- n$' "$CHARTROOM_HOME/inbox.md"
+}
+
+@test "inbox add: the text is stored verbatim (backslashes, quotes, ampersands)" {
+  cr init >/dev/null
+  id="$(cr inbox add 'use C:\new\tdir & "quotes"?')"
+  grep -qxF -- "- [$id] $(date +%F) — use C:\\new\\tdir & \"quotes\"?" "$CHARTROOM_HOME/inbox.md"
+  [ "$(cr resolve "$id" --json | jq -r .text)" = 'use C:\new\tdir & "quotes"?' ]
+}
