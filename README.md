@@ -95,6 +95,7 @@ chartroom dashboard --daemon --open  # in the background, and open the browser
 chartroom dashboard open             # reuse the running one (or start it), then open the browser
 chartroom dashboard stop             # (or: status)
 chartroom dashboard --json           # the same lanes, no server
+chartroom board                      # the same lanes in the terminal, one line per item
 ```
 
 A one-page, read-only view of the fleet that refreshes every 5 seconds, so you can see what
@@ -140,7 +141,9 @@ How it is built, and what it promises:
   shortest unique suffix such as `n-21ba` when two open tasks share one), or an inbox item's
   `i-7f3a` tag. Clicking it copies `/continue <id>`; paste that into the XO session and the
   `continue` skill takes you straight to what the item needs from you.
-  `chartroom resolve <id>` maps any short or full id back. Inbox items get their tag from
+  `chartroom resolve <id>` maps any short or full id back. `chartroom board` prints the same
+  lanes in the terminal (short id, title, state, last event; color only on a terminal,
+  `--json` for the lanes JSON). Inbox items get their tag from
   `chartroom inbox add <text>` (or `chartroom inbox tag` for lines written by hand); it never
   changes as other items come and go.
 

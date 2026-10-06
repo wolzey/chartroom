@@ -191,3 +191,40 @@ cmd_dashboard() {
   pid_alive "$child" && kill "$child" 2>/dev/null
   die "dashboard did not start"
 }
+
+# `chartroom board`: the dashboard's lanes in the terminal, from the same dashboard_json, so
+# the two never disagree. One line per item: short id, title, state, a snippet of the last
+# event. Color only when stdout is a terminal (and NO_COLOR is unset); --json is the lanes JSON.
+cmd_board() {
+  local json=0 color=0 a
+  [[ -t 1 && -z "${NO_COLOR:-}" ]] && color=1
+  for a in "$@"; do
+    case "$a" in
+      --json) json=1 ;;
+      --color) color=1 ;;
+      --no-color) color=0 ;;
+      *) die "board: unknown arg $a (usage: chartroom board [--json] [--color|--no-color])" ;;
+    esac
+  done
+  if [[ $json -eq 1 ]]; then dashboard_json; return; fi
+  dashboard_json | jq -r --argjson color "$color" '
+    def c($code): if $color == 1 then "\u001b[" + $code + "m" + . + "\u001b[0m" else . end;
+    def cut($n): if length > $n then .[0:$n - 1] + "…" else . end;
+    def pad($n): . + (" " * ([$n - length, 0] | max));
+    [["needs_you", "Needs you", "1;31"], ["in_progress", "In progress", "1;36"], ["on_hold", "On hold", "1;33"],
+     ["ready", "Ready for you", "1;32"], ["recent", "Recently finished", "1;90"]] as $lanes
+    | . as $b
+    | ([$b.lanes[][] | (.short_id // "-") | length] | max // 4) as $w
+    | $lanes[] as [$k, $name, $col]
+    | ($b.lanes[$k] // []) as $items
+    | ("\($name) (\($items | length))" | c($col)),
+      (if ($items | length) == 0 then "  none" | c("2")
+       else $items[]
+         | ((.short_id // "-") | pad($w) | c("1")) + "  " + ((.title // .id) | cut(60))
+           + "  " + ("[" + (.reason // .state // "") + "]" | c("2"))
+           + (if .type == "inbox" then (if .date then "  since " + .date else "" end)
+              elif .waiting_on then "  waiting on: " + (.waiting_on | cut(60))
+              elif .last_event then "  " + (.last_event | gsub("\n"; " ") | cut(70)) else "" end)
+         | "  " + . end),
+      ""'
+}

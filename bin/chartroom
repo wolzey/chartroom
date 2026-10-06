@@ -823,6 +823,8 @@ chartroom - run a crew of coding agents from one agent session (the XO)
   chartroom event <id> <kind> <text>      append a status event (workers use this; kinds: progress,
                                           waiting, decision, blocked, done, failed)
   chartroom status [--json] [--all]       fleet view, derived from disk + live backends
+  chartroom board [--json] [--no-color]   the dashboard's lanes in the terminal, one line per
+                                          item: short id, title, state, last event
   chartroom resolve <id> [--json]         a full or short id (as the dashboard shows it) -> the
                                           task id, or the inbox item (i-xxxx); fails if unknown
                                           or ambiguous
@@ -849,7 +851,7 @@ EOF
 
 cmd="${1:-help}"; shift || true
 case "$cmd" in
-  init|project|new|worktree|dispatch|event|hook|status|resolve|inbox|peek|steer|stop|attach|close|watch|dashboard|doctor|version|help) "cmd_$cmd" "$@" ;;
+  init|project|new|worktree|dispatch|event|hook|status|board|resolve|inbox|peek|steer|stop|attach|close|watch|dashboard|doctor|version|help) "cmd_$cmd" "$@" ;;
   install-skills) cmd_install_skills "$@" ;;
   ls) cmd_status "$@" ;;
   -h|--help) cmd_help ;;

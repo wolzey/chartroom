@@ -414,3 +414,28 @@ EOF2
   # a closed task's 4-hex suffix is the same as an inbox tag's hex, but i- keeps them apart
   [ "$(cr resolve 7f3a)" = docs-7f3a ]
 }
+
+@test "board: the dashboard's lanes in the terminal, short id first; plain when piped; --json is the board" {
+  build_fleet
+  fixture fix-login-21ba subagent <<<"60 decision: pick A or B (recommend A)"
+  perl -0pi -e 's/- 2026-01-02 — merge/- [i-7f3a] 2026-01-02 — merge/' "$CHARTROOM_HOME/inbox.md"
+  run cr board
+  [ "$status" -eq 0 ]
+  [[ "$output" != *$'\e['* ]]   # piped: no color
+  # the same lanes, counts and order as dashboard --json
+  [ "$(grep -E '^[A-Z]' <<<"$output" | tr '\n' '|')" = "Needs you (6)|In progress (2)|On hold (2)|Ready for you (2)|Recently finished (1)|" ]
+  local want got
+  want="$(cr dashboard --json | jq -r '.lanes[][] | .short_id // "-"' | tr '\n' ' ')"
+  got="$(grep -E '^  [^ ]' <<<"$output" | grep -v '^  none$' | awk '{print $1}' | tr '\n' ' ')"
+  [ "$got" = "$want" ]
+  grep -qE '^  21ba +Task fix-login-21ba  \[decision\]  decision: pick A or B \(recommend A\)$' <<<"$output"
+  grep -qE '^  i-7f3a +merge the parser PR\?  \[waiting on you \(inbox\)\]  since 2026-01-02$' <<<"$output"
+  grep -qE '^  - +which region for staging\?' <<<"$output"   # an untagged inbox line has no id yet
+  # color on request
+  [[ "$(cr board --color)" == *$'\e[1;31mNeeds you'* ]]
+  [ "$(NO_COLOR=1 cr board | grep -c $'\e')" -eq 0 ]
+  # --json is the dashboard's JSON
+  [ "$(cr board --json | jq -c '[.counts, [.lanes[][] | .short_id]]')" = "$(cr dashboard --json | jq -c '[.counts, [.lanes[][] | .short_id]]')" ]
+  run cr board --bogus
+  [ "$status" -ne 0 ]
+}

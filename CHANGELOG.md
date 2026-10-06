@@ -15,7 +15,10 @@ are stable from 0.1.0.
   moves them. `chartroom resolve <id> [--json]` maps a full or short id back to the task or
   inbox item and fails on an unknown or ambiguous one. `status --json` rows and every
   dashboard card gain `short_id` (existing fields unchanged); the dashboard shows it on each
-  card and copies `/continue <id>` on click.
+  card's top-right corner and copies `/continue <id>` on click (with a brief "copied").
+- `chartroom board [--json] [--color|--no-color]`: the dashboard's lanes in the terminal, built
+  from the same `dashboard --json`, one line per item (short id, title, state, last event),
+  colored only when stdout is a terminal and `NO_COLOR` is unset.
 - A `continue` skill (`/continue <id>`): the XO resolves the id and takes the commander
   straight to the point: the pending question (asked with the agent's question tool,
   recommendation first), the outcome and landing options, or a one-line status.
