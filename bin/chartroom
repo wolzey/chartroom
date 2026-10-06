@@ -731,12 +731,13 @@ chartroom - run a crew of coding agents from one agent session (the XO)
   chartroom status [--json] [--all]       fleet view, derived from disk + live backends
   chartroom peek <id> [n]                 recent events and worker output
   chartroom watch [--once [--timeout S]]  wake stream: one line per event that needs the XO
-  chartroom dashboard [--port N] [--open] [--daemon] [--no-gh]
+  chartroom dashboard [--port N] [--open] [--daemon] [--no-gh] [--theme chartroom|hud]
                                           local read-only web view (127.0.0.1 only, default
                                           port 4517): needs you / in progress / on hold /
-                                          ready / recently finished. Needs python3.
+                                          ready / recently finished. Needs python3. The theme
+                                          default is CHARTROOM_DASHBOARD_THEME (chartroom).
   chartroom dashboard stop|status|--json  stop a --daemon one, is it up, or print the lanes
-  chartroom dashboard open [--port N] [--no-gh]
+  chartroom dashboard open [--port N] [--no-gh] [--theme NAME]
                                           start the dashboard if it is not up (as a daemon),
                                           then open it in the browser (CHARTROOM_OPENER, else
                                           open / xdg-open); prints the URL either way

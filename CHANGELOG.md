@@ -7,6 +7,13 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- Dashboard themes: `chartroom` (the default) and `hud`, a machine-vision look in red and
+  amber with scanlines, a header radar and a reticle that locks onto cards. Same lanes and
+  cards in both, each with light and dark variants and reduced-motion support. Pick the
+  server's default with `chartroom dashboard --theme NAME` or `CHARTROOM_DASHBOARD_THEME` (env
+  or config file). A theme menu in the page overrides it per browser, next to a light/dark/auto
+  toggle.
+
 - A `waiting` worker event: a worker records it right before ending a turn to wait on
   something (CI, a review, a timer, a person), with an optional `until <UTC time>`. A stopped
   worker whose newest report is `waiting` is `waiting` in `status` (In progress on the
@@ -32,6 +39,13 @@ are stable from 0.1.0.
   that are not yet in a brief, so they survive a compaction or restart. `chartroom init`
   creates it (never overwrites), `chartroom status` prints a one-line count of open items,
   the XO skill keeps it current, and `bearings` folds its waiting items into "Needs you".
+
+### Changed
+- The dashboard page moves: working tasks show a heartbeat, a wake and ticking timers, waiting
+  ones ride at anchor with a countdown, needs-you cards glow, cards glide between lanes, new
+  events wash in, and counts tick. A ship's log strip shows the newest events. Cards are keyed
+  by id instead of rebuilt on every poll. `prefers-reduced-motion` turns the motion off. The
+  JSON API is unchanged.
 
 ## [0.1.0] - 2026-10-05
 

@@ -289,6 +289,39 @@ start_daemon() {
   [ "$status" -eq 1 ]
 }
 
+@test "server: the page's default theme comes from --theme, then CHARTROOM_DASHBOARD_THEME, then chartroom" {
+  need_python
+  unset CHARTROOM_DASHBOARD_THEME
+  theme_of() { get "$URL/" | grep -o '<html lang="en" data-theme="[a-z]*">' | sed -E 's/.*data-theme="([a-z]+)".*/\1/'; }
+  start_daemon --no-gh
+  [ "$(theme_of)" = chartroom ]
+  cr dashboard stop >/dev/null
+  start_daemon --no-gh --theme hud
+  [ "$(theme_of)" = hud ]
+  # the page still has exactly one theme slot, and the substitution kept it self-contained
+  [ "$(get "$URL/" | grep -c 'data-theme="hud">')" -eq 1 ]
+  cr dashboard stop >/dev/null
+  CHARTROOM_DASHBOARD_THEME=hud start_daemon --no-gh
+  [ "$(theme_of)" = hud ]
+  cr dashboard stop >/dev/null
+  # the config file, and the flag beating it
+  echo "CHARTROOM_DASHBOARD_THEME=hud" >"$CHARTROOM_CONFIG"
+  start_daemon --no-gh
+  [ "$(theme_of)" = hud ]
+  cr dashboard stop >/dev/null
+  start_daemon --no-gh --theme chartroom
+  [ "$(theme_of)" = chartroom ]
+  cr dashboard stop >/dev/null
+  # an unknown theme fails before anything starts, naming the choices
+  run cr dashboard --daemon --port 0 --theme neon
+  [ "$status" -eq 1 ]; [[ "$output" == *"unknown dashboard theme 'neon' (themes: chartroom hud"* ]]
+  run env CHARTROOM_DASHBOARD_THEME=neon "$CHARTROOM" dashboard --daemon --port 0
+  [ "$status" -eq 1 ]; [[ "$output" == *"unknown dashboard theme 'neon'"* ]]
+  [ ! -e "$CHARTROOM_HOME/.dashboard.pid" ]
+  run cr dashboard --theme
+  [ "$status" -eq 1 ]; [[ "$output" == *"--theme needs a value"* ]]
+}
+
 @test "server: a stale pid file never makes stop signal an unrelated process" {
   sleep 60 &
   local other=$!

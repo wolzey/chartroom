@@ -31,6 +31,8 @@ TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 TASK_FILES = ("brief.md", "report.md", "plan.md", "final.md", "events.log")
 GITHUB_PR = re.compile(r"^https://github\.com/[^/]+/[^/]+/pull/[0-9]+$")
 HERE = os.path.dirname(os.path.abspath(__file__))
+THEMES = ("chartroom", "hud")  # the page's themes; lib/dashboard.sh validates against the same list
+THEME_SLOT = b'<html lang="en" data-theme="chartroom">'
 
 
 class Board:
@@ -173,6 +175,7 @@ def main():
     ap.add_argument("--bin", required=True, help="path to bin/chartroom")
     ap.add_argument("--open", action="store_true")
     ap.add_argument("--no-gh", action="store_true")
+    ap.add_argument("--theme", choices=THEMES, default="chartroom", help="the page's default theme")
     args = ap.parse_args()
 
     home = os.environ.get("CHARTROOM_HOME")
@@ -180,6 +183,11 @@ def main():
         sys.exit("chartroom dashboard: CHARTROOM_HOME is not set (start it with `chartroom dashboard`)")
     with open(os.path.join(HERE, "index.html"), "rb") as fh:
         page = fh.read()
+    # The default theme is written into the page once, so it renders without a flash; a
+    # browser's own choice from the page's switcher still wins.
+    if page.count(THEME_SLOT) != 1:
+        sys.exit("chartroom dashboard: index.html has no single theme slot %r" % THEME_SLOT.decode())
+    page = page.replace(THEME_SLOT, THEME_SLOT.replace(b'"chartroom"', b'"%s"' % args.theme.encode()))
     board = Board(args.bin, home, not args.no_gh)
     try:
         httpd = ThreadingHTTPServer((HOST, args.port), None)

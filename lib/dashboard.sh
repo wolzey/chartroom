@@ -6,6 +6,7 @@
 # serves this JSON, the page, and the task files; it never decides what a task means.
 
 CR_DASHBOARD_PORT_DEFAULT=4517
+CR_DASHBOARD_THEMES='chartroom hud' # the page's themes (lib/dashboard/index.html and server.py list the same)
 # Task files the server may hand out (anything else is a 404).
 CR_DASHBOARD_FILES='brief.md report.md plan.md final.md events.log'
 
@@ -139,7 +140,8 @@ dashboard_open() { # [daemon args...]
 }
 
 cmd_dashboard() {
-  local port="$CR_DASHBOARD_PORT_DEFAULT" open=0 daemon=0 json=0 prs_file="" gh=1
+  local port="$CR_DASHBOARD_PORT_DEFAULT" open=0 daemon=0 json=0 prs_file="" gh=1 theme
+  theme="$(cfg DASHBOARD_THEME '' chartroom)"
   case "${1:-}" in
     open) shift; dashboard_open "$@"; return ;;
     stop) dashboard_stop; return ;;
@@ -156,11 +158,13 @@ cmd_dashboard() {
       --json) json=1; shift ;;
       --pr-states) [[ $# -ge 2 ]] || die "--pr-states needs a file"; prs_file="$2"; shift 2 ;;
       --no-gh) gh=0; shift ;;
-      *) die "dashboard: unknown arg $1 (usage: chartroom dashboard [--port N] [--open] [--daemon] [--no-gh] | open [--port N] [--no-gh] | --json | stop | status)" ;;
+      --theme) [[ $# -ge 2 ]] || die "--theme needs a value ($CR_DASHBOARD_THEMES)"; theme="$2"; shift 2 ;;
+      *) die "dashboard: unknown arg $1 (usage: chartroom dashboard [--port N] [--open] [--daemon] [--no-gh] [--theme NAME] | open [--port N] [--no-gh] [--theme NAME] | --json | stop | status)" ;;
     esac
   done
   if [[ $json -eq 1 ]]; then dashboard_json "$prs_file"; return; fi
   [[ "$port" =~ ^[0-9]+$ ]] && (( port <= 65535 )) || die "--port must be 0-65535 (0 picks a free port)"
+  [[ " $CR_DASHBOARD_THEMES " == *" $theme "* ]] || die "unknown dashboard theme '$theme' (themes: $CR_DASHBOARD_THEMES; set with --theme or CHARTROOM_DASHBOARD_THEME)"
   local py; py="$(bin_of python3)"
   [[ -n "$py" ]] || die "the dashboard needs python3 (standard library only); 'chartroom dashboard --json' works without it"
   local pid p
@@ -171,6 +175,7 @@ cmd_dashboard() {
   local args=("$CR_ROOT/lib/dashboard/server.py" --port "$port" --pidfile "$(dashboard_pidfile)" --bin "$CR_BIN")
   [[ $open -eq 1 ]] && args+=(--open)
   [[ $gh -eq 0 ]] && args+=(--no-gh)
+  args+=(--theme "$theme")
   export CHARTROOM_HOME="$CR_HOME"
   if [[ $daemon -eq 0 ]]; then exec "$py" "${args[@]}"; fi
   local log="$CR_HOME/.dashboard.log" i

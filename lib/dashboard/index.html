@@ -1,15 +1,19 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="chartroom">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>chartroom</title>
 <link rel="icon" href="data:,">
 <style>
-  /* Chartroom: a chart table on the bridge. Paper chart by day, night watch by dark.
-     Work under way moves (a heartbeat and a wake), waiting rides at anchor, what needs
-     you glows like a beacon. Every loop animates transform/opacity only, and
-     prefers-reduced-motion turns all of it off. */
+  /* Two themes over one layout, picked by <html data-theme> (the server writes its configured
+     default there; the header switcher overrides it per browser). Each has light and dark
+     modes, from the system or forced with <html data-mode>.
+     chartroom: a chart table on the bridge. Paper chart by day, night watch by dark. Work
+     under way moves (a heartbeat and a wake), waiting rides at anchor, what needs you glows
+     like a beacon.
+     hud: machine vision, further down. Every loop in both animates transform/opacity only,
+     and prefers-reduced-motion turns all of it off. */
   :root {
     --display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
     --body: "Avenir Next", Avenir, "Segoe UI Variable Text", "Segoe UI", "Gill Sans", system-ui, sans-serif;
@@ -23,7 +27,7 @@
     color-scheme: light;
   }
   @media (prefers-color-scheme: dark) {
-    :root:not([data-theme=light]) {
+    :root:not([data-mode=light]) {
       --bg: #061420; --bg2: #0a1d2d; --panel: #0d2133; --panel2: #0a1b2a; --ink: #e2ebf1; --muted: #8fa4b5;
       --faint: #5f7586; --line: rgba(150,200,230,.15); --line2: rgba(150,200,230,.07); --chip: rgba(150,200,230,.08);
       --link: #7cc7ec;
@@ -33,7 +37,7 @@
       color-scheme: dark;
     }
   }
-  :root[data-theme=dark] {
+  :root[data-mode=dark] {
     --bg: #061420; --bg2: #0a1d2d; --panel: #0d2133; --panel2: #0a1b2a; --ink: #e2ebf1; --muted: #8fa4b5;
     --faint: #5f7586; --line: rgba(150,200,230,.15); --line2: rgba(150,200,230,.07); --chip: rgba(150,200,230,.08);
     --link: #7cc7ec;
@@ -49,12 +53,14 @@
   [data-lane=recent] { --accent: var(--recent); }
 
   * { box-sizing: border-box; }
-  html { background: var(--bg); }
-  body { margin: 0; min-height: 100vh; color: var(--ink); background:
+  /* the page background lives on <html>: a body background would paint over the fixed
+     ambient layers below (z-index -1) */
+  html { background:
            radial-gradient(1200px 700px at 85% -10%, var(--bg2), transparent 70%),
            linear-gradient(var(--grid) 1px, transparent 1px) 0 0 / 100% 64px,
            linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 64px 100%,
-           var(--bg);
+           var(--bg); background-attachment: fixed; }
+  body { margin: 0; min-height: 100vh; color: var(--ink);
          font: 14px/1.45 var(--body); -webkit-font-smoothing: antialiased; overflow-x: hidden; }
   a { color: var(--link); text-decoration: none; }
   a:hover { text-decoration: underline; }
@@ -100,6 +106,10 @@
   .sounding span { font-variant-numeric: tabular-nums; min-width: 7ch; }
   .theme { font: inherit; color: var(--muted); background: var(--chip); border: 1px solid var(--line); border-radius: 999px;
            padding: 3px 10px; cursor: pointer; }
+  select.theme { appearance: none; -webkit-appearance: none; padding-right: 22px;
+                 background: var(--chip) no-repeat right 8px center / 8px 5px
+                   url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 5"><path d="M0 0h8L4 5z" fill="%23888"/></svg>'); }
+  select.theme option { background: var(--panel); color: var(--ink); }
   .theme:hover { color: var(--ink); }
 
   .counts { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
@@ -143,7 +153,7 @@
             color: var(--needs); background: color-mix(in srgb, var(--needs) 8%, transparent); display: none; overflow-wrap: anywhere; }
 
   /* lanes */
-  main { display: grid; gap: 18px; padding: 16px 20px 48px; grid-template-columns: repeat(auto-fit, minmax(256px, 1fr));
+  main { position: relative; display: grid; gap: 18px; padding: 16px 20px 48px; grid-template-columns: repeat(auto-fit, minmax(256px, 1fr));
          align-items: start; }
   section.lane { min-width: 0; animation: rise .7s cubic-bezier(.2,.8,.2,1) both; animation-delay: calc(var(--i) * 70ms); }
   @keyframes rise { from { opacity: 0; transform: translateY(14px); } }
@@ -153,6 +163,7 @@
   .lane h2 .n { margin-left: auto; font: 600 18px/1 var(--display); letter-spacing: 0; color: var(--accent);
                 font-variant-numeric: tabular-nums lining-nums; display: inline-block; }
   .lane h2 .sig { width: 10px; height: 10px; }
+  .lane h2 .alias { display: none; }
   .cards { display: grid; gap: 10px; }
   .foot:empty { display: none; }
   .foot { margin-top: 10px; }
@@ -174,6 +185,11 @@
   .card.inbox { border-style: dashed; }
   .card .head { display: flex; gap: 9px; align-items: flex-start; }
   .card .title { font-weight: 600; overflow-wrap: anywhere; line-height: 1.3; flex: 1; min-width: 0; }
+  /* the short id, top right: click copies "/continue <id>" */
+  .sid { flex: none; margin: 1px -4px 0 0; padding: 0 5px; font: 11px/1.5 var(--mono); color: var(--muted);
+         background: var(--chip); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
+  .sid:hover, .sid:focus-visible { color: var(--ink); border-color: var(--accent); outline: none; }
+  .sid.copied { color: var(--accent); border-color: var(--accent); }
   .card .sub { color: var(--muted); font-size: 12px; margin-top: 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; }
   .badge { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 4px; background: var(--chip);
            color: var(--ink); border: 1px solid var(--line); white-space: nowrap; }
@@ -249,6 +265,7 @@
   @keyframes ink { 0% { background: color-mix(in srgb, var(--accent) 22%, transparent); } 100% { background: transparent; } }
 
   .ghost { position: fixed; z-index: 2; pointer-events: none; margin: 0; }
+  .brackets, .band, .radar, .reticle { display: none; }
 
   dialog { width: min(900px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; border: 1px solid var(--line);
            border-radius: 12px; background: var(--panel); color: var(--ink); box-shadow: 0 30px 80px -30px rgba(0,0,0,.6); }
@@ -263,6 +280,126 @@
   dialog pre { margin: 0; padding: 14px; white-space: pre-wrap; overflow-wrap: anywhere;
                font: 12.5px/1.55 var(--mono); }
 
+  /* ===================================================================== theme: hud
+     Machine vision over the same lanes: red and amber on near-black, or oxide on paper in
+     daylight. Scanlines and a slow rolling band stay on the page background, behind the
+     cards; text keeps the chartroom sizes and the effects never sit on top of it. A reticle
+     locks onto the card you point at (and cycles through what needs you), and needs-you
+     cards carry corner brackets. */
+  :root[data-theme=hud] {
+    --display: "DIN Condensed", "Bahnschrift Condensed", "Bahnschrift", "Arial Narrow", sans-serif;
+    --body: "DIN Alternate", "Bahnschrift", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+    --bg: #f0eae0; --bg2: #e6dccd; --panel: #faf6ef; --panel2: #f4ede2; --ink: #2a0d08; --muted: #6b3d34;
+    --faint: #8f6a62; --line: rgba(150,30,15,.24); --line2: rgba(150,30,15,.1); --chip: rgba(150,30,15,.06);
+    --link: #a3200f;
+    --needs: #c4160a; --prog: #985600; --wait: #7a5f00; --hold: #8a5a4e; --ready: #3b1a12; --recent: #937269;
+    --sweep: rgba(196,22,10,.22); --grid: transparent; --scan: rgba(120,20,10,.045); --band: rgba(196,22,10,.05);
+    --shadow: none;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root[data-theme=hud]:not([data-mode=light]) {
+      --bg: #0b0303; --bg2: #1c0605; --panel: #150605; --panel2: #110404; --ink: #f6e2dc; --muted: #cf978c;
+      --faint: #a06a60; --line: rgba(255,72,52,.28); --line2: rgba(255,72,52,.12); --chip: rgba(255,72,52,.08);
+      --link: #ff9178;
+      --needs: #ff4637; --prog: #ffb01f; --wait: #ffd36b; --hold: #c9877a; --ready: #fff1e8; --recent: #957068;
+      --sweep: rgba(255,59,47,.3); --scan: rgba(0,0,0,.3); --band: rgba(255,50,30,.06);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme=hud][data-mode=dark] {
+    --bg: #0b0303; --bg2: #1c0605; --panel: #150605; --panel2: #110404; --ink: #f6e2dc; --muted: #cf978c;
+    --faint: #a06a60; --line: rgba(255,72,52,.28); --line2: rgba(255,72,52,.12); --chip: rgba(255,72,52,.08);
+    --link: #ff9178;
+    --needs: #ff4637; --prog: #ffb01f; --wait: #ffd36b; --hold: #c9877a; --ready: #fff1e8; --recent: #957068;
+    --sweep: rgba(255,59,47,.3); --scan: rgba(0,0,0,.3); --band: rgba(255,50,30,.06);
+    color-scheme: dark;
+  }
+  :root[data-theme=hud] { background: repeating-linear-gradient(0deg, var(--scan) 0 1px, transparent 1px 3px),
+                                      radial-gradient(1100px 700px at 15% -10%, var(--bg2), transparent 70%), var(--bg);
+                          background-attachment: fixed; }
+  [data-theme=hud] body { letter-spacing: .01em; }
+  [data-theme=hud] .sea, [data-theme=hud] .sweep, [data-theme=hud] .rose { display: none; }
+  [data-theme=hud] :focus-visible { border-radius: 0; }
+  [data-theme=hud] .band { display: block; position: fixed; left: 0; right: 0; top: 0; height: 24vh; z-index: -1; pointer-events: none;
+                           background: linear-gradient(180deg, transparent, var(--band) 60%, transparent);
+                           animation: roll 9s linear infinite; will-change: transform; }
+  @keyframes roll { from { transform: translateY(-25vh); } to { transform: translateY(105vh); } }
+
+  /* header: a small radar where the compass rose was; each dot is a task, flashing as the sweep crosses it */
+  [data-theme=hud] .radar { display: block; position: relative; width: 52px; height: 52px; flex: none; container-type: inline-size;
+                            border-radius: 50%; border: 1px solid var(--line);
+                            background: repeating-radial-gradient(circle, transparent 0 7.5px, var(--line2) 8px 8.5px); }
+  .radar .rsweep { position: absolute; inset: 0; border-radius: 50%; will-change: transform;
+                   background: conic-gradient(from 0deg, transparent 0deg 290deg, var(--sweep) 359deg, var(--needs) 360deg);
+                   animation: spin 4s linear infinite; animation-delay: var(--sync, 0s); }
+  .radar .blip { position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px; background: var(--accent); transform: var(--at);
+                 opacity: .45; animation: hit 4s linear infinite; animation-delay: var(--d, 0s); }
+  @keyframes hit { 0% { opacity: 1; transform: var(--at) scale(1.8); } 30%,100% { opacity: .45; transform: var(--at); } }
+  [data-theme=hud] .brand h1 { font: 700 27px/1 var(--display); letter-spacing: .16em; text-transform: uppercase; color: var(--needs); }
+  [data-theme=hud] .brand h1 small { font-family: var(--mono); letter-spacing: .18em; }
+  [data-theme=hud] .meta, [data-theme=hud] .instruments { font-family: var(--mono); text-transform: uppercase; letter-spacing: .04em; }
+  [data-theme=hud] .theme, [data-theme=hud] .gauge, [data-theme=hud] .badge, [data-theme=hud] .sid,
+  [data-theme=hud] .more, [data-theme=hud] .kind, [data-theme=hud] .banner { border-radius: 2px; }
+  [data-theme=hud] .gauge b, [data-theme=hud] .lane h2 .n { font-family: var(--display); font-weight: 700; }
+  [data-theme=hud] .gauge .lamp, [data-theme=hud] .sig.dot::before, [data-theme=hud] .sig.dot::after { border-radius: 1px; }
+  [data-theme=hud] .sig.ring::before { border-radius: 1px; border-style: dashed; }
+  [data-theme=hud] .gauge.hot .lamp { animation: alarm 1.2s steps(1) infinite; animation-delay: var(--sync, 0s); }
+  @keyframes alarm { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+
+  /* the telemetry strip (the ship's log in chartroom) */
+  [data-theme=hud] .log h3 { font: 700 15px/1.2 var(--display); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+  [data-theme=hud] .log li { border-radius: 0; }
+  [data-theme=hud] .log li.fresh::before { border-radius: 0; background: var(--needs); }
+
+  /* lanes: plain names, the HUD alias as a muted subtitle */
+  [data-theme=hud] .lane h2 { font: 700 15px/1 var(--display); letter-spacing: .14em; flex-wrap: wrap; row-gap: 5px; }
+  [data-theme=hud] .lane h2 .alias { display: block; order: 1; flex-basis: 100%; padding-left: 19px;
+                                     font: 500 10.5px/1 var(--mono); letter-spacing: .1em; color: var(--faint); }
+  [data-theme=hud] .empty { font: 12px var(--mono); text-transform: uppercase; letter-spacing: .06em; }
+
+  /* cards: squared off, a hard accent rule, no lift */
+  [data-theme=hud] .card { border-radius: 2px; background: var(--panel); }
+  [data-theme=hud] .card::before { top: -1px; bottom: -1px; width: 2px; border-radius: 0; }
+  [data-theme=hud] .card:hover { transform: none; border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+  [data-theme=hud] .badge { font: 600 10.5px/1.6 var(--mono); text-transform: uppercase; letter-spacing: .06em; padding: 0 5px; }
+  [data-theme=hud] .clock { text-transform: uppercase; letter-spacing: .03em; }
+  [data-theme=hud] .card .links { text-transform: uppercase; font: 11.5px var(--mono); letter-spacing: .04em; }
+  [data-theme=hud] .sid { text-transform: uppercase; letter-spacing: .06em; }
+  [data-theme=hud] .gleam, [data-theme=hud] .glow { display: none; }
+  [data-theme=hud] .wake i { background: repeating-linear-gradient(90deg, var(--accent) 0 4px, transparent 4px 7px); }
+  [data-theme=hud] .m-hold .title { color: color-mix(in srgb, var(--ink) 85%, var(--muted)); }
+
+  /* needs you: corner brackets that hold a lock, re-acquiring every few seconds */
+  [data-theme=hud] .m-attn .brackets { display: block; position: absolute; inset: -5px; pointer-events: none; --k: var(--accent);
+    background:
+      linear-gradient(var(--k), var(--k)) left top / 12px 2px no-repeat, linear-gradient(var(--k), var(--k)) left top / 2px 12px no-repeat,
+      linear-gradient(var(--k), var(--k)) right top / 12px 2px no-repeat, linear-gradient(var(--k), var(--k)) right top / 2px 12px no-repeat,
+      linear-gradient(var(--k), var(--k)) left bottom / 12px 2px no-repeat, linear-gradient(var(--k), var(--k)) left bottom / 2px 12px no-repeat,
+      linear-gradient(var(--k), var(--k)) right bottom / 12px 2px no-repeat, linear-gradient(var(--k), var(--k)) right bottom / 2px 12px no-repeat;
+    animation: relock 4s ease-in-out infinite; animation-delay: var(--sync, 0s); }
+  @keyframes relock { 0%,72%,100% { transform: none; opacity: 1; } 80% { transform: scale(1.03); opacity: .35; } 88% { transform: none; opacity: 1; } 92% { opacity: .5; } 96% { opacity: 1; } }
+
+  /* a new signal: the event line flickers in, then washes out */
+  [data-theme=hud] .card.flash .last, [data-theme=hud] .card.flash .waiting { animation: flick .45s steps(4) 1, ink 2.6s ease-out 1; }
+  @keyframes flick { 0% { opacity: .2; } 50% { opacity: 1; } 75% { opacity: .5; } 100% { opacity: 1; } }
+
+  /* the reticle: four corners that glide (transform only) to the locked card */
+  [data-theme=hud] .reticle { display: block; position: absolute; left: 0; top: 0; pointer-events: none; z-index: 2; }
+  .reticle i { position: absolute; left: 0; top: 0; width: 16px; height: 16px; border: 0 solid var(--needs);
+               transition: transform .45s cubic-bezier(.2,.9,.2,1), opacity .25s; }
+  .reticle i:nth-child(1) { border-width: 2px 0 0 2px; }
+  .reticle i:nth-child(2) { border-width: 2px 2px 0 0; }
+  .reticle i:nth-child(3) { border-width: 0 0 2px 2px; }
+  .reticle i:nth-child(4) { border-width: 0 2px 2px 0; }
+  .reticle .tagline { position: absolute; left: 0; top: 0; padding: 0 5px; font: 600 10px/14px var(--mono); letter-spacing: .1em;
+                      text-transform: uppercase; color: var(--needs); background: var(--bg); white-space: nowrap;
+                      transition: transform .45s cubic-bezier(.2,.9,.2,1), opacity .25s; }
+  .reticle.off i, .reticle.off .tagline { opacity: 0; }
+
+  [data-theme=hud] dialog { border-radius: 2px; }
+  [data-theme=hud] dialog .bar b { font: 700 16px var(--display); letter-spacing: .1em; text-transform: uppercase; }
+
   @media (max-width: 760px) {
     header.bridge { position: static; grid-template-columns: 1fr; padding: 10px 16px; }
     .instruments { grid-column: 1; flex-wrap: wrap; }
@@ -275,13 +412,14 @@
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
-    .sea, .sweep { display: none; }
+    .sea, .sweep, [data-theme=hud] .band { display: none; }
   }
 </style>
 </head>
 <body>
 <div class="sea" aria-hidden="true"></div>
 <div class="sweep" aria-hidden="true"></div>
+<div class="band" aria-hidden="true"></div>
 <header class="bridge">
   <div class="brand">
     <svg class="rose" viewBox="0 0 64 64" aria-hidden="true">
@@ -290,8 +428,9 @@
       <path d="M32 5 35 29 59 32 35 35 32 59 29 35 5 32 29 29Z" fill="currentColor" fill-opacity=".12" stroke="currentColor" stroke-opacity=".4" stroke-width=".8"/>
       <g class="needle"><path class="n" d="M32 11 35.2 32H28.8Z"/><path class="s" d="M32 53 35.2 32H28.8Z"/><circle cx="32" cy="32" r="2.4" fill="currentColor"/></g>
     </svg>
+    <div class="radar" id="radar" title="each dot is a task; the inner ring needs you" aria-hidden="true"><div class="rsweep" id="rsweep"></div></div>
     <div>
-      <h1>Chartroom<small>fleet</small></h1>
+      <h1>Chartroom<small id="brand-sub">fleet</small></h1>
       <div class="meta" id="meta">loading…</div>
     </div>
   </div>
@@ -301,13 +440,14 @@
       <svg viewBox="0 0 20 20" aria-hidden="true"><circle class="track" cx="10" cy="10" r="8" fill="none" stroke-width="2"/><circle class="arc" id="arc" cx="10" cy="10" r="8" fill="none" stroke-width="2" stroke-linecap="round"/></svg>
       <span id="sounded">sounding…</span>
     </span>
-    <button class="theme" id="theme" type="button">auto</button>
+    <select class="theme" id="skin" aria-label="dashboard theme"></select>
+    <button class="theme" id="mode" type="button">auto</button>
   </div>
   <nav class="counts" id="counts" aria-label="lane counts"></nav>
 </header>
-<section class="log" id="log" hidden><h3>Ship’s log</h3><ol id="log-list"></ol></section>
+<section class="log" id="log" hidden><h3 id="log-title">Ship’s log</h3><ol id="log-list"></ol></section>
 <div class="banner" id="banner"></div>
-<main id="lanes"></main>
+<main id="lanes"><div class="reticle off" id="reticle" aria-hidden="true"><i></i><i></i><i></i><i></i><span class="tagline" id="lock-tag"></span></div></main>
 <div id="ghosts"></div>
 <dialog id="viewer">
   <div class="bar"><b id="viewer-title"></b><a id="viewer-raw" target="_blank" rel="noopener">raw</a><button id="viewer-close" type="button">close</button></div>
@@ -329,6 +469,28 @@ const LOG_ROWS = 5;
 const SYNC_MS = 12000; // every looping animation's period divides this, so rebuilt cards stay in step
 const reduced = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : { matches: false };
 
+// Themes: everything that differs besides the CSS. Add one by adding an entry here, a
+// [data-theme=NAME] block in the styles, and its name to THEMES in lib/dashboard.sh.
+const THEMES = {
+  chartroom: {
+    label: "chartroom", sub: "fleet", log: "Ship’s log", calm: "Nothing needs you. Fair winds.",
+    alias: {},
+    words: { underway: "under way", draft: "drafting", signal: "last signal", anchor: "at anchor", attn: "waiting on you",
+             hold: "quiet for", ready: "ready", finished: "finished", age: "age", since: "since" },
+    icons: { anchor: "anchor", ready: "flag", logged: "logged" },
+  },
+  hud: {
+    label: "hud", sub: "fleet vision", log: "Telemetry", calm: "No priority targets. All clear.",
+    alias: { needs_you: "priority targets", in_progress: "engaged", on_hold: "dormant", ready: "acquired", recent: "terminated" },
+    words: { underway: "engaged", draft: "plotting", signal: "last signal", anchor: "holding", attn: "waiting on you",
+             hold: "silent for", ready: "acquired", finished: "finished", age: "age", since: "since" },
+    icons: { anchor: "diamond", ready: "target", logged: "cross" },
+    decode: true, reticle: true, radar: true,
+  },
+};
+const SERVER_THEME = THEMES[document.documentElement.dataset.theme] ? document.documentElement.dataset.theme : "chartroom";
+function theme() { return THEMES[document.documentElement.dataset.theme] || THEMES.chartroom; }
+
 function el(tag, attrs, ...kids) {
   const n = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
@@ -343,6 +505,9 @@ const ICONS = {
   anchor: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="5" r="2.3"/><path d="M12 7.3V21M7.5 11h9M4.5 14.5c.8 3.6 3.8 6.5 7.5 6.5s6.7-2.9 7.5-6.5"/></svg>',
   flag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V3M5 4h12l-3 4.5 3 4.5H5"/></svg>',
   logged: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>',
+  diamond: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 21 12 12 21 3 12Z"/><path d="M12 9 15 12 12 15 9 12Z" fill="currentColor" stroke="none"/></svg>',
+  target: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><rect x="10" y="10" width="4" height="4" fill="currentColor" stroke="none"/></svg>',
+  cross: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
 };
 function icon(name) { const t = document.createElement("template"); t.innerHTML = ICONS[name]; return t.content.firstChild; }
 
@@ -408,9 +573,10 @@ function motionOf(c, lane) {
 }
 
 function signal(motion) {
-  if (motion === "anchor") return el("span", { class: "sig", "aria-hidden": "true" }, icon("anchor"));
-  if (motion === "ready") return el("span", { class: "sig", "aria-hidden": "true" }, icon("flag"));
-  if (motion === "logged") return el("span", { class: "sig", "aria-hidden": "true" }, icon("logged"));
+  const ic = theme().icons;
+  if (motion === "anchor") return el("span", { class: "sig", "aria-hidden": "true" }, icon(ic.anchor));
+  if (motion === "ready") return el("span", { class: "sig", "aria-hidden": "true" }, icon(ic.ready));
+  if (motion === "logged") return el("span", { class: "sig", "aria-hidden": "true" }, icon(ic.logged));
   if (motion === "hold") return el("span", { class: "sig ring", "aria-hidden": "true" });
   return el("span", { class: "sig dot", "aria-hidden": "true" });
 }
@@ -418,29 +584,52 @@ function signal(motion) {
 function clockRow(c, motion) {
   const row = el("div", { class: "clock" });
   const add = (label, node) => { if (node) row.append(el("span", {}, el("span", { class: "lbl", text: label }), node)); };
+  const w = theme().words;
   if (c.type !== "task") {
-    if (c.date) add("since", el("b", { text: c.date }));
+    if (c.date) add(w.since, el("b", { text: c.date }));
     return row.childNodes.length ? row : null;
   }
   if (motion === "underway" || motion === "draft") {
-    add(motion === "draft" ? "drafting" : "under way", ticker("since", c.created));
-    add("last signal", ticker("since", c.last_at, " ago"));
+    add(motion === "draft" ? w.draft : w.underway, ticker("since", c.created));
+    add(w.signal, ticker("since", c.last_at, " ago"));
   } else if (motion === "anchor") {
-    add("at anchor", ticker("since", c.last_at));
-    add("age", el("b", { text: ago(c.created), title: c.created }));
+    add(w.anchor, ticker("since", c.last_at));
+    add(w.age, el("b", { text: ago(c.created), title: c.created }));
   } else if (motion === "attn") {
-    add("waiting on you", ticker("since", c.last_at));
-    add("age", el("b", { text: ago(c.created), title: c.created }));
+    add(w.attn, ticker("since", c.last_at));
+    add(w.age, el("b", { text: ago(c.created), title: c.created }));
   } else if (motion === "hold") {
-    add("quiet for", ticker("since", c.last_at));
-    add("age", el("b", { text: ago(c.created), title: c.created }));
+    add(w.hold, ticker("since", c.last_at));
+    add(w.age, el("b", { text: ago(c.created), title: c.created }));
   } else if (motion === "ready") {
-    add("ready", ticker("since", c.last_at, " ago"));
-    add("age", el("b", { text: ago(c.created), title: c.created }));
+    add(w.ready, ticker("since", c.last_at, " ago"));
+    add(w.age, el("b", { text: ago(c.created), title: c.created }));
   } else {
-    add("finished", ticker("since", c.finished_at || c.closed || c.last_at, " ago"));
+    add(w.finished, ticker("since", c.finished_at || c.closed || c.last_at, " ago"));
   }
   return row.childNodes.length ? row : null;
+}
+
+function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+  const t = el("textarea", { readonly: "", style: "position:fixed;opacity:0" });
+  t.value = text; document.body.append(t); t.select();
+  try { return document.execCommand("copy") ? Promise.resolve() : Promise.reject(new Error("copy refused")); }
+  finally { t.remove(); }
+}
+
+// The card's short id; a click copies "/continue <id>" and says so for a moment.
+function shortId(c) {
+  if (!c.short_id) return null;
+  const cmd = "/continue " + c.short_id;
+  const b = el("button", { type: "button", class: "sid", text: c.short_id, title: "copy " + cmd, "aria-label": "copy " + cmd });
+  b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    copyText(cmd).then(() => { b.textContent = "copied"; b.classList.add("copied"); },
+                       () => { b.textContent = "copy failed"; })
+      .finally(() => setTimeout(() => { b.textContent = c.short_id; b.classList.remove("copied"); }, 1400));
+  });
+  return b;
 }
 
 function card(c, lane) {
@@ -456,7 +645,8 @@ function card(c, lane) {
   const node = el("article", { class: "card m-" + motion + (c.type === "inbox" ? " inbox" : "") + (fresh ? " fresh" : "") },
     el("div", { class: "gleam", "aria-hidden": "true" }),
     motion === "attn" ? el("div", { class: "glow", "aria-hidden": "true" }) : null,
-    el("div", { class: "head" }, signal(motion), el("div", { class: "title", text: c.title || c.id, title: c.id })),
+    motion === "attn" ? el("div", { class: "brackets", "aria-hidden": "true" }) : null,
+    el("div", { class: "head" }, signal(motion), el("div", { class: "title", text: c.title || c.id, title: c.id }), shortId(c)),
     sub, clockRow(c, motion));
   if (c.type === "task" && c.waiting_on) {
     const w = el("div", { class: "waiting", text: "waiting on: " + c.waiting_on });
@@ -489,6 +679,26 @@ function card(c, lane) {
   if (links.childNodes.length) node.append(links);
   if (motion === "underway" || motion === "draft" || motion === "anchor") node.append(el("div", { class: "wake", "aria-hidden": "true" }, el("i")));
   return node;
+}
+
+const NOISE = "▓▒░█<>/\\|#%&$@=+*01ΣΔΞ";
+function decode(node, text, delay) {
+  node.textContent = text;
+  if (reduced.matches || document.hidden || !text || !theme().decode) return;
+  const t0 = performance.now() + (delay || 0), D = Math.min(450, 150 + text.length * 6);
+  const step = (t) => {
+    if (!node.isConnected) { node.textContent = text; return; }
+    const p = (t - t0) / D;
+    if (p >= 1) { node.textContent = text; return; }
+    if (p >= 0) {
+      const upto = Math.floor(p * text.length);
+      let out = text.slice(0, upto);
+      for (let i = upto; i < Math.min(text.length, upto + 6); i++) out += text[i] === " " ? " " : NOISE[(Math.random() * NOISE.length) | 0];
+      node.textContent = out;
+    }
+    requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
 }
 
 function sync(n) { n.style.setProperty("--sync", -(performance.now() % SYNC_MS) + "ms"); }
@@ -525,7 +735,7 @@ function buildFrame() {
     const cards = el("div", { class: "cards" });
     const foot = el("div", { class: "foot" });
     const sec = el("section", { class: "lane", "data-lane": k, id: "lane-" + k, style: "--i:" + i },
-      el("h2", {}, el("span", { class: "sig dot", "aria-hidden": "true" }), label, n), cards, foot);
+      el("h2", {}, el("span", { class: "sig dot", "aria-hidden": "true" }), label, el("span", { class: "alias", "data-lane-alias": k }), n), cards, foot);
     if (k === "in_progress") sec.querySelector("h2").classList.add("m-underway");
     if (k === "needs_you") sec.querySelector("h2").classList.add("m-attn");
     sections[k] = { sec, n, cards, foot };
@@ -565,13 +775,14 @@ function render(d) {
     tween(n, items.length);
     const limit = SHOW[k] && !expanded[k] ? SHOW[k] : Infinity;
     const want = items.slice(0, limit).map((c) => {
-      // inbox ids are positional (inbox-0, inbox-1, ...), so key them by content to keep animations on the right card
-      let key = c.type === "inbox" ? "inbox:" + (c.date || "") + ":" + c.title : c.id;
+      let key = keyOf(c);
       while (next.has(key)) key += "'";
-      const sig = k + "\n" + JSON.stringify(c), old = nodes.get(key);
+      const sig = document.documentElement.dataset.theme + "\n" + k + "\n" + JSON.stringify(c), old = nodes.get(key);
       if (old && old._sig === sig) { next.set(key, old); return old; }
       const m = card(c, k);
-      m._sig = sig; m._lane = k; m._last = c.last_event || c.waiting_on || ""; m._at = ms(c.last_at);
+      m._sig = sig; m._lane = k; m._key = key; m._last = c.last_event || c.waiting_on || ""; m._at = ms(c.last_at);
+      m.addEventListener("mouseenter", () => { hovering = m; lockOn(m); });
+      m.addEventListener("mouseleave", () => { hovering = null; });
       if (!old) entering.push(m);
       else if (old._last !== m._last) flashing.push(m);
       next.set(key, m);
@@ -587,7 +798,7 @@ function render(d) {
     while (ref) { const nx = ref.nextSibling; ref.remove(); ref = nx; }
 
     foot.replaceChildren();
-    if (!items.length) foot.append(el("div", { class: "empty", text: k === "needs_you" ? "Nothing needs you. Fair winds." : "None." }));
+    if (!items.length) foot.append(el("div", { class: "empty", text: k === "needs_you" ? theme().calm : "None." }));
     if (items.length > limit) {
       const b = el("button", { class: "more", type: "button", text: "show all " + items.length });
       b.addEventListener("click", () => { expanded[k] = true; render(d); });
@@ -625,21 +836,94 @@ function render(d) {
       n.animate([{ transform: "translate(" + dx + "px," + dy + "px)" }, { transform: "none" }],
         { duration: 650, easing: "cubic-bezier(.2,.8,.2,1)" });
     }
-    for (const m of entering) {
-      m.animate([{ opacity: 0, transform: "translateY(-10px) scale(.97)" }, { opacity: 1, transform: "none" }],
-        { duration: 600, easing: "cubic-bezier(.2,.8,.2,1)", fill: "backwards" });
-    }
+    entering.forEach((m, i) => enter(m, Math.min(i, 12) * 40));
     for (const m of flashing) { m.classList.add("flash"); setTimeout(() => m.classList.remove("flash"), 2700); }
   } else if (firstRender && !reduced.matches) {
     let i = 0;
-    for (const [k] of LANES) for (const m of sections[k].cards.children) {
-      m.animate([{ opacity: 0, transform: "translateY(12px)" }, { opacity: 1, transform: "none" }],
-        { duration: 600, delay: 120 + Math.min(i++, 24) * 35, easing: "cubic-bezier(.2,.8,.2,1)", fill: "backwards" });
-    }
+    for (const [k] of LANES) for (const m of sections[k].cards.children) enter(m, 120 + Math.min(i++, 24) * 35);
   }
   renderLog(d);
+  renderRadar(d);
+  relock();
   firstRender = false;
   document.title = (d.counts.needs_you ? "(" + d.counts.needs_you + ") " : "") + "chartroom";
+}
+
+function keyOf(c) {
+  // inbox ids are positional (inbox-0, inbox-1, ...), so key them by short id or content to keep animations on the right card
+  return c.type === "inbox" ? "inbox:" + (c.short_id || (c.date || "") + ":" + c.title) : c.id;
+}
+
+// A card arriving: chartroom drops it in; hud steps it in and decodes its title out of noise.
+function enter(m, delay) {
+  if (reduced.matches || document.hidden) return;
+  if (theme().decode) {
+    const t = m.querySelector(".title");
+    decode(t, t.textContent, delay);
+    m.animate([{ opacity: 0, transform: "translateX(-10px)" }, { opacity: 1, transform: "none" }],
+      { duration: 360, delay, easing: "steps(5, end)", fill: "backwards" });
+  } else {
+    m.animate([{ opacity: 0, transform: "translateY(-10px) scale(.97)" }, { opacity: 1, transform: "none" }],
+      { duration: 600, delay, easing: "cubic-bezier(.2,.8,.2,1)", fill: "backwards" });
+  }
+}
+
+// ---------------------------------------------------------------- hud: header radar and the lock reticle
+
+const RINGS = { needs_you: 16, ready: 26, in_progress: 34, on_hold: 41, recent: 47 }; // percent of the radar's width, from center
+const SWEEP_MS = 4000;
+function hash(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+function renderRadar(d) {
+  const box = document.getElementById("radar");
+  if (!theme().radar) { box.querySelectorAll(".blip").forEach((b) => b.remove()); return; }
+  const now = performance.now(), out = [];
+  for (const [k] of LANES) for (const c of d.lanes[k] || []) {
+    const h = hash(keyOf(c)), theta = (h % 3600) / 10, r = RINGS[k] - 3 + ((h >>> 12) % 6), rad = theta * Math.PI / 180;
+    const b = el("i", { class: "blip", "data-lane": k });
+    b.style.setProperty("--at", "translate(" + (Math.sin(rad) * r / 2).toFixed(2) + "cqw," + (-Math.cos(rad) * r / 2).toFixed(2) + "cqw)");
+    // flash as the sweep crosses this bearing; the sweep's angle is (now % SWEEP_MS) / SWEEP_MS turns
+    b.style.setProperty("--d", (theta / 360 * SWEEP_MS - (now % SWEEP_MS) - SWEEP_MS).toFixed(0) + "ms");
+    out.push(b);
+  }
+  box.replaceChildren(document.getElementById("rsweep"), ...out);
+}
+
+const reticle = document.getElementById("reticle");
+const corners = reticle.querySelectorAll("i");
+let locked = null, hovering = null, lockIx = 0;
+function lockOn(n) {
+  if (!theme().reticle || !n || !n.isConnected) { reticle.classList.add("off"); locked = null; return; }
+  const moved = locked !== n._key;
+  locked = n._key;
+  // the card's layout position inside <main> (offsets ignore the FLIP transforms in flight)
+  const main = document.getElementById("lanes");
+  let ox = 0, oy = 0;
+  for (let e = n; e && e !== main; e = e.offsetParent) { ox += e.offsetLeft; oy += e.offsetTop; }
+  const x = ox - 5, y = oy - 5, w = n.offsetWidth + 10, h = n.offsetHeight + 10, k = 16;
+  [[x, y], [x + w - k, y], [x, y + h - k], [x + w - k, y + h - k]]
+    .forEach(([cx, cy], i) => { corners[i].style.transform = "translate(" + cx + "px," + cy + "px)"; });
+  const tag = document.getElementById("lock-tag");
+  tag.textContent = "lock · " + (n.querySelector(".badge") ? n.querySelector(".badge").textContent : "");
+  tag.style.transform = "translate(" + (x + 22) + "px," + (y - 6) + "px)";
+  reticle.classList.remove("off");
+  if (moved && !reduced.matches) corners.forEach((c) => c.animate([{ opacity: .2 }, { opacity: 1 }, { opacity: .4 }, { opacity: 1 }], { duration: 320, easing: "steps(4)" }));
+}
+function relock() {
+  const n = locked ? nodes.get(locked) : null;
+  if (n && n.isConnected) lockOn(n); else autoLock(true);
+}
+// While nobody is pointing, the reticle cycles through what needs you (else what is under way).
+function autoLock(force) {
+  if (!theme().reticle) { lockOn(null); return; }
+  if (hovering && hovering.isConnected && !force) return;
+  for (const k of ["needs_you", "in_progress"]) {
+    const rows = [...sections[k].cards.children];
+    if (!rows.length) continue;
+    lockIx = force ? 0 : (lockIx + 1) % rows.length;
+    lockOn(rows[lockIx]);
+    return;
+  }
+  lockOn(null);
 }
 
 // Ship's log: the newest events across every task, new ones washing in.
@@ -656,9 +940,9 @@ function renderLog(d) {
     keys.add(key);
     const [tag, text] = eventLine(c.last_event);
     const t = ticker("since", c.last_at);
-    const li = el("li", { title: c.last_event }, el("span", { class: "t" }, t), el("span", { class: "who", text: c.title || c.id, title: c.id }),
-      el("span", { class: "what" }, tag, text));
-    if (seenLog && !seenLog.has(key) && !reduced.matches) li.classList.add("fresh");
+    const what = el("span", { class: "what" }, tag, el("span", { text }));
+    const li = el("li", { title: c.last_event }, el("span", { class: "t" }, t), el("span", { class: "who", text: c.title || c.id, title: c.id }), what);
+    if (seenLog && !seenLog.has(key) && !reduced.matches) { li.classList.add("fresh"); decode(what.lastChild, text, 0); }
     if ((c.files || []).includes("events.log")) {
       const href = "/task/" + encodeURIComponent(c.id) + "/events.log";
       li.classList.add("open");
@@ -736,27 +1020,52 @@ async function view(c, f, href) {
 }
 document.getElementById("viewer-close").addEventListener("click", () => document.getElementById("viewer").close());
 
-// Theme: auto (the system's), light, or dark; remembered in this browser only.
-const THEMES = ["auto", "light", "dark"];
-let theme = "auto";
-try { theme = THEMES.includes(localStorage.getItem("chartroom-theme")) ? localStorage.getItem("chartroom-theme") : "auto"; } catch (e) { /* storage blocked: stay on auto */ }
-function applyTheme() {
-  if (theme === "auto") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = theme;
-  const btn = document.getElementById("theme");
-  btn.textContent = theme === "auto" ? "◐ auto" : theme === "light" ? "☼ day" : "☾ night";
-  btn.title = "theme: " + theme + " (click to change)";
-}
-document.getElementById("theme").addEventListener("click", () => {
-  theme = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
-  try { localStorage.setItem("chartroom-theme", theme); } catch (e) { /* not remembered, still applied */ }
-  applyTheme();
-});
-applyTheme();
+// Remembered in this browser only; storage may be blocked, so every access is guarded.
+function stored(key, allowed) { try { const v = localStorage.getItem(key); return allowed.includes(v) ? v : null; } catch (e) { return null; } }
+function store(key, v) { try { if (v == null) localStorage.removeItem(key); else localStorage.setItem(key, v); } catch (e) { /* not remembered, still applied */ } }
 
+// Theme: a stored choice wins over the server's configured default ("default" clears it).
+const skinSel = document.getElementById("skin");
+skinSel.append(el("option", { value: "", text: "theme: default (" + SERVER_THEME + ")" }),
+  ...Object.keys(THEMES).map((k) => el("option", { value: k, text: "theme: " + THEMES[k].label })));
+function applySkin(choice) {
+  document.documentElement.dataset.theme = choice || SERVER_THEME;
+  skinSel.value = choice || "";
+  const t = theme();
+  document.getElementById("brand-sub").textContent = t.sub;
+  document.getElementById("log-title").textContent = t.log;
+  for (const a of document.querySelectorAll("[data-lane-alias]")) a.textContent = t.alias[a.dataset.laneAlias] ? "// " + t.alias[a.dataset.laneAlias] : "";
+}
+skinSel.addEventListener("change", () => {
+  store("chartroom-theme-name", skinSel.value || null);
+  applySkin(skinSel.value);
+  if (last) render(last); // the theme is part of every card's signature, so they rebuild in the new theme
+});
+
+// Mode: auto (the system's), light, or dark. The first dashboard kept this under "chartroom-theme".
+const MODES = ["auto", "light", "dark"];
+let mode = stored("chartroom-mode", MODES) || stored("chartroom-theme", MODES) || "auto";
+function applyMode() {
+  if (mode === "auto") delete document.documentElement.dataset.mode; else document.documentElement.dataset.mode = mode;
+  const btn = document.getElementById("mode");
+  btn.textContent = mode === "auto" ? "◐ auto" : mode === "light" ? "☼ light" : "☾ dark";
+  btn.title = "light/dark: " + mode + " (click to change)";
+}
+document.getElementById("mode").addEventListener("click", () => {
+  mode = MODES[(MODES.indexOf(mode) + 1) % MODES.length];
+  store("chartroom-mode", mode);
+  applyMode();
+});
+
+applyMode();
 buildFrame();
+applySkin(stored("chartroom-theme-name", Object.keys(THEMES)));
+sync(document.getElementById("rsweep"));
 refresh();
 setInterval(() => { if (!document.hidden) refresh(); }, POLL_MS);
 setInterval(() => { if (!document.hidden) tick(); }, 1000);
+setInterval(() => { if (!document.hidden) autoLock(false); }, 3500);
+window.addEventListener("resize", () => relock());
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
 </script>
 </body>

@@ -92,13 +92,16 @@ under way, trouble.
 chartroom dashboard                  # http://127.0.0.1:4517, Ctrl-C to stop
 chartroom dashboard --daemon --open  # in the background, and open the browser
 chartroom dashboard open             # reuse the running one (or start it), then open the browser
+chartroom dashboard --theme hud      # start with the HUD theme as the default
 chartroom dashboard stop             # (or: status)
 chartroom dashboard --json           # the same lanes, no server
 ```
 
 A one-page, read-only view of the fleet that refreshes every 5 seconds, so you can see what
-to pull from. It works on a phone-width window and follows your light/dark setting. It has
-five lanes, each with a count in the header:
+to pull from. It works on a phone-width window and follows your light/dark setting (or a
+light/dark toggle in the header). Work in progress visibly moves, changes animate, and
+`prefers-reduced-motion` turns all motion off. It has five lanes, each with a count in the
+header:
 
 | Lane | What lands there |
 |---|---|
@@ -134,6 +137,12 @@ How it is built, and what it promises:
   and waits for it. Then it opens the URL with `CHARTROOM_OPENER`, else `open` (macOS) or
   `xdg-open`, and prints it either way. A lock in the home (holding its owner's pid; taken over only when that pid is gone) keeps two calls from starting two
   servers. The `dashboard` skill (`/dashboard`) runs exactly this.
+- **Themes.** `chartroom` (a nautical chart table) and `hud` (machine vision: red and amber,
+  scanlines, a header radar, a reticle that locks onto cards). Both keep the same lanes and
+  cards, a light and a dark variant, and the reduced-motion behaviour. The server's default is
+  `--theme NAME`, else `CHARTROOM_DASHBOARD_THEME` (env or config file), else `chartroom`. The
+  theme menu in the header overrides it for that browser only ("default" goes back to the
+  server's). The default is set when the server starts: restart a running dashboard to change it.
 - A legacy home works the same: `CHARTROOM_HOME=~/.captain chartroom dashboard`.
 
 ## Concepts
@@ -244,6 +253,7 @@ Environment variables win. Otherwise chartroom reads `~/.config/chartroom/config
 | `CHARTROOM_CLAUDE_ALLOWED_TOOLS` | `Bash Read Edit Write Glob Grep WebFetch WebSearch` | headless Claude |
 | `CHARTROOM_WATCH_INTERVAL` | `3` | seconds |
 | `CHARTROOM_DASHBOARD_RECENT_HOURS` | `48` | how far back the dashboard's Recently finished lane reaches |
+| `CHARTROOM_DASHBOARD_THEME` | `chartroom` | the dashboard's default theme: `chartroom` or `hud` (`--theme` overrides) |
 | `CHARTROOM_GH` | `gh` | the gh binary the dashboard uses for PR states |
 | `CHARTROOM_OPENER` | `open` / `xdg-open` | command `dashboard open` runs with the URL |
 | `CHARTROOM_WAITING_GRACE_MINUTES` | `15` | a `waiting` worker turns `waiting-overdue` this long after its until-time |
