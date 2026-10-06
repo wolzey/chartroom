@@ -22,7 +22,7 @@
     --faint: #8c9196; --line: rgba(20,36,58,.15); --line2: rgba(20,36,58,.07); --chip: rgba(20,36,58,.06);
     --link: #0d5a8a;
     --needs: #c2412b; --prog: #0f7490; --wait: #9c6c0c; --hold: #7a6a55; --ready: #2e7d4c; --recent: #7b848c;
-    --sweep: rgba(15,116,144,.18); --contour: .5; --grid: rgba(20,36,58,.045);
+    --sweep: rgba(15,116,144,.18); --contour: .32; --grid: rgba(20,36,58,.045);
     --shadow: 0 1px 0 rgba(255,255,255,.7) inset, 0 1px 2px rgba(20,36,58,.08), 0 10px 24px -18px rgba(20,36,58,.45);
     color-scheme: light;
   }
@@ -32,7 +32,7 @@
       --faint: #5f7586; --line: rgba(150,200,230,.15); --line2: rgba(150,200,230,.07); --chip: rgba(150,200,230,.08);
       --link: #7cc7ec;
       --needs: #ff7b5c; --prog: #41c9e2; --wait: #e9b956; --hold: #ab9c88; --ready: #5ed592; --recent: #71879a;
-      --sweep: rgba(65,201,226,.13); --contour: .28; --grid: rgba(150,200,230,.035);
+      --sweep: rgba(65,201,226,.13); --contour: .16; --grid: rgba(150,200,230,.035);
       --shadow: 0 1px 0 rgba(255,255,255,.04) inset, 0 12px 30px -18px rgba(0,0,0,.9);
       color-scheme: dark;
     }
@@ -42,7 +42,7 @@
     --faint: #5f7586; --line: rgba(150,200,230,.15); --line2: rgba(150,200,230,.07); --chip: rgba(150,200,230,.08);
     --link: #7cc7ec;
     --needs: #ff7b5c; --prog: #41c9e2; --wait: #e9b956; --hold: #ab9c88; --ready: #5ed592; --recent: #71879a;
-    --sweep: rgba(65,201,226,.13); --contour: .28; --grid: rgba(150,200,230,.035);
+    --sweep: rgba(65,201,226,.13); --contour: .16; --grid: rgba(150,200,230,.035);
     --shadow: 0 1px 0 rgba(255,255,255,.04) inset, 0 12px 30px -18px rgba(0,0,0,.9);
     color-scheme: dark;
   }
@@ -134,7 +134,7 @@
             font-size: 12.5px; padding: 2px 8px; border-radius: 6px; cursor: default; position: relative; }
   .log li.open { cursor: pointer; }
   .log li.open:hover { background: var(--chip); }
-  .log .t { font: 11.5px var(--mono); color: var(--faint); font-variant-numeric: tabular-nums; text-align: right; }
+  .log .t { font: 11.5px var(--mono); color: var(--faint); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
   .log .who { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .log .what { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .log li.fresh { animation: logIn .7s cubic-bezier(.2,.8,.2,1) both; }
