@@ -35,7 +35,7 @@ dashboard_task_extra() { # <id>
   for f in $CR_DASHBOARD_FILES; do [[ -s "$d/$f" ]] && files+=("$f"); done
   prs="$(cat "$d/events.log" "$d/report.md" 2>/dev/null |
     grep -oE 'https?://[^][ <>()"'"'"'`]+/(pull|pulls|merge_requests|pullrequest)/[0-9]+' | awk '!seen[$0]++' || true)"
-  report="$(grep -E '^[^ ]+ (progress|decision|blocked|done|failed|steered): ' "$d/events.log" 2>/dev/null | tail -1 || true)"
+  report="$(grep -E '^[^ ]+ (progress|waiting|decision|blocked|done|failed|steered): ' "$d/events.log" 2>/dev/null | tail -1 || true)"
   jq -n --arg prs "$prs" --arg files "${files[*]-}" --arg report "$report" '{
     prs: ($prs | split("\n") | map(select(length > 0))),
     files: ($files | split(" ") | map(select(length > 0))),
@@ -86,9 +86,54 @@ dashboard_stop() {
   echo "dashboard stopped (pid $pid, port $port)"
 }
 
+# Does the server on <port> answer /healthz? (python3 is already required to run one.)
+dashboard_healthy() { # <port>
+  "$(bin_of python3)" - "$1" <<'PY' >/dev/null 2>&1
+import sys, urllib.request
+with urllib.request.urlopen("http://127.0.0.1:%s/healthz" % sys.argv[1], timeout=2) as r:
+    sys.exit(0 if r.read().strip() == b"ok" else 1)
+PY
+}
+
+# `dashboard open`: reuse this home's dashboard when it answers, else start one as a daemon
+# (a stale pid file, or a server that stopped answering, is replaced), then open its URL
+# with CHARTROOM_OPENER, else `open` (macOS) or `xdg-open`; without any, print it. A lock
+# in the home keeps two concurrent calls from starting two servers.
+dashboard_open() { # [daemon args...]
+  local lock="$CR_HOME/.dashboard.lock" i pid p url opener got=0
+  # Without python3 the health check below cannot run, and a healthy server must never be
+  # mistaken for a dead one and stopped.
+  [[ -n "$(bin_of python3)" ]] || die "the dashboard needs python3 (standard library only); 'chartroom dashboard --json' works without it"
+  mkdir -p "$CR_HOME"
+  for i in $(seq 1 100); do mkdir "$lock" 2>/dev/null && { got=1; break; }; sleep 0.1; done
+  # A lock older than 10s was left by a killed call: take it over.
+  [[ $got -eq 1 ]] || warn "taking over a stale $lock"
+  trap 'rmdir "'"$lock"'" 2>/dev/null || true' EXIT
+  if read -r pid p < <(dashboard_running) && ! dashboard_healthy "$p"; then
+    warn "dashboard pid $pid is not answering on port $p; restarting it"
+    dashboard_stop >/dev/null
+  fi
+  if ! read -r pid p < <(dashboard_running); then
+    rm -f "$(dashboard_pidfile)"
+    ( cmd_dashboard --daemon "$@" ) >&2 || die "dashboard did not start"
+    read -r pid p < <(dashboard_running) || die "dashboard did not start"
+  fi
+  for i in $(seq 1 50); do dashboard_healthy "$p" && break; sleep 0.1; done
+  dashboard_healthy "$p" || die "dashboard (pid $pid) is not answering on port $p"
+  url="http://127.0.0.1:$p/"
+  opener="$(cfg OPENER '' '')"
+  if [[ -z "$opener" ]]; then
+    if [[ "$(uname -s)" == Darwin && -n "$(bin_of open)" ]]; then opener=open
+    elif [[ -n "$(bin_of xdg-open)" ]]; then opener=xdg-open; fi
+  fi
+  if [[ -n "$opener" ]] && $opener "$url" >/dev/null 2>&1; then echo "dashboard open: $url"
+  else echo "dashboard running: $url (no browser opener found; open it yourself)"; fi
+}
+
 cmd_dashboard() {
   local port="$CR_DASHBOARD_PORT_DEFAULT" open=0 daemon=0 json=0 prs_file="" gh=1
   case "${1:-}" in
+    open) shift; dashboard_open "$@"; return ;;
     stop) dashboard_stop; return ;;
     status)
       local pid p
@@ -103,7 +148,7 @@ cmd_dashboard() {
       --json) json=1; shift ;;
       --pr-states) [[ $# -ge 2 ]] || die "--pr-states needs a file"; prs_file="$2"; shift 2 ;;
       --no-gh) gh=0; shift ;;
-      *) die "dashboard: unknown arg $1 (usage: chartroom dashboard [--port N] [--open] [--daemon] [--no-gh] | --json | stop | status)" ;;
+      *) die "dashboard: unknown arg $1 (usage: chartroom dashboard [--port N] [--open] [--daemon] [--no-gh] | open [--port N] [--no-gh] | --json | stop | status)" ;;
     esac
   done
   if [[ $json -eq 1 ]]; then dashboard_json "$prs_file"; return; fi

@@ -16,7 +16,7 @@ never from conversation memory. (If `chartroom` is not on PATH, use
    Also read `$CHARTROOM_HOME/inbox.md`: questions waiting on the commander and chat
    approvals not yet in a brief.
    For every task in `done`, `decision`, `blocked`, `failed`, `stopped-silent`,
-   `awaiting-input` or `lost` state, read its `$CHARTROOM_HOME/tasks/<id>/report.md` if one
+   `waiting-overdue`, `awaiting-input` or `lost` state, read its `$CHARTROOM_HOME/tasks/<id>/report.md` if one
    exists, and the last few lines of `events.log`. Run `chartroom peek <id>` only when those
    don't explain the state. If the commander says "include PRs", also check PR state for tasks
    that opened one with the project's forge CLI (`gh` for GitHub, `az repos` for Azure DevOps,
@@ -32,8 +32,11 @@ never from conversation memory. (If `chartroom` is not on PATH, use
    each: the outcome, the risk, the evidence ("tests pass", "3 files"), and the full PR URL if there is one.
 
    **Under way**: one line per project, saying what is being worked on. No progress chatter.
+   A `waiting` task is under way: say what it waits on and until when (`waiting_on`,
+   `waiting_until`).
 
-   **Trouble**: failures, lost workers, and silent stops, with what you're doing about each.
+   **Trouble**: failures, lost workers, silent stops, and overdue waits (`waiting-overdue`),
+   with what you're doing about each.
 
    Use plain language: outcomes, not machinery. No task ids, paths, branch names, backend
    names, or status words unless the commander needs one to act. If nothing is open, say so in

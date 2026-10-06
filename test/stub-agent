@@ -8,6 +8,7 @@
 #                        record the answer and finish with done
 #   STUB_MODE=fail       report + failed
 #   STUB_MODE=silent     exit without any event
+#   STUB_MODE=waiting    say it is waiting (on $STUB_WAITING, default "CI"), then exit
 #   STUB_SLEEP=N         sleep N seconds before acting
 #   STUB_COMMIT=1        commit a file on the task branch (ship tasks)
 set -euo pipefail
@@ -30,4 +31,5 @@ case "${STUB_MODE:-done}" in
   decision) ev decision "pick A or B (recommend A)" ;;
   fail) printf 'outcome: failed\n' >"$d/report.md"; ev failed "stub failed on purpose" ;;
   silent) : ;;
+  waiting) ev waiting "${STUB_WAITING:-CI}" ;;
 esac

@@ -8,7 +8,7 @@ setup() { common_setup; }
   run cr install-skills --claude --agents --pi
   [ "$status" -eq 0 ]
   for d in .claude/skills .agents/skills .pi/agent/skills; do
-    for s in chartroom bearings; do
+    for s in chartroom bearings dashboard; do
       [ -L "$HOME/$d/$s" ]
       [ -f "$HOME/$d/$s/SKILL.md" ]
     done

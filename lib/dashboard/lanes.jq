@@ -7,8 +7,10 @@
 #
 # Rules (README "Dashboard" documents the same table):
 #   needs_you    decision, blocked, failed, awaiting-input; plus inbox "Waiting ..." items
-#   in_progress  working or drafting
-#   on_hold      stopped-silent; working/done whose last event says it waits on a person;
+#   in_progress  working, drafting, or waiting (a stopped worker inside its `waiting` window;
+#                the card carries what it waits on and until when)
+#   on_hold      stopped-silent or waiting-overdue; working/done whose last event (other than
+#                the worker's own `waiting` event) says it waits on a person;
 #                done with an open PR that still needs someone's review (from gh)
 #   ready        done, not closed, nothing above applies (a PR or report to read)
 #   recent       closed within $hours, or done with every known PR merged/closed (gh)
@@ -24,28 +26,32 @@ now as $now
     . as $t
     | ($t.prs | map({url: .} + ($prs[.] // {}) | .state = ((.state // "unknown") | ascii_upcase))) as $pr
     | ($t.last_event // $t.last) as $ev
+    | (($ev // "") | startswith("waiting: ")) as $said_waiting
     | (($t.closed | ts) // null) as $closed_at
     | ($pr | length > 0 and all(.[]; .state == "MERGED" or .state == "CLOSED") and any(.[]; .state == "MERGED")) as $merged
     | ($pr | any(.[]; .state == "OPEN" and (.reviewDecision == "REVIEW_REQUIRED" or .reviewDecision == "CHANGES_REQUESTED"))) as $in_review
     | {type: "task", id, title, project, kind, backend, state, live, created, closed,
        last_event: $ev, last_at: ($t.last_event_at // $t.last_at // $t.dispatched // $t.created),
-       prs: $pr, files, has_report}
+       prs: $pr, files, has_report, waiting_on: ($t.waiting_on // null), waiting_until: ($t.waiting_until // null)}
     | .lane = (
         if $t.state == "closed" then (if $closed_at != null and $closed_at >= $since then "recent" else null end)
         elif ($t.state | priority) < 4 then "needs_you"
-        elif $t.state == "stopped-silent" then "on_hold"
+        elif $t.state == "stopped-silent" or $t.state == "waiting-overdue" then "on_hold"
+        elif $t.state == "waiting" then "in_progress"
         elif $t.state == "done" then
           (if $merged then "recent" elif $in_review or ($ev | waits_on_person) then "on_hold" else "ready" end)
-        elif ($ev | waits_on_person) then "on_hold"
+        elif ($ev | waits_on_person) and ($said_waiting | not) then "on_hold"
         else "in_progress" end)
     | .reason = (
         if .lane == "needs_you" then .state
         elif .lane == "on_hold" then
           (if $t.state == "stopped-silent" then "stopped without reporting"
+           elif $t.state == "waiting-overdue" then "waiting overdue"
            elif $in_review then "PR awaiting review" else "waiting on someone" end)
         elif .lane == "ready" then (if ($pr | length) > 0 then "PR to review" elif $t.has_report then "report to read" else "done" end)
         elif .lane == "recent" then (if $merged then "merged" else "closed" end)
         elif $t.state == "drafting" then "drafting the brief"
+        elif $t.state == "waiting" then "waiting"
         else .live end)
     | select(.lane != null))
 | . as $tasks

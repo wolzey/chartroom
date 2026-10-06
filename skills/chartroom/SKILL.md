@@ -56,8 +56,10 @@ Run this once at the start of every session, before taking new work:
 2. `chartroom status`. This is the truth. Reconcile it before taking new work:
    - `decision`, `blocked`: the commander still owes an answer, or you do. Queue it.
    - `done`: read `report.md` and check the evidence (see Verify). Queue the outcome.
-   - `failed`, `stopped-silent`, `awaiting-input`, `lost`: run `chartroom peek <id>` and decide
-     whether to re-steer, re-dispatch, or report.
+   - `failed`, `stopped-silent`, `waiting-overdue`, `awaiting-input`, `lost`: run
+     `chartroom peek <id>` and decide whether to re-steer, re-dispatch, or report.
+   - `waiting`: the worker ended its turn to wait on something (`waiting_on`, until
+     `waiting_until`). Leave it be; it wakes you if the wait runs out.
    - `in-session` subagents from a dead session are gone. Re-dispatch them; the brief survives.
 3. Start waiting for wakes (see Supervision) whenever any task is in flight.
 4. If anything needs the commander, open with a short digest (the `bearings` format).
@@ -146,6 +148,8 @@ happened). Your harness reference says which one to use. Every line is a wake:
 - `decision`, `blocked`, `done`, `failed`: the worker reported.
 - `exited`: a headless or command run ended without reporting first.
 - `agent: turn-ended (stopped its turn without reporting)`: a session worker went idle silently.
+  A turn (or run) that ends right after a `waiting` event is not a wake.
+- `waiting overdue: ...`: a stopped worker's `waiting` window ran out (once per wait).
 - `agent: awaiting-input: ...`: an approval or question prompt is up, or a trust dialog chartroom
   would not answer.
 - `herdr: ...`: herdr's own agent-state signals.
@@ -170,6 +174,10 @@ On a wake:
   send-keys), but only when the highlighted option is the allow option. Anything outside the
   worktree, or anything outward-facing, goes to the commander.
 - **exited** with no done or decision: read `final.md` and peek, then treat it as stopped-silent.
+- **waiting overdue**: peek. A session worker that is still idle: steer it to check on what it
+  was waiting for and report. A headless or command worker cannot wake itself, so its wait
+  is yours: check the thing (CI, the review) yourself, then re-run it with `chartroom steer`.
+  Escalate only if the wait is on the commander or another person who has gone quiet.
 
 Answer a worker with `chartroom steer <id> "<answer>"`. Live backends type it in (or write it
 to the stream) and confirm it was taken. Between-runs backends refuse while the worker is

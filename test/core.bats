@@ -172,6 +172,44 @@ EOF
   [ "$(cr status --json | jq -r '.[0].state')" = stopped-silent ]
 }
 
+@test "waiting: an exit right after waiting is not a wake; the status is waiting with its window" {
+  id="$(new_task --backend command --command "STUB_MODE=waiting STUB_WAITING='CI on PR 12 until 2099-01-01T10:30Z' $STUB {id}")"
+  cr dispatch "$id" >/dev/null
+  wait_event "$id" ' exited: '
+  run cr watch --once --timeout 3
+  [ "$status" -eq 124 ]
+  [[ "$output" != *"exited"* ]]
+  run cr status --json
+  [ "$(jq -c '.[0] | [.state,.waiting_on,.waiting_until]' <<<"$output")" = '["waiting","CI on PR 12 until 2099-01-01T10:30Z","2099-01-01T10:30:00Z"]' ]
+  [ "$(jq -r '.[0].waiting_since' <<<"$output")" != null ]
+  # a later report closes the wait
+  cr event "$id" progress "CI green, merging"
+  [ "$(cr status --json | jq -c '.[0] | [.state,.waiting_on]')" = '["stopped-silent",null]' ]
+}
+
+@test "waiting: the window running out wakes once (waiting overdue), and is recorded" {
+  id="$(new_task --backend command --command "STUB_MODE=waiting STUB_WAITING='review from the docs team' $STUB {id}")"
+  cr dispatch "$id" >/dev/null
+  wait_event "$id" ' exited: '
+  run cr watch --once --timeout 2
+  [ "$status" -eq 124 ]
+  # no until-time: the window is CHARTROOM_WAITING_MAX_MINUTES past the event
+  export CHARTROOM_WAITING_MAX_MINUTES=0
+  [ "$(cr status --json | jq -r '.[0].state')" = waiting-overdue ]
+  run cr watch --once --timeout 5
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[$id] waiting overdue: review from the docs team (since "* ]]
+  grep -q ' note: waiting overdue: review from the docs team' "$CHARTROOM_HOME/tasks/$id/events.log"
+  run cr watch --once --timeout 2
+  [ "$status" -eq 124 ]
+  [[ "$output" != *"overdue"* ]]
+  # an until-time is honoured plus CHARTROOM_WAITING_GRACE_MINUTES
+  unset CHARTROOM_WAITING_MAX_MINUTES
+  cr event "$id" waiting "a timer until $(jq -rn 'now - 600 | floor | todate')"
+  [ "$(cr status --json | jq -r '.[0].state')" = waiting ]
+  [ "$(CHARTROOM_WAITING_GRACE_MINUTES=5 cr status --json | jq -r '.[0].state')" = waiting-overdue ]
+}
+
 @test "watch --once times out with 124 and keeps its cursor between calls" {
   run cr watch --once --timeout 2
   [ "$status" -eq 124 ]
@@ -197,6 +235,8 @@ EOF
   [ "$status" -ne 0 ]
   run cr event "$id" progress "fine"
   [ "$status" -eq 0 ]
+  run cr event "$id" waiting "CI on PR 3 until 2026-01-05T15:30:00Z"
+  [ "$status" -eq 0 ]
   run cr event nope progress "x"
   [ "$status" -ne 0 ]
 }
@@ -219,6 +259,16 @@ EOF
   cr hook "$id" codex-notify '{"type":"agent-turn-complete","turn-id":"1"}'
   run cr watch --once --timeout 3
   [[ "$output" != *"turn-ended (stopped"* ]] # reported already (awaiting-input is not a report, but done was)
+  # a turn ending right after `waiting` is not news; once the worker resumes, it is again
+  cr event "$id" steered "carry on"
+  cr event "$id" waiting "CI on PR 3"
+  cr hook "$id" stop
+  run cr watch --once --timeout 3
+  [[ "$output" != *"without reporting"* ]]
+  cr event "$id" progress "CI green"
+  cr hook "$id" stop
+  run cr watch --once --timeout 5
+  [[ "$output" == *"turn-ended (stopped its turn without reporting)"* ]]
   # hooks never fail the agent, even for unknown tasks
   run cr hook no-such-task stop
   [ "$status" -eq 0 ]

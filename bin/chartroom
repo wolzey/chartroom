@@ -273,7 +273,10 @@ address the human directly. Task id: \`$id\`.
      printf '%s <kind>: <text>\n' "\$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $d/events.log
    Kinds: \`progress\` (sparingly, milestones only), \`decision\` (a choice only the human can make:
    state the options and your recommendation, then STOP), \`blocked\` (cannot proceed: say exactly
-   what is needed, then STOP), \`done\` (one-line outcome), \`failed\` (could not do it, why).
+   what is needed, then STOP), \`done\` (one-line outcome), \`failed\` (could not do it, why),
+   \`waiting\` (right before you end a turn to wait on something: CI, a review, a timer, a person.
+   Say what, and until when as a UTC time if known, e.g. "CI on PR 12 until 2026-01-05T15:30:00Z".
+   When you resume, report again with \`progress\` or any other kind).
 3. Before \`done\` or \`failed\`, write $d/report.md containing: outcome; what changed
    (files, commits) or what you found; validation you actually ran with real results (never claim
    a check you did not run); risks and open questions.
@@ -388,8 +391,11 @@ state_of() { # derived from the last wake-worthy event; a restart re-derives the
 
 # One JSON object per line per task: the fleet view that `status` and `dashboard` share.
 # last/last_at are the newest non-note event; updated/closed/branch/has_report feed the dashboard.
+# A stopped worker whose newest report is `waiting` is "waiting" until its window runs out,
+# then "waiting-overdue" (a live one stays "working"). waiting_on/waiting_until/waiting_since
+# describe the open `waiting` event whatever the state, and are null without one.
 status_rows() { # [--all]
-  local all=0 id st d live lastline
+  local all=0 id st d live lastline wait
   [[ "${1:-}" == --all ]] && all=1
   shopt -s nullglob
   for d in "$CR_HOME"/tasks/*/; do
@@ -397,14 +403,22 @@ status_rows() { # [--all]
     st="$(state_of "$id")"
     [[ $all -eq 1 || "$st" != closed ]] || continue
     if [[ "$st" == closed ]]; then live=-; else live="$(live_of "$id")"; fi
+    wait=""
+    [[ "$st" != closed ]] && wait="$(waiting_info "$id" 2>/dev/null || true)"
+    if [[ -n "$wait" && "$live" =~ ^(stopped|gone|idle|done)$ ]]; then
+      if [[ "$(jq -r .overdue <<<"$wait")" == true ]]; then st="waiting-overdue"; else st="waiting"; fi
+    elif [[ -n "$wait" ]]; then st=working
+    fi
     [[ "$st" == working && "$live" =~ ^(stopped|gone|idle|done)$ ]] && st="stopped-silent"
     [[ "$st" == working && "$live" == blocked ]] && st="awaiting-input"
     lastline="$(grep -vE ' note: ' "$d/events.log" 2>/dev/null | tail -1 || true)"
     jq -c --arg st "$st" --arg live "$live" --arg last "${lastline:21}" --arg last_at "${lastline:0:20}" \
+      --argjson wait "${wait:-null}" \
       --argjson has_report "$([[ -s "$d/report.md" ]] && echo true || echo false)" \
       '{id,title,kind,backend:(if (.backend//"")=="" then "auto" else .backend end),project:((.project//"")|split("/")|last),
         state:$st,live:$live,created,last:$last,last_at:(if $last_at=="" then null else $last_at end),
-        updated,dispatched,closed,branch,has_report:$has_report}' "$d/meta.json"
+        updated,dispatched,closed,branch,has_report:$has_report,
+        waiting_on:($wait.on // null),waiting_until:($wait.until // null),waiting_since:($wait.since // null)}' "$d/meta.json"
   done
 }
 
@@ -504,7 +518,8 @@ cmd_close() {
 
 # One stream for the whole fleet. Every stdout line is a wake: a worker
 # decision/blocker/done/failure, a process ending, an agent stopping its turn or waiting
-# on a prompt, or a worker vanishing. Routine progress is never printed.
+# on a prompt, a worker vanishing, or a stopped worker's `waiting` window running out.
+# Routine progress, and a turn that ends right after `waiting`, are never printed.
 #   chartroom watch                      run forever (e.g. under Claude Code's Monitor)
 #   chartroom watch --once [--timeout S] block until the first wake(s), print them, exit 0;
 #                                        exit 124 on timeout. Remembers its place in
@@ -534,7 +549,8 @@ watch_scan_lines() { # <id> <from-offset> <to-offset>
     kind="$(line_kind "$line")"
     case "$kind" in
       decision|blocked|done|failed) wake "$id" "$line" ;;
-      # A run ending, or a turn stopping, right after the worker reported is not news.
+      # A run ending, or a turn stopping, right after the worker reported (or said it is
+      # waiting) is not news.
       exited) reported_upto "$id" "$pos" || wake "$id" "$line" ;;
       agent)
         case "$line" in
@@ -545,13 +561,22 @@ watch_scan_lines() { # <id> <from-offset> <to-offset>
   done < <(head -c "$to" "$f" | tail -c +"$((from + 1))")
 }
 
-# Did the worker report a terminal event after the last dispatch/steer, within the
-# first <bytes> of the log?
+# reported_since_dispatch, within the first <bytes> of the log.
 reported_upto() { # <id> <bytes>
-  head -c "$2" "$(tdir "$1")/events.log" | awk '
-    ($2=="note:" && $3=="dispatched") || $2=="steered:" { t=0 }
-    $2 ~ /^(decision|blocked|done|failed):$/ { t=1 }
-    END { exit t ? 0 : 1 }'
+  head -c "$2" "$(tdir "$1")/events.log" | reported_awk
+}
+
+# A stopped worker whose waiting window has run out wakes once: the wake is recorded as
+# "note: waiting overdue ..." so a restarted or --once watch does not repeat it.
+watch_overdue() { # <id>
+  local id="$1" wait live
+  wait="$(waiting_info "$id" 2>/dev/null || true)"
+  [[ -n "$wait" && "$(jq -r '.overdue and (.announced | not)' <<<"$wait")" == true ]] || return 0
+  live="$(live_of "$id")"
+  [[ "$live" =~ ^(stopped|gone|idle|done)$ ]] || return 0
+  local msg; msg="waiting overdue: $(jq -r '"\(.on) (since \(.since)" + (if .until then ", until \(.until)" else "" end) + ")"' <<<"$wait")"
+  log_event "$id" note "$msg"
+  wake "$id" "$msg"
 }
 
 cmd_watch() {
@@ -589,7 +614,7 @@ cmd_watch() {
         OFF[$id]=$size
       fi
       local r; r="$(backend_runner "$id")"
-      [[ -n "$r" && -n "$(meta "$id" dispatched)" ]] && "${r}_watch" "$id"
+      if [[ -n "$r" && -n "$(meta "$id" dispatched)" ]]; then "${r}_watch" "$id"; watch_overdue "$id"; fi
     done
     if [[ -n "$cursor" ]]; then
       for id in "${!OFF[@]}"; do printf '%s\t%s\n' "$id" "${OFF[$id]}"; done >"$cursor.tmp" && mv "$cursor.tmp" "$cursor"
@@ -663,7 +688,7 @@ cmd_install_skills() {
   local t s src dst cur seen=" "
   for t in "${targets[@]}"; do
     [[ "$seen" == *" $t "* ]] && continue; seen+="$t "
-    for s in chartroom bearings; do
+    for s in chartroom bearings dashboard; do
       src="$CR_ROOT/skills/$s"; dst="$t/$s"
       if [[ $uninstall -eq 1 ]]; then
         if [[ -L "$dst" && "$(realpath_f "$dst")" == "$(realpath_f "$src")" ]]; then
@@ -701,7 +726,8 @@ chartroom - run a crew of coding agents from one agent session (the XO)
   chartroom steer <id> [--inbox] <msg>    deliver an answer or follow-up to the worker
   chartroom stop <id>                     interrupt a worker
   chartroom attach <id>                   open a session worker's terminal (herdr/cmux/tmux)
-  chartroom event <id> <kind> <text>      append a status event (workers use this)
+  chartroom event <id> <kind> <text>      append a status event (workers use this; kinds: progress,
+                                          waiting, decision, blocked, done, failed)
   chartroom status [--json] [--all]       fleet view, derived from disk + live backends
   chartroom peek <id> [n]                 recent events and worker output
   chartroom watch [--once [--timeout S]]  wake stream: one line per event that needs the XO
@@ -710,6 +736,10 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           port 4517): needs you / in progress / on hold /
                                           ready / recently finished. Needs python3.
   chartroom dashboard stop|status|--json  stop a --daemon one, is it up, or print the lanes
+  chartroom dashboard open [--port N] [--no-gh]
+                                          start the dashboard if it is not up (as a daemon),
+                                          then open it in the browser (CHARTROOM_OPENER, else
+                                          open / xdg-open); prints the URL either way
   chartroom close <id> [--discard]        remove a clean worktree, close its tab, mark closed
                                           (--discard only on the commander's explicit word)
   chartroom install-skills [--claude|--agents|--pi|--all|--dir D] [--uninstall] [--dry-run]

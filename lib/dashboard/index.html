@@ -53,6 +53,8 @@
            color: var(--ink); border: 1px solid var(--line); }
   .badge.accent { color: var(--accent); border-color: var(--accent); }
   .card .last { margin-top: 4px; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card .waiting { margin-top: 4px; font-size: 12.5px; overflow-wrap: anywhere; }
+  .card .waiting .until { color: var(--muted); }
   .card .links { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; }
   a { color: var(--link); text-decoration: none; }
   a:hover { text-decoration: underline; }
@@ -119,6 +121,13 @@ function ago(iso) {
   return Math.floor(s / 24) + "d";
 }
 
+// "in 25m" / "12m ago" for a time that may be in the future.
+function until(iso) {
+  const t = Date.parse(iso);
+  if (isNaN(t)) return "";
+  return t >= Date.now() ? "in " + ago(new Date(2 * Date.now() - t).toISOString()) : ago(iso) + " ago";
+}
+
 function prLabel(url) {
   const m = url.match(/^https?:\/\/[^/]+\/(.+?)\/(?:-\/)?(?:pull|pulls|merge_requests|pullrequest)\/(\d+)$/);
   return m ? m[1].split("/").slice(-1)[0] + "#" + m[2] : url;
@@ -139,7 +148,11 @@ function card(c) {
   }
   const node = el("div", { class: "card" + (c.type === "inbox" ? " inbox" : "") },
     el("div", { class: "title", text: c.title || c.id, title: c.id }), sub);
-  if (c.type === "task" && c.last_event) node.append(el("div", { class: "last", text: c.last_event, title: c.last_event }));
+  if (c.type === "task" && c.waiting_on) {
+    const w = el("div", { class: "waiting", text: "waiting on: " + c.waiting_on });
+    if (c.waiting_until) w.append(el("span", { class: "until", text: " · until " + until(c.waiting_until), title: c.waiting_until }));
+    node.append(w);
+  } else if (c.type === "task" && c.last_event) node.append(el("div", { class: "last", text: c.last_event, title: c.last_event }));
   const links = el("div", { class: "links" });
   for (const p of c.prs || []) {
     const href = safeHref(p.url);

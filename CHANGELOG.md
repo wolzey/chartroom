@@ -7,6 +7,19 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- A `waiting` worker event: a worker records it right before ending a turn to wait on
+  something (CI, a review, a timer, a person), with an optional `until <UTC time>`. A stopped
+  worker whose newest report is `waiting` is `waiting` in `status` (In progress on the
+  dashboard, with what it waits on and until when) instead of `stopped-silent`; past its window
+  (until-time + `CHARTROOM_WAITING_GRACE_MINUTES`, default 15, or `CHARTROOM_WAITING_MAX_MINUTES`,
+  default 120, without one) it is `waiting-overdue` (On hold). `watch` no longer wakes on a turn
+  end or exit right after `waiting`, and wakes once, as `waiting overdue: ...` (recorded as a
+  note), when the window runs out. `status --json` rows gain `waiting_on`, `waiting_until` and
+  `waiting_since`. The brief protocol documents the new kind.
+- `chartroom dashboard open`: reuse this home's dashboard if it answers, else start it as a
+  daemon (replacing a stale pid file), then open it in the browser (`CHARTROOM_OPENER`, `open`,
+  `xdg-open`, or print the URL). A new `dashboard` skill (`/dashboard`) runs it, and
+  `install-skills` links it with the others.
 - `chartroom dashboard [--port N] [--open] [--daemon] [--no-gh]`, `dashboard stop|status`, and
   `dashboard --json`: a local, read-only web page of the fleet in five lanes (needs you, in
   progress, on hold, ready for you, recently finished) with counts, last events, PR links and

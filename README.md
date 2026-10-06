@@ -8,8 +8,8 @@ git worktree. It supervises them and comes back with outcomes, real decisions, a
 You don't juggle tabs.
 
 chartroom has two parts: a small bash CLI (`chartroom`) that does the exact work (task
-records, worktrees, launching, steering, liveness, a wake stream), and two Agent Skills
-(`chartroom`, `bearings`) that tell your agent how to be the XO. State is plain files under
+records, worktrees, launching, steering, liveness, a wake stream), and Agent Skills
+(`chartroom`, `bearings`, and `dashboard` to open the board) that tell your agent how to be the XO. State is plain files under
 `~/.chartroom`. There is no daemon (an optional local dashboard can show the fleet in a browser).
 
 ```
@@ -35,7 +35,7 @@ backends, secondmates on other hosts, Relay, Gerrit/GitLab flows, and has a larg
 chartroom is the small one. The differences that are real:
 
 - **It installs into your existing setup instead of being one.** firstmate is an "agent distro":
-  you clone it and launch your agent inside it. chartroom is a CLI on your PATH plus two skills
+  you clone it and launch your agent inside it. chartroom is a CLI on your PATH plus three skills
   linked into the agents you already use. Your home directory, config and other skills stay as
   they are.
 - **No multiplexer required.** Headless workers (`claude -p` with live steering over a stream,
@@ -91,6 +91,7 @@ under way, trouble.
 ```bash
 chartroom dashboard                  # http://127.0.0.1:4517, Ctrl-C to stop
 chartroom dashboard --daemon --open  # in the background, and open the browser
+chartroom dashboard open             # reuse the running one (or start it), then open the browser
 chartroom dashboard stop             # (or: status)
 chartroom dashboard --json           # the same lanes, no server
 ```
@@ -102,8 +103,8 @@ five lanes, each with a count in the header:
 | Lane | What lands there |
 |---|---|
 | **Needs you** | tasks in `decision`, `blocked`, `failed` or `awaiting-input` (in that order), then the "Waiting on ..." items in `inbox.md` with their question text |
-| **In progress** | `working` and `drafting` tasks |
-| **On hold** | `stopped-silent` tasks; tasks whose last event says they wait on a person ("waiting on/for", "awaiting review", "pending approval", "on hold"); done tasks whose open PR still needs someone's review |
+| **In progress** | `working` and `drafting` tasks, and `waiting` ones: a worker that ended its turn right after a `waiting` event, inside its window (the card shows what it waits on and until when) |
+| **On hold** | `stopped-silent` and `waiting-overdue` tasks; tasks whose last event (other than their own `waiting` event) says they wait on a person ("waiting on/for", "awaiting review", "pending approval", "on hold"); done tasks whose open PR still needs someone's review |
 | **Ready for you** | `done` tasks that are not closed: a PR to review or a report to read |
 | **Recently finished** | tasks closed in the last 48 hours (`CHARTROOM_DASHBOARD_RECENT_HOURS`), and done tasks whose PRs are all merged |
 
@@ -128,6 +129,11 @@ How it is built, and what it promises:
   links.
 - `--daemon` writes `.dashboard.pid` (pid and port) and `.dashboard.log` in the home. One
   dashboard per home; `--port 0` picks a free port.
+- `dashboard open` reuses this home's dashboard if it answers on its port; otherwise it
+  replaces a stale pid file (or a server that stopped answering), starts one with `--daemon`
+  and waits for it. Then it opens the URL with `CHARTROOM_OPENER`, else `open` (macOS) or
+  `xdg-open`, and prints it either way. A lock in the home keeps two calls from starting two
+  servers. The `dashboard` skill (`/dashboard`) runs exactly this.
 - A legacy home works the same: `CHARTROOM_HOME=~/.captain chartroom dashboard`.
 
 ## Concepts
@@ -190,11 +196,18 @@ write them:
 | Kind | Written by | Wakes the XO |
 |---|---|---|
 | `progress` | worker | no |
+| `waiting` | worker, right before ending a turn to wait on CI, a review, a timer or a person: what, and until when (`... until 2026-01-05T15:30:00Z`) if known | no; once, as `waiting overdue: ...`, if the worker is still stopped when the window runs out |
 | `decision` `blocked` `done` `failed` | worker | yes |
-| `note` | chartroom (created, dispatched, worktree, fallback, closed) | no |
+| `note` | chartroom (created, dispatched, worktree, fallback, closed, `waiting overdue`) | no |
 | `steered` | chartroom (`steer`) | no |
 | `exited` | process wrappers (`... (exit N)`) | yes, unless the worker reported first |
 | `agent` | hooks: `turn-ended`, `awaiting-input: <why>`, `prompt-received` | `turn-ended` without a report, and `awaiting-input` |
+
+A worker whose newest report is `waiting` and whose session has stopped shows as `waiting` in
+`status` (not `stopped-silent`) until its until-time plus `CHARTROOM_WAITING_GRACE_MINUTES`, or,
+with no until-time, `CHARTROOM_WAITING_MAX_MINUTES` after the event; then `waiting-overdue`.
+Any later report, steer or dispatch closes the wait. `status --json` rows carry `waiting_on`,
+`waiting_until` and `waiting_since` (null without an open wait).
 
 The event line format, the brief protocol and `meta.json`'s `schema` field are stable from 0.1.
 CLI flags may change before 1.0.
@@ -232,6 +245,9 @@ Environment variables win. Otherwise chartroom reads `~/.config/chartroom/config
 | `CHARTROOM_WATCH_INTERVAL` | `3` | seconds |
 | `CHARTROOM_DASHBOARD_RECENT_HOURS` | `48` | how far back the dashboard's Recently finished lane reaches |
 | `CHARTROOM_GH` | `gh` | the gh binary the dashboard uses for PR states |
+| `CHARTROOM_OPENER` | `open` / `xdg-open` | command `dashboard open` runs with the URL |
+| `CHARTROOM_WAITING_GRACE_MINUTES` | `15` | a `waiting` worker turns `waiting-overdue` this long after its until-time |
+| `CHARTROOM_WAITING_MAX_MINUTES` | `120` | ... or this long after the event, when it names no until-time |
 
 `CAP_PROJECT_ROOTS`, `CAP_CREW_WORKSPACE` and `CAP_WATCH_INTERVAL` are read as legacy fallbacks.
 

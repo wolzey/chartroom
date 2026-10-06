@@ -96,6 +96,27 @@ EOF
   [ "$(card t-draft | jq -r .reason)" = "drafting the brief" ]
 }
 
+@test "lanes: a stopped worker inside its waiting window is in progress; past it, on hold" {
+  local until; until="$(jq -rn 'now + 1800 | floor | todate')"
+  fixture t-wait command pid=2147480000 <<<"300 waiting: CI on PR 7 until $until"
+  fixture t-wait-old command pid=2147480000 <<<"9000 waiting: sign-off from legal"
+  fixture t-wait-past command pid=2147480000 <<<"7000 waiting: a timer until $(jq -rn 'now - 3600 | floor | todate')"
+  fixture t-wait-live subagent <<<"100 waiting: waiting on CI for PR 9"
+  fixture t-resumed command pid=2147480000 <<'EOF'
+900 waiting: CI on PR 8
+600 progress: CI green, merging
+EOF
+  BOARD="$(cr dashboard --json)"
+  [ "$(lane_ids in_progress)" = "t-wait-live t-wait" ]
+  [ "$(lane_ids on_hold)" = "t-resumed t-wait-past t-wait-old" ]
+  [ "$(card t-wait | jq -c '[.state,.reason,.waiting_on,.waiting_until]')" = "[\"waiting\",\"waiting\",\"CI on PR 7 until $until\",\"$until\"]" ]
+  [ "$(card t-wait-old | jq -c '[.state,.reason,.waiting_on,.waiting_until]')" = '["waiting-overdue","waiting overdue","sign-off from legal",null]' ]
+  [ "$(card t-wait-past | jq -r .state)" = waiting-overdue ]
+  # a live session that said `waiting` is still working (its own wording is not "on hold")
+  [ "$(card t-wait-live | jq -c '[.state,.reason,.waiting_on]')" = '["working","in-session","waiting on CI for PR 9"]' ]
+  [ "$(card t-resumed | jq -c '[.state,.reason,.waiting_on]')" = '["stopped-silent","stopped without reporting",null]' ]
+}
+
 @test "lanes: cards carry title, project, last event, PR links and files" {
   build_fleet
   BOARD="$(cr dashboard --json)"
@@ -270,6 +291,45 @@ start_daemon() {
   kill "$other"
   run cr dashboard --port
   [ "$status" -eq 1 ]; [[ "$output" == *"--port needs a value"* ]]
+}
+
+@test "dashboard open: starts one when none runs, reuses a running one, replaces a stale pid file" {
+  need_python
+  export CHARTROOM_OPENER="$BATS_TEST_TMPDIR/opener"
+  printf '#!/bin/sh\necho "$@" >>"%s"\n' "$BATS_TEST_TMPDIR/opened" >"$CHARTROOM_OPENER"; chmod +x "$CHARTROOM_OPENER"
+  # not running: starts a daemon, waits for it to answer, opens the URL
+  run cr dashboard open --port 0 --no-gh
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"dashboard open: http://127.0.0.1:"* ]]
+  read -r SRV_PID PORT <"$CHARTROOM_HOME/.dashboard.pid"
+  [ "$(get "http://127.0.0.1:$PORT/healthz")" = ok ]
+  [ "$(tail -1 "$BATS_TEST_TMPDIR/opened")" = "http://127.0.0.1:$PORT/" ]
+  # already running: same server, nothing new started
+  run cr dashboard open --port 0 --no-gh
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"dashboard open: http://127.0.0.1:$PORT/"* ]]
+  [ "$(cat "$CHARTROOM_HOME/.dashboard.pid")" = "$SRV_PID $PORT" ]
+  [ "$(grep -c . "$BATS_TEST_TMPDIR/opened")" -eq 2 ]
+  [ "$(pgrep -f "dashboard/server.py.*$CHARTROOM_HOME" | wc -l | tr -d ' ')" -eq 1 ]
+  cr dashboard stop >/dev/null
+  # a stale pid file (this test's own live shell pid: alive, but not a dashboard) is replaced,
+  # and that process is never signalled
+  echo "$$ 1" >"$CHARTROOM_HOME/.dashboard.pid"
+  run cr dashboard open --port 0 --no-gh
+  [ "$status" -eq 0 ]
+  kill -0 $$
+  read -r SRV_PID PORT <"$CHARTROOM_HOME/.dashboard.pid"
+  [ "$SRV_PID" != "$$" ]
+  [ "$(get "http://127.0.0.1:$PORT/healthz")" = ok ]
+  [ ! -d "$CHARTROOM_HOME/.dashboard.lock" ]
+}
+
+@test "dashboard open: without an opener it prints the URL" {
+  need_python
+  export CHARTROOM_OPENER="$BATS_TEST_TMPDIR/no-such-opener"
+  run cr dashboard open --port 0 --no-gh
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"dashboard running: http://127.0.0.1:"*"open it yourself"* ]]
 }
 
 @test "server: foreground mode serves until stopped" {
