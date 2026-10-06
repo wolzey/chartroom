@@ -211,6 +211,10 @@ bats test/                 # no herdr/tmux/cmux/claude/codex needed: fakes and a
 scripts/privacy-gate.sh    # no personal data in tracked files
 ```
 
+Maintainers: the repo allows only **rebase** merges. A squash or merge commit made on GitHub
+is authored with the merging account's display name, which the privacy gate (rightly) rejects
+on `main`. A rebase merge keeps each commit's own author, and GitHub becomes the committer.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
