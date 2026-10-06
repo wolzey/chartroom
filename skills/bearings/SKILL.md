@@ -13,6 +13,8 @@ never from conversation memory. (If `chartroom` is not on PATH, use
    ```bash
    chartroom status --json
    ```
+   Also read `$CHARTROOM_HOME/inbox.md`: questions waiting on the commander and chat
+   approvals not yet in a brief.
    For every task in `done`, `decision`, `blocked`, `failed`, `stopped-silent`,
    `awaiting-input` or `lost` state, read its `$CHARTROOM_HOME/tasks/<id>/report.md` if one
    exists, and the last few lines of `events.log`. Run `chartroom peek <id>` only when those
@@ -23,7 +25,8 @@ never from conversation memory. (If `chartroom` is not on PATH, use
 2. Write the digest in exactly these four sections, omitting any section that's empty:
 
    **Needs you**: decisions and blockers only a human can resolve, highest impact first.
-   One line each: the project, the question, and the recommendation.
+   One line each: the project, the question, and the recommendation. Include every open item
+   under "Waiting on the commander" in `inbox.md`.
 
    **Ready**: finished work waiting for the commander's word (review, merge, or PR). One line
    each: the outcome, the risk, the evidence ("tests pass", "3 files"), and the full PR URL if there is one.

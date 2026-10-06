@@ -4,6 +4,14 @@ All notable changes to chartroom. Versions follow SemVer. Before 1.0, minor vers
 change CLI flags. The event-log line format, the brief protocol, and `meta.json` `schema` 1
 are stable from 0.1.0.
 
+## [Unreleased]
+
+### Added
+- `inbox.md` in the home: questions waiting on the commander and approvals given in chat
+  that are not yet in a brief, so they survive a compaction or restart. `chartroom init`
+  creates it (never overwrites), `chartroom status` prints a one-line count of open items,
+  the XO skill keeps it current, and `bearings` folds its waiting items into "Needs you".
+
 ## [0.1.0] - 2026-10-05
 
 First public cut, extracted from a private tool and generalized.

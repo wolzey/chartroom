@@ -114,6 +114,7 @@ cmd_init() {
   # Standing preferences: commander.md (a legacy captain.md is kept and still read).
   [[ -f "$CR_HOME/commander.md" || -f "$CR_HOME/captain.md" ]] || cp "$CR_ROOT/templates/commander.md" "$CR_HOME/commander.md"
   [[ -f "$CR_HOME/projects.md" ]] || cp "$CR_ROOT/templates/projects.md" "$CR_HOME/projects.md"
+  [[ -f "$CR_HOME/inbox.md" ]] || cp "$CR_ROOT/templates/inbox.md" "$CR_HOME/inbox.md"
   for f in "$CR_HOME/CLAUDE.md" "$CR_HOME/AGENTS.md"; do
     [[ -f "$f" ]] || cp "$CR_ROOT/templates/home-AGENTS.md" "$f"
   done
@@ -400,9 +401,29 @@ cmd_status() {
     rows+=("$(jq -c --arg st "$st" --arg live "$live" --arg last "$last" '{id,title,kind,backend:(if .backend=="" then "auto" else .backend end),project:(.project|split("/")|last),state:$st,live:$live,created,last:$last}' "$d/meta.json")")
   done
   if [[ $json -eq 1 ]]; then printf '%s\n' "${rows[@]+"${rows[@]}"}" | jq -s .; return; fi
-  [[ ${#rows[@]} -gt 0 ]] || { echo "no open tasks"; return; }
-  printf '%s\n' "${rows[@]}" | jq -r '[.id,.state,.live,.backend,.project,.kind,(.last|.[0:70])] | @tsv' |
-    { printf 'ID\tSTATE\tLIVE\tBACKEND\tPROJECT\tKIND\tLAST\n'; cat; } | table
+  if [[ ${#rows[@]} -eq 0 ]]; then echo "no open tasks"
+  else
+    printf '%s\n' "${rows[@]}" | jq -r '[.id,.state,.live,.backend,.project,.kind,(.last|.[0:70])] | @tsv' |
+      { printf 'ID\tSTATE\tLIVE\tBACKEND\tPROJECT\tKIND\tLAST\n'; cat; } | table
+  fi
+  inbox_line
+}
+
+# One line counting open inbox.md items (bullets under the Waiting / Approvals headings,
+# "(none)" excluded); prints nothing when there are none.
+inbox_line() {
+  local f="$CR_HOME/inbox.md"
+  [[ -f "$f" ]] || return 0
+  awk -v f="$f" '
+    /^## / { s = $0; next }
+    /^- / && $0 !~ /^- \(none\)/ { if (s ~ /^## Waiting/) w++; else if (s ~ /^## Approvals/) a++ }
+    END {
+      if (w + a == 0) exit
+      out = ""
+      if (w) out = w " waiting on the commander"
+      if (a) out = out (out == "" ? "" : ", ") a (a == 1 ? " approval" : " approvals") " not yet in a brief"
+      printf "inbox: %s (%s)\n", out, f
+    }' "$f"
 }
 
 table() { if command -v column >/dev/null 2>&1; then column -t -s $'\t'; else cat; fi; }
@@ -654,7 +675,7 @@ cmd_help() {
 chartroom - run a crew of coding agents from one agent session (the XO)
 (state in $CHARTROOM_HOME, default ~/.chartroom)
 
-  chartroom init                          create the home (commander.md, projects.md, AGENTS.md)
+  chartroom init                          create the home (commander.md, projects.md, inbox.md, AGENTS.md)
   chartroom doctor [--json]               what can run here: backends, why not, steering mode
   chartroom project <name|path>           resolve a repo: path, forge, default base, overrides
   chartroom new --project P --title T [--backend B] [--kind ship|scout] [--base REF] [--plan-gate]
