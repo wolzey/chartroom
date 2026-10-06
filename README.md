@@ -132,7 +132,7 @@ How it is built, and what it promises:
 - `dashboard open` reuses this home's dashboard if it answers on its port; otherwise it
   replaces a stale pid file (or a server that stopped answering), starts one with `--daemon`
   and waits for it. Then it opens the URL with `CHARTROOM_OPENER`, else `open` (macOS) or
-  `xdg-open`, and prints it either way. A lock in the home keeps two calls from starting two
+  `xdg-open`, and prints it either way. A lock in the home (holding its owner's pid; taken over only when that pid is gone) keeps two calls from starting two
   servers. The `dashboard` skill (`/dashboard`) runs exactly this.
 - A legacy home works the same: `CHARTROOM_HOME=~/.captain chartroom dashboard`.
 

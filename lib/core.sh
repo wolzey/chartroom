@@ -138,7 +138,8 @@ reported_awk() {
 reported_since_dispatch() { reported_awk <"$(tdir "$1")/events.log"; }
 
 # The worker's open `waiting` event, when it is the newest thing the worker said (a later
-# report, steer or dispatch closes it). Prints one JSON object, or nothing:
+# report, steer or dispatch closes it) and no decision/blocked/failed/done came since the
+# last dispatch or steer. Prints one JSON object, or nothing:
 #   {on, since, until, deadline, overdue, announced}
 # until is the first "YYYY-MM-DDTHH:MM[:SS]Z" in the text; the window runs to until plus
 # CHARTROOM_WAITING_GRACE_MINUTES, or, without one, CHARTROOM_WAITING_MAX_MINUTES past
@@ -151,6 +152,10 @@ waiting_info() { # <id>
     | ([range($ev | length) | select($ev[.] | (.kind | test("^(progress|waiting|decision|blocked|done|failed|steered)$"))
          or (.kind == "note" and (.text | startswith("dispatched"))))] | last) as $i
     | select($i != null and $ev[$i].kind == "waiting")
+    # A report the XO must act on (decision/blocked/failed/done) since the last dispatch or
+    # steer outranks a later `waiting`: the task keeps that state.
+    | ([range($i) | select($ev[.] | .kind == "steered" or (.kind == "note" and (.text | startswith("dispatched"))))] | last // -1) as $r
+    | select([$ev[$r + 1:$i][] | select(.kind | test("^(decision|blocked|failed|done)$"))] | length == 0)
     | $ev[$i] as $w
     | ([$w.text | match("[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2})?(\\.[0-9]+)?Z"; "g").string] | first | if . then epoch else null end) as $until
     | (if $until != null then $until + $grace * 60 else (($w.ts | epoch) // now) + $max * 60 end) as $deadline

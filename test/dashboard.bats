@@ -106,7 +106,18 @@ EOF
 900 waiting: CI on PR 8
 600 progress: CI green, merging
 EOF
+  # a decision/blocked/done since the last dispatch or steer outranks a later `waiting`
+  fixture t-asked command pid=2147480000 <<'EOF'
+500 decision: ship A or B? (recommend A)
+400 waiting: the commander's answer
+EOF
+  fixture t-shipped command pid=2147480000 <<'EOF'
+500 done: PR opened
+400 waiting: review on the PR
+EOF
   BOARD="$(cr dashboard --json)"
+  [ "$(card t-asked | jq -c '[.state,.lane,.waiting_on]')" = '["decision","needs_you",null]' ]
+  [ "$(card t-shipped | jq -c '[.state,.waiting_on]')" = '["done",null]' ]
   [ "$(lane_ids in_progress)" = "t-wait-live t-wait" ]
   [ "$(lane_ids on_hold)" = "t-resumed t-wait-past t-wait-old" ]
   [ "$(card t-wait | jq -c '[.state,.reason,.waiting_on,.waiting_until]')" = "[\"waiting\",\"waiting\",\"CI on PR 7 until $until\",\"$until\"]" ]
@@ -309,7 +320,13 @@ start_daemon() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"dashboard open: http://127.0.0.1:$PORT/"* ]]
   [ "$(cat "$CHARTROOM_HOME/.dashboard.pid")" = "$SRV_PID $PORT" ]
-  [ "$(grep -c . "$BATS_TEST_TMPDIR/opened")" -eq 2 ]
+  # a lock left by a call that is gone is taken over, and released after
+  mkdir "$CHARTROOM_HOME/.dashboard.lock"; echo 2147480000 >"$CHARTROOM_HOME/.dashboard.lock/pid"
+  run cr dashboard open --port 0 --no-gh
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"taking over"*"dashboard open: http://127.0.0.1:$PORT/"* ]]
+  [ ! -e "$CHARTROOM_HOME/.dashboard.lock" ]
+  [ "$(grep -c . "$BATS_TEST_TMPDIR/opened")" -eq 3 ]
   [ "$(pgrep -f "dashboard/server.py.*$CHARTROOM_HOME" | wc -l | tr -d ' ')" -eq 1 ]
   cr dashboard stop >/dev/null
   # a stale pid file (this test's own live shell pid: alive, but not a dashboard) is replaced,
@@ -321,7 +338,7 @@ start_daemon() {
   read -r SRV_PID PORT <"$CHARTROOM_HOME/.dashboard.pid"
   [ "$SRV_PID" != "$$" ]
   [ "$(get "http://127.0.0.1:$PORT/healthz")" = ok ]
-  [ ! -d "$CHARTROOM_HOME/.dashboard.lock" ]
+  [ ! -e "$CHARTROOM_HOME/.dashboard.lock" ]
 }
 
 @test "dashboard open: without an opener it prints the URL" {

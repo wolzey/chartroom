@@ -100,15 +100,23 @@ PY
 # with CHARTROOM_OPENER, else `open` (macOS) or `xdg-open`; without any, print it. A lock
 # in the home keeps two concurrent calls from starting two servers.
 dashboard_open() { # [daemon args...]
-  local lock="$CR_HOME/.dashboard.lock" i pid p url opener got=0
+  local lock="$CR_HOME/.dashboard.lock" i pid p url opener owner
   # Without python3 the health check below cannot run, and a healthy server must never be
   # mistaken for a dead one and stopped.
   [[ -n "$(bin_of python3)" ]] || die "the dashboard needs python3 (standard library only); 'chartroom dashboard --json' works without it"
   mkdir -p "$CR_HOME"
-  for i in $(seq 1 100); do mkdir "$lock" 2>/dev/null && { got=1; break; }; sleep 0.1; done
-  # A lock older than 10s was left by a killed call: take it over.
-  [[ $got -eq 1 ]] || warn "taking over a stale $lock"
-  trap 'rmdir "'"$lock"'" 2>/dev/null || true' EXIT
+  # The lock holds its owner's pid. A lock whose owner is gone was left by a killed call and
+  # is taken over; a live owner is waited for (up to 60s), never robbed.
+  for i in $(seq 1 600); do
+    if mkdir "$lock" 2>/dev/null; then echo $$ >"$lock/pid"; break; fi
+    owner="$(cat "$lock/pid" 2>/dev/null || true)"
+    if [[ -n "$owner" ]] && ! pid_alive "$owner"; then
+      warn "taking over $lock from a call that is gone (pid $owner)"; rm -rf "$lock"; continue
+    fi
+    sleep 0.1
+  done
+  [[ "$(cat "$lock/pid" 2>/dev/null)" == "$$" ]] || die "another 'dashboard open' still holds $lock"
+  trap '[[ "$(cat "'"$lock"'/pid" 2>/dev/null)" == "'"$$"'" ]] && rm -rf "'"$lock"'"' EXIT
   if read -r pid p < <(dashboard_running) && ! dashboard_healthy "$p"; then
     warn "dashboard pid $pid is not answering on port $p; restarting it"
     dashboard_stop >/dev/null
