@@ -79,7 +79,7 @@ chartroom doctor
 
 - **Share settings, not state.** `~/.config/chartroom/config` (home path, project roots,
   workspace name, branch prefix, harness) and your standing preferences (`commander.md`,
-  `projects.md`) are safe to keep in your dotfiles. Everything else in the home is per machine:
+  `rulings.log`, `projects.md`) are safe to keep in your dotfiles. Everything else in the home is per machine:
   `tasks/` records hold local worktree paths, process ids and session handles, and `worktrees/`
   holds the checkouts themselves. Never sync `tasks/`, `worktrees/`, `inbox.md`, `.watch-cursor`
   or `.dashboard.*` between machines.
@@ -119,6 +119,12 @@ that has one:
 
 4. Check: `chartroom status` lists the old tasks with their states, and `chartroom board`
    shows the same lanes as the dashboard.
+5. Optional: move hand-written preferences into the rulings ledger (see Concepts).
+   `chartroom rule draft > map.tsv` lists each bullet with a guessed topic and its date. Edit
+   the topics so rulings that replace each other share one, set a row's topic to `keep` to
+   leave that bullet as hand-written text, and rewrite a row's text if the winner has to stand
+   alone. Then `chartroom rule import map.tsv` (a dry run) and `--apply`, which backs the file
+   up under `records/`, appends the rulings, removes the imported bullets and renders the block.
 
 ## Quickstart
 
@@ -253,6 +259,11 @@ Undo by reversing each step: remove the hosts line, the LaunchDaemons and the al
   report and no commits.
 - **Plan gate** (`new --plan-gate`): the worker writes `plan.md`, raises a decision and stops
   until you approve.
+- **Rulings** (`rulings.log`): the commander's lasting preferences, one append-only line each
+  with a topic, the ruling it supersedes and where it came from. The newest ruling in a topic
+  wins. `chartroom rule add --topic <slug> "<text>"` records one and rewrites a generated block
+  in `commander.md` with the live set, so a preference that changed three times reads as one
+  line, and `rule list --all` still shows the whole chain. Text outside the block stays yours.
 - **Authority is explicit.** Workers never push, open PRs, merge, or delete branches unless the
   brief grants it for that task. `close` refuses a dirty worktree, and branches are never deleted.
 
@@ -288,6 +299,7 @@ raised as a wake. It never edits your agent config to pre-trust paths.
 ```
 $CHARTROOM_HOME/                    default ~/.chartroom
   commander.md  projects.md         standing preferences, per-project overrides
+  rulings.log                       commander rulings, one line each; rendered into commander.md
   inbox.md                          questions waiting on the commander, chat approvals not yet in a brief
   AGENTS.md  CLAUDE.md              "a session here is the XO"
   tasks/<id>/meta.json              {"schema":1, id, kind, backend, project, base_sha, branch, worktree, ...}
@@ -296,6 +308,12 @@ $CHARTROOM_HOME/                    default ~/.chartroom
   .dashboard.pid  .dashboard.log    only while `chartroom dashboard --daemon` runs
   worktrees/<repo>/<id>/            task worktrees (unless the repo ignores .worktrees/)
 ```
+
+Ruling lines are `<ISO-8601 UTC> [r-xxxx] topic=<slug> supersedes=<r-xxxx|-> src=<token> :: <text>`,
+append-only. The live set is the newest ruling of each topic, minus any ruling a later line
+names in `supersedes=` and any topic whose newest text starts with `(retired)`. It is
+rendered between `<!-- chartroom:rulings ... -->` and `<!-- /chartroom:rulings -->` in
+`commander.md` (or a legacy `captain.md` when there is no `commander.md`).
 
 Event lines are `<ISO-8601 UTC> <kind>: <text>`. They are append-only, and any process may
 write them:

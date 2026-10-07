@@ -16,7 +16,7 @@ says:
 | In an older home | In chartroom |
 |---|---|
 | captain | the commander |
-| `captain.md` | `commander.md` (chartroom reads either) |
+| `captain.md` | `commander.md` (chartroom reads either, and renders rulings into whichever the home has) |
 | "Waiting on the captain" in `inbox.md` | "Waiting on the commander" |
 | "Captain's intent" in a brief | "Commander's intent" |
 | `cap <command>` | `chartroom <command>` (same commands and flags) |

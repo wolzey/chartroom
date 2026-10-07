@@ -11,6 +11,7 @@
 #   tasks/<id>/brief.md     the worker's contract (intent, spec, authority, protocol)
 #   tasks/<id>/events.log   append-only "<ts> <kind>: <text>" lines from workers + chartroom
 #   tasks/<id>/report.md    the worker's final report
+#   rulings.log             append-only commander rulings, latest wins per topic (lib/rulings.sh)
 #
 # Usage: chartroom <command> [args]   (chartroom help for the list)
 
@@ -33,6 +34,8 @@ source "$CR_ROOT/lib/agents.sh"
 source "$CR_ROOT/lib/session.sh"
 # shellcheck source=../lib/dashboard.sh
 source "$CR_ROOT/lib/dashboard.sh"
+# shellcheck source=../lib/rulings.sh
+source "$CR_ROOT/lib/rulings.sh"
 for _f in "$CR_ROOT"/lib/backends/*.sh; do
   # shellcheck source=/dev/null
   source "$_f"
@@ -831,6 +834,21 @@ chartroom - run a crew of coding agents from one agent session (the XO)
   chartroom inbox add <text>              add a dated "Waiting on the commander" item with a
                                           stable id; prints the id
   chartroom inbox tag                     give every untagged Waiting item its id (idempotent)
+  chartroom rule add --topic T [--supersedes r-x|-] [--src S] <text>
+                                          record a lasting commander ruling in rulings.log
+                                          (append-only); the newest ruling in a topic wins and
+                                          supersedes the previous one; re-renders the generated
+                                          block in commander.md (or a legacy captain.md); prints
+                                          the id
+  chartroom rule retire <r-id> [reason]   end a ruling's topic (appends; nothing is deleted)
+  chartroom rule list [--all] [--json]    live rulings, newest first (--all: every ruling,
+                                          live ones starred, with supersede links)
+  chartroom rule render                   rewrite the generated block from rulings.log
+  chartroom rule draft                    print an import map (TSV) of the hand-written
+                                          bullets in the preferences file, to edit
+  chartroom rule import <map> [--apply]   import a map as rulings: dry run by default; --apply
+                                          backs the file up to records/, appends the rulings,
+                                          removes the imported bullets and renders the block
   chartroom peek <id> [n]                 recent events and worker output
   chartroom watch [--once [--timeout S]]  wake stream: one line per event that needs the XO
   chartroom dashboard [--port N] [--open] [--daemon] [--no-gh] [--theme chartroom|hud]
@@ -852,7 +870,7 @@ EOF
 
 cmd="${1:-help}"; shift || true
 case "$cmd" in
-  init|project|new|worktree|dispatch|event|hook|status|board|resolve|inbox|peek|steer|stop|attach|close|watch|dashboard|doctor|version|help) "cmd_$cmd" "$@" ;;
+  init|project|new|worktree|dispatch|event|hook|status|board|resolve|inbox|rule|peek|steer|stop|attach|close|watch|dashboard|doctor|version|help) "cmd_$cmd" "$@" ;;
   install-skills) cmd_install_skills "$@" ;;
   ls) cmd_status "$@" ;;
   -h|--help) cmd_help ;;

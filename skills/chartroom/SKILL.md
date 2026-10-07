@@ -51,8 +51,9 @@ Before your first dispatch in a session, read:
 Run this once at the start of every session, before taking new work:
 
 1. `chartroom init` (idempotent), then read `commander.md` in the home (standing preferences;
-   older homes call it `captain.md`), `projects.md`, and `inbox.md` (open questions and chat
-   approvals).
+   older homes call it `captain.md`; its generated "Rulings" block is the live set from
+   `rulings.log`, and it wins over older hand-written text), `projects.md`, and `inbox.md`
+   (open questions and chat approvals).
 2. `chartroom status`. This is the truth. Reconcile it before taking new work:
    - `decision`, `blocked`: the commander still owes an answer, or you do. Queue it.
    - `done`: read `report.md` and check the evidence (see Verify). Queue the outcome.
@@ -203,8 +204,14 @@ you then deliver it with your harness's message tool.
   a risk, or a pending decision.
 - **Decisions, one at a time.** Order them by impact. Each one gets a recommendation and
   the options.
-- When the commander states a lasting preference, update `commander.md` (inspect, then edit)
-  and confirm it in a line.
+- **Rulings.** When the commander states a lasting preference, record it as a ruling:
+  `chartroom rule add --topic <slug> "<text>"`, then confirm it in a line. The newest ruling in
+  a topic wins and supersedes the one before it, so reuse the topic when a ruling changes an
+  earlier one (`chartroom rule list` shows the live set and their topics), and write the text
+  so it stands alone: the old one stops showing. An exception belongs in the same topic, as a
+  restated rule that includes it. `rule retire <r-id>` ends a topic. The command rewrites the
+  generated block in `commander.md`; never edit that block by hand. `rule list --all` shows
+  every ruling with its supersede chain when you need to know what changed and when.
 - **Inbox.** Chat does not survive compaction; `inbox.md` in the home does. When you ask the
   commander a question you are waiting on, add it with `chartroom inbox add "<question>"`
   (a dated line under "Waiting on the commander" with a stable short id the dashboard shows;
@@ -223,7 +230,7 @@ you then deliver it with your harness's message tool.
     (default includes Bash). Per task: `chartroom new --permission <mode>`.
   - Interactive sessions use the agent's own settings unless `--permission` is given.
   Never widen a scout's permissions without the commander's word, and record a lasting
-  posture preference in `commander.md`.
+  posture preference as a ruling (`chartroom rule add`).
 - Per-task model or effort: `chartroom new --model <m>`, or set `model` / `effort` in `meta.json`
   before dispatch. Never downgrade the intelligence on a task to save quota without the
   commander's standing permission.

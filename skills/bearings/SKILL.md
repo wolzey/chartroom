@@ -44,8 +44,8 @@ never from conversation memory. (If `chartroom` is not on PATH, use
 
 3. If **Needs you** is non-empty, walk the decisions one at a time, starting with the
    highest-impact one. Ask the question, wait for the answer, and carry it out through the
-   chartroom skill's rules (`chartroom steer` to relay it, and record lasting preferences in
-   `commander.md`). Then move to the next one.
+   chartroom skill's rules (`chartroom steer` to relay it, and record lasting preferences with
+   `chartroom rule add`). Then move to the next one.
 
 If the commander asks for a file version (`bearings file`), also write the digest to
 `$CHARTROOM_HOME/bearings-<YYYY-MM-DD>.md`, replacing today's, and link it.

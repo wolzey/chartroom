@@ -7,6 +7,16 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- A rulings ledger. `chartroom rule add --topic <slug> "<text>"` appends the commander's
+  lasting preference to `rulings.log` (`<ts> [r-xxxx] topic=... supersedes=... src=... :: text`,
+  append-only); the newest ruling in a topic wins and records the one it supersedes, and the
+  live set is rendered into a generated block in `commander.md` (or a legacy `captain.md`),
+  leaving hand-written text alone. `rule retire`, `rule list [--all] [--json]` (with supersede
+  chains) and `rule render` round it out. `rule draft` and `rule import <map> [--apply]` move an
+  existing file's hand-written bullets into the ledger once: a dry run by default, and a backup
+  under `records/` before anything changes. The chartroom, bearings and continue skills record
+  preferences with `rule add` instead of editing `commander.md`, and the template gains the
+  empty block.
 - README: an optional local hostname for the dashboard (`http://chartroom/`), a Caddy
   reverse proxy on its own loopback address that rewrites `Host` past the rebinding guard.
 - A `captain` skill: the chartroom skill under its older name, with a table of the older
