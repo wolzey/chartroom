@@ -94,6 +94,7 @@ load_config() {
   CR_CLAUDE_ALLOWED_TOOLS="$(cfg CLAUDE_ALLOWED_TOOLS '' 'Bash Read Edit Write Glob Grep WebFetch WebSearch')"
   CR_COMMAND="$(cfg COMMAND '' '')"
   CR_DELIVER_WAIT="$(cfg DELIVER_WAIT '' 8)"
+  CR_JOIN_ACK_WAIT="$(cfg JOIN_ACK_WAIT '' 20)"
   CR_WAITING_GRACE="$(cfg WAITING_GRACE_MINUTES '' 15)"
   CR_WAITING_MAX="$(cfg WAITING_MAX_MINUTES '' 120)"
   [[ "$CR_WAITING_GRACE$CR_WAITING_MAX" =~ ^[0-9]+$ ]] || die "CHARTROOM_WAITING_GRACE_MINUTES and CHARTROOM_WAITING_MAX_MINUTES must be whole minutes"
