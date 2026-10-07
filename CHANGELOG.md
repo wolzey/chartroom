@@ -7,6 +7,8 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- README: an optional local hostname for the dashboard (`http://chartroom/`), a Caddy
+  reverse proxy on its own loopback address that rewrites `Host` past the rebinding guard.
 - A `captain` skill: the chartroom skill under its older name, with a table of the older
   words (captain, `captain.md`, `cap`, the old backend names). `install-skills` links it with
   the others, so `/captain` and a legacy home whose `AGENTS.md` asks for it keep working.

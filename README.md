@@ -202,6 +202,47 @@ How it is built, and what it promises:
   `chartroom inbox add <text>` (or `chartroom inbox tag` for lines written by hand); it never
   changes as other items come and go.
 
+### Optional: a local hostname
+
+To open the dashboard at `http://chartroom/` (or `https://chartroom/`) instead of a port, put
+a reverse proxy in front of it on a loopback address of its own, so nothing else on
+`127.0.0.1` changes. The server itself stays as it is. On macOS, with [Caddy](https://caddyserver.com):
+
+1. Map the name to a second loopback address: add `127.0.0.2 chartroom` to `/etc/hosts`, and
+   alias it with `sudo ifconfig lo0 alias 127.0.0.2 up` (a LaunchDaemon that runs this command
+   at load keeps it across reboots; Linux routes all of `127.0.0.0/8` already).
+2. Point Caddy at the dashboard, bound only to that address. The dashboard answers only
+   `Host: 127.0.0.1:<port>` or `localhost:<port>` (its DNS-rebinding guard, above), so the
+   proxy must present the upstream's own address:
+
+   ```caddyfile
+   {
+   	default_bind 127.0.0.2
+   	admin "unix//var/run/chartroom-caddy.sock|0600"
+   	skip_install_trust
+   }
+
+   http://chartroom, https://chartroom {
+   	tls internal
+   	reverse_proxy 127.0.0.1:4517 {
+   		header_up Host {upstream_hostport}
+   	}
+   }
+   ```
+
+   Naming both schemes serves plain HTTP too instead of redirecting. `admin` keeps Caddy's
+   admin API off `localhost:2019`, on a socket only root can use.
+3. Run Caddy as root (a LaunchDaemon with `KeepAlive`): macOS lets other users bind ports
+   below 1024 only on all interfaces, not on one address. Give it a root-owned copy of the
+   binary and the Caddyfile, not files your account can rewrite.
+4. `sudo caddy trust --config <Caddyfile> --adapter caddyfile` adds Caddy's local CA to the
+   System keychain, which Safari, Chrome and curl use (Firefox keeps its own store). Then flush
+   the DNS cache: `sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder`.
+
+Type the trailing slash (`chartroom/`) or the scheme, or the browser may search for the word.
+Undo by reversing each step: remove the hosts line, the LaunchDaemons and the alias
+(`sudo ifconfig lo0 -alias 127.0.0.2`), and `caddy untrust`.
+
 ## Concepts
 
 - **Commander / XO / crew.** You, the coordinating agent, the workers. The crew never talks to you
