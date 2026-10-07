@@ -121,14 +121,16 @@ rules_draft() {
 # (src=import), drop the imported bullets from the hand-written text, render the block.
 rules_import() {
   local map="$1" apply="$2" f n=0 row topic sup date text orig ts id bak
-  local -a ids=() origs=()
+  local -a ids=() origs=() kept=()
   [[ -f "$map" ]] || die "no such map: $map"
   f="$(prefs_file)"
   [[ -f "$f" ]] || die "no preferences file at $f (chartroom init)"
   local -a rows=()
   while IFS= read -r row; do
     [[ -z "$row" || "$row" == \#* ]] && continue
-    [[ "$(awk -F'\t' '{print NF}' <<<"$row")" -eq 5 ]] || die "map row needs 5 tab-separated columns: $row"
+    # Five non-empty columns (read would merge empty ones: a tab is IFS whitespace).
+    awk -F'\t' '{ if (NF != 5) exit 1; for (i = 1; i <= 5; i++) if ($i ~ /^[[:space:]]*$/) exit 1 }' <<<"$row" ||
+      die "map row needs 5 non-empty tab-separated columns: $row"
     rows+=("$row")
   done <"$map"
   for row in "${rows[@]}"; do
@@ -137,8 +139,14 @@ rules_import() {
     grep -qxF -- "- $orig" "$f" || die "map row $n: bullet not found in $f: $orig"
     [[ "$date" == "-" || "$date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || die "map row $n: date must be YYYY-MM-DD or -: $date"
     [[ "$sup" =~ ^(auto|-|r-[0-9a-f]{4,}|#[0-9]+)$ ]] || die "map row $n: bad supersedes: $sup"
-    [[ "$sup" =~ ^#([0-9]+)$ ]] && { (( BASH_REMATCH[1] >= 1 && BASH_REMATCH[1] < n )) || die "map row $n: $sup must name an earlier row"; }
+    if [[ "$sup" =~ ^#([0-9]+)$ ]]; then
+      (( BASH_REMATCH[1] >= 1 && BASH_REMATCH[1] < n )) || die "map row $n: $sup must name an earlier row"
+      [[ -z "${kept[$((BASH_REMATCH[1] - 1))]}" ]] || die "map row $n: $sup is a keep row, not a ruling"
+    elif [[ "$sup" =~ ^r- ]]; then
+      rules_json | jq -e --arg s "$sup" 'any(.[]; .id == $s)' >/dev/null || die "map row $n: no such ruling: $sup"
+    fi
     [[ "$topic" == keep ]] || [[ "$topic" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "map row $n: topic must be a slug or keep: $topic"
+    if [[ "$topic" == keep ]]; then kept+=(1); else kept+=(""); fi
   done
   if [[ "$apply" -ne 1 ]]; then
     n=0
@@ -158,7 +166,7 @@ rules_import() {
   for row in "${rows[@]}"; do
     IFS=$'\t' read -r topic sup date text orig <<<"$row"; n=$((n + 1))
     if [[ "$topic" == keep ]]; then ids+=(""); continue; fi
-    [[ "$sup" =~ ^#([0-9]+)$ ]] && { sup="${ids[$((BASH_REMATCH[1] - 1))]}"; [[ -n "$sup" ]] || die "map row $n: #${BASH_REMATCH[1]} is a keep row"; }
+    [[ "$sup" =~ ^#([0-9]+)$ ]] && sup="${ids[$((BASH_REMATCH[1] - 1))]}"
     if [[ "$date" == "-" ]]; then ts="$(now)"; else ts="${date}T00:00:00Z"; fi
     id="$(rules_append "$ts" "$topic" "$sup" import "$text")"
     ids+=("$id"); origs+=("- $orig")

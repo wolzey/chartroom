@@ -187,6 +187,14 @@ EOF
   run cr rule import "$BATS_TEST_TMPDIR/map" --apply
   [ "$status" -ne 0 ]
   [[ "$output" == *"earlier row"* ]]
+  printf 'keep\tauto\t-\ta rule\ta rule\nx\t#1\t-\ttext\ta rule\n' >"$BATS_TEST_TMPDIR/map"
+  run cr rule import "$BATS_TEST_TMPDIR/map" --apply
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"keep row"* ]]
+  printf 'x\tauto\t-\t\ta rule\n' >"$BATS_TEST_TMPDIR/map"
+  run cr rule import "$BATS_TEST_TMPDIR/map" --apply
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"5 non-empty"* ]]
   [ ! -e "$CHARTROOM_HOME/rulings.log" ]
   [ ! -d "$CHARTROOM_HOME/records" ]
 }
