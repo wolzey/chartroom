@@ -2,12 +2,13 @@
 
 A backend is `<runner>:<agent>`: **where** the worker runs × **which** agent runs. Runners are
 `herdr`, `cmux`, `tmux` (session runners: a terminal you can watch), `headless` (no terminal),
-`command` (any CLI) and `subagent` (the host harness). Agents are `claude` and `codex`. Old
+`command` (any CLI) and `subagent` (the host harness), plus `joined`, which is never
+dispatched: a running session joins itself (see the last section). Agents are `claude` and `codex`. Old
 names still work: `codex` = `headless:codex`, `herdr-claude` = `herdr:claude`,
 `herdr-codex` = `herdr:codex`.
 
 `chartroom doctor` shows every backend, whether it can run here, why not, and how it steers.
-Last verified against: claude 2.1.289, codex-cli 0.158.0, herdr 0.9.1, tmux 3.x (October 2026).
+Last verified against: claude 2.1.289 (joined: 2.1.293), codex-cli 0.158.0, herdr 0.9.1, tmux 3.x (October 2026).
 cmux is implemented against its documented CLI but **unverified on a real cmux install**.
 
 ## Selection and fallback
