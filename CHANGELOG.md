@@ -7,6 +7,22 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- Joining a running session. Tell an agent session you started yourself "join chartroom" (the
+  new `join` skill, linked by `install-skills`) and it becomes a supervised worker of the home:
+  `chartroom join` records it as a `joined:<agent>` task in its own directory and branch (no
+  new worktree; `close` only marks it closed and never removes or cleans the directory), the
+  agent writes its own brief, and re-running join in the same session returns the same task.
+  Steering goes through a mailbox: `chartroom listen <id>` blocks until the XO's next message,
+  prints it and marks it read, and `steer` reports `delivered` only once it was read, else
+  `queued, not yet read`. In Claude Code the listener runs as a background command, so an idle
+  session wakes when a message lands (verified on 2.1.293); Codex and other agents use
+  `listen --check` between steps. tmux and herdr panes are recorded only when verified as the
+  session's own (by process ancestry), for peek, attach and stop. The skill's session-scoped
+  hooks report turn ends and prompts through `chartroom hook --session`, found by session id
+  in `${XDG_STATE_HOME:-~/.local/state}/chartroom/sessions`; the agent's pid ending is recorded
+  once as `exited` and wakes `watch`. `doctor` lists `joined:claude` and `joined:codex` with
+  their steering. New config: `CHARTROOM_JOIN_ACK_WAIT` (seconds `steer` waits for the read,
+  default 20).
 - A rulings ledger. `chartroom rule add --topic <slug> "<text>"` appends the commander's
   lasting preference to `rulings.log` (`<ts> [r-xxxx] topic=... supersedes=... src=... :: text`,
   append-only); the newest ruling in a topic wins and records the one it supersedes, and the

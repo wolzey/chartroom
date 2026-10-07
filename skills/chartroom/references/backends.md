@@ -44,6 +44,7 @@ cmux is implemented against its documented CLI but **unverified on a real cmux i
 | live | herdr, cmux, tmux, headless:claude | Delivers now and confirms it was taken (agent hook, replayed message, or screen state) |
 | between-runs | headless:codex, command | Refuses while running; afterwards resumes (`codex exec resume`) or re-runs the template with the message. `command` also has `steer --inbox` (best effort) |
 | host | subagent | Records it; you deliver it with your harness's message tool |
+| mailbox | joined:<agent> | Writes to the joined session's mailbox; "delivered" only once its listener (or `listen --check`) read it, else "queued, not yet read" |
 
 ## First-launch trust dialogs
 
@@ -139,3 +140,57 @@ Headless runs (`claude -p`, `codex exec`) show no dialog.
   (`run_in_background: true`, `name: <id>`). It dies with your session; the brief and record
   survive, so a restarted XO re-dispatches it. Best for read-only scouts: it shares your
   session's permissions.
+
+## joined:<agent> (a running session that joined itself)
+
+Not a dispatch backend. An agent session the commander started themselves (Claude Code in any
+terminal, an IDE or the desktop app; Codex; inside or outside herdr/tmux/cmux) is told "join
+chartroom" and runs the `join` skill. The connection starts from the agent's side, so chartroom
+never has to reach into its terminal.
+
+- `chartroom join --title T [--kind ship|scout] [--agent A]`, run by the agent from its own
+  directory, records the task: project from the cwd's repo, the current checkout and branch as
+  the "worktree" as they are (no new worktree, `worktree_created` unset), backend
+  `joined:<agent>`, `dispatched` set at once. It prints the id, the brief and the protocol; the
+  agent fills the brief's intent and spec itself. Re-running it in the same session (same Claude
+  session id, else same agent pid, else same directory) returns the same open task.
+- **Steering is a mailbox**: `tasks/<id>/mail/<n>.txt`, read up to the number in `mail/read`.
+  The agent keeps `chartroom listen <id>` armed; it blocks until a message lands, prints it,
+  marks it read, logs `agent: prompt-received mail #n` and exits. `steer` writes the message and
+  reports `delivered` only once it is read (within `CHARTROOM_JOIN_ACK_WAIT`, default 20s),
+  otherwise `queued, not yet read` and whether a listener is armed. It never types into the
+  agent's terminal.
+- **Handles are verified, never trusted from the env**: a tmux pane (`$TMUX_PANE`, on the
+  socket from `$TMUX`) or herdr pane (`$HERDR_PANE_ID`) is recorded only if its shell is an
+  ancestor of the join command, because nested multiplexers leak stale variables (a tmux server
+  started from one herdr pane carries that pane's id into every window). A cmux surface is
+  recorded only when no other multiplexer is in the env. Handles serve `peek`, `attach` and
+  `stop` (Esc); with none, those fall back to events and mailbox (`attach` explains).
+- **Liveness**: the agent's pid (Claude Code's `CLAUDE_PID`, else the nearest ancestor named
+  after a known agent). `live` is `listening` while the listener is armed and the agent is not
+  mid-turn, `working`/`idle`/`blocked` from hooks or herdr's pane state, `stopped` once the pid
+  is gone. `watch` records the pid ending once as `exited: joined agent session ended` and wakes
+  on it unless the worker had reported.
+- **Hooks (Claude Code)**: the join skill declares Stop, Notification and UserPromptSubmit
+  hooks in its frontmatter; Claude Code registers them when the skill is invoked and keeps them
+  for the rest of the session. They are static, so they look the task up by the payload's
+  `session_id` in `${XDG_STATE_HOME:-~/.local/state}/chartroom/sessions/<id>` (home, task,
+  chartroom binary; written by `join`, removed by `close`) and call `chartroom hook --session`.
+  A joined session's `idle_prompt` notification is ignored: idling on the listener is normal.
+- **close** marks the task closed and removes the session registry entry. It never removes or
+  cleans the directory and never refuses on uncommitted work (it says there is some). The
+  listener sees the close and exits with "stop listening".
+
+What works where (Claude Code verified on 2.1.293 in tmux, October 2026; the rest by design):
+
+| Agent / where | Wakes on `steer` when idle | Turn ends, prompts | peek / attach / stop |
+|---|---|---|---|
+| Claude Code in tmux | yes: the background listener exits and Claude Code re-invokes the session (verified) | skill hooks (verified: Stop) | pane capture / switch to the pane / Esc |
+| Claude Code in herdr | yes (same mechanism) | skill hooks; herdr pane state | herdr pane read / focus tab / Esc |
+| Claude Code elsewhere (plain terminal, IDE, desktop) | yes (same mechanism) | skill hooks | events + mailbox only; no attach |
+| Codex, other agents | no: `listen --check` between steps and before each turn ends, best effort | none (no session-scoped hooks); pid liveness only | as above per terminal |
+
+Gaps: an agent with no background wake reads messages only when it checks; a session that
+ends without the skill's hooks (or a non-Claude agent) is noticed only when its pid disappears.
+Background commands keep running while the session lives; if the listener is killed (e.g. the
+user stops it), `steer` reports `queued, not yet read ... no listener is armed`.

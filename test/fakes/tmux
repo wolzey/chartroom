@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # fake tmux: enough of the CLI for chartroom's tmux runner. State in $FAKE_TMUX_DIR.
 # Pressing Enter simulates Claude's UserPromptSubmit hook for task $FAKE_TMUX_TASK.
-[[ "${1:-}" == -L ]] && shift 2
+[[ "${1:-}" == -L || "${1:-}" == -S ]] && shift 2
 [[ "${1:-}" == -V ]] && { echo "tmux ${FAKE_TMUX_VERSION:-3.4}"; exit 0; }
 S="${FAKE_TMUX_DIR:?}"; mkdir -p "$S/panes"
 printf '%s\n' "$*" >>"$S/calls.log"
@@ -13,7 +13,9 @@ case "$cmd" in
   new-session|new-window)
     touch "$S/session"; n=$(( $(ls "$S/panes" | wc -l) + 1 )); echo "%$n" >"$S/panes/$n"; echo "%$n" ;;
   pipe-pane) : ;;
-  display-message) t="$(target "$@")"; [[ -f "$S/panes/${t#%}" ]] && echo "$t" ;;
+  display-message)
+    t="$(target "$@")"; [[ -f "$S/panes/${t#%}" ]] || exit 1
+    if [[ "${*: -1}" == '#{pane_pid}' ]]; then echo "${FAKE_TMUX_PANE_PID:-999999}"; else echo "$t"; fi ;;
   capture-pane) cat "$S/screen" 2>/dev/null || printf '❯ \n' ;;
   send-keys)
     last="${*: -1}"
