@@ -141,6 +141,7 @@ EOF
 # Commander preferences
 
 - Delivery default: commit on a branch.
+
 - 2026-01-05: Bot approval loop on web PRs; never merge.
 - 2026-01-06: Bot reviews are off; CI plus one human approval.
 - An idea we liked, not adopted.
@@ -175,6 +176,7 @@ EOF
   [ -z "$(hand | grep -- '^- 2026-01-0' || true)" ]
   [ -z "$(hand | grep -- '^- Delivery default' || true)" ]
   block | grep -q -- '- Bot reviews are back on: bot approval loop'
+  [ -z "$(awk 'prev ~ /^$/ && /^$/ { print NR } { prev = $0 }' "$CHARTROOM_HOME/commander.md")" ]
 }
 
 @test "import refuses a map that does not match the file" {

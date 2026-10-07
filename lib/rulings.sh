@@ -172,9 +172,13 @@ rules_import() {
     ids+=("$id"); origs+=("- $orig")
     printf 'imported %s topic=%s :: %s\n' "$id" "$topic" "$text"
   done
-  # Drop the imported bullets (exact lines) from the hand-written text.
+  # Drop the imported bullets (exact lines) from the hand-written text, and squeeze the blank
+  # lines they leave behind.
   printf '%s\n' "${origs[@]}" >"$f.drop"
-  awk 'NR == FNR { drop[$0] = 1; next } !($0 in drop)' "$f.drop" "$f" >"$f.tmp" && mv "$f.tmp" "$f"
+  awk 'NR == FNR { drop[$0] = 1; next }
+    $0 in drop { next }
+    /^[[:space:]]*$/ { if (blank++) next; print; next }
+    { blank = 0; print }' "$f.drop" "$f" >"$f.tmp" && mv "$f.tmp" "$f"
   rm -f "$f.drop"
   rules_render
   echo "rendered the live rulings into $f"
