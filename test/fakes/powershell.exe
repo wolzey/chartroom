@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# fake powershell.exe: the two commands chartroom runs. A Win32_Process CommandLine lookup
+# answers from this machine's ps; Start-Process '<url>' is only logged.
+echo "powershell.exe $*" >>"${FAKE_LOG:-/dev/null}"
+c="${*: -1}"
+if [[ "$c" =~ ProcessId=([0-9]+) ]]; then ps -p "${BASH_REMATCH[1]}" -o command= 2>/dev/null; exit 0; fi
+[[ "$c" == "Start-Process "* ]] && exit 0
+echo "fake powershell.exe: unsupported: $c" >&2; exit 1

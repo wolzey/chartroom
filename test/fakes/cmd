@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# fake cmd.exe (Git Bash): `//c mklink //J <link> <target>` makes a symlink (Git Bash sees a
+# junction as one; FAKE_JUNCTION_FAIL=1 refuses), `//c rmdir <link>` removes it, and
+# `//c start "" <url>` is only logged.
+echo "cmd $*" >>"${FAKE_LOG:-/dev/null}"
+[[ "${1:-}" == //c ]] || { echo "fake cmd: expected //c" >&2; exit 1; }
+case "${2:-}" in
+  mklink) [[ -z "${FAKE_JUNCTION_FAIL:-}" && "$3" == //J ]] || exit 1; ln -s "$5" "$4" ;;
+  rmdir) if [[ -L "$3" ]]; then rm "$3"; else rmdir "$3"; fi ;;
+  start) exit 0 ;;
+  *) echo "fake cmd: unsupported: $*" >&2; exit 1 ;;
+esac

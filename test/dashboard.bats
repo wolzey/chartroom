@@ -8,11 +8,26 @@ setup() {
   common_setup
   cr init >/dev/null
   PY="$(type -P python3 || true)"
+  case "${OSTYPE:-}" in msys*|cygwin*) PY="${CR_TEST_PYTHON:-}" ;; esac
 }
 
 teardown() {
   cr dashboard stop >/dev/null 2>&1 || true
-  [[ -n "${SRV_PID:-}" ]] && kill "$SRV_PID" 2>/dev/null || true
+  [[ -n "${SRV_PID:-}" ]] && srv_kill "$SRV_PID" || true
+}
+
+# The server's pid is python's own. On Git Bash that is a Windows pid, which kill cannot see.
+srv_alive() {
+  case "${OSTYPE:-}" in
+    msys*|cygwin*) tasklist //FI "PID eq $1" //NH 2>/dev/null | grep -qw "$1" ;;
+    *) kill -0 "$1" 2>/dev/null ;;
+  esac
+}
+srv_kill() {
+  case "${OSTYPE:-}" in
+    msys*|cygwin*) taskkill //F //PID "$1" >/dev/null 2>&1 ;;
+    *) kill "$1" 2>/dev/null ;;
+  esac
 }
 
 ago() { jq -rn --argjson s "$1" 'now - $s | floor | todate'; }
@@ -202,7 +217,7 @@ EOF
 
 # ---------------------------------------------------------------- server
 
-need_python() { [[ -n "$PY" ]] || skip "python3 not available"; ln -sf "$PY" "$BIN/python3"; }
+need_python() { [[ -n "$PY" ]] || skip "python3 not available"; link_tool "$PY" python3; }
 get() { curl -s --max-time 10 "$@"; }
 code() { curl -s -o /dev/null --max-time 10 -w '%{http_code}' "$@"; }
 start_daemon() {
@@ -218,7 +233,7 @@ start_daemon() {
   need_python
   build_fleet
   start_daemon --no-gh
-  kill -0 "$SRV_PID"
+  srv_alive "$SRV_PID"
   [ "$(get "$URL/healthz")" = "ok" ]
   # the JSON endpoint is the CLI's board plus the enrichment status
   local j; j="$(get "$URL/api/dashboard")"
@@ -248,7 +263,7 @@ start_daemon() {
   [ "$status" -eq 1 ]; [[ "$output" == *"already running"* ]]
   run cr dashboard stop
   [ "$status" -eq 0 ]; [[ "$output" == *"dashboard stopped (pid $SRV_PID"* ]]
-  run kill -0 "$SRV_PID"; [ "$status" -ne 0 ]
+  run srv_alive "$SRV_PID"; [ "$status" -ne 0 ]
   [ ! -e "$CHARTROOM_HOME/.dashboard.pid" ]
   run cr dashboard stop
   [ "$status" -eq 0 ]; [[ "$output" == "dashboard not running" ]]
@@ -360,7 +375,7 @@ start_daemon() {
   [[ "$output" == *"taking over"*"dashboard open: http://127.0.0.1:$PORT/"* ]]
   [ ! -e "$CHARTROOM_HOME/.dashboard.lock" ]
   [ "$(grep -c . "$BATS_TEST_TMPDIR/opened")" -eq 3 ]
-  [ "$(pgrep -f "dashboard/server.py.*$CHARTROOM_HOME" | wc -l | tr -d ' ')" -eq 1 ]
+  if command -v pgrep >/dev/null; then [ "$(pgrep -f "dashboard/server.py.*$CHARTROOM_HOME" | wc -l | tr -d ' ')" -eq 1 ]; fi
   cr dashboard stop >/dev/null
   # a stale pid file (this test's own live shell pid: alive, but not a dashboard) is replaced,
   # and that process is never signalled
@@ -392,7 +407,7 @@ start_daemon() {
   [ "$(get "http://127.0.0.1:$PORT/healthz")" = ok ]
   run cr dashboard stop
   [ "$status" -eq 0 ]
-  run kill -0 "$SRV_PID"; [ "$status" -ne 0 ]
+  run srv_alive "$SRV_PID"; [ "$status" -ne 0 ]
 }
 
 @test "server: PR states come from gh when present, and its absence is reported, not fatal" {

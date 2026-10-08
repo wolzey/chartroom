@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# fake uname: reports $FAKE_UNAME (default Linux), so a test can steer the macOS opener branch.
+echo "${FAKE_UNAME:-Linux}"

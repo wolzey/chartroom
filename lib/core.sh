@@ -52,9 +52,11 @@ bin_of() { type -P "$1" 2>/dev/null || true; }
 
 CR_CONFIG_FILE="${CHARTROOM_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/chartroom/config}"
 
+# A trailing CR (a file saved by a Windows editor) is not part of the value.
 cfg_file_value() { # <KEY>
   [[ -f "$CR_CONFIG_FILE" ]] || return 0
-  sed -nE "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$CR_CONFIG_FILE" | tail -1 | sed -E 's/^"(.*)"$/\1/; s/^'"'"'(.*)'"'"'$/\1/'
+  local cr=$'\r'
+  sed -nE "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$CR_CONFIG_FILE" | tail -1 | sed -E "s/$cr\$//; "'s/^"(.*)"$/\1/; s/^'"'"'(.*)'"'"'$/\1/'
 }
 
 cfg() { # <SUFFIX> <legacy CAP_ name or ""> <default>
@@ -78,7 +80,11 @@ resolve_home() {
 }
 
 load_config() {
+  detect_platform
   resolve_home
+  # Git Bash: a Windows-form home (C:\crew\home, as a Windows tool would pass it)
+  # becomes /c/crew/home, so globs and path joins keep working.
+  if [[ "$CR_PLATFORM" == msys && "$CR_HOME" =~ ^[A-Za-z]:[\\/] ]]; then CR_HOME="$(cygpath -u "$CR_HOME")"; fi
   CR_PROJECT_ROOTS="$(cfg PROJECT_ROOTS CAP_PROJECT_ROOTS '')"
   CR_PROJECT_ROOTS="${CR_PROJECT_ROOTS//\~/$HOME}"
   CR_WORKSPACE="$(cfg WORKSPACE CAP_CREW_WORKSPACE chartroom-crew)"
@@ -97,6 +103,48 @@ load_config() {
   CR_WAITING_GRACE="$(cfg WAITING_GRACE_MINUTES '' 15)"
   CR_WAITING_MAX="$(cfg WAITING_MAX_MINUTES '' 120)"
   [[ "$CR_WAITING_GRACE$CR_WAITING_MAX" =~ ^[0-9]+$ ]] || die "CHARTROOM_WAITING_GRACE_MINUTES and CHARTROOM_WAITING_MAX_MINUTES must be whole minutes"
+}
+
+# ---------------------------------------------------------------- platform
+# CR_PLATFORM: posix (macOS, Linux), wsl (Linux under WSL) or msys (Git for Windows' Git
+# Bash, MSYS2, Cygwin). Windows-only behaviour hangs off this, so macOS and Linux keep their
+# code paths. CHARTROOM_PLATFORM overrides the detection.
+detect_platform() {
+  CR_PLATFORM="$(cfg PLATFORM '' '')"
+  if [[ -z "$CR_PLATFORM" ]]; then
+    case "${OSTYPE:-}" in
+      msys*|cygwin*) CR_PLATFORM=msys ;;
+      linux*)
+        CR_PLATFORM=posix
+        if [[ -n "${WSL_DISTRO_NAME:-}" || "$(cat /proc/sys/kernel/osrelease 2>/dev/null)" == *[Mm]icrosoft* ]]; then CR_PLATFORM=wsl; fi ;;
+      *) CR_PLATFORM=posix ;;
+    esac
+  fi
+  [[ "$CR_PLATFORM" =~ ^(posix|wsl|msys)$ ]] || die "CHARTROOM_PLATFORM must be posix, wsl or msys (got $CR_PLATFORM)"
+  # A native jq.exe under MSYS writes CRLF, which would leave a CR on every captured value;
+  # --binary turns that off. Probed, so an MSYS-built jq that writes LF is left alone.
+  if [[ "$CR_PLATFORM" == msys && "$(command jq -n 1 2>/dev/null)" == $'1\r' ]]; then
+    jq() { command jq -b "$@"; }
+    export -f jq
+  fi
+  return 0
+}
+
+# A path as native Windows programs (python.exe, claude.exe) read it: C:/crew/home on Git
+# Bash, unchanged elsewhere.
+win_path() { if [[ "$CR_PLATFORM" == msys ]]; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
+
+# Stop a process and its children. On Git Bash, a native child (claude.exe, codex) does not
+# die with its MSYS parent, so the whole Windows process tree goes, via the parent's
+# Windows pid.
+kill_tree() { # <pid>
+  local pid="$1" w
+  if [[ "$CR_PLATFORM" == msys ]]; then
+    w="$(cat "/proc/$pid/winpid" 2>/dev/null || true)"
+    [[ -n "$w" ]] && taskkill //T //F //PID "$w" >/dev/null 2>&1 && return 0
+    warn "could not end the Windows process tree of pid $pid; its agent may still be running"
+  fi
+  pkill -TERM -P "$pid" 2>/dev/null || true; kill -TERM "$pid" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------- task records
@@ -119,7 +167,7 @@ slugify() {
 }
 
 # The worker's single instruction, identical on every backend.
-task_prompt() { printf 'Read the brief at %s/brief.md and follow it exactly. Your task id is %s.' "$(tdir "$1")" "$1"; }
+task_prompt() { printf 'Read the brief at %s/brief.md and follow it exactly. Your task id is %s.' "$(win_path "$(tdir "$1")")" "$1"; }
 
 # The kind of the last event line, e.g. "done" (field 2 without the colon).
 line_kind() { local k; k="$(awk '{print $2}' <<<"$1")"; printf '%s' "${k%:}"; }

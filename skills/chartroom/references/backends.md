@@ -41,8 +41,8 @@ cmux is implemented against its documented CLI but **unverified on a real cmux i
 
 | Mode | Backends | What `steer` does |
 |---|---|---|
-| live | herdr, cmux, tmux, headless:claude | Delivers now and confirms it was taken (agent hook, replayed message, or screen state) |
-| between-runs | headless:codex, command | Refuses while running; afterwards resumes (`codex exec resume`) or re-runs the template with the message. `command` also has `steer --inbox` (best effort) |
+| live | herdr, cmux, tmux, headless:claude (not on Git Bash) | Delivers now and confirms it was taken (agent hook, replayed message, or screen state) |
+| between-runs | headless:codex, command, headless:claude on Git Bash | Refuses while running; afterwards resumes (`codex exec resume`) or re-runs the template with the message. `command` also has `steer --inbox` (best effort) |
 | host | subagent | Records it; you deliver it with your harness's message tool |
 
 ## First-launch trust dialogs
@@ -121,6 +121,8 @@ Headless runs (`claude -p`, `codex exec`) show no dialog.
   wrapper closes stdin. claude 2.1.289 does not exit on that late EOF, so after 5s the wrapper
   ends it (`exited: … ended by chartroom after its final result`). The session is already saved:
   a later `steer` runs `claude -p --resume <uuid>` (verified to keep context).
+- On Git Bash (Windows), stdin is an anonymous pipe instead of a FIFO, so steering is
+  between runs: refused while it runs, then `--resume`. `stop` ends the Windows process tree.
 - `final.md` gets the last `result` text; `peek` summarises messages, tool calls and results.
 
 ## command

@@ -38,8 +38,9 @@ THEME_SLOT = b'<html lang="en" data-theme="chartroom">'
 class Board:
     """Runs the CLI for the lanes, caches the result, and keeps gh PR states on the side."""
 
-    def __init__(self, cli, home, use_gh):
-        self.cli, self.home = cli, home
+    def __init__(self, cli, home, use_gh, bash=None):
+        # On Windows a native python cannot run bin/chartroom (a bash script) by itself.
+        self.cli, self.home = ([bash] if bash else []) + [cli], home
         self.lock = threading.Lock()
         self.cached, self.cached_at = None, 0.0
         fd, self.pr_file = tempfile.mkstemp(prefix="chartroom-dashboard-prs-", suffix=".json")
@@ -57,7 +58,7 @@ class Board:
         with self.lock:
             if self.cached is not None and time.time() - self.cached_at < CACHE_SECONDS:
                 return self.cached
-            proc = subprocess.run([self.cli, "dashboard", "--json", "--pr-states", self.pr_file],
+            proc = subprocess.run(self.cli + ["dashboard", "--json", "--pr-states", self.pr_file],
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
             if proc.returncode != 0:
                 raise RuntimeError("chartroom dashboard --json failed: " + proc.stderr.decode("utf-8", "replace").strip())
@@ -173,6 +174,7 @@ def main():
     ap.add_argument("--port", type=int, default=4517)
     ap.add_argument("--pidfile")
     ap.add_argument("--bin", required=True, help="path to bin/chartroom")
+    ap.add_argument("--bash", help="run --bin with this bash (Git Bash on Windows)")
     ap.add_argument("--open", action="store_true")
     ap.add_argument("--no-gh", action="store_true")
     ap.add_argument("--theme", choices=THEMES, default="chartroom", help="the page's default theme")
@@ -188,7 +190,7 @@ def main():
     if page.count(THEME_SLOT) != 1:
         sys.exit("chartroom dashboard: index.html has no single theme slot %r" % THEME_SLOT.decode())
     page = page.replace(THEME_SLOT, THEME_SLOT.replace(b'"chartroom"', b'"%s"' % args.theme.encode()))
-    board = Board(args.bin, home, not args.no_gh)
+    board = Board(args.bin, home, not args.no_gh, args.bash)
     try:
         httpd = ThreadingHTTPServer((HOST, args.port), None)
     except OSError as exc:

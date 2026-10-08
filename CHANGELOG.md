@@ -7,6 +7,22 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- Windows. WSL2 works as Linux does. Git Bash (Git for Windows) runs the core, the
+  `headless`, `command` and `subagent` backends and the dashboard:
+  - `install.sh` writes a launcher script where `ln -s` copies.
+  - `install-skills` links with directory junctions.
+  - A native `jq.exe`'s CRLF output is turned off with `--binary`.
+  - `headless:claude` reads a pipe and steers between runs.
+  - `stop` ends the worker's Windows process tree.
+  - The dashboard runs under a native python (`python3`, `python` or `py -3`, never the
+    Microsoft Store stub). It gets Windows paths and bash, and is tracked by its Windows pid.
+  - `dashboard open` uses `start`, or on WSL `wslview` or PowerShell.
+
+  herdr is off on Git Bash unless `CHARTROOM_HERDR_ANY_OS=1`. `doctor` prints the platform and
+  notes on Windows only (`--json` adds `platform` and `notes` there); macOS and Linux output is
+  unchanged. `CHARTROOM_PLATFORM` overrides the detection. README: a Windows section. CI: a
+  windows-latest job (Git Bash: bats, install, and a native-process smoke test), non-blocking
+  until its first green run.
 - A rulings ledger. `chartroom rule add --topic <slug> "<text>"` appends the commander's
   lasting preference to `rulings.log` (`<ts> [r-xxxx] topic=... supersedes=... src=... :: text`,
   append-only); the newest ruling in a topic wins and records the one it supersedes, and the
@@ -83,6 +99,13 @@ are stable from 0.1.0.
   events wash in, and counts tick. A ship's log strip shows the newest events. Cards are keyed
   by id instead of rebuilt on every poll. `prefers-reduced-motion` turns the motion off. The
   JSON API is unchanged.
+
+### Fixed
+- Checkouts are LF whatever `core.autocrlf` says (`.gitattributes`). Git for Windows' default
+  CRLF checkout stopped `bin/chartroom` at its first line.
+- A config file with CRLF line endings, saved by a Windows editor, no longer leaves a CR on
+  every value.
+- The dashboard's compiled python cache is no longer tracked.
 
 ## [0.1.0] - 2026-10-05
 

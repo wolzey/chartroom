@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# fake wslview (WSL's browser opener): only logs.
+echo "wslview $*" >>"${FAKE_LOG:-/dev/null}"

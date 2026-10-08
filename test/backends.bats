@@ -92,6 +92,7 @@ setup() { common_setup; }
 }
 
 @test "headless:claude: pre-assigned session, live steer over the FIFO, resume after exit" {
+  case "${OSTYPE:-}" in msys*|cygwin*) skip "Git Bash steers headless claude between runs (test/windows.bats)" ;; esac
   use_fake claude
   export FAKE_TURN=8
   id="$(new_task --backend headless:claude)"

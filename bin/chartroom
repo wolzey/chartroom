@@ -739,28 +739,54 @@ cmd_doctor() {
     [[ -z "$first_ok" && "$avail" == yes && " $CR_BACKEND_ORDER " == *" $b "* ]] && first_ok="$b"
     rows+=("$(jq -cn --arg b "$b" --arg a "$avail" --arg w "$why" --arg s "$(steer_mode_of "$b")" '{backend:$b,available:($a=="yes"),steering:$s,reason:$w}')")
   done
+  local notes=()
+  [[ "$CR_PLATFORM" == posix ]] || mapfile -t notes < <(platform_notes)
   if [[ $json -eq 1 ]]; then
     printf '%s\n' "${rows[@]}" | jq -s --arg v "$CR_VERSION" --arg h "$CR_HOME" --arg hs "$CR_HOME_SOURCE" --arg o "$CR_BACKEND_ORDER" --arg auto "$first_ok" --arg harness "$CR_HARNESS" \
-      '{version:$v,home:$h,home_source:$hs,harness:$harness,order:($o|split(" ")),auto:(if $auto=="" then null else $auto end),backends:.}'
+      --arg platform "$CR_PLATFORM" --argjson notes "$(printf '%s\n' "${notes[@]+"${notes[@]}"}" | jq -R -s -c 'split("\n") | map(select(length > 0))')" \
+      '{version:$v,home:$h,home_source:$hs,harness:$harness,order:($o|split(" ")),auto:(if $auto=="" then null else $auto end),backends:.}
+       + (if $platform == "posix" then {} else {platform:$platform,notes:$notes} end)'
   else
     echo "chartroom $CR_VERSION"
     echo "home:     $CR_HOME ($CR_HOME_SOURCE)"
     echo "config:   $CR_CONFIG_FILE$([[ -f "$CR_CONFIG_FILE" ]] || echo ' (not present)')"
     echo "harness:  $CR_HARNESS"
     echo "bash $BASH_VERSION, jq $jqv, git $gitv${CI:+, CI=$CI}"
+    case "$CR_PLATFORM" in
+      msys) echo "platform: Windows, Git Bash (msys)" ;;
+      wsl) echo "platform: Windows Subsystem for Linux (wsl)" ;;
+    esac
     echo "order:    $CR_BACKEND_ORDER"
     echo "auto:     ${first_ok:-none available}"
     echo
     printf '%s\n' "${rows[@]}" | jq -r '[.backend, (if .available then "ok" else "-" end), .steering, .reason] | @tsv' |
       { printf 'BACKEND\tOK\tSTEERING\tWHY NOT\n'; cat; } | table
+    if [[ ${#notes[@]} -gt 0 ]]; then echo; printf 'note: %s\n' "${notes[@]}"; fi
   fi
   [[ $ok -eq 1 ]] || { warn "missing required dependency (jq and git are required)"; return 1; }
 }
 
+# What works differently on Windows, one line each (doctor prints them off posix only).
+platform_notes() {
+  case "$CR_PLATFORM" in
+    msys)
+      echo "Git Bash: herdr, cmux and tmux sessions are unavailable; use headless, command or subagent (herdr's Windows preview: CHARTROOM_HERDR_ANY_OS=1)"
+      echo "headless:claude takes steering between runs here (no live stdin to a native claude.exe)"
+      echo "install-skills links with directory junctions (no Developer Mode needed)"
+      if declare -F jq >/dev/null; then echo "jq is a native jq.exe that writes CRLF; chartroom runs it with --binary"; fi
+      find_python
+      if [[ ${#CR_PY[@]} -gt 0 ]]; then echo "dashboard python: ${CR_PY[*]}"; else python_missing; fi ;;
+    wsl)
+      echo "WSL: install the agents (claude, codex) inside WSL and keep repositories on the WSL filesystem, not under /mnt/c"
+      echo "dashboard open uses CHARTROOM_OPENER, xdg-open, wslview, then PowerShell's Start-Process" ;;
+  esac
+}
+
 cmd_version() { echo "chartroom $CR_VERSION (state schema $CR_SCHEMA)"; }
 
-# Link the skills into each agent's user skill directory. Symlinks only; refuses to
-# replace anything that is not already a symlink into this checkout.
+# Link the skills into each agent's user skill directory. Symlinks (directory junctions on
+# Git Bash); refuses to replace anything that is not already a link into this checkout, or a
+# copy it made itself where links are unavailable.
 cmd_install_skills() {
   local targets=() uninstall=0 dry=0 a
   while [[ $# -gt 0 ]]; do
@@ -789,7 +815,9 @@ cmd_install_skills() {
       src="$CR_ROOT/skills/$s"; dst="$t/$s"
       if [[ $uninstall -eq 1 ]]; then
         if [[ -L "$dst" && "$(realpath_f "$dst")" == "$(realpath_f "$src")" ]]; then
-          if [[ $dry -eq 1 ]]; then echo "would remove $dst"; else rm "$dst"; echo "removed $dst"; fi
+          if [[ $dry -eq 1 ]]; then echo "would remove $dst"; else unlink_dir "$dst"; echo "removed $dst"; fi
+        elif skill_copy_of "$dst" "$src"; then
+          if [[ $dry -eq 1 ]]; then echo "would remove $dst"; else rm -rf "$dst"; echo "removed $dst"; fi
         elif [[ -e "$dst" || -L "$dst" ]]; then echo "skip $dst (not a chartroom link)"; fi
         continue
       fi
@@ -797,12 +825,36 @@ cmd_install_skills() {
         cur="$(realpath_f "$dst" 2>/dev/null || true)"
         if [[ "$cur" == "$(realpath_f "$src")" ]]; then echo "ok   $dst"; continue; fi
         echo "skip $dst (a symlink to $cur; remove it first)"; continue
+      elif skill_copy_of "$dst" "$src"; then
+        if [[ $dry -eq 1 ]]; then echo "would refresh $dst (a copy of $src)"; continue; fi
+        rm -rf "$dst"; copy_skill "$src" "$dst"; echo "refresh $dst (a copy of $src)"; continue
       elif [[ -e "$dst" ]]; then echo "skip $dst (exists and is not a symlink; not touching it)"; continue; fi
       if [[ $dry -eq 1 ]]; then echo "would link $dst -> $src"; continue; fi
-      mkdir -p "$t"; ln -s "$src" "$dst"; echo "link $dst -> $src"
+      mkdir -p "$t"
+      if [[ "$CR_PLATFORM" != msys ]]; then ln -s "$src" "$dst"; echo "link $dst -> $src"
+      elif link_junction "$src" "$dst"; then echo "link $dst -> $src"
+      else copy_skill "$src" "$dst"; echo "copy $dst <- $src (links are unavailable here; re-run install-skills after updating chartroom)"; fi
     done
   done
 }
+
+# Git Bash: a directory junction needs no Developer Mode or admin (`ln -s` would copy), and
+# bash sees it as a symlink. One bash does not see as a link is undone, so the caller copies.
+link_junction() { # <src> <dst>
+  cmd //c mklink //J "$(cygpath -w "$2")" "$(cygpath -w "$1")" >/dev/null 2>&1 || return 1
+  [[ -L "$2" ]] && return 0
+  cmd //c rmdir "$(cygpath -w "$2")" >/dev/null 2>&1
+  return 1
+}
+# Remove a skill link, never what it points to (rmdir removes only a junction).
+unlink_dir() { if [[ "$CR_PLATFORM" == msys ]]; then cmd //c rmdir "$(cygpath -w "$1")" >/dev/null; else rm "$1"; fi; }
+# Where no link can be made, a copy marked with the checkout it came from, so a re-run
+# refreshes it and --uninstall removes it.
+copy_skill() { # <src> <dst>
+  [[ ! -e "$2" && ! -L "$2" ]] || die "$2 is in the way of a copy; remove it and re-run"
+  cp -R "$1" "$2" && printf '%s\n' "$1" >"$2/.chartroom-copy"
+}
+skill_copy_of() { [[ -d "$1" && ! -L "$1" && "$(cat "$1/.chartroom-copy" 2>/dev/null)" == "$2" ]]; } # <dst> <src>
 
 cmd_help() {
   cat <<'EOF'

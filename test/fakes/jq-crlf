@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# fake native jq.exe under Git Bash: CRLF line endings unless run with -b (--binary).
+# Wraps the real jq in $REAL_JQ.
+set -o pipefail
+if [[ "${1:-}" == -b ]]; then shift; exec "$REAL_JQ" "$@"; fi
+"$REAL_JQ" "$@" | sed $'s/$/\r/'

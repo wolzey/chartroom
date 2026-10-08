@@ -46,7 +46,8 @@ dashboard can show the fleet in a browser).
 ## Install
 
 Requirements: bash ≥ 4 (macOS: `brew install bash`), `jq`, `git`. Optional, per backend:
-herdr, cmux (macOS), tmux ≥ 3.0, the `claude` and/or `codex` CLIs.
+herdr, cmux (macOS), tmux ≥ 3.0, the `claude` and/or `codex` CLIs. On Windows, see
+[Windows](#windows).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/wolzey/chartroom/main/install.sh | bash
@@ -66,6 +67,38 @@ Per agent:
 | Gemini CLI | `chartroom install-skills --agents` (Gemini reads `~/.agents/skills`), or `gemini skills link <checkout>/skills/chartroom` | same as Codex |
 | pi | `chartroom install-skills --pi` | same as Codex |
 | opencode, Cursor, Amp, Copilot, others | paste [`adapters/agents-md/AGENTS.md`](adapters/agents-md/AGENTS.md) into the agent's instructions, or start it in `~/.chartroom` (its `AGENTS.md` points at the skill) | same as Codex |
+
+### Windows
+
+chartroom is bash, so on Windows it runs in WSL2 or in Git Bash. It doesn't run in
+PowerShell or cmd.
+
+- **WSL2 (recommended): everything works, as on Linux.** Install chartroom, the agents
+  (`claude`, `codex`) and your repositories inside WSL, and run the XO there. Keep the
+  repositories on the WSL filesystem (`~/code`), not under `/mnt/c`. A Windows-side
+  `claude.exe` isn't used, and skills installed in WSL are seen by WSL agents only. For
+  `dashboard open`, install `wslu` (`wslview`); without it chartroom falls back to PowerShell's
+  `Start-Process`. The Windows browser reaches the dashboard through WSL's localhost forwarding,
+  which is on by default.
+- **Git Bash (Git for Windows): the core, `headless:claude`, `headless:codex`, `command`,
+  `subagent` and the dashboard.** There are no session runners: Git for Windows has no tmux,
+  cmux is macOS-only, and herdr's Windows build is a preview that chartroom leaves off unless
+  `CHARTROOM_HERDR_ANY_OS=1`. Install jq and Python (`winget install jqlang.jq Python.Python.3.12`),
+  run the installer from Git Bash, and add `~/.local/bin` to your PATH in `~/.bashrc`. Some
+  things differ from macOS and Linux:
+  - The checkout is LF whatever `core.autocrlf` says (`.gitattributes`).
+  - `~/.local/bin/chartroom` is a small launcher script, because Git Bash's `ln -s` copies.
+  - `install-skills` links with directory junctions, which need no Developer Mode, into
+    `%USERPROFILE%\.claude\skills` and the others.
+  - A native `jq.exe`'s CRLF output is turned off with `--binary`.
+  - `headless:claude` takes steering between runs, by resuming the session, not live.
+  - `stop` ends the worker's whole Windows process tree.
+  - `dashboard open` uses `start`.
+
+  `chartroom doctor` lists these under `note:`. The Windows CI job runs the test suite in Git
+  Bash.
+- **PowerShell / cmd:** not supported. To install from PowerShell, hand over to Git Bash:
+  `& "$env:ProgramFiles\Git\bin\bash.exe" -lc "curl -fsSL https://raw.githubusercontent.com/wolzey/chartroom/main/install.sh | bash"`.
 
 ### Updating, and running on several machines
 
@@ -189,7 +222,8 @@ How it is built, and what it promises:
 - `dashboard open` reuses this home's dashboard if it answers on its port; otherwise it
   replaces a stale pid file (or a server that stopped answering), starts one with `--daemon`
   and waits for it. Then it opens the URL with `CHARTROOM_OPENER`, else `open` (macOS) or
-  `xdg-open`, and prints it either way. A lock in the home (holding its owner's pid; taken over only when that pid is gone) keeps two calls from starting two
+  `xdg-open`; on WSL, `wslview` or PowerShell's `Start-Process`; on Git Bash, `start`. It prints
+  the URL either way. A lock in the home (holding its owner's pid; taken over only when that pid is gone) keeps two calls from starting two
   servers. The `dashboard` skill (`/dashboard`) runs exactly this.
 - **Themes.** `chartroom` (a nautical chart table) and `hud` (machine vision: red and amber,
   scanlines, a header radar, a reticle that locks onto cards). Both keep the same lanes and
@@ -371,7 +405,9 @@ Environment variables win. Otherwise chartroom reads `~/.config/chartroom/config
 | `CHARTROOM_DASHBOARD_RECENT_HOURS` | `48` | how far back the dashboard's Recently finished lane reaches |
 | `CHARTROOM_DASHBOARD_THEME` | `chartroom` | the dashboard's default theme: `chartroom` or `hud` (`--theme` overrides) |
 | `CHARTROOM_GH` | `gh` | the gh binary the dashboard uses for PR states |
-| `CHARTROOM_OPENER` | `open` / `xdg-open` | command `dashboard open` runs with the URL |
+| `CHARTROOM_OPENER` | `open` / `xdg-open` (WSL: `wslview`, PowerShell; Git Bash: `start`) | command `dashboard open` runs with the URL |
+| `CHARTROOM_PLATFORM` | *(detected)* | `posix`, `wsl` or `msys` (Git Bash); override only if detection is wrong |
+| `CHARTROOM_HERDR_ANY_OS` | *(unset)* | `1` offers herdr on Git Bash, where its Windows preview is unverified |
 | `CHARTROOM_WAITING_GRACE_MINUTES` | `15` | a `waiting` worker turns `waiting-overdue` this long after its until-time |
 | `CHARTROOM_WAITING_MAX_MINUTES` | `120` | ... or this long after the event, when it names no until-time |
 
@@ -382,6 +418,9 @@ Environment variables win. Otherwise chartroom reads `~/.config/chartroom/config
 **Does it work without herdr or tmux?** Yes. In a plain terminal it uses tmux if it's installed,
 otherwise headless workers. Over SSH or in CI it runs headless or command workers only.
 `chartroom doctor` tells you which.
+
+**Does it work on Windows?** Yes, in WSL2 (everything) or Git Bash (headless, command and
+subagent workers, and the dashboard). See [Windows](#windows).
 
 **Can a worker be something other than Claude or Codex?** Yes: `--backend command --command
 'your-agent --prompt {prompt} --cwd {worktree}'`. The worker reports by appending event lines
@@ -395,7 +434,7 @@ through your forge's CLI.
 ## Contributing
 
 ```bash
-shellcheck -x -S warning bin/chartroom lib/*.sh lib/backends/*.sh install.sh scripts/*.sh test/stub-agent test/fakes/*
+shellcheck -x -S warning bin/chartroom lib/*.sh lib/backends/*.sh install.sh scripts/*.sh test/stub-agent test/windows-smoke.sh test/fakes/*
 bats test/                 # no herdr/tmux/cmux/claude/codex needed: fakes and a stub agent
 scripts/privacy-gate.sh    # no personal data in tracked files
 ```
