@@ -26,6 +26,11 @@ common_setup() {
   # Minimal PATH: bash>=4, jq, git and the base system. Fakes are added per test.
   BIN="$BATS_TEST_TMPDIR/bin"; mkdir -p "$BIN"
   link_tool "$real_bash" bash; link_tool "$real_jq" jq; link_tool "$real_git" git
+  # The tests' own jq calls get LF from a native jq.exe too (chartroom's guard is exercised by
+  # test/windows.bats elsewhere, and by the CI doctor and smoke steps on Windows).
+  if [[ "$("$real_jq" -n 1 2>/dev/null)" == $'1\r' ]]; then
+    printf '#!/bin/sh\nexec %q -b "$@"\n' "$real_jq" >"$BIN/jq"; chmod +x "$BIN/jq"
+  fi
   export PATH="$BIN:/usr/bin:/bin:/usr/sbin:/sbin"
   # Git Bash: chartroom's Windows paths need cmd, taskkill, tasklist and powershell.exe.
   case "${OSTYPE:-}" in msys*|cygwin*)
