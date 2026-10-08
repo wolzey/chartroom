@@ -96,6 +96,9 @@ PowerShell or cmd.
   - `dashboard open` uses `start`.
   - `chartroom join` is unavailable: it finds the session by its process tree, and a native
     Windows agent is outside Git Bash's. Join a running session from WSL2.
+  - Workers that chartroom launches inherit its `jq`: an exported bash function that runs
+    `jq.exe` with `--binary` and passes its arguments unconverted (file operands become Windows
+    paths). It is harmless for ordinary use; `command jq` runs `jq.exe` itself.
 
   `chartroom doctor` lists these under `note:`. The Windows CI job runs the test suite in Git
   Bash.
