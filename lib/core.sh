@@ -122,9 +122,10 @@ detect_platform() {
   fi
   [[ "$CR_PLATFORM" =~ ^(posix|wsl|msys)$ ]] || die "CHARTROOM_PLATFORM must be posix, wsl or msys (got $CR_PLATFORM)"
   if [[ "$CR_PLATFORM" == msys ]]; then
-    # A native jq.exe under MSYS writes CRLF, which would leave a CR on every captured value;
-    # --binary turns that off. Probed, so an MSYS-built jq that writes LF is left alone.
-    CR_JQ_BINARY=""; [[ "$(command jq -n 1 2>/dev/null)" == $'1\r' ]] && CR_JQ_BINARY=1
+    # A native jq.exe under MSYS can write CRLF (jq 1.8.1 does for some output and not for
+    # other), which would leave a CR on captured values; --binary turns that off, so it is
+    # passed whenever this jq accepts it.
+    CR_JQ_BINARY=""; command jq -b -n 1 >/dev/null 2>&1 && CR_JQ_BINARY=1
     export CR_JQ_BINARY
     jq() { msys_jq "$@"; }
     export -f jq msys_jq

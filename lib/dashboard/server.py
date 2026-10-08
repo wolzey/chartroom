@@ -217,7 +217,7 @@ def main():
     signal.signal(signal.SIGINT, cleanup)
     if args.pidfile:
         tmp = args.pidfile + ".tmp"
-        with open(tmp, "w") as fh:
+        with open(tmp, "w", newline="\n") as fh:  # LF on Windows too: bash reads it
             fh.write("%d %d\n" % (os.getpid(), port))
         os.replace(tmp, args.pidfile)
     url = "http://%s:%d/" % (HOST, port)

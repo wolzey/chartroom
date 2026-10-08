@@ -12,7 +12,13 @@ cr() { "$root/bin/chartroom" "$@"; }
 step() { printf '== %s\n' "$*"; }
 fail() {
   printf 'windows-smoke: FAIL: %s\n' "$*" >&2
-  [[ -z "${id:-}" ]] || cat "$CHARTROOM_HOME/tasks/$id/events.log" >&2
+  if [[ -n "${id:-}" ]]; then
+    local f
+    for f in events.log claude.err claude.jsonl stdin.first meta.json; do
+      [[ ! -f "$CHARTROOM_HOME/tasks/$id/$f" ]] || { echo "== $f" >&2; tail -n 20 "$CHARTROOM_HOME/tasks/$id/$f" >&2; }
+    done
+    echo "== processes" >&2; ps -W 2>/dev/null | grep -iE 'python|bash' >&2 || true
+  fi
   [[ ! -f "$CHARTROOM_HOME/.dashboard.log" ]] || { echo "== .dashboard.log" >&2; cat "$CHARTROOM_HOME/.dashboard.log" >&2; }
   exit 1
 }

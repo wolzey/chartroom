@@ -83,7 +83,8 @@ jobs:
           CHARTROOM_REF=ci-install bash install.sh
           "$HOME/.local/bin/chartroom" version
           "$HOME/.local/bin/chartroom" install-skills --dir "$HOME/skills"
-          "$HOME/.local/bin/chartroom" install-skills --dir "$HOME/skills" | grep -q '^ok   '
+          again="$("$HOME/.local/bin/chartroom" install-skills --dir "$HOME/skills")"; echo "$again"
+          grep -q '^ok   ' <<<"$again"
           test -f "$HOME/skills/chartroom/SKILL.md"
           "$HOME/.local/bin/chartroom" install-skills --dir "$HOME/skills" --uninstall
           test ! -e "$HOME/skills/chartroom"

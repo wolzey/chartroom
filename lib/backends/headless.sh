@@ -95,6 +95,8 @@ launch_claude_headless() { # <id> <wt> <prompt> [resume]
     done
     # claude -p (stream-json input) does not exit on a late stdin EOF (verified on 2.1.289):
     # give it 5s, then end it. The session is already persisted, so --resume still works.
+    # With a pipe, claude must see EOF even when kill -0 could not see it (a native process).
+    [[ -z "$CR_PIPE" ]] || exec 9>&-
     for _ in 1 2 3 4 5; do kill -0 "$cpid" 2>/dev/null || break; sleep 1; done
     why=""
     if kill -0 "$cpid" 2>/dev/null; then

@@ -330,11 +330,11 @@ EOF
 }
 
 @test "dispatch returns at once even when its output is captured (worker detached)" {
-  id="$(new_task --backend command --command "STUB_SLEEP=6 $STUB {id}")"
+  # well under the stub's sleep; Git Bash's process start-up is slow, so it gets more room
+  local sleep=6 bound=3; case "${OSTYPE:-}" in msys*|cygwin*) sleep=30 bound=20 ;; esac
+  id="$(new_task --backend command --command "STUB_SLEEP=$sleep $STUB {id}")"
   s=$(date +%s)
   out="$(cr dispatch "$id")"
-  # well under the stub's 6s; Git Bash's process start-up is slow, so it gets more room
-  local bound=3; case "${OSTYPE:-}" in msys*|cygwin*) bound=5 ;; esac
   [ $(( $(date +%s) - s )) -lt "$bound" ]
   [[ "$out" == *"command worker running"* ]]
   cr stop "$id" >/dev/null

@@ -102,6 +102,7 @@ dashboard_running() { # -> prints "pid port" when a dashboard for this home is u
   # signal a process that is not this server.
   if [[ "$CR_PLATFORM" == msys ]]; then
     # Native python wrote its Windows pid, which kill -0 and Git Bash's ps cannot see.
+    port="${port%$'\r'}"
     [[ "$pid" =~ ^[0-9]+$ ]] || return 1
     win_cmdline "$pid" | grep -qE 'dashboard[/\\]server\.py' || return 1
   else
