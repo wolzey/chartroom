@@ -55,18 +55,18 @@ get() { curl -s --max-time 10 "$@"; }
 }
 
 @test "config: a CRLF config file (saved by a Windows editor) gives clean values" {
-  printf 'CHARTROOM_WORKSPACE=crew\r\nCHARTROOM_BRANCH_PREFIX="win/"\r\n' >"$CHARTROOM_CONFIG"
+  printf 'CHARTROOM_WORKSPACE=fleet\r\nCHARTROOM_BRANCH_PREFIX="win/"\r\n' >"$CHARTROOM_CONFIG"
   id="$(new_task)"
   [ "$(meta_of "$id" branch)" = "win/$id" ]
 }
 
 @test "msys: a Windows-form CHARTROOM_HOME is used in its /c/ form" {
   msys
-  CHARTROOM_HOME='C:\crew\home' run cr doctor --json
+  CHARTROOM_HOME='C:\chartroom\home' run cr doctor --json
   [ "$status" -eq 0 ]
-  [ "$(jq -r .home <<<"$output")" = /c/crew/home ]
-  CHARTROOM_HOME='D:/crew' run cr doctor --json
-  [ "$(jq -r .home <<<"$output")" = /d/crew ]
+  [ "$(jq -r .home <<<"$output")" = /c/chartroom/home ]
+  CHARTROOM_HOME='D:/fleet' run cr doctor --json
+  [ "$(jq -r .home <<<"$output")" = /d/fleet ]
 }
 
 @test "msys: herdr is off unless opted in; headless:claude steers between runs" {

@@ -82,8 +82,8 @@ resolve_home() {
 load_config() {
   detect_platform
   resolve_home
-  # Git Bash: a Windows-form home (C:\crew\home, as a Windows tool would pass it)
-  # becomes /c/crew/home, so globs and path joins keep working.
+  # Git Bash: a Windows-form home (C:\chartroom\home, as a Windows tool would pass it)
+  # becomes /c/chartroom/home, so globs and path joins keep working.
   if [[ "$CR_PLATFORM" == msys && "$CR_HOME" =~ ^[A-Za-z]:[\\/] ]]; then CR_HOME="$(cygpath -u "$CR_HOME")"; fi
   CR_PROJECT_ROOTS="$(cfg PROJECT_ROOTS CAP_PROJECT_ROOTS '')"
   CR_PROJECT_ROOTS="${CR_PROJECT_ROOTS//\~/$HOME}"
@@ -130,7 +130,7 @@ detect_platform() {
   return 0
 }
 
-# A path as native Windows programs (python.exe, claude.exe) read it: C:/crew/home on Git
+# A path as native Windows programs (python.exe, claude.exe) read it: C:/chartroom/home on Git
 # Bash, unchanged elsewhere.
 win_path() { if [[ "$CR_PLATFORM" == msys ]]; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
 
