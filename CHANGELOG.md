@@ -36,7 +36,8 @@ are stable from 0.1.0.
     Microsoft Store stub). It gets Windows paths and bash, and is tracked by its Windows pid.
   - `dashboard open` uses `start`, or on WSL `wslview` or PowerShell.
 
-  herdr is off on Git Bash unless `CHARTROOM_HERDR_ANY_OS=1`. `doctor` prints the platform and
+  herdr is off on Git Bash unless `CHARTROOM_HERDR_ANY_OS=1`, and `chartroom join` is off there
+  (a native agent is outside Git Bash's process tree; WSL2 joins). `doctor` prints the platform and
   notes on Windows only (`--json` adds `platform` and `notes` there); macOS and Linux output is
   unchanged. `CHARTROOM_PLATFORM` overrides the detection. README: a Windows section. CI: a
   windows-latest job (Git Bash: bats, install, and a native-process smoke test).

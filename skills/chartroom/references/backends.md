@@ -187,6 +187,9 @@ never has to reach into its terminal.
   mid-turn, `working`/`idle`/`blocked` from hooks or herdr's pane state, `stopped` once the pid
   is gone. `watch` records the pid ending once as `exited: joined agent session ended` and wakes
   on it unless the worker had reported.
+- **Not on Git Bash (Windows)**: `join` refuses there, and `doctor` says so. A native Windows
+  agent is outside Git Bash's process tree (whose `ps` has no `-o` either), so neither the
+  agent nor its pid can be found. Join from WSL2, where it works as on Linux.
 - **Hooks (Claude Code)**: the join skill declares Stop, Notification and UserPromptSubmit
   hooks in its frontmatter; Claude Code registers them when the skill is invoked and keeps them
   for the rest of the session. They are static, so they look the task up by the payload's

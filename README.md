@@ -94,6 +94,8 @@ PowerShell or cmd.
   - `headless:claude` takes steering between runs, by resuming the session, not live.
   - `stop` ends the worker's whole Windows process tree.
   - `dashboard open` uses `start`.
+  - `chartroom join` is unavailable: it finds the session by its process tree, and a native
+    Windows agent is outside Git Bash's. Join a running session from WSL2.
 
   `chartroom doctor` lists these under `note:`. The Windows CI job runs the test suite in Git
   Bash.

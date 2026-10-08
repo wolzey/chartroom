@@ -314,6 +314,7 @@ cmd_join() {
     esac
   done
   [[ "$kind" =~ ^(ship|scout)$ ]] || die "kind must be ship or scout (got $kind)"
+  [[ "$CR_PLATFORM" != msys ]] || die "$(join_unavailable_msys)"
   [[ -d "$CR_HOME/tasks" ]] || die "no chartroom home at $CR_HOME ($CR_HOME_SOURCE); pass the right one as CHARTROOM_HOME=<path>, or create it with 'chartroom init'"
   if [[ -n "${CHARTROOM_TASK:-}" && -f "$(tdir "$CHARTROOM_TASK")/meta.json" ]] && ! is_joined "$CHARTROOM_TASK"; then
     die "this session is already chartroom task $CHARTROOM_TASK (the XO launched it); follow its brief at $(tdir "$CHARTROOM_TASK")/brief.md"
@@ -388,6 +389,10 @@ Next, as this task's worker:
 3. Carry on under the brief's worker protocol: events, report.md, stop at decisions, no push.
 EOF
 }
+
+# Git Bash: join finds the session by its process tree, and a native Windows agent is outside
+# MSYS's (Git Bash's ps also has no -o); its records would hold git's C:/ paths. WSL2 joins.
+join_unavailable_msys() { echo "chartroom join is unavailable on Git Bash; run the session and chartroom in WSL2 to join it"; }
 
 write_join_brief() { # <id>
   local id="$1" d wt branch
@@ -925,8 +930,10 @@ cmd_doctor() {
     [[ -z "$first_ok" && "$avail" == yes && " $CR_BACKEND_ORDER " == *" $b "* ]] && first_ok="$b"
     rows+=("$(jq -cn --arg b "$b" --arg a "$avail" --arg w "$why" --arg s "$(steer_mode_of "$b")" '{backend:$b,available:($a=="yes"),steering:$s,reason:$w}')")
   done
+  local jwhy="not dispatched: a running session joins with chartroom join"
+  [[ "$CR_PLATFORM" != msys ]] || jwhy="$(join_unavailable_msys)"
   for b in joined:claude joined:codex; do
-    rows+=("$(jq -cn --arg b "$b" --arg s "$(steer_mode_of "$b")" '{backend:$b,available:false,steering:$s,reason:"not dispatched: a running session joins with chartroom join"}')")
+    rows+=("$(jq -cn --arg b "$b" --arg s "$(steer_mode_of "$b")" --arg w "$jwhy" '{backend:$b,available:false,steering:$s,reason:$w}')")
   done
   local notes=()
   [[ "$CR_PLATFORM" == posix ]] || mapfile -t notes < <(platform_notes)
@@ -961,6 +968,7 @@ platform_notes() {
     msys)
       echo "Git Bash: herdr, cmux and tmux sessions are unavailable; use headless, command or subagent (herdr's Windows preview: CHARTROOM_HERDR_ANY_OS=1)"
       echo "headless:claude takes steering between runs here (no live stdin to a native claude.exe)"
+      echo "chartroom join (joined:claude, joined:codex) is unavailable here; join a session from WSL2"
       echo "install-skills links with directory junctions (no Developer Mode needed)"
       if [[ -n "${CR_JQ_BINARY:-}" ]]; then echo "jq runs with --binary (a native jq.exe would otherwise write CRLF) and its arguments unconverted"; fi
       find_python

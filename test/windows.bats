@@ -101,6 +101,21 @@ get() { curl -s --max-time 10 "$@"; }
   [ "$(jq -r '.backends[]|select(.backend=="headless:claude").steering' <<<"$output")" = live ]
 }
 
+@test "msys: chartroom join is off, and doctor says why" {
+  msys
+  cr init >/dev/null
+  export CLAUDECODE=1 CLAUDE_PID=$$ CLAUDE_CODE_SESSION_ID=sess-1
+  run bash -c 'cd "$1" && "$2" join --title here' _ "$PROJECT" "$CHARTROOM"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"chartroom join is unavailable on Git Bash; run the session and chartroom in WSL2 to join it"* ]]
+  [ -z "$(ls "$CHARTROOM_HOME/tasks")" ]
+  run cr doctor --json
+  [ "$(jq -r '.backends[]|select(.backend=="joined:codex").reason' <<<"$output")" = "chartroom join is unavailable on Git Bash; run the session and chartroom in WSL2 to join it" ]
+  jq -e '.notes | any(startswith("chartroom join (joined:claude, joined:codex) is unavailable here"))' <<<"$output" >/dev/null
+  CHARTROOM_PLATFORM=posix run cr doctor --json
+  [ "$(jq -r '.backends[]|select(.backend=="joined:codex").reason' <<<"$output")" = "not dispatched: a running session joins with chartroom join" ]
+}
+
 @test "msys: install-skills links with junctions, re-runs, and uninstalls through rmdir" {
   msys
   run cr install-skills --dir "$HOME/skills"
