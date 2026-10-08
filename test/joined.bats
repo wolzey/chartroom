@@ -134,6 +134,25 @@ with two lines"
   wait_event "$id" 'agent: prompt-received$'
 }
 
+@test "watch: a joined turn ending with its listener armed is at rest; without one it wakes" {
+  id="$(joined_id "$(join_here --title resting)")"
+  cr watch --once --timeout 1 >/dev/null 2>&1 || true
+  # Run the binary itself in the background, so $! is the listener (not a subshell).
+  "$CHARTROOM" listen "$id" >/dev/null &
+  lp=$!
+  for _ in $(seq 1 20); do [ -f "$CHARTROOM_HOME/tasks/$id/mail/listener.pid" ] && break; sleep 0.1; done
+  echo '{"session_id":"sess-1"}' | cr hook --session stop
+  run cr watch --once --timeout 2
+  [ "$status" -eq 124 ]
+  [[ "$output" != *"stopped its turn"* ]]
+  kill "$lp"; wait "$lp" 2>/dev/null || true
+  [ ! -f "$CHARTROOM_HOME/tasks/$id/mail/listener.pid" ]
+  echo '{"session_id":"sess-1"}' | cr hook --session stop
+  run cr watch --once --timeout 5
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[$id]"*"agent: turn-ended (stopped its turn without reporting)"* ]]
+}
+
 @test "close marks a joined task closed and never touches its directory" {
   id="$(joined_id "$(join_here --title closing)")"
   echo wip >"$PROJECT/wip.txt"

@@ -177,7 +177,9 @@ never has to reach into its terminal.
   for the rest of the session. They are static, so they look the task up by the payload's
   `session_id` in `${XDG_STATE_HOME:-~/.local/state}/chartroom/sessions/<id>` (home, task,
   chartroom binary; written by `join`, removed by `close`) and call `chartroom hook --session`.
-  A joined session's `idle_prompt` notification is ignored: idling on the listener is normal.
+  A joined session's `idle_prompt` notification is ignored, and `watch` raises no "stopped its
+  turn without reporting" wake while its listener is armed: idling on the listener is normal.
+  With no listener armed, a silent turn end wakes the XO as for any worker.
 - **close** marks the task closed and removes the session registry entry. It never removes or
   cleans the directory and never refuses on uncommitted work (it says there is some). The
   listener sees the close and exits with "stop listening".
