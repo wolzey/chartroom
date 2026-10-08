@@ -14,6 +14,8 @@ setup() {
 teardown() {
   cr dashboard stop >/dev/null 2>&1 || true
   [[ -n "${SRV_PID:-}" ]] && srv_kill "$SRV_PID" || true
+  # a second home's server, should one have started (the busy-port test)
+  CHARTROOM_HOME="$BATS_TEST_TMPDIR/other" cr dashboard stop >/dev/null 2>&1 || true
 }
 
 # The server's pid is python's own. On Git Bash that is a Windows pid, which kill cannot see.
@@ -218,8 +220,10 @@ EOF
 # ---------------------------------------------------------------- server
 
 need_python() { [[ -n "$PY" ]] || skip "python3 not available"; link_tool "$PY" python3; }
-get() { curl -s --max-time 10 "$@"; }
-code() { curl -s -o /dev/null --max-time 10 -w '%{http_code}' "$@"; }
+# Git Bash computes the board much more slowly (every process start is expensive there).
+CURL_MAX=10; case "${OSTYPE:-}" in msys*|cygwin*) CURL_MAX=60 ;; esac
+get() { curl -s --max-time "$CURL_MAX" "$@"; }
+code() { curl -s -o /dev/null --max-time "$CURL_MAX" -w '%{http_code}' "$@"; }
 start_daemon() {
   run cr dashboard --daemon --port 0 "$@"
   [ "$status" -eq 0 ] || { echo "$output"; cat "$CHARTROOM_HOME/.dashboard.log" 2>/dev/null; false; }
@@ -296,7 +300,7 @@ start_daemon() {
   read -r SRV_PID _ <"$CHARTROOM_HOME/.dashboard.pid"
   [ "$(get "http://127.0.0.1:$p/healthz")" = ok ]
   # a second home cannot take the same port
-  run env CHARTROOM_HOME="$BATS_TEST_TMPDIR/other" "$CHARTROOM" dashboard --daemon --port "$p" --no-gh
+  run env CHARTROOM_HOME="$BATS_TEST_TMPDIR/other" "$CHARTROOM" dashboard --daemon --port "$p" --no-gh 3>&-
   [ "$status" -eq 1 ]; [[ "$output" == *"cannot listen on 127.0.0.1:$p"* ]]
   run cr dashboard --port 70000
   [ "$status" -eq 1 ]; [[ "$output" == *"--port must be 0-65535"* ]]
@@ -400,7 +404,7 @@ start_daemon() {
 @test "server: foreground mode serves until stopped" {
   need_python
   # in a subshell so the server is not our child: a killed child would linger as a zombie
-  ( "$CHARTROOM" dashboard --port 0 --no-gh >"$BATS_TEST_TMPDIR/fg.log" 2>&1 & )
+  ( "$CHARTROOM" dashboard --port 0 --no-gh >"$BATS_TEST_TMPDIR/fg.log" 2>&1 3>&- & )
   local i
   for i in $(seq 1 50); do [[ -s "$CHARTROOM_HOME/.dashboard.pid" ]] && break; sleep 0.1; done
   read -r SRV_PID PORT <"$CHARTROOM_HOME/.dashboard.pid"
@@ -412,6 +416,7 @@ start_daemon() {
 
 @test "server: PR states come from gh when present, and its absence is reported, not fatal" {
   need_python
+  case "${OSTYPE:-}" in msys*|cygwin*) skip "a native Windows python cannot run the bash fake gh" ;; esac
   use_fake gh
   fixture t-review subagent <<<"100 done: https://github.com/acme/todo-cli/pull/8"
   export FAKE_GH_STATES="$BATS_TEST_TMPDIR/gh.json"

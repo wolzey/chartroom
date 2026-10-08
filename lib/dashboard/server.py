@@ -16,6 +16,7 @@ import os
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -169,6 +170,17 @@ def make_handler(board, port, page):
     return Handler
 
 
+class Server(ThreadingHTTPServer):
+    """On Windows, SO_REUSEADDR (http.server's default) lets a second server bind a port that
+    one is already listening on; ask for the port exclusively there instead."""
+    if os.name == "nt":
+        allow_reuse_address = False
+
+        def server_bind(self):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            super().server_bind()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=4517)
@@ -192,7 +204,7 @@ def main():
     page = page.replace(THEME_SLOT, THEME_SLOT.replace(b'"chartroom"', b'"%s"' % args.theme.encode()))
     board = Board(args.bin, home, not args.no_gh, args.bash)
     try:
-        httpd = ThreadingHTTPServer((HOST, args.port), None)
+        httpd = Server((HOST, args.port), None)
     except OSError as exc:
         sys.exit("chartroom dashboard: cannot listen on %s:%d: %s" % (HOST, args.port, exc.strerror or exc))
     httpd.daemon_threads = True

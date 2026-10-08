@@ -126,7 +126,9 @@ detect_platform() {
     # other), which would leave a CR on captured values; --binary turns that off, so it is
     # passed whenever this jq accepts it.
     CR_JQ_BINARY=""; command jq -b -n 1 >/dev/null 2>&1 && CR_JQ_BINARY=1
-    export CR_JQ_BINARY
+    # /tmp's Windows path, so msys_jq converts most file operands without a cygpath each.
+    CR_MSYS_TMP="$(cygpath -m /tmp 2>/dev/null || true)"
+    export CR_JQ_BINARY CR_MSYS_TMP
     jq() { msys_jq "$@"; }
     export -f jq msys_jq
   fi
@@ -136,15 +138,20 @@ detect_platform() {
 # Git Bash: run the native jq.exe with its arguments as written. MSYS would rewrite any
 # path-looking argument, so a --arg value such as /tmp/x (a worktree, the home, a steer
 # message starting with /) would be stored as C:/...; with that off, file operands (the
-# ones that exist) are converted to Windows paths here instead, in one cygpath call.
+# ones that exist) are converted to Windows paths here instead: drive and /tmp paths in
+# bash, anything else in one cygpath call (forks are slow on Windows).
 msys_jq() {
-  local a i=0 skip=0 out=() files=() at=() conv=() bin=()
+  local a d i=0 skip=0 out=() files=() at=() conv=() bin=()
   [[ -n "${CR_JQ_BINARY:-}" ]] && bin=(-b)
   for a in "$@"; do
     out+=("$a")
     if (( skip > 0 )); then skip=$((skip - 1))
     elif [[ "$a" == --arg || "$a" == --argjson ]]; then skip=2
-    elif [[ "$a" == /* && -e "$a" ]]; then files+=("$a"); at+=("$i"); fi
+    elif [[ "$a" == /* && -e "$a" ]]; then
+      if [[ "$a" =~ ^/([A-Za-z])/ ]]; then d="${BASH_REMATCH[1]}"; out[i]="${d^^}:${a:2}"
+      elif [[ -n "${CR_MSYS_TMP:-}" && "$a" == /tmp/* ]]; then out[i]="$CR_MSYS_TMP${a:4}"
+      else files+=("$a"); at+=("$i"); fi
+    fi
     i=$((i + 1))
   done
   if (( ${#files[@]} > 0 )); then

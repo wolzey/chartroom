@@ -68,7 +68,9 @@ real_symlinks() {
 # Put named fakes (test/fakes/<name>) on PATH.
 use_fake() { local f; for f in "$@"; do ln -sf "$REPO_ROOT/test/fakes/$f" "$BIN/$f"; done; }
 
-cr() { "$CHARTROOM" "$@"; }
+# fd 3 is bats' own: a worker or dashboard a test leaves behind must not hold it, or bats
+# waits for it after the last test (Git Bash keeps a stub process per native child).
+cr() { "$CHARTROOM" "$@" 3>&-; }
 
 # Create a task and give its brief a commander's intent; prints the id.
 new_task() {

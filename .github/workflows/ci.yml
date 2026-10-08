@@ -47,7 +47,7 @@ jobs:
   windows:
     runs-on: windows-latest
     continue-on-error: true
-    timeout-minutes: 60
+    timeout-minutes: 50
     defaults:
       run:
         shell: bash
@@ -68,14 +68,20 @@ jobs:
       - name: no personal data
         run: scripts/privacy-gate.sh
       - name: bats
+        # a hung test fails after BATS_TEST_TIMEOUT; anything hung around the suite, by the step
+        timeout-minutes: 30
+        env:
+          BATS_TEST_TIMEOUT: 300
         run: '"$(cygpath -u "$RUNNER_TEMP")/bats/bin/bats" --print-output-on-failure test/'
       - name: doctor with only bash, jq and git
         if: success() || failure()
+        timeout-minutes: 5
         run: |
           export CHARTROOM_HOME="$(cygpath -u "$RUNNER_TEMP")/home"
           bin/chartroom doctor
       - name: install.sh and install-skills smoke test into a temp HOME
         if: success() || failure()
+        timeout-minutes: 10
         run: |
           export HOME="$(cygpath -u "$RUNNER_TEMP")/h" CHARTROOM_REPO="$(cygpath -u "$GITHUB_WORKSPACE")"
           mkdir -p "$HOME"
@@ -90,4 +96,5 @@ jobs:
           test ! -e "$HOME/skills/chartroom"
       - name: native interop (a native agent process, the dashboard under native python)
         if: success() || failure()
+        timeout-minutes: 15
         run: test/windows-smoke.sh
