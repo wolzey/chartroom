@@ -168,8 +168,10 @@ setup() { common_setup; }
   id="$(new_task --backend tmux:claude)"
   export FAKE_TMUX_TASK="$id"
   cr dispatch "$id" >/dev/null
-  # the brief's prompt was confirmed by its signature
-  sig="$(printf '%s' "Read the brief at $CHARTROOM_HOME/tasks/$id/brief.md and follow it exactly. Your task id is $id." | (source "$REPO_ROOT/lib/core.sh"; text_sig))"
+  # the brief's prompt was confirmed by its signature (on Git Bash the prompt names the brief by
+  # its Windows path, as a native agent needs)
+  b="$CHARTROOM_HOME/tasks/$id"; case "${OSTYPE:-}" in msys*|cygwin*) b="$(cygpath -m "$b")" ;; esac
+  sig="$(printf '%s' "Read the brief at $b/brief.md and follow it exactly. Your task id is $id." | (source "$REPO_ROOT/lib/core.sh"; text_sig))"
   events "$id" | grep -q "agent: prompt-received sig=$sig len="
   # a full match
   run cr steer "$id" "rebase on main, then rerun the tests"
