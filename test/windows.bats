@@ -200,6 +200,31 @@ get() { curl -s --max-time 10 "$@"; }
   run kill -0 "$pid"; [ "$status" -ne 0 ]
 }
 
+@test "msys: stop ends the worker's MSYS descendants by their Windows pids, grandchildren too" {
+  msys
+  sleep 60 &
+  local w=$!
+  id="$(new_task --backend headless:claude)"
+  jq --arg p "$w" '.pid=$p | .backend="headless:claude" | .dispatched="2026-01-01T00:00:00Z"' "$CHARTROOM_HOME/tasks/$id/meta.json" >"$BATS_TEST_TMPDIR/m"
+  mv "$BATS_TEST_TMPDIR/m" "$CHARTROOM_HOME/tasks/$id/meta.json"
+  # a process table: the wrapper, its native child (exec'd from a forked subshell, so its
+  # Windows parent is gone), a grandchild, and an unrelated process. Windows pids beyond
+  # any real pid, since the fake taskkill signals what it is given.
+  local P="$BATS_TEST_TMPDIR/proc"
+  mkdir -p "$P/$w" "$P/424242" "$P/525252" "$P/600000"
+  echo 2147480001 >"$P/$w/winpid"
+  echo "$w" >"$P/424242/ppid"; echo 2147480002 >"$P/424242/winpid"
+  echo 424242 >"$P/525252/ppid"; echo 2147480003 >"$P/525252/winpid"
+  echo 1 >"$P/600000/ppid"; echo 2147480004 >"$P/600000/winpid"
+  CHARTROOM_PROC="$P" run cr stop "$id"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"could not end"* ]]
+  grep -qx "taskkill //F //T //PID 2147480001 //PID 2147480002 //PID 2147480003" "$FAKE_LOG"
+  run grep -F 2147480004 "$FAKE_LOG"; [ "$status" -ne 0 ]
+  for i in $(seq 1 20); do kill -0 "$w" 2>/dev/null || break; sleep 0.25; done
+  run kill -0 "$w"; [ "$status" -ne 0 ]
+}
+
 @test "msys: the dashboard gets Windows paths and bash, and is found and stopped by its Windows pid" {
   need_python
   msys

@@ -165,15 +165,27 @@ msys_jq() {
 # Bash, unchanged elsewhere.
 win_path() { if [[ "$CR_PLATFORM" == msys ]]; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
 
-# Stop a process and its children. On Git Bash, a native child (claude.exe, codex) does not
-# die with its MSYS parent, so the whole Windows process tree goes, via the parent's
-# Windows pid.
+# Stop a process and its children. On Git Bash a native child (claude.exe, codex) does not
+# die with its MSYS parent, and taskkill /T cannot reach one exec'd from a forked subshell
+# (its Windows parent is gone), so the pid and all its MSYS descendants (by
+# <proc>/<pid>/ppid) are ended by their Windows pids. CHARTROOM_PROC (default /proc) lets
+# the tests stand in a process table.
 kill_tree() { # <pid>
-  local pid="$1" w
+  local pid="$1" proc="${CHARTROOM_PROC:-/proc}" p d x todo args=()
   if [[ "$CR_PLATFORM" == msys ]]; then
-    w="$(cat "/proc/$pid/winpid" 2>/dev/null || true)"
-    [[ -n "$w" ]] && taskkill //T //F //PID "$w" >/dev/null 2>&1 && return 0
-    warn "could not end the Windows process tree of pid $pid; its agent may still be running"
+    todo=("$pid")
+    while (( ${#todo[@]} > 0 )); do
+      p="${todo[0]}"; todo=("${todo[@]:1}")
+      if { read -r x <"$proc/$p/winpid"; } 2>/dev/null; then args+=(//PID "$x"); fi
+      for d in "$proc"/[0-9]*; do
+        { read -r x <"$d/ppid"; } 2>/dev/null && [[ "$x" == "$p" ]] && todo+=("${d##*/}")
+      done
+    done
+    if (( ${#args[@]} > 0 )); then
+      taskkill //F //T "${args[@]}" >/dev/null 2>&1 || true
+    else
+      warn "could not end the Windows process tree of pid $pid; its agent may still be running"
+    fi
   fi
   pkill -TERM -P "$pid" 2>/dev/null || true; kill -TERM "$pid" 2>/dev/null || true
 }
