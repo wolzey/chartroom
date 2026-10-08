@@ -773,7 +773,7 @@ platform_notes() {
       echo "Git Bash: herdr, cmux and tmux sessions are unavailable; use headless, command or subagent (herdr's Windows preview: CHARTROOM_HERDR_ANY_OS=1)"
       echo "headless:claude takes steering between runs here (no live stdin to a native claude.exe)"
       echo "install-skills links with directory junctions (no Developer Mode needed)"
-      if declare -F jq >/dev/null; then echo "jq is a native jq.exe that writes CRLF; chartroom runs it with --binary"; fi
+      if [[ -n "${CR_JQ_BINARY:-}" ]]; then echo "jq is a native jq.exe that writes CRLF; chartroom runs it with --binary"; fi
       find_python
       if [[ ${#CR_PY[@]} -gt 0 ]]; then echo "dashboard python: ${CR_PY[*]}"; else python_missing; fi ;;
     wsl)

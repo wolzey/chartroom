@@ -224,7 +224,11 @@ cmd_dashboard() {
   # Paths in Windows form for a native python on Git Bash (unchanged elsewhere), which also
   # cannot run bin/chartroom, a bash script, without being handed bash.
   local args=("$(win_path "$CR_ROOT/lib/dashboard/server.py")" --port "$port" --pidfile "$(win_path "$(dashboard_pidfile)")" --bin "$(win_path "$CR_BIN")")
-  [[ "$CR_PLATFORM" == msys ]] && args+=(--bash "$(win_path "$BASH")")
+  # (Git Bash's own bash.exe: $BASH may be a wrapper script, which python cannot run either.)
+  if [[ "$CR_PLATFORM" == msys ]]; then
+    local b="$BASH"; [[ -e /usr/bin/bash.exe ]] && b=/usr/bin/bash.exe
+    args+=(--bash "$(win_path "$b")")
+  fi
   [[ $open -eq 1 ]] && args+=(--open)
   [[ $gh -eq 0 ]] && args+=(--no-gh)
   args+=(--theme "$theme")

@@ -54,6 +54,21 @@ get() { curl -s --max-time 10 "$@"; }
   [[ "$output" == *"note: jq is a native jq.exe that writes CRLF; chartroom runs it with --binary"* ]]
 }
 
+@test "msys: jq gets --arg values as written and file operands as Windows paths" {
+  REAL_JQ="$(readlink "$BIN/jq")"; export REAL_JQ FAKE_JQ_LOG="$BATS_TEST_TMPDIR/jq.log"
+  rm "$BIN/jq"; ln -s "$REPO_ROOT/test/fakes/jq-crlf" "$BIN/jq"
+  msys
+  id="$(new_task)"
+  [ "$("$REAL_JQ" -r .project "$CHARTROOM_HOME/tasks/$id/meta.json")" = "$PROJECT" ]
+  # every call runs with MSYS's argument conversion off (but the CRLF probe, which has none)...
+  [ -z "$(grep -v '^\*|' "$FAKE_JQ_LOG" | grep -vx '|-n 1')" ]
+  # ...a path-looking --arg value (the project) reaches jq untouched, never through cygpath...
+  grep -qF -- "--arg project $PROJECT " "$FAKE_JQ_LOG"
+  [ -z "$(grep '^cygpath' "$FAKE_LOG" | grep -F -- "$PROJECT")" ]
+  # ...and a file operand goes through cygpath -m
+  grep -qF -- "cygpath -m -- $CHARTROOM_HOME/tasks/$id/meta.json" "$FAKE_LOG"
+}
+
 @test "config: a CRLF config file (saved by a Windows editor) gives clean values" {
   printf 'CHARTROOM_WORKSPACE=fleet\r\nCHARTROOM_BRANCH_PREFIX="win/"\r\n' >"$CHARTROOM_CONFIG"
   id="$(new_task)"

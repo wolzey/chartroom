@@ -11,7 +11,9 @@ are stable from 0.1.0.
   `headless`, `command` and `subagent` backends and the dashboard:
   - `install.sh` writes a launcher script where `ln -s` copies.
   - `install-skills` links with directory junctions.
-  - A native `jq.exe`'s CRLF output is turned off with `--binary`.
+  - A native `jq.exe` gets its arguments unconverted (MSYS would rewrite a path-looking
+    `--arg` value into `C:/...`), with file operands passed as Windows paths, and its CRLF
+    output is turned off with `--binary`.
   - `headless:claude` reads a pipe and steers between runs.
   - `stop` ends the worker's Windows process tree.
   - The dashboard runs under a native python (`python3`, `python` or `py -3`, never the

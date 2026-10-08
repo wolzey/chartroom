@@ -333,7 +333,9 @@ EOF
   id="$(new_task --backend command --command "STUB_SLEEP=6 $STUB {id}")"
   s=$(date +%s)
   out="$(cr dispatch "$id")"
-  [ $(( $(date +%s) - s )) -lt 3 ]
+  # well under the stub's 6s; Git Bash's process start-up is slow, so it gets more room
+  local bound=3; case "${OSTYPE:-}" in msys*|cygwin*) bound=5 ;; esac
+  [ $(( $(date +%s) - s )) -lt "$bound" ]
   [[ "$out" == *"command worker running"* ]]
   cr stop "$id" >/dev/null
 }

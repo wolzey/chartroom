@@ -32,10 +32,13 @@ common_setup() {
     printf '#!/bin/sh\nexec %q -b "$@"\n' "$real_jq" >"$BIN/jq"; chmod +x "$BIN/jq"
   fi
   export PATH="$BIN:/usr/bin:/bin:/usr/sbin:/sbin"
-  # Git Bash: chartroom's Windows paths need cmd, taskkill, tasklist and powershell.exe.
+  # Git Bash: chartroom's Windows paths need cmd, taskkill, tasklist and powershell.exe, and
+  # git its own helpers (git-upload-pack for a local clone). herdr's code paths run against
+  # the fake herdr here too; its default-off guard is asserted in backends.bats.
   case "${OSTYPE:-}" in msys*|cygwin*)
     local w; w="$(cygpath -u "${SYSTEMROOT:-C:\Windows}")"
-    PATH="$PATH:$w/System32:$w/System32/WindowsPowerShell/v1.0" ;;
+    PATH="$PATH:$w/System32:$w/System32/WindowsPowerShell/v1.0:$(dirname "$real_git"):$(cygpath -u "$("$real_git" --exec-path)")"
+    export CHARTROOM_HERDR_ANY_OS=1 ;;
   esac
   export FAKE_LOG="$BATS_TEST_TMPDIR/fake.log"
   export GIT_CONFIG_GLOBAL="$BATS_TEST_TMPDIR/gitconfig"

@@ -13,6 +13,11 @@ setup() { common_setup; }
   [[ "$output" == *"subagent"*"only inside Claude Code"* ]]
   run cr doctor --json
   [ "$(jq -r .auto <<<"$output")" = null ]
+  # Git Bash: herdr stays off unless opted in (test_helper opts in for the other tests)
+  case "${OSTYPE:-}" in msys*|cygwin*)
+    CHARTROOM_HERDR_ANY_OS="" run cr doctor --json
+    [ "$(jq -r '.backends[]|select(.backend=="herdr:claude").reason' <<<"$output")" = "herdr on Windows is unverified (CHARTROOM_HERDR_ANY_OS=1 to try it)" ] ;;
+  esac
 }
 
 @test "doctor: CI disables session runners; harness=claude enables subagent" {

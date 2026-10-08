@@ -51,6 +51,7 @@ jobs:
     defaults:
       run:
         shell: bash
+    # The steps after bats run even when it fails, so each one still reports.
     steps:
       - uses: actions/checkout@v5
         with:
@@ -67,12 +68,14 @@ jobs:
       - name: no personal data
         run: scripts/privacy-gate.sh
       - name: bats
-        run: '"$(cygpath -u "$RUNNER_TEMP")/bats/bin/bats" test/'
+        run: '"$(cygpath -u "$RUNNER_TEMP")/bats/bin/bats" --print-output-on-failure test/'
       - name: doctor with only bash, jq and git
+        if: success() || failure()
         run: |
           export CHARTROOM_HOME="$(cygpath -u "$RUNNER_TEMP")/home"
           bin/chartroom doctor
       - name: install.sh and install-skills smoke test into a temp HOME
+        if: success() || failure()
         run: |
           export HOME="$(cygpath -u "$RUNNER_TEMP")/h" CHARTROOM_REPO="$(cygpath -u "$GITHUB_WORKSPACE")"
           mkdir -p "$HOME"
@@ -85,4 +88,5 @@ jobs:
           "$HOME/.local/bin/chartroom" install-skills --dir "$HOME/skills" --uninstall
           test ! -e "$HOME/skills/chartroom"
       - name: native interop (a native agent process, the dashboard under native python)
+        if: success() || failure()
         run: test/windows-smoke.sh

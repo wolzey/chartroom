@@ -121,13 +121,36 @@ detect_platform() {
     esac
   fi
   [[ "$CR_PLATFORM" =~ ^(posix|wsl|msys)$ ]] || die "CHARTROOM_PLATFORM must be posix, wsl or msys (got $CR_PLATFORM)"
-  # A native jq.exe under MSYS writes CRLF, which would leave a CR on every captured value;
-  # --binary turns that off. Probed, so an MSYS-built jq that writes LF is left alone.
-  if [[ "$CR_PLATFORM" == msys && "$(command jq -n 1 2>/dev/null)" == $'1\r' ]]; then
-    jq() { command jq -b "$@"; }
-    export -f jq
+  if [[ "$CR_PLATFORM" == msys ]]; then
+    # A native jq.exe under MSYS writes CRLF, which would leave a CR on every captured value;
+    # --binary turns that off. Probed, so an MSYS-built jq that writes LF is left alone.
+    CR_JQ_BINARY=""; [[ "$(command jq -n 1 2>/dev/null)" == $'1\r' ]] && CR_JQ_BINARY=1
+    export CR_JQ_BINARY
+    jq() { msys_jq "$@"; }
+    export -f jq msys_jq
   fi
   return 0
+}
+
+# Git Bash: run the native jq.exe with its arguments as written. MSYS would rewrite any
+# path-looking argument, so a --arg value such as /tmp/x (a worktree, the home, a steer
+# message starting with /) would be stored as C:/...; with that off, file operands (the
+# ones that exist) are converted to Windows paths here instead, in one cygpath call.
+msys_jq() {
+  local a i=0 skip=0 out=() files=() at=() conv=() bin=()
+  [[ -n "${CR_JQ_BINARY:-}" ]] && bin=(-b)
+  for a in "$@"; do
+    out+=("$a")
+    if (( skip > 0 )); then skip=$((skip - 1))
+    elif [[ "$a" == --arg || "$a" == --argjson ]]; then skip=2
+    elif [[ "$a" == /* && -e "$a" ]]; then files+=("$a"); at+=("$i"); fi
+    i=$((i + 1))
+  done
+  if (( ${#files[@]} > 0 )); then
+    mapfile -t conv < <(cygpath -m -- "${files[@]}")
+    for i in "${!at[@]}"; do out[${at[$i]}]="${conv[$i]}"; done
+  fi
+  MSYS2_ARG_CONV_EXCL='*' command jq "${bin[@]}" "${out[@]}"
 }
 
 # A path as native Windows programs (python.exe, claude.exe) read it: C:/chartroom/home on Git

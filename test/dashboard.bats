@@ -222,7 +222,7 @@ get() { curl -s --max-time 10 "$@"; }
 code() { curl -s -o /dev/null --max-time 10 -w '%{http_code}' "$@"; }
 start_daemon() {
   run cr dashboard --daemon --port 0 "$@"
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$CHARTROOM_HOME/.dashboard.log" 2>/dev/null; false; }
   [[ "$output" == *"dashboard running: http://127.0.0.1:"* ]]
   read -r SRV_PID PORT <"$CHARTROOM_HOME/.dashboard.pid"
   [[ "$PORT" =~ ^[0-9]+$ && "$PORT" -gt 0 ]]

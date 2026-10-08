@@ -10,7 +10,12 @@ t="$(mktemp -d)"
 export CHARTROOM_HOME="$t/home" CHARTROOM_CONFIG="$t/no-config"
 cr() { "$root/bin/chartroom" "$@"; }
 step() { printf '== %s\n' "$*"; }
-fail() { printf 'windows-smoke: FAIL: %s\n' "$*" >&2; [[ -z "${id:-}" ]] || cat "$CHARTROOM_HOME/tasks/$id/events.log" >&2; exit 1; }
+fail() {
+  printf 'windows-smoke: FAIL: %s\n' "$*" >&2
+  [[ -z "${id:-}" ]] || cat "$CHARTROOM_HOME/tasks/$id/events.log" >&2
+  [[ ! -f "$CHARTROOM_HOME/.dashboard.log" ]] || { echo "== .dashboard.log" >&2; cat "$CHARTROOM_HOME/.dashboard.log" >&2; }
+  exit 1
+}
 wait_for() { # <file> <regex> <seconds>
   local i; for i in $(seq 1 $(($3 * 4))); do grep -qE "$2" "$1" 2>/dev/null && return 0; sleep 0.25; done; return 1
 }
