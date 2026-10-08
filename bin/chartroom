@@ -370,7 +370,7 @@ cmd_join() {
   local where; where="$(joined_detect_pane "$id")"
   if [[ -n "$existing" ]]; then log_event "$id" note "re-joined${where:+ from $where}"
   else log_event "$id" note "dispatched via joined:$agent${where:+ ($where)}${pid:+, pid $pid}"; fi
-  local listen="CHARTROOM_HOME=$(printf '%q' "$CR_HOME") $(printf '%q' "$CR_BIN") listen $id"
+  local listen; listen="CHARTROOM_HOME=$(printf '%q' "$CR_HOME") $(printf '%q' "$CR_BIN") listen $id"
   printf 'id=%s\nbrief=%s\n' "$id" "$d/brief.md"
   [[ -n "$existing" ]] && echo "already joined: this session is task $id (record refreshed)"
   cat <<EOF
