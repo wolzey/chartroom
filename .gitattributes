@@ -1,0 +1,3 @@
+# LF everywhere, whatever core.autocrlf says: bash cannot run a CRLF script, and Git for
+# Windows checks text out as CRLF by default.
+* text=auto eol=lf
