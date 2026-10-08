@@ -43,14 +43,16 @@ codex_notify_args() { # <id>
 
 # Claude Code hooks for interactive sessions (tmux, cmux): turn end, approval/idle
 # prompts and prompt receipt become events. Written per task, loaded with --settings.
-claude_settings_file() { # <id> -> path
-  local id="$1" f h
+# "prompt" mode (herdr, which tracks turn state itself) adds only UserPromptSubmit, so
+# delivery can be checked against the submitted text without doubling herdr's wakes.
+claude_settings_file() { # <id> [all|prompt] -> path
+  local id="$1" mode="${2:-all}" f h
   f="$(tdir "$id")/claude-settings.json"
   h="CHARTROOM_HOME=$(printf '%q' "$CR_HOME") $(printf '%q' "$CR_BIN") hook $id"
-  jq -n --arg stop "$h stop" --arg notif "$h notification" --arg sub "$h prompt-submit" '{hooks:{
-    Stop:[{hooks:[{type:"command",command:$stop}]}],
-    Notification:[{hooks:[{type:"command",command:$notif}]}],
-    UserPromptSubmit:[{hooks:[{type:"command",command:$sub}]}]}}' >"$f"
+  jq -n --arg stop "$h stop" --arg notif "$h notification" --arg sub "$h prompt-submit" --arg mode "$mode" '{hooks:(
+    (if $mode == "all" then {Stop:[{hooks:[{type:"command",command:$stop}]}],
+      Notification:[{hooks:[{type:"command",command:$notif}]}]} else {} end)
+    + {UserPromptSubmit:[{hooks:[{type:"command",command:$sub}]}]})}' >"$f"
   printf '%s' "$f"
 }
 
@@ -62,7 +64,7 @@ claude_common_args() { # <id> <permission-mode or "">
   printf '%s\n' --add-dir "$(tdir "$1")"
 }
 
-# Full argv (one per line) for an interactive agent session. <hooks:1|0>
+# Full argv (one per line) for an interactive agent session. <hooks:1|0|prompt>
 interactive_argv() { # <id> <agent> <hooks>
   local id="$1" agent="$2" hooks="$3" b
   b="$(agent_bin "$agent")"; [[ -n "$b" ]] || die "$agent not on PATH"
@@ -72,6 +74,7 @@ interactive_argv() { # <id> <agent> <hooks>
       local perm; perm="$(meta "$id" permission)"
       claude_common_args "$id" "${perm:-$CR_CLAUDE_PERMISSION}"
       [[ "$hooks" == 1 ]] && printf '%s\n' --settings "$(claude_settings_file "$id")"
+      [[ "$hooks" == prompt ]] && printf '%s\n' --settings "$(claude_settings_file "$id" prompt)"
       ;;
     codex)
       # Interactive codex otherwise self-updates on launch and exits, losing the brief.

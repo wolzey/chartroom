@@ -154,6 +154,62 @@ setup() { common_setup; }
   grep -q "kill-pane -t %1" "$FAKE_TMUX_DIR/calls.log"
 }
 
+@test "tmux:claude steer: delivered only when the hook's prompt matches the full text" {
+  use_fake tmux claude
+  export FAKE_TMUX_DIR="$BATS_TEST_TMPDIR/tmux"
+  id="$(new_task --backend tmux:claude)"
+  export FAKE_TMUX_TASK="$id"
+  cr dispatch "$id" >/dev/null
+  # the brief's prompt was confirmed by its signature
+  sig="$(printf '%s' "Read the brief at $CHARTROOM_HOME/tasks/$id/brief.md and follow it exactly. Your task id is $id." | (source "$REPO_ROOT/lib/core.sh"; text_sig))"
+  events "$id" | grep -q "agent: prompt-received sig=$sig len="
+  # a full match
+  run cr steer "$id" "rebase on main, then rerun the tests"
+  [ "$status" -eq 0 ]
+  [ "$output" = "delivered (the agent received the full text)" ]
+  # a fragment once: logged, input cleared, retyped, then confirmed
+  FAKE_TMUX_DROP=5 run cr steer "$id" "use the staging database for this run"
+  [ "$status" -eq 0 ]
+  [ "$output" = "delivered (the agent received the full text)" ]
+  events "$id" | grep -q "note: delivery mismatch: the agent received other text (sig=[0-9a-f]* len=32; expected sig=[0-9a-f]* len=37)"
+  grep -q -- "send-keys -t %1 C-u" "$FAKE_TMUX_DIR/calls.log"
+  # a prompt the session makes itself, arriving first, is not a mismatch and causes no retype
+  : >"$FAKE_TMUX_DIR/calls.log"
+  FAKE_TMUX_NOISE=1 run cr steer "$id" "notify-proof message"
+  [ "$status" -eq 0 ]
+  [ "$output" = "delivered (the agent received the full text)" ]
+  [ "$(grep -c -- '-l -- notify-proof message' "$FAKE_TMUX_DIR/calls.log")" -eq 1 ]
+  [ "$(events "$id" | grep -c 'delivery mismatch')" -eq 1 ]
+  # fragments every time: it fails loudly and never says delivered
+  rm -f "$FAKE_TMUX_DIR/drops"
+  FAKE_TMUX_DROP=3 FAKE_TMUX_DROP_TIMES=99 run cr steer "$id" "ship it after the review"
+  [ "$status" -ne 0 ]
+  [[ "$output" != *delivered* ]]
+  [[ "$output" == *"received only part of it"* ]]
+  [ "$(events "$id" | grep -c 'delivery mismatch')" -ge 4 ]
+}
+
+@test "tmux:claude steer: a long or multi-line message goes via a file and a short pointer" {
+  use_fake tmux claude
+  export FAKE_TMUX_DIR="$BATS_TEST_TMPDIR/tmux"
+  id="$(new_task --backend tmux:claude)"
+  export FAKE_TMUX_TASK="$id"
+  cr dispatch "$id" >/dev/null
+  long="$(printf 'step %s; ' $(seq 1 80))"
+  run cr steer "$id" "$long"
+  [ "$status" -eq 0 ]
+  [[ "$output" == "delivered (the agent received the full one-line pointer; the message is in $CHARTROOM_HOME/tasks/$id/messages/)" ]]
+  [ "$(cat "$CHARTROOM_HOME/tasks/$id/messages/1.md")" = "$long" ]
+  grep -q -- "-l -- Message from the XO (${#long} characters, in a file so nothing is cut): read $CHARTROOM_HOME/tasks/$id/messages/1.md and act on it." "$FAKE_TMUX_DIR/calls.log"
+  events "$id" | grep -qF "steered: $long"
+  run cr steer "$id" "two
+lines"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$CHARTROOM_HOME/tasks/$id/messages/2.md")" = $'two\nlines' ]
+  # the event log stays one line per event
+  events "$id" | grep -q "steered: two lines$"
+}
+
 @test "tmux: a trust dialog is answered only for chartroom's own worktree" {
   use_fake tmux claude
   export FAKE_TMUX_DIR="$BATS_TEST_TMPDIR/tmux"; mkdir -p "$FAKE_TMUX_DIR"
@@ -257,4 +313,14 @@ setup() { common_setup; }
   [ "$status" -eq 0 ]
   [[ "$output" == *"run_in_background: true"* ]]
   [ "$(cr status --json | jq -r '.[0].live')" = in-session ]
+}
+
+@test "herdr claude workers get only the prompt hook; tmux/cmux get all three" {
+  use_fake claude
+  id="$(new_task --backend herdr:claude)"
+  run bash -c "source '$REPO_ROOT/lib/core.sh'; source '$REPO_ROOT/lib/agents.sh'; CR_BIN='$CHARTROOM'; load_config; interactive_argv '$id' claude prompt"
+  [[ "$output" == *"--settings"* ]]
+  [ "$(jq -c '.hooks|keys' "$CHARTROOM_HOME/tasks/$id/claude-settings.json")" = '["UserPromptSubmit"]' ]
+  run bash -c "source '$REPO_ROOT/lib/core.sh'; source '$REPO_ROOT/lib/agents.sh'; CR_BIN='$CHARTROOM'; load_config; interactive_argv '$id' claude 1"
+  [ "$(jq -c '.hooks|keys' "$CHARTROOM_HOME/tasks/$id/claude-settings.json")" = '["Notification","Stop","UserPromptSubmit"]' ]
 }

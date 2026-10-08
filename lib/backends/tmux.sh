@@ -37,7 +37,7 @@ tmux_type() { tmx send-keys -t "$(meta "$1" tmux_pane)" -l -- "$2"; }
 tmux_keys() {
   local id="$1" k; shift
   for k in "$@"; do
-    case "$k" in enter) k=Enter ;; esc) k=Escape ;; down) k=Down ;; esac
+    case "$k" in enter) k=Enter ;; esc) k=Escape ;; down) k=Down ;; clear) k=C-u ;; esac
     tmx send-keys -t "$(meta "$id" tmux_pane)" "$k"; sleep 0.3
   done
 }
