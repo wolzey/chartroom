@@ -106,6 +106,8 @@ setup() { common_setup; }
   [[ "$output" == *"steering: live"* ]]
   sid="$(meta_of "$id" session_id)"
   [[ "$sid" =~ ^[0-9a-f-]{36}$ ]]
+  # The fake logs its argv once it runs, which can be just after dispatch returns.
+  for _ in $(seq 1 50); do grep -q -- "--session-id $sid" "$FAKE_LOG" 2>/dev/null && break; sleep 0.1; done
   grep -q -- "-p --input-format stream-json --output-format stream-json --verbose --replay-user-messages --permission-mode acceptEdits --add-dir $CHARTROOM_HOME/tasks/$id --allowedTools Bash" "$FAKE_LOG"
   grep -q -- "--session-id $sid" "$FAKE_LOG"
   sleep 1
