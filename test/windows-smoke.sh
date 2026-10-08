@@ -38,13 +38,14 @@ for c in python3 python; do
 done
 [[ -n "$py" ]] || fail "no python 3.8+"
 
-# A native "claude": python.exe speaking just enough stream-json, like test/fakes/claude.
+# A native "claude": python.exe speaking just enough stream-json, like test/fakes/claude
+# (compact, as claude writes it: the wrapper looks for "type":"result").
 mkdir -p "$t/bin"
 cat >"$t/chartroom-smoke-agent.py" <<'PY'
 import json, os, sys, time
 out = sys.stdout.buffer
 def emit(o):
-    out.write((json.dumps(o) + "\n").encode()); out.flush()
+    out.write((json.dumps(o, separators=(",", ":")) + "\n").encode()); out.flush()
 emit({"type": "system", "subtype": "init"})
 for line in sys.stdin.buffer:
     out.write(line.rstrip(b"\r\n") + b"\n"); out.flush()

@@ -65,8 +65,11 @@ get() { curl -s --max-time 10 "$@"; }
   # ...a path-looking --arg value (the project) reaches jq untouched, never through cygpath...
   grep -qF -- "--arg project $PROJECT " "$FAKE_JQ_LOG"
   [ -z "$(grep '^cygpath' "$FAKE_LOG" | grep -F -- "$PROJECT")" ]
-  # ...and a file operand goes through cygpath -m
-  grep -qF -- "cygpath -m -- $CHARTROOM_HOME/tasks/$id/meta.json" "$FAKE_LOG"
+  # ...and a file operand goes through cygpath -m (one under /tmp is converted in bash)
+  case "$CHARTROOM_HOME" in
+    /tmp/*) [ -z "$(grep '^cygpath -m -- ' "$FAKE_LOG" | grep -F -- "$CHARTROOM_HOME/tasks/$id/meta.json")" ] ;;
+    *) grep -qF -- "cygpath -m -- $CHARTROOM_HOME/tasks/$id/meta.json" "$FAKE_LOG" ;;
+  esac
 }
 
 @test "config: a CRLF config file (saved by a Windows editor) gives clean values" {
