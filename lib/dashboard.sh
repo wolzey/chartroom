@@ -239,7 +239,9 @@ cmd_dashboard() {
   nohup "${CR_PY[@]}" "${args[@]}" >"$log" 2>&1 </dev/null &
   local child=$!
   for i in $(seq 1 100); do
-    # On Git Bash $! is an MSYS pid and the pid file holds python's Windows pid.
+    # On Git Bash $! is an MSYS pid and the pid file holds python's Windows pid, so a server
+    # that could not bind shows only in its log.
+    [[ "$CR_PLATFORM" == msys ]] && grep -q 'cannot listen' "$log" 2>/dev/null && break
     if read -r pid p < <(dashboard_running) && [[ "$pid" == "$child" || "$CR_PLATFORM" == msys ]]; then
       echo "dashboard running: http://127.0.0.1:$p (pid $pid; log $log; stop with: chartroom dashboard stop)"
       return 0
