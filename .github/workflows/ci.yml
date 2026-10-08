@@ -42,11 +42,10 @@ jobs:
           CHARTROOM_REF=ci-install bash install.sh
           "$HOME/.local/bin/chartroom" version
 
-  # Git Bash on Windows. Non-blocking until its first green run; then drop continue-on-error.
-  # (WSL2 is Linux, which the ubuntu job covers; hosted runners cannot run WSL2 reliably.)
+  # Git Bash on Windows. (WSL2 is Linux, which the ubuntu job covers; hosted runners cannot
+  # run WSL2 reliably.)
   windows:
     runs-on: windows-latest
-    continue-on-error: true
     timeout-minutes: 50
     defaults:
       run:

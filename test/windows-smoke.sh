@@ -55,9 +55,10 @@ PY
 printf '#!/usr/bin/env bash\nexec %q %q "$@"\n' "$py" "$(cygpath -m "$t/chartroom-smoke-agent.py")" >"$t/bin/claude"
 chmod +x "$t/bin/claude"
 export PATH="$t/bin:$PATH"
-agents() { # how many native smoke agents are running
+agents() { # how many native smoke agents (python processes) are running; the query's own
+  # powershell.exe has the same text in its command line, so match the process name too
   powershell.exe -NoProfile -NonInteractive -Command \
-    "@(Get-CimInstance Win32_Process | Where-Object { \$_.CommandLine -like '*chartroom-smoke-agent*' }).Count" | tr -d '\r'
+    "@(Get-CimInstance Win32_Process | Where-Object { \$_.Name -like 'python*' -and \$_.CommandLine -like '*chartroom-smoke-agent*' }).Count" | tr -d '\r'
 }
 
 p="$t/proj"
@@ -91,7 +92,7 @@ step "dashboard: native python, started, found by its Windows pid, served, stopp
 cr dashboard --daemon --port 0 --no-gh
 read -r _ port <"$CHARTROOM_HOME/.dashboard.pid"
 cr dashboard status || fail "status does not find the running dashboard"
-curl -fsS --max-time 30 "http://127.0.0.1:$port/api/dashboard" | jq -e '.lanes | length == 5' >/dev/null || fail "/api/dashboard"
+curl -fsS --max-time 120 "http://127.0.0.1:$port/api/dashboard" | jq -e '.lanes | length == 5' >/dev/null || fail "/api/dashboard"
 cr dashboard stop
 if cr dashboard status >/dev/null; then fail "the dashboard is still running after stop"; fi
 

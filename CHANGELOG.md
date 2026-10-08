@@ -23,8 +23,7 @@ are stable from 0.1.0.
   herdr is off on Git Bash unless `CHARTROOM_HERDR_ANY_OS=1`. `doctor` prints the platform and
   notes on Windows only (`--json` adds `platform` and `notes` there); macOS and Linux output is
   unchanged. `CHARTROOM_PLATFORM` overrides the detection. README: a Windows section. CI: a
-  windows-latest job (Git Bash: bats, install, and a native-process smoke test), non-blocking
-  until its first green run.
+  windows-latest job (Git Bash: bats, install, and a native-process smoke test).
 - A rulings ledger. `chartroom rule add --topic <slug> "<text>"` appends the commander's
   lasting preference to `rulings.log` (`<ts> [r-xxxx] topic=... supersedes=... src=... :: text`,
   append-only); the newest ruling in a topic wins and records the one it supersedes, and the
