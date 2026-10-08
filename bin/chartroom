@@ -829,7 +829,10 @@ watch_scan_lines() { # <id> <from-offset> <to-offset>
       exited) reported_upto "$id" "$pos" || wake "$id" "$line" ;;
       agent)
         case "$line" in
-          *" agent: turn-ended"*) reported_upto "$id" "$pos" || wake "$id" "$line (stopped its turn without reporting)" ;;
+          # A joined session ending its turn with its listener armed is at rest, not silent.
+          *" agent: turn-ended"*)
+            is_joined "$id" && listener_alive "$id" && continue
+            reported_upto "$id" "$pos" || wake "$id" "$line (stopped its turn without reporting)" ;;
           *" agent: awaiting-input"*) wake "$id" "$line" ;;
         esac ;;
     esac
