@@ -529,7 +529,12 @@ cmd_hook() {
   [[ -n "$id" && -f "$(tdir "$id")/meta.json" ]] || exit 0
   case "$what" in
     stop) log_event "$id" agent "turn-ended" ;;
-    prompt-submit) log_event "$id" agent "prompt-received" ;;
+    prompt-submit)
+      # Records what was submitted (as a signature), so steer can tell the full text from a fragment.
+      [[ -n "$payload" || -t 0 ]] || payload="$(cat 2>/dev/null || true)"
+      msg="$(jq -r '.prompt // empty' <<<"$payload" 2>/dev/null || true)"
+      if [[ -n "$msg" ]]; then log_event "$id" agent "prompt-received sig=$(printf '%s' "$msg" | text_sig) len=${#msg}"
+      else log_event "$id" agent "prompt-received"; fi ;;
     notification)
       [[ -n "$payload" ]] || payload="$(cat 2>/dev/null || true)"
       # A joined session parked on its listener is idle on purpose; that is not a prompt.

@@ -18,8 +18,21 @@ case "$cmd" in
     if [[ "${*: -1}" == '#{pane_pid}' ]]; then echo "${FAKE_TMUX_PANE_PID:-999999}"; else echo "$t"; fi ;;
   capture-pane) cat "$S/screen" 2>/dev/null || printf '❯ \n' ;;
   send-keys)
+    # -l text accumulates in the input box; C-u clears it; Enter submits it to the
+    # UserPromptSubmit hook as {"prompt": ...}. FAKE_TMUX_DROP=N cuts N leading characters
+    # from the next FAKE_TMUX_DROP_TIMES (default 1) submits, like a truncated paste.
     last="${*: -1}"
-    if [[ "$last" == Enter && -n "${FAKE_TMUX_TASK:-}" ]]; then "${CHARTROOM_BIN:?}" hook "$FAKE_TMUX_TASK" prompt-submit; fi ;;
+    if [[ " $* " == *" -l "* ]]; then printf '%s' "$last" >>"$S/typed"
+    elif [[ "$last" == C-u ]]; then : >"$S/typed"
+    elif [[ "$last" == Enter && -n "${FAKE_TMUX_TASK:-}" ]]; then
+      p="$(cat "$S/typed" 2>/dev/null)"; : >"$S/typed"
+      n="$(cat "$S/drops" 2>/dev/null || echo 0)"
+      if [[ -n "${FAKE_TMUX_DROP:-}" && $n -lt ${FAKE_TMUX_DROP_TIMES:-1} ]]; then p="${p:$FAKE_TMUX_DROP}"; echo $((n + 1)) >"$S/drops"; fi
+      # FAKE_TMUX_NOISE: the session submits a prompt of its own first (a background task's
+      # completion notice), as Claude Code does.
+      [[ -n "${FAKE_TMUX_NOISE:-}" ]] && jq -cn '{prompt:"<task-notification>background command completed</task-notification>"}' | "${CHARTROOM_BIN:?}" hook "$FAKE_TMUX_TASK" prompt-submit
+      jq -cn --arg p "$p" '{prompt:$p}' | "${CHARTROOM_BIN:?}" hook "$FAKE_TMUX_TASK" prompt-submit
+    fi ;;
   kill-pane) t="$(target "$@")"; rm -f "$S/panes/${t#%}" ;;
   switch-client|attach-session) : ;;
   *) : ;;

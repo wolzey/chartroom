@@ -42,7 +42,7 @@ cmux is implemented against its documented CLI but **unverified on a real cmux i
 
 | Mode | Backends | What `steer` does |
 |---|---|---|
-| live | herdr, cmux, tmux, headless:claude | Delivers now and confirms it was taken (agent hook, replayed message, or screen state) |
+| live | herdr, cmux, tmux, headless:claude | Delivers now and confirms it was taken: Claude in tmux/cmux by the prompt hook's signature of the submitted text, headless:claude by the replayed message, herdr by its agent state or the text on screen; Codex sessions report `submitted, not verified` |
 | between-runs | headless:codex, command | Refuses while running; afterwards resumes (`codex exec resume`) or re-runs the template with the message. `command` also has `steer --inbox` (best effort) |
 | host | subagent | Records it; you deliver it with your harness's message tool |
 | mailbox | joined:<agent> | Writes to the joined session's mailbox; "delivered" only once its listener (or `listen --check`) read it, else "queued, not yet read" |
@@ -81,10 +81,23 @@ Headless runs (`claude -p`, `codex exec`) show no dialog.
 - Turn ends and prompts come from the agent, not the screen: Claude is launched with
   `--settings tasks/<id>/claude-settings.json` adding `Stop`, `Notification` and
   `UserPromptSubmit` hooks that run `chartroom hook`; Codex gets
-  `-c notify=[chartroom, hook, <id>, codex-notify]`. Delivery is confirmed by the
-  `prompt-received` hook (Claude) or Codex's "esc to interrupt" working line.
+  `-c notify=[chartroom, hook, <id>, codex-notify]`.
+- Delivery to Claude (tmux and cmux) is confirmed against the text actually submitted: the
+  `UserPromptSubmit` hook logs `agent: prompt-received sig=<12 hex> len=<n>` (sha256 of the
+  prompt, whitespace collapsed), and `steer` says `delivered` only when that matches what it
+  typed. If another signature arrives and ours does not within `CHARTROOM_DELIVER_WAIT`, it logs
+  `note: delivery mismatch ...`, clears the input (Ctrl-U per wrapped line), retypes, and after
+  3 mismatches fails loudly. A prompt the session makes itself (a background task's
+  completion notice) arriving first is not a mismatch. Verified on Claude Code 2.1.293,
+  including a message sent mid-turn (the hook fires when Claude takes the queued message).
+- Messages longer than `CHARTROOM_STEER_INLINE_MAX` (default 300) characters, or with a
+  newline, are not typed: they go to `tasks/<id>/messages/<n>.md` and the agent gets a one-line
+  pointer ("Message from the XO ...: read <file> and act on it."). Typing them was where text got
+  cut (a newline submits early; a long paste races Enter). The confirmation then covers the
+  pointer, not the agent's reading of the file.
 - Codex has no prompt-submitted or approval hook, so for Codex sessions delivery confirmation
-  reads the screen, and approval prompts are not signalled. This is weaker than Claude, and
+  reads the screen ("esc to interrupt") and cannot check the text: `steer` says `submitted, not
+  verified`, never `delivered`. Approval prompts are not signalled. This is weaker than Claude, and
   Codex may report an intermediate turn end while it is still working.
 - `attach` = `tmux attach` (or `switch-client` inside tmux). `close` kills the window.
 

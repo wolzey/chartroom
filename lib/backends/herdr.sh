@@ -27,15 +27,42 @@ herdr_alive() { [[ -n "$(herdr_status "$1")" ]]; }
 herdr_screen() { herdr agent read "$1" --source visible --lines 40; }
 herdr_keys() { local id="$1" k; shift; for k in "$@"; do herdr agent send-keys "$id" "$k" >/dev/null; sleep 0.3; done; }
 
-herdr_deliver() { # <agent> <text> - submit and confirm the agent actually took the prompt
-  local name="$1" text="$2" i st
-  for i in 1 2 3 4; do
+# Submit and confirm the agent took the prompt: 0 confirmed, 2 taken but text unchecked, 1 failed.
+# Claude workers carry a UserPromptSubmit hook (prompt mode), so the submitted text's signature
+# is checked exactly as for tmux; a mismatch clears the input (ctrl+u) and resubmits, at most 3
+# times. Without that hook (codex, or a worker launched before it existed) herdr's own state
+# ("working") or the text's start on screen only shows that a prompt was taken.
+herdr_deliver() { # <id> <text>
+  local name="$1" text="$2" f i t st before new got="" want="" mismatches=0 n
+  f="$(tdir "$name")/events.log"
+  [[ "$(backend_agent "$name")" == claude ]] && jq -e '.hooks.UserPromptSubmit' "$(tdir "$name")/claude-settings.json" >/dev/null 2>&1 &&
+    want="$(printf '%s' "$text" | text_sig)"
+  for i in 1 2 3 4 5 6; do
+    before="$(wc -c <"$f")"
     herdr agent prompt "$name" "$text" >/dev/null 2>&1 || true
-    sleep 3
+    if [[ -n "$want" ]]; then
+      got=""
+      for t in $(seq 1 "$CR_DELIVER_WAIT"); do
+        sleep 1
+        new="$(tail -c +"$((before + 1))" "$f")"
+        grep -q " agent: prompt-received sig=$want " <<<"$new" && return 0
+        got="$(grep -oE ' agent: prompt-received sig=[0-9a-f]+ len=[0-9]+' <<<"$new" | tail -1 || true)"
+      done
+      if [[ -n "$got" ]]; then
+        mismatches=$((mismatches + 1))
+        log_event "$name" note "delivery mismatch: the agent received other text (${got#* agent: prompt-received }; expected sig=$want len=${#text}); clearing its input and retrying"
+        [[ $mismatches -ge 3 ]] && return 1
+        n=$(( ${#text} / 60 + 3 )); while (( n-- > 0 )); do herdr agent send-keys "$name" ctrl+u >/dev/null 2>&1 || true; done
+        continue
+      fi
+    else
+      sleep 3
+    fi
     st="$(herdr_status "$name")"
     if [[ "$st" == working ]] || herdr agent read "$name" --source recent --lines 80 2>/dev/null | grep -qF "${text:0:40}"; then
-      return 0
+      return 2
     fi
+    [[ $i -ge 4 ]] && break
     sleep 2
   done
   return 1
@@ -54,7 +81,7 @@ herdr_launch() { # <id> <wt> <agent>
 
   local start=(agent start "$id" --kind "$agent" --pane "$pane" --timeout 60000) extra=() out i
   # herdr starts the agent binary itself; pass the same flags chartroom uses elsewhere.
-  mapfile -t extra < <(interactive_argv "$id" "$agent" 0 | tail -n +2)
+  mapfile -t extra < <(interactive_argv "$id" "$agent" "$([[ "$agent" == claude ]] && echo prompt || echo 0)" | tail -n +2)
   [[ ${#extra[@]} -gt 0 ]] && start+=(-- "${extra[@]}")
   for i in $(seq 1 40); do
     if out="$(herdr "${start[@]}" 2>&1)"; then break; fi
@@ -64,7 +91,8 @@ herdr_launch() { # <id> <wt> <agent>
   sleep 1
   handle_trust "$id" "$agent" herdr_screen herdr_keys || true
   herdr agent wait "$id" --until idle --until "done" --timeout 30000 >/dev/null 2>&1 || true
-  herdr_deliver "$id" "$(task_prompt "$id")" || die "agent started but did not take the brief; inspect tab $tab"
+  local rc=0; herdr_deliver "$id" "$(task_prompt "$id")" || rc=$?
+  [[ $rc -eq 1 ]] && die "agent started but did not take the brief; inspect tab $tab"
   echo "herdr $agent worker running (workspace $CR_WORKSPACE, tab $tab)"
 }
 
@@ -74,8 +102,9 @@ herdr_live() {
 }
 herdr_steer() {
   log_event "$1" steered "$2"
-  herdr_deliver "$1" "$2" || die "agent did not take the message; check: chartroom peek $1"
-  echo "delivered"
+  local text rc=0; text="$(steer_text "$1" "$2")"
+  herdr_deliver "$1" "$text" || rc=$?
+  steer_result "$1" "$2" "$text" "$rc"
 }
 herdr_stop() { herdr agent send-keys "$1" esc >/dev/null 2>&1 || true; }
 herdr_peek() { echo "== pane (recent)"; herdr agent read "$1" --source recent --lines "$(($2 * 3))" 2>/dev/null | grep -v '^\s*$' | tail -n "$(($2 * 2))"; return 0; }

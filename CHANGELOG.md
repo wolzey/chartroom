@@ -89,6 +89,21 @@ are stable from 0.1.0.
   creates it (never overwrites), `chartroom status` prints a one-line count of open items,
   the XO skill keeps it current, and `bearings` folds its waiting items into "Needs you".
 
+### Fixed
+- `steer` to a Claude session worker (tmux, cmux, herdr) no longer says `delivered` when only a
+  fragment of the message was submitted. The UserPromptSubmit hook now records a signature of
+  the submitted prompt (`agent: prompt-received sig=<12 hex> len=<n>`) and delivery is confirmed
+  only when it matches the text typed; on a mismatch chartroom clears the input, retypes (at most
+  3 times) and then fails. herdr Claude workers get that one hook (prompt mode) for this. Codex
+  sessions have no prompt hook and now report `submitted, not verified` instead of `delivered`.
+- Messages longer than `CHARTROOM_STEER_INLINE_MAX` (default 300) characters, or with a newline,
+  are written to `tasks/<id>/messages/<n>.md` and the agent gets a one-line pointer to it, instead
+  of being typed into the TUI where a newline submitted early or a long paste raced Enter.
+- Event lines stay one per line: a newline in an event's text (a multi-line steer) is written as
+  a space.
+- `watch` no longer raises "stopped its turn without reporting" for a joined session that ends a
+  turn with its listener armed, its normal resting state; it still does when no listener is armed.
+
 ### Changed
 - README reads on its own: the comparison with another project is gone; the differences that
   matter are listed under Design.
