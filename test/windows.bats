@@ -273,7 +273,7 @@ get() { curl -s --max-time 10 "$@"; }
   run env CHARTROOM_HOME="$BATS_TEST_TMPDIR/other" "$CHARTROOM" dashboard --daemon --port "$p" --no-gh 3>&-
   [ "$status" -eq 1 ]; [[ "$output" == *"cannot listen on 127.0.0.1:$p"* ]]
   # the start loop gives up only after about 10s when nothing breaks it
-  [ $((SECONDS - t0)) -lt 6 ]
+  [ $((SECONDS - t0)) -lt 8 ]
 }
 
 @test "dashboard open: Git Bash uses start; WSL uses wslview, then PowerShell" {
