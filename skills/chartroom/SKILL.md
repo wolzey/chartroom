@@ -192,6 +192,12 @@ to the stream) and confirm it was taken. Between-runs backends refuse while the 
 running, then resume or re-run it with your message. For subagents it records the answer, and
 you then deliver it with your harness's message tool.
 
+A **joined** task (backend `joined:<agent>`) is a session the commander started themselves
+and told "join chartroom": it wrote its own brief, works in its own directory, and is never
+dispatched. `steer` goes to its mailbox: `delivered` means it read the message; `queued, not
+yet read` means it has not yet, so do not claim delivery. Claude Code sessions wake on it;
+others read between steps. `close` only marks it closed; its directory is never touched.
+
 ## Talking to the commander
 
 - **Outcomes, consequences, decisions.** Keep the machinery below deck. No task ids,

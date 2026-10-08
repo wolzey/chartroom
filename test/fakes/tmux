@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # fake tmux: enough of the CLI for chartroom's tmux runner. State in $FAKE_TMUX_DIR.
 # Pressing Enter simulates Claude's UserPromptSubmit hook for task $FAKE_TMUX_TASK.
-[[ "${1:-}" == -L ]] && shift 2
+[[ "${1:-}" == -L || "${1:-}" == -S ]] && shift 2
 [[ "${1:-}" == -V ]] && { echo "tmux ${FAKE_TMUX_VERSION:-3.4}"; exit 0; }
 S="${FAKE_TMUX_DIR:?}"; mkdir -p "$S/panes"
 printf '%s\n' "$*" >>"$S/calls.log"
@@ -13,11 +13,26 @@ case "$cmd" in
   new-session|new-window)
     touch "$S/session"; n=$(( $(ls "$S/panes" | wc -l) + 1 )); echo "%$n" >"$S/panes/$n"; echo "%$n" ;;
   pipe-pane) : ;;
-  display-message) t="$(target "$@")"; [[ -f "$S/panes/${t#%}" ]] && echo "$t" ;;
+  display-message)
+    t="$(target "$@")"; [[ -f "$S/panes/${t#%}" ]] || exit 1
+    if [[ "${*: -1}" == '#{pane_pid}' ]]; then echo "${FAKE_TMUX_PANE_PID:-999999}"; else echo "$t"; fi ;;
   capture-pane) cat "$S/screen" 2>/dev/null || printf '❯ \n' ;;
   send-keys)
+    # -l text accumulates in the input box; C-u clears it; Enter submits it to the
+    # UserPromptSubmit hook as {"prompt": ...}. FAKE_TMUX_DROP=N cuts N leading characters
+    # from the next FAKE_TMUX_DROP_TIMES (default 1) submits, like a truncated paste.
     last="${*: -1}"
-    if [[ "$last" == Enter && -n "${FAKE_TMUX_TASK:-}" ]]; then "${CHARTROOM_BIN:?}" hook "$FAKE_TMUX_TASK" prompt-submit; fi ;;
+    if [[ " $* " == *" -l "* ]]; then printf '%s' "$last" >>"$S/typed"
+    elif [[ "$last" == C-u ]]; then : >"$S/typed"
+    elif [[ "$last" == Enter && -n "${FAKE_TMUX_TASK:-}" ]]; then
+      p="$(cat "$S/typed" 2>/dev/null)"; : >"$S/typed"
+      n="$(cat "$S/drops" 2>/dev/null || echo 0)"
+      if [[ -n "${FAKE_TMUX_DROP:-}" && $n -lt ${FAKE_TMUX_DROP_TIMES:-1} ]]; then p="${p:$FAKE_TMUX_DROP}"; echo $((n + 1)) >"$S/drops"; fi
+      # FAKE_TMUX_NOISE: the session submits a prompt of its own first (a background task's
+      # completion notice), as Claude Code does.
+      [[ -n "${FAKE_TMUX_NOISE:-}" ]] && jq -cn '{prompt:"<task-notification>background command completed</task-notification>"}' | "${CHARTROOM_BIN:?}" hook "$FAKE_TMUX_TASK" prompt-submit
+      jq -cn --arg p "$p" '{prompt:$p}' | "${CHARTROOM_BIN:?}" hook "$FAKE_TMUX_TASK" prompt-submit
+    fi ;;
   kill-pane) t="$(target "$@")"; rm -f "$S/panes/${t#%}" ;;
   switch-client|attach-session) : ;;
   *) : ;;

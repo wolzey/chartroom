@@ -61,7 +61,7 @@ cmux_type() { cmuxc send $(cmux_ws_args "$1") -- "${2//$'\n'/ }" >/dev/null; }
 cmux_keys() {
   local id="$1" k; shift
   for k in "$@"; do
-    case "$k" in esc) k=escape ;; esac
+    case "$k" in esc) k=escape ;; clear) k=ctrl+u ;; esac
     # --force: a key must reach an open dialog (the trust prompt), which cmux otherwise guards.
     cmuxc send-key --force $(cmux_ws_args "$id") "$k" >/dev/null; sleep 0.3
   done

@@ -100,6 +100,8 @@ load_config() {
   CR_CLAUDE_ALLOWED_TOOLS="$(cfg CLAUDE_ALLOWED_TOOLS '' 'Bash Read Edit Write Glob Grep WebFetch WebSearch')"
   CR_COMMAND="$(cfg COMMAND '' '')"
   CR_DELIVER_WAIT="$(cfg DELIVER_WAIT '' 8)"
+  CR_JOIN_ACK_WAIT="$(cfg JOIN_ACK_WAIT '' 20)"
+  CR_STEER_INLINE_MAX="$(cfg STEER_INLINE_MAX '' 300)"
   CR_WAITING_GRACE="$(cfg WAITING_GRACE_MINUTES '' 15)"
   CR_WAITING_MAX="$(cfg WAITING_MAX_MINUTES '' 120)"
   [[ "$CR_WAITING_GRACE$CR_WAITING_MAX" =~ ^[0-9]+$ ]] || die "CHARTROOM_WAITING_GRACE_MINUTES and CHARTROOM_WAITING_MAX_MINUTES must be whole minutes"
@@ -199,7 +201,8 @@ meta_set() { # meta_set <id> <key> <string-value>
   local f; f="$(tdir "$1")/meta.json"
   jq --arg k "$2" --arg v "$3" '.[$k]=$v | .updated=(now|todate)' "$f" >"$f.tmp" && mv "$f.tmp" "$f"
 }
-log_event() { printf '%s %s: %s\n' "$(now)" "$2" "$3" >>"$(tdir "$1")/events.log"; }
+# One line per event, always: newlines in the text become spaces.
+log_event() { printf '%s %s: %s\n' "$(now)" "$2" "${3//$'\n'/ }" >>"$(tdir "$1")/events.log"; }
 pid_alive() { [[ -n "${1:-}" ]] && kill -0 "$1" 2>/dev/null; }
 
 slugify() {
@@ -211,6 +214,14 @@ slugify() {
 
 # The worker's single instruction, identical on every backend.
 task_prompt() { printf 'Read the brief at %s/brief.md and follow it exactly. Your task id is %s.' "$(win_path "$(tdir "$1")")" "$1"; }
+
+# A short signature of a prompt's text: whitespace runs collapsed and trimmed, so a typed
+# message and what the agent's prompt hook received compare equal; first 12 hex of sha256.
+text_sig() {
+  local h
+  if command -v sha256sum >/dev/null 2>&1; then h=(sha256sum); else h=(shasum -a 256); fi
+  tr -s '[:space:]' ' ' | sed -E 's/^ //; s/ $//' | "${h[@]}" | cut -c1-12
+}
 
 # The kind of the last event line, e.g. "done" (field 2 without the colon).
 line_kind() { local k; k="$(awk '{print $2}' <<<"$1")"; printf '%s' "${k%:}"; }

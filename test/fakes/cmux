@@ -20,8 +20,12 @@ case "$cmd" in
     esac ;;
   new-surface) [[ -f "$S/ws" ]] || { echo "Error: not_found" >&2; exit 1; }; printf '{"surface_id":"%s"}\n' "$(newsf)" ;;
   read-screen) sf="$(arg --surface "$@")"; [[ -f "$S/surfaces/$sf" ]] || { echo "Error: not_found" >&2; exit 1; }; cat "$S/screen" 2>/dev/null || printf '❯ \n' ;;
-  send) : ;;
-  send-key) [[ "${*: -1}" == enter && -n "${FAKE_CMUX_TASK:-}" ]] && "${CHARTROOM_BIN:?}" hook "$FAKE_CMUX_TASK" prompt-submit ;;
+  send) printf '%s' "${*: -1}" >>"$S/typed" ;;
+  send-key)
+    if [[ "${*: -1}" == enter && -n "${FAKE_CMUX_TASK:-}" ]]; then
+      jq -cn --arg p "$(cat "$S/typed" 2>/dev/null)" '{prompt:$p}' | "${CHARTROOM_BIN:?}" hook "$FAKE_CMUX_TASK" prompt-submit
+    fi
+    : >"$S/typed" ;;
   close-surface) rm -f "$S/surfaces/$(arg --surface "$@")" ;;
   rename-tab|focus-panel|list-pane-surfaces) : ;;
   *) echo "Error: unknown command $cmd" >&2; exit 2 ;;

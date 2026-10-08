@@ -7,6 +7,22 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- Joining a running session. Tell an agent session you started yourself "join chartroom" (the
+  new `join` skill, linked by `install-skills`) and it becomes a supervised worker of the home:
+  `chartroom join` records it as a `joined:<agent>` task in its own directory and branch (no
+  new worktree; `close` only marks it closed and never removes or cleans the directory), the
+  agent writes its own brief, and re-running join in the same session returns the same task.
+  Steering goes through a mailbox: `chartroom listen <id>` blocks until the XO's next message,
+  prints it and marks it read, and `steer` reports `delivered` only once it was read, else
+  `queued, not yet read`. In Claude Code the listener runs as a background command, so an idle
+  session wakes when a message lands (verified on 2.1.293); Codex and other agents use
+  `listen --check` between steps. tmux and herdr panes are recorded only when verified as the
+  session's own (by process ancestry), for peek, attach and stop. The skill's session-scoped
+  hooks report turn ends and prompts through `chartroom hook --session`, found by session id
+  in `${XDG_STATE_HOME:-~/.local/state}/chartroom/sessions`; the agent's pid ending is recorded
+  once as `exited` and wakes `watch`. `doctor` lists `joined:claude` and `joined:codex` with
+  their steering. New config: `CHARTROOM_JOIN_ACK_WAIT` (seconds `steer` waits for the read,
+  default 20).
 - Windows. WSL2 works as Linux does. Git Bash (Git for Windows) runs the core, the
   `headless`, `command` and `subagent` backends and the dashboard:
   - `install.sh` writes a launcher script where `ln -s` copies.
@@ -89,6 +105,21 @@ are stable from 0.1.0.
   that are not yet in a brief, so they survive a compaction or restart. `chartroom init`
   creates it (never overwrites), `chartroom status` prints a one-line count of open items,
   the XO skill keeps it current, and `bearings` folds its waiting items into "Needs you".
+
+### Fixed
+- `steer` to a Claude session worker (tmux, cmux, herdr) no longer says `delivered` when only a
+  fragment of the message was submitted. The UserPromptSubmit hook now records a signature of
+  the submitted prompt (`agent: prompt-received sig=<12 hex> len=<n>`) and delivery is confirmed
+  only when it matches the text typed; on a mismatch chartroom clears the input, retypes (at most
+  3 times) and then fails. herdr Claude workers get that one hook (prompt mode) for this. Codex
+  sessions have no prompt hook and now report `submitted, not verified` instead of `delivered`.
+- Messages longer than `CHARTROOM_STEER_INLINE_MAX` (default 300) characters, or with a newline,
+  are written to `tasks/<id>/messages/<n>.md` and the agent gets a one-line pointer to it, instead
+  of being typed into the TUI where a newline submitted early or a long paste raced Enter.
+- Event lines stay one per line: a newline in an event's text (a multi-line steer) is written as
+  a space.
+- `watch` no longer raises "stopped its turn without reporting" for a joined session that ends a
+  turn with its listener armed, its normal resting state; it still does when no listener is armed.
 
 ### Changed
 - README reads on its own: the comparison with another project is gone; the differences that

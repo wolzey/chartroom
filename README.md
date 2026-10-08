@@ -10,8 +10,8 @@ You don't juggle tabs.
 chartroom has two parts: a small bash CLI (`chartroom`) that does the exact work (task
 records, worktrees, launching, steering, liveness, a wake stream), and Agent Skills
 (`chartroom`, `bearings`, `dashboard` to open the board, `continue` to jump to one item by its
-short id, and `captain`, the chartroom skill under its older name) that tell your agent how to
-be the XO. State is plain files under `~/.chartroom`. There is no daemon (an optional local
+short id, `captain`, the chartroom skill under its older name, and `join`, which lets an
+agent session you started yourself join the crew) that tell your agent how to be the XO. State is plain files under `~/.chartroom`. There is no daemon (an optional local
 dashboard can show the fleet in a browser).
 
 ```
@@ -314,6 +314,7 @@ A backend is `<runner>:<agent>`, where the agent is `claude` or `codex`.
 | `headless:codex` | `codex exec --json` | `peek` | between runs (`exec resume`) | codex CLI | verified (0.158.0) |
 | `command` | any CLI from a template (`{brief} {prompt} {worktree} {task_dir} {id}`) | `peek` | between runs (+ best-effort inbox) | nothing | tested with the stub agent |
 | `subagent` | the host harness's subagent | no | host | Claude Code only | carried over, not re-verified |
+| `joined:<agent>` | a session you started yourself, that ran `chartroom join` | `peek`; `attach` if it is in tmux/herdr/cmux | mailbox | the `join` skill in that session | verified (Claude Code 2.1.293 in tmux) |
 
 Default automatic order: `herdr:claude cmux:claude tmux:claude headless:codex headless:claude command`
 (`CHARTROOM_BACKEND_ORDER`). When a backend is chosen automatically and the first choice isn't
@@ -322,6 +323,17 @@ unavailable (herdr not on PATH); using tmux:claude (steering: live)`. When you n
 explicitly, it never silently downgrades. Dispatch fails and names the next viable option.
 `CI=true` disables session runners. Details, including how each one confirms delivery:
 [skills/chartroom/references/backends.md](skills/chartroom/references/backends.md).
+
+**Joining a running session.** An agent session you started yourself, anywhere (any terminal,
+an IDE, the desktop app, inside or outside herdr/tmux), can join the crew: say "join chartroom"
+in it (or `/join`, with a home path or name if you have more than one). The `join` skill runs
+`chartroom join` from that session's directory, which records it as a task using the directory
+and branch as they are (no new worktree; `close` never removes or cleans it), has the agent write
+its own brief from what you asked it, and arms a mailbox listener. `chartroom steer` writes to
+the mailbox and says `delivered` only once the agent read it. In Claude Code the listener runs
+as a background command, so an idle session wakes up when a message arrives; Codex and other
+agents read their mailbox between steps. Details per agent and terminal:
+[backends.md](skills/chartroom/references/backends.md#joinedagent-a-running-session-that-joined-itself).
 
 **First-launch trust dialogs.** Claude Code and Codex ask before working in a never-seen
 folder. chartroom answers that dialog only for a worktree it created itself for the task, and
@@ -427,6 +439,9 @@ subagent workers, and the dashboard). See [Windows](#windows).
 (the brief tells it how).
 
 **Where do I watch a worker?** `chartroom attach <id>` (tmux, herdr or cmux), or `chartroom peek <id>`.
+
+**Can an agent I already started be supervised?** Yes: tell it "join chartroom" (the `join`
+skill, installed by `install-skills`). See "Joining a running session" under Backends.
 
 **Does it push or open PRs?** Only when you tell the XO to, for that task. The worker does it
 through your forge's CLI.

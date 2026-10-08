@@ -231,6 +231,26 @@ cmd_new() {
   printf 'id=%s\nbrief=%s\n' "$id" "$d/brief.md"
 }
 
+# Protocol steps 2-3 (events, report): shared by every brief, launched or joined.
+brief_report_steps() { # <id>
+  local id="$1" d; d="$(tdir "$1")"
+  cat <<EOF
+2. Report status by appending events. Prefer the helper (\`chartroom\` if it is on your PATH):
+     CHARTROOM_HOME=$CR_HOME $CR_BIN event $id <kind> "<one line>"
+   Fallback if the helper fails:
+     printf '%s <kind>: <text>\n' "\$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $d/events.log
+   Kinds: \`progress\` (sparingly, milestones only), \`decision\` (a choice only the human can make:
+   state the options and your recommendation, then STOP), \`blocked\` (cannot proceed: say exactly
+   what is needed, then STOP), \`done\` (one-line outcome), \`failed\` (could not do it, why),
+   \`waiting\` (right before you end a turn to wait on something: CI, a review, a timer, a person.
+   Say what, and until when as a UTC time if known, e.g. "CI on PR 12 until 2026-01-05T15:30:00Z".
+   When you resume, report again with \`progress\` or any other kind).
+3. Before \`done\` or \`failed\`, write $d/report.md containing: outcome; what changed
+   (files, commits) or what you found; validation you actually ran with real results (never claim
+   a check you did not run); risks and open questions.
+EOF
+}
+
 write_brief() {
   local id="$1" d kind branch title
   d="$(tdir "$id")"; kind="$(meta "$id" kind)"; branch="$(meta "$id" branch)"; title="$(meta "$id" title)"
@@ -270,23 +290,162 @@ address the human directly. Task id: \`$id\`.
 
 1. Work only inside your worktree (your current directory). Never touch the primary checkout
    or other worktrees. Follow the repo's own AGENTS.md / CLAUDE.md conventions.
-2. Report status by appending events. Prefer the helper (\`chartroom\` if it is on your PATH):
-     CHARTROOM_HOME=$CR_HOME $CR_BIN event $id <kind> "<one line>"
-   Fallback if the helper fails:
-     printf '%s <kind>: <text>\n' "\$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $d/events.log
-   Kinds: \`progress\` (sparingly, milestones only), \`decision\` (a choice only the human can make:
-   state the options and your recommendation, then STOP), \`blocked\` (cannot proceed: say exactly
-   what is needed, then STOP), \`done\` (one-line outcome), \`failed\` (could not do it, why),
-   \`waiting\` (right before you end a turn to wait on something: CI, a review, a timer, a person.
-   Say what, and until when as a UTC time if known, e.g. "CI on PR 12 until 2026-01-05T15:30:00Z".
-   When you resume, report again with \`progress\` or any other kind).
-3. Before \`done\` or \`failed\`, write $d/report.md containing: outcome; what changed
-   (files, commits) or what you found; validation you actually ran with real results (never claim
-   a check you did not run); risks and open questions.
+$(brief_report_steps "$id")
 4. When you STOP for a decision or blocker, end your turn (or exit, if you are a one-shot
    process). The XO answers in this same session, or by resuming or re-running you
    with the answer as your next prompt. If \`$d/inbox.md\` exists, read it after each milestone.
 EOF
+}
+
+# ---------------------------------------------------------------- join / listen
+
+# Run by an agent session chartroom did not launch, from its own directory: records it as
+# a joined task (lib/backends/joined.sh). Re-running it in the same session refreshes the
+# record instead of creating a second one.
+cmd_join() {
+  local title="" kind=ship agent="" id=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --title) title="$2"; shift 2 ;;
+      --kind) kind="$2"; shift 2 ;;
+      --agent) agent="$2"; shift 2 ;;
+      --id) id="$2"; shift 2 ;;
+      *) die "join: unknown arg $1" ;;
+    esac
+  done
+  [[ "$kind" =~ ^(ship|scout)$ ]] || die "kind must be ship or scout (got $kind)"
+  [[ -d "$CR_HOME/tasks" ]] || die "no chartroom home at $CR_HOME ($CR_HOME_SOURCE); pass the right one as CHARTROOM_HOME=<path>, or create it with 'chartroom init'"
+  if [[ -n "${CHARTROOM_TASK:-}" && -f "$(tdir "$CHARTROOM_TASK")/meta.json" ]] && ! is_joined "$CHARTROOM_TASK"; then
+    die "this session is already chartroom task $CHARTROOM_TASK (the XO launched it); follow its brief at $(tdir "$CHARTROOM_TASK")/brief.md"
+  fi
+  local proc pid="" sid="" key cwd
+  proc="$(detect_agent_proc)"
+  [[ -n "$agent" ]] || agent="${proc%% *}"
+  [[ -n "$agent" ]] || die "could not tell which agent this is; pass --agent claude|codex|<name>"
+  [[ "$agent" =~ ^[a-z][a-z0-9-]*$ ]] || die "agent must be a lowercase name (got $agent)"
+  [[ -n "$proc" && "${proc%% *}" == "$agent" ]] && pid="${proc#* }"
+  [[ "$agent" == claude ]] && sid="${CLAUDE_CODE_SESSION_ID:-}"
+  cwd="$(pwd -P)"
+  key="${sid:+session:$sid}"; key="${key:-${pid:+pid:$pid}}"; key="${key:-cwd:$cwd}"
+
+  # Same session again: reuse its open task.
+  local d existing=""
+  shopt -s nullglob
+  for d in "$CR_HOME"/tasks/*/; do
+    [[ -f "$d/meta.json" ]] || continue
+    if jq -e --arg k "$key" '.joined == "1" and (.closed // "") == "" and .join_key == $k' "$d/meta.json" >/dev/null; then existing="$(basename "$d")"; break; fi
+  done
+
+  if [[ -z "$existing" ]]; then
+    local wt project branch base_sha=""
+    if wt="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)"; then
+      project="$(git -C "$cwd" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+      project="${project%/.git}"; [[ -d "$project" && "$project" != *.git ]] || project="$wt"
+      branch="$(git -C "$cwd" branch --show-current 2>/dev/null || true)"
+      base_sha="$(git -C "$cwd" rev-parse --verify --quiet HEAD 2>/dev/null || true)"
+    else wt="$cwd"; project="$cwd"; branch=""; fi
+    [[ -n "$title" ]] || title="joined: $(basename "$wt")${branch:+ ($branch)}"
+    [[ -n "$id" ]] || id="$(slugify "$title")-$(rand_hex4)"
+    [[ "$id" =~ ^[a-z][a-z0-9_-]{0,31}$ ]] || die "id '$id' must match [a-z][a-z0-9_-]{0,31}"
+    d="$(tdir "$id")"; [[ ! -e "$d" ]] || die "task $id already exists"
+    ensure_cursor
+    mkdir -p "$d/mail"
+    jq -n --argjson schema "$CR_SCHEMA" --arg id "$id" --arg title "$title" --arg kind "$kind" --arg backend "joined:$agent" \
+      --arg project "$project" --arg base "${branch:-HEAD}" --arg base_sha "$base_sha" --arg branch "$branch" --arg wt "$wt" \
+      --arg cwd "$cwd" --arg key "$key" \
+      '{schema:$schema,id:$id,title:$title,kind:$kind,backend:$backend,backend_source:"joined",project:$project,base:$base,
+        base_sha:$base_sha,branch:$branch,plan_gate:0,worktree:$wt,cwd:$cwd,joined:"1",join_key:$key,
+        created:(now|todate),updated:(now|todate),dispatched:(now|todate)}' >"$d/meta.json"
+    : >"$d/events.log"
+    log_event "$id" note "created ($kind, joined from a running $agent session)"
+    write_join_brief "$id"
+  else
+    id="$existing"; d="$(tdir "$id")"
+  fi
+  [[ -n "$pid" ]] && meta_set "$id" pid "$pid"
+  if [[ -n "$sid" ]]; then
+    meta_set "$id" session_id "$sid"
+    mkdir -p "$(session_registry)"; printf '%s\t%s\t%s\n' "$CR_HOME" "$id" "$CR_BIN" >"$(session_registry)/$sid"
+  fi
+  local where; where="$(joined_detect_pane "$id")"
+  if [[ -n "$existing" ]]; then log_event "$id" note "re-joined${where:+ from $where}"
+  else log_event "$id" note "dispatched via joined:$agent${where:+ ($where)}${pid:+, pid $pid}"; fi
+  local listen="CHARTROOM_HOME=$(printf '%q' "$CR_HOME") $(printf '%q' "$CR_BIN") listen $id"
+  printf 'id=%s\nbrief=%s\n' "$id" "$d/brief.md"
+  [[ -n "$existing" ]] && echo "already joined: this session is task $id (record refreshed)"
+  cat <<EOF
+terminal: ${where:-none recorded (peek/attach unavailable; steering uses the mailbox)}
+steering: $(joined_steer_mode "$agent")
+
+Next, as this task's worker:
+1. Fill the brief's "Commander's intent" (what the user asked you for in this session, in
+   their words where you have them) and "Spec" (where the work stands, what done looks like).
+2. Arm the mailbox listener and keep it armed:
+     $listen
+   Claude Code: run it as a background Bash command (run_in_background). When it exits it
+   prints the XO's message(s): act on them, then start it again. One listener at a time.
+   Other agents: run it with --check between steps and before ending each turn.
+3. Carry on under the brief's worker protocol: events, report.md, stop at decisions, no push.
+EOF
+}
+
+write_join_brief() { # <id>
+  local id="$1" d wt branch
+  d="$(tdir "$id")"; wt="$(meta "$id" worktree)"; branch="$(meta "$id" branch)"
+  cat >"$d/brief.md" <<EOF
+# $(meta "$id" title)
+
+## Commander's intent
+
+<!-- Joined session: what the commander asked this session for, in their words where you have them. -->
+
+## Spec
+
+<!-- Joined session: where the work stands (done, in progress, next), what done looks like,
+     constraints the commander gave, and anything the XO should know. -->
+
+## Authority
+
+- Delivery: carry on with what the commander already asked of this session, in $wt${branch:+ (branch \`$branch\`)}. Commit there if that was already the plan. Do NOT push, open a pull request, merge, rebase shared branches, or delete branches.
+- Additional grants: none. Anything destructive, irreversible, outward-facing (push, PR, messages, tickets, deploys), or security-sensitive needs a \`decision\` event, not your judgment.
+
+## Worker protocol
+
+You joined the crew from a running session; the XO now supervises this work and your reports
+go to it. The commander may still talk to you here: their words are instructions too, and
+worth a \`progress\` event so the XO sees them. Task id: \`$id\`.
+
+1. Work only in $wt. chartroom never removes or cleans this directory; \`close\` only marks the
+   task closed. Follow the repo's own AGENTS.md / CLAUDE.md conventions.
+$(brief_report_steps "$id")
+4. Messages from the XO arrive in your mailbox. Keep a listener armed:
+     CHARTROOM_HOME=$CR_HOME $CR_BIN listen $id
+   Claude Code: run it as a background Bash command (run_in_background: true); an idle session
+   is woken when it exits. It prints the message(s): act on them, report, then start it again.
+   Other agents: run it with \`--check\` between steps and before ending each turn.
+5. When you STOP for a decision or blocker, end your turn with the listener armed; the XO's
+   answer arrives in the mailbox.
+EOF
+}
+
+cmd_listen() { # <id> [--check] [--timeout S]
+  local id="${1:-}" check=0 timeout=0 start pf; shift || true
+  [[ -n "$id" ]] || die "usage: chartroom listen <id> [--check] [--timeout S]"; need_task "$id"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in --check) check=1; shift ;; --timeout) timeout="$2"; shift 2 ;; *) die "listen: unknown arg $1" ;; esac
+  done
+  is_joined "$id" || die "task $id was launched by chartroom, not joined; it is steered through its own backend"
+  if [[ $check -eq 1 ]]; then mail_take "$id" || echo "no new messages"; return 0; fi
+  pf="$(mail_dir "$id")/listener.pid"; mkdir -p "$(mail_dir "$id")"
+  echo $$ >"$pf"
+  trap '[[ "$(cat "'"$pf"'" 2>/dev/null)" == '"$$"' ]] && rm -f "'"$pf"'"' EXIT
+  start="$(date +%s)"
+  while true; do
+    [[ -n "$(meta "$id" closed)" ]] && { echo "task $id is closed; stop listening"; return 0; }
+    mail_take "$id" && return 0
+    if (( timeout > 0 && $(date +%s) - start >= timeout )); then echo "no messages after ${timeout}s; re-arm: chartroom listen $id"; exit 124; fi
+    sleep 1
+  done
 }
 
 worktree_path() {
@@ -327,6 +486,7 @@ cmd_dispatch() {
   local id="${1:-}"; [[ -n "$id" ]] || die "usage: chartroom dispatch <id>"; need_task "$id"
   local kind wt="" runner agent
   kind="$(meta "$id" kind)"
+  is_joined "$id" && die "task $id joined from a running session; it is never dispatched (steer it instead)"
   grep -qE '^## Spec' "$(tdir "$id")/brief.md" || die "brief is missing its Spec section"
   if ! grep -A3 -E "^## (Commander|Captain)'s intent" "$(tdir "$id")/brief.md" | grep -qvE "^(## |<!--|\s*$)"; then
     die "brief has no commander's intent yet; fill it before dispatch"
@@ -353,14 +513,32 @@ cmd_event() {
 
 # Agent-native signals -> events. Called by Claude Code hooks (JSON on stdin) and by
 # Codex `notify` (JSON as the last argument). Never fails the calling agent.
+#   chartroom hook <id> <what>          hooks written per task (launched workers)
+#   chartroom hook --session <what>     static hooks (the join skill): the task is found from
+#                                       the payload's session_id via the session registry
 cmd_hook() {
-  local id="${1:-}" what="${2:-}" payload="" msg
+  local id="${1:-}" what="${2:-}" payload="" msg reg
+  if [[ "$id" == --session ]]; then
+    payload="$(cat 2>/dev/null || true)"
+    msg="$(jq -r '.session_id // empty' <<<"$payload" 2>/dev/null || true)"
+    reg="$(session_registry)/$msg"
+    [[ -n "$msg" && -f "$reg" ]] || exit 0
+    IFS=$'\t' read -r CR_HOME id _ <"$reg"
+    [[ -n "$(meta "$id" closed 2>/dev/null)" ]] && exit 0
+  fi
   [[ -n "$id" && -f "$(tdir "$id")/meta.json" ]] || exit 0
   case "$what" in
     stop) log_event "$id" agent "turn-ended" ;;
-    prompt-submit) log_event "$id" agent "prompt-received" ;;
+    prompt-submit)
+      # Records what was submitted (as a signature), so steer can tell the full text from a fragment.
+      [[ -n "$payload" || -t 0 ]] || payload="$(cat 2>/dev/null || true)"
+      msg="$(jq -r '.prompt // empty' <<<"$payload" 2>/dev/null || true)"
+      if [[ -n "$msg" ]]; then log_event "$id" agent "prompt-received sig=$(printf '%s' "$msg" | text_sig) len=${#msg}"
+      else log_event "$id" agent "prompt-received"; fi ;;
     notification)
-      payload="$(cat 2>/dev/null || true)"
+      [[ -n "$payload" ]] || payload="$(cat 2>/dev/null || true)"
+      # A joined session parked on its listener is idle on purpose; that is not a prompt.
+      [[ "$(jq -r '.notification_type // empty' <<<"$payload" 2>/dev/null)" == idle_prompt ]] && is_joined "$id" && exit 0
       msg="$(jq -r '.message // empty' <<<"$payload" 2>/dev/null | tr '\n' ' ' | cut -c1-200)"
       log_event "$id" agent "awaiting-input: ${msg:-agent needs input}" ;;
     codex-notify)
@@ -413,7 +591,7 @@ status_rows() { # [--all] [--id ID]
     if [[ "$st" == closed ]]; then live=-; else live="$(live_of "$id")"; fi
     wait=""
     [[ "$st" != closed ]] && wait="$(waiting_info "$id" 2>/dev/null || true)"
-    if [[ -n "$wait" && "$live" =~ ^(stopped|gone|idle|done)$ ]]; then
+    if [[ -n "$wait" && "$live" =~ ^(stopped|gone|idle|done|listening)$ ]]; then
       if [[ "$(jq -r .overdue <<<"$wait")" == true ]]; then st="waiting-overdue"; else st="waiting"; fi
     elif [[ -n "$wait" ]]; then st=working
     fi
@@ -591,6 +769,11 @@ cmd_close() {
   wt="$(meta "$id" worktree)"; project="$(meta "$id" project)"; branch="$(meta "$id" branch)"; base_sha="$(meta "$id" base_sha)"
   r="$(backend_runner "$id")"
   if [[ -n "$r" && "$r" =~ ^(headless|command)$ ]]; then "${r}_close" "$id"; fi
+  if is_joined "$id"; then
+    local dirty=""; [[ -d "$wt" ]] && dirty="$(git -C "$wt" status --porcelain 2>/dev/null || true)"
+    echo "left $wt as it is (a joined session's own directory; chartroom never removes or cleans it)${dirty:+; it has uncommitted changes}"
+    wt=""
+  fi
   if [[ -n "$wt" && -d "$wt" ]]; then
     local dirty; dirty="$(git -C "$wt" status --porcelain)"
     if [[ -n "$dirty" && $discard -eq 0 ]]; then
@@ -600,11 +783,11 @@ cmd_close() {
     fi
     if [[ -n "$dirty" ]]; then git -C "$project" worktree remove --force "$wt"; else git -C "$project" worktree remove "$wt"; fi
   fi
-  if [[ -n "$branch" ]] && git -C "$project" rev-parse --verify --quiet "$branch" >/dev/null; then
+  if [[ -n "$branch" && -n "$base_sha" ]] && git -C "$project" rev-parse --verify --quiet "$branch" >/dev/null; then
     local ahead; ahead="$(git -C "$project" rev-list --count "$base_sha..$branch")"
     echo "branch $branch kept ($ahead commit(s) ahead of base; branches are never deleted by chartroom)"
   fi
-  if [[ -n "$r" && "$r" =~ ^($SESSION_RUNNERS)$ ]]; then "${r}_close" "$id" || true; fi
+  if [[ -n "$r" && "$r" =~ ^($SESSION_RUNNERS|joined)$ ]]; then "${r}_close" "$id" || true; fi
   meta_set "$id" closed "$(now)"
   if [[ $discard -eq 1 ]]; then log_event "$id" note "closed (uncommitted work discarded on commander's order)"
   else log_event "$id" note "closed"; fi
@@ -651,7 +834,10 @@ watch_scan_lines() { # <id> <from-offset> <to-offset>
       exited) reported_upto "$id" "$pos" || wake "$id" "$line" ;;
       agent)
         case "$line" in
-          *" agent: turn-ended"*) reported_upto "$id" "$pos" || wake "$id" "$line (stopped its turn without reporting)" ;;
+          # A joined session ending its turn with its listener armed is at rest, not silent.
+          *" agent: turn-ended"*)
+            is_joined "$id" && listener_alive "$id" && continue
+            reported_upto "$id" "$pos" || wake "$id" "$line (stopped its turn without reporting)" ;;
           *" agent: awaiting-input"*) wake "$id" "$line" ;;
         esac ;;
     esac
@@ -670,7 +856,7 @@ watch_overdue() { # <id>
   wait="$(waiting_info "$id" 2>/dev/null || true)"
   [[ -n "$wait" && "$(jq -r '.overdue and (.announced | not)' <<<"$wait")" == true ]] || return 0
   live="$(live_of "$id")"
-  [[ "$live" =~ ^(stopped|gone|idle|done)$ ]] || return 0
+  [[ "$live" =~ ^(stopped|gone|idle|done|listening)$ ]] || return 0
   local msg; msg="waiting overdue: $(jq -r '"\(.on) (since \(.since)" + (if .until then ", until \(.until)" else "" end) + ")"' <<<"$wait")"
   log_event "$id" note "$msg"
   wake "$id" "$msg"
@@ -738,6 +924,9 @@ cmd_doctor() {
     if why="$(probe_backend "$b")"; then avail=yes; why=""; else avail=no; fi
     [[ -z "$first_ok" && "$avail" == yes && " $CR_BACKEND_ORDER " == *" $b "* ]] && first_ok="$b"
     rows+=("$(jq -cn --arg b "$b" --arg a "$avail" --arg w "$why" --arg s "$(steer_mode_of "$b")" '{backend:$b,available:($a=="yes"),steering:$s,reason:$w}')")
+  done
+  for b in joined:claude joined:codex; do
+    rows+=("$(jq -cn --arg b "$b" --arg s "$(steer_mode_of "$b")" '{backend:$b,available:false,steering:$s,reason:"not dispatched: a running session joins with chartroom join"}')")
   done
   local notes=()
   [[ "$CR_PLATFORM" == posix ]] || mapfile -t notes < <(platform_notes)
@@ -811,7 +1000,7 @@ cmd_install_skills() {
   local t s src dst cur seen=" "
   for t in "${targets[@]}"; do
     [[ "$seen" == *" $t "* ]] && continue; seen+="$t "
-    for s in chartroom bearings dashboard continue captain; do
+    for s in chartroom bearings dashboard continue captain join; do
       src="$CR_ROOT/skills/$s"; dst="$t/$s"
       if [[ $uninstall -eq 1 ]]; then
         if [[ -L "$dst" && "$(realpath_f "$dst")" == "$(realpath_f "$src")" ]]; then
@@ -870,9 +1059,19 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           <runner>:<agent> (runners: herdr cmux tmux headless;
                                           agents: claude codex), command, subagent, or auto
                                           (omit --backend: pick per CHARTROOM_BACKEND_ORDER)
+  chartroom join [--title T] [--kind ship|scout] [--agent A]
+                                          run INSIDE a running agent session (not launched by
+                                          chartroom) from its directory: records it as a joined
+                                          task (backend joined:<agent>) using that directory as
+                                          is; prints the id, brief and protocol. Idempotent per
+                                          session
+  chartroom listen <id> [--check] [--timeout S]
+                                          a joined worker's mailbox: block until the XO's next
+                                          message, print it, mark it read (--check: do not block)
   chartroom worktree <id>                 create (or print) the task's isolated worktree
   chartroom dispatch <id>                 launch the worker on its backend
-  chartroom steer <id> [--inbox] <msg>    deliver an answer or follow-up to the worker
+  chartroom steer <id> [--inbox] <msg>    deliver an answer or follow-up to the worker (joined:
+                                          to its mailbox; "delivered" only once it is read)
   chartroom stop <id>                     interrupt a worker
   chartroom attach <id>                   open a session worker's terminal (herdr/cmux/tmux)
   chartroom event <id> <kind> <text>      append a status event (workers use this; kinds: progress,
@@ -914,6 +1113,7 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           then open it in the browser (CHARTROOM_OPENER, else
                                           open / xdg-open); prints the URL either way
   chartroom close <id> [--discard]        remove a clean worktree, close its tab, mark closed
+                                          (a joined task's directory is never touched)
                                           (--discard only on the commander's explicit word)
   chartroom install-skills [--claude|--agents|--pi|--all|--dir D] [--uninstall] [--dry-run]
   chartroom version
@@ -922,7 +1122,7 @@ EOF
 
 cmd="${1:-help}"; shift || true
 case "$cmd" in
-  init|project|new|worktree|dispatch|event|hook|status|board|resolve|inbox|rule|peek|steer|stop|attach|close|watch|dashboard|doctor|version|help) "cmd_$cmd" "$@" ;;
+  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|rule|peek|steer|stop|attach|close|watch|dashboard|doctor|version|help) "cmd_$cmd" "$@" ;;
   install-skills) cmd_install_skills "$@" ;;
   ls) cmd_status "$@" ;;
   -h|--help) cmd_help ;;
