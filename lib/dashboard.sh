@@ -1,5 +1,6 @@
 # shellcheck shell=bash
-# dashboard.sh - `chartroom dashboard`: a read-only, loopback-only view of the fleet.
+# dashboard.sh - `chartroom dashboard`: a read-only view of the fleet, on loopback unless
+# --host/--expose (or CHARTROOM_DASHBOARD_HOST) puts it on the network, behind an access token.
 #
 # The lanes are computed here, in bash + jq, from the same rows `status` prints
 # (status_rows), so the page and the CLI never disagree. lib/dashboard/server.py only
@@ -11,6 +12,18 @@ CR_DASHBOARD_THEMES='chartroom hud' # the page's themes (lib/dashboard/index.htm
 CR_DASHBOARD_FILES='brief.md report.md plan.md final.md events.log'
 
 dashboard_pidfile() { printf '%s/.dashboard.pid' "$CR_HOME"; }
+dashboard_tokenfile() { printf '%s/.dashboard.token' "$CR_HOME"; }
+
+# The address this machine itself uses to reach a server bound to <host>.
+dashboard_local_host() { [[ "$1" == 0.0.0.0 ]] && echo 127.0.0.1 || echo "$1"; }
+
+# The URL to open for a server on <host> <port>: with ?token= when it is bound beyond loopback
+# and a token exists (a --no-token server ignores it).
+dashboard_url() { # <host> <port>
+  local t="" f; f="$(dashboard_tokenfile)"
+  [[ "$1" != 127.* && -s "$f" ]] && t="?token=$(tr -d '[:space:]' <"$f")"
+  printf 'http://%s:%s/%s\n' "$(dashboard_local_host "$1")" "$2" "$t"
+}
 
 # Open inbox.md items as JSON: {waiting:[{short_id,date,text}], approvals:[...]}. Same rules
 # as inbox_line: bullets under "## Waiting ..." / "## Approvals ...", "(none)" excluded.
@@ -66,20 +79,29 @@ dashboard_json() { # [pr-states-file]
     -f "$CR_ROOT/lib/dashboard/lanes.jq"
 }
 
-dashboard_running() { # -> prints "pid port" when a dashboard for this home is up
-  local f pid port; f="$(dashboard_pidfile)"
+# For `doctor`: the configured bind address, whether an access token exists, and the bind
+# address of a running dashboard (null when none runs).
+dashboard_doctor_json() {
+  local pid p h=""
+  read -r pid p h < <(dashboard_running) || true
+  jq -cn --arg b "$(cfg DASHBOARD_HOST '' 127.0.0.1)" --arg t "$([[ -s "$(dashboard_tokenfile)" ]] && echo 1)" \
+    --arg r "${h:+$h:$p}" '{bind: $b, token_set: ($t == "1"), running: (if $r == "" then null else $r end)}'
+}
+
+dashboard_running() { # -> prints "pid port host" when a dashboard for this home is up
+  local f pid port host; f="$(dashboard_pidfile)"
   [[ -f "$f" ]] || return 1
-  read -r pid port <"$f" || true
+  read -r pid port host <"$f" || true
   pid_alive "$pid" || return 1
   # A stale file's pid may now belong to something else (after a reboot): never claim or
   # signal a process that is not this server.
   ps -p "$pid" -o command= 2>/dev/null | grep -q 'dashboard/server\.py' || return 1
-  printf '%s %s\n' "$pid" "$port"
+  printf '%s %s %s\n' "$pid" "$port" "${host:-127.0.0.1}"
 }
 
 dashboard_stop() {
-  local f pid port i; f="$(dashboard_pidfile)"
-  if ! read -r pid port < <(dashboard_running); then
+  local f pid port host i; f="$(dashboard_pidfile)"
+  if ! read -r pid port host < <(dashboard_running); then
     [[ -f "$f" ]] && rm -f "$f"
     echo "dashboard not running"; return 0
   fi
@@ -87,14 +109,15 @@ dashboard_stop() {
   for i in $(seq 1 50); do pid_alive "$pid" || break; sleep 0.1; done
   pid_alive "$pid" && { kill -9 "$pid" 2>/dev/null || true; }
   rm -f "$f"
-  echo "dashboard stopped (pid $pid, port $port)"
+  echo "dashboard stopped (pid $pid, port $port$([[ "$host" == 127.0.0.1 ]] || echo ", host $host"))"
 }
 
-# Does the server on <port> answer /healthz? (python3 is already required to run one.)
-dashboard_healthy() { # <port>
-  "$(bin_of python3)" - "$1" <<'PY' >/dev/null 2>&1
+# Does the server on <port> (bound to [host]) answer /healthz? (python3 is already required
+# to run one.)
+dashboard_healthy() { # <port> [host]
+  "$(bin_of python3)" - "$1" "$(dashboard_local_host "${2:-127.0.0.1}")" <<'PY' >/dev/null 2>&1
 import sys, urllib.request
-with urllib.request.urlopen("http://127.0.0.1:%s/healthz" % sys.argv[1], timeout=2) as r:
+with urllib.request.urlopen("http://%s:%s/healthz" % (sys.argv[2], sys.argv[1]), timeout=2) as r:
     sys.exit(0 if r.read().strip() == b"ok" else 1)
 PY
 }
@@ -104,7 +127,7 @@ PY
 # with CHARTROOM_OPENER, else `open` (macOS) or `xdg-open`; without any, print it. A lock
 # in the home keeps two concurrent calls from starting two servers.
 dashboard_open() { # [daemon args...]
-  local lock="$CR_HOME/.dashboard.lock" i pid p url opener owner
+  local lock="$CR_HOME/.dashboard.lock" i pid p h url opener owner
   # Without python3 the health check below cannot run, and a healthy server must never be
   # mistaken for a dead one and stopped.
   [[ -n "$(bin_of python3)" ]] || die "the dashboard needs python3 (standard library only); 'chartroom dashboard --json' works without it"
@@ -121,18 +144,18 @@ dashboard_open() { # [daemon args...]
   done
   [[ "$(cat "$lock/pid" 2>/dev/null)" == "$$" ]] || die "another 'dashboard open' still holds $lock"
   trap '[[ "$(cat "'"$lock"'/pid" 2>/dev/null)" == "'"$$"'" ]] && rm -rf "'"$lock"'"' EXIT
-  if read -r pid p < <(dashboard_running) && ! dashboard_healthy "$p"; then
+  if read -r pid p h < <(dashboard_running) && ! dashboard_healthy "$p" "$h"; then
     warn "dashboard pid $pid is not answering on port $p; restarting it"
     dashboard_stop >/dev/null
   fi
-  if ! read -r pid p < <(dashboard_running); then
+  if ! read -r pid p h < <(dashboard_running); then
     rm -f "$(dashboard_pidfile)"
     ( cmd_dashboard --daemon "$@" ) >&2 || die "dashboard did not start"
-    read -r pid p < <(dashboard_running) || die "dashboard did not start"
+    read -r pid p h < <(dashboard_running) || die "dashboard did not start"
   fi
-  for i in $(seq 1 50); do dashboard_healthy "$p" && break; sleep 0.1; done
-  dashboard_healthy "$p" || die "dashboard (pid $pid) is not answering on port $p"
-  url="http://127.0.0.1:$p/"
+  for i in $(seq 1 50); do dashboard_healthy "$p" "$h" && break; sleep 0.1; done
+  dashboard_healthy "$p" "$h" || die "dashboard (pid $pid) is not answering on port $p"
+  url="$(dashboard_url "$h" "$p")"
   opener="$(cfg OPENER '' '')"
   if [[ -z "$opener" ]]; then
     if [[ "$(uname -s)" == Darwin && -n "$(bin_of open)" ]]; then opener=open
@@ -143,14 +166,18 @@ dashboard_open() { # [daemon args...]
 }
 
 cmd_dashboard() {
-  local port="$CR_DASHBOARD_PORT_DEFAULT" open=0 daemon=0 json=0 prs_file="" gh=1 theme
+  local port="$CR_DASHBOARD_PORT_DEFAULT" open=0 daemon=0 json=0 prs_file="" gh=1 theme host token=1
   theme="$(cfg DASHBOARD_THEME '' chartroom)"
+  host="$(cfg DASHBOARD_HOST '' 127.0.0.1)"
   case "${1:-}" in
     open) shift; dashboard_open "$@"; return ;;
     stop) dashboard_stop; return ;;
     status)
-      local pid p
-      if read -r pid p < <(dashboard_running); then echo "dashboard running: http://127.0.0.1:$p (pid $pid)"; else echo "dashboard not running"; return 1; fi
+      local pid p h
+      if read -r pid p h < <(dashboard_running); then
+        echo "dashboard running: $(dashboard_url "$h" "$p") (pid $pid)"
+        [[ "$h" == 127.* ]] || grep '^chartroom dashboard: \(WARNING\|on the network\)' "$CR_HOME/.dashboard.log" 2>/dev/null | sed 's/^chartroom dashboard: //' || true
+      else echo "dashboard not running"; return 1; fi
       return ;;
   esac
   while [[ $# -gt 0 ]]; do
@@ -162,31 +189,50 @@ cmd_dashboard() {
       --pr-states) [[ $# -ge 2 ]] || die "--pr-states needs a file"; prs_file="$2"; shift 2 ;;
       --no-gh) gh=0; shift ;;
       --theme) [[ $# -ge 2 ]] || die "--theme needs a value ($CR_DASHBOARD_THEMES)"; theme="$2"; shift 2 ;;
-      *) die "dashboard: unknown arg $1 (usage: chartroom dashboard [--port N] [--open] [--daemon] [--no-gh] [--theme NAME] | open [--port N] [--no-gh] [--theme NAME] | --json | stop | status)" ;;
+      --host) [[ $# -ge 2 ]] || die "--host needs an address (0.0.0.0 for every interface)"; host="$2"; shift 2 ;;
+      --expose) host=0.0.0.0; shift ;;
+      --no-token) token=0; shift ;;
+      *) die "dashboard: unknown arg $1 (usage: chartroom dashboard [--port N] [--open] [--daemon] [--no-gh] [--theme NAME] [--host ADDR | --expose] [--no-token] | open [same flags] | --json | stop | status)" ;;
     esac
   done
   if [[ $json -eq 1 ]]; then dashboard_json "$prs_file"; return; fi
+  [[ "$host" == localhost ]] && host=127.0.0.1
+  if ! [[ "$host" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] ||
+     (( 10#${BASH_REMATCH[1]} > 255 || 10#${BASH_REMATCH[2]} > 255 || 10#${BASH_REMATCH[3]} > 255 || 10#${BASH_REMATCH[4]} > 255 )); then
+    die "--host must be an IPv4 address (0.0.0.0 for every interface; set with --host, --expose or CHARTROOM_DASHBOARD_HOST), not '$host'"
+  fi
   [[ "$port" =~ ^[0-9]+$ ]] && (( port <= 65535 )) || die "--port must be 0-65535 (0 picks a free port)"
   [[ " $CR_DASHBOARD_THEMES " == *" $theme "* ]] || die "unknown dashboard theme '$theme' (themes: $CR_DASHBOARD_THEMES; set with --theme or CHARTROOM_DASHBOARD_THEME)"
   local py; py="$(bin_of python3)"
   [[ -n "$py" ]] || die "the dashboard needs python3 (standard library only); 'chartroom dashboard --json' works without it"
-  local pid p
-  if read -r pid p < <(dashboard_running); then
-    die "a dashboard for $CR_HOME is already running: http://127.0.0.1:$p (pid $pid); 'chartroom dashboard stop' first"
+  local pid p h
+  if read -r pid p h < <(dashboard_running); then
+    die "a dashboard for $CR_HOME is already running: http://$(dashboard_local_host "$h"):$p (pid $pid); 'chartroom dashboard stop' first"
   fi
   mkdir -p "$CR_HOME"
   local args=("$CR_ROOT/lib/dashboard/server.py" --port "$port" --pidfile "$(dashboard_pidfile)" --bin "$CR_BIN")
   [[ $open -eq 1 ]] && args+=(--open)
   [[ $gh -eq 0 ]] && args+=(--no-gh)
-  args+=(--theme "$theme")
+  args+=(--theme "$theme" --host "$host")
+  [[ $token -eq 0 ]] && args+=(--no-token)
   export CHARTROOM_HOME="$CR_HOME"
   if [[ $daemon -eq 0 ]]; then exec "$py" "${args[@]}"; fi
   local log="$CR_HOME/.dashboard.log" i
-  nohup "$py" "${args[@]}" >"$log" 2>&1 </dev/null &
-  local child=$!
+  # the log carries the token's URL when the server is exposed: private to the owner
+  rm -f "$log"
+  ( umask 077; nohup "$py" "${args[@]}" >"$log" 2>&1 </dev/null & echo $! >"$log.pid" )
+  local child; child="$(cat "$log.pid")"; rm -f "$log.pid"
   for i in $(seq 1 100); do
-    if read -r pid p < <(dashboard_running) && [[ "$pid" == "$child" ]]; then
-      echo "dashboard running: http://127.0.0.1:$p (pid $pid; log $log; stop with: chartroom dashboard stop)"
+    if read -r pid p h < <(dashboard_running) && [[ "$pid" == "$child" ]]; then
+      if [[ "$h" == 127.* ]]; then
+        echo "dashboard running: http://$h:$p (pid $pid; log $log; stop with: chartroom dashboard stop)"
+      else
+        echo "dashboard running: $(dashboard_url "$h" "$p") (pid $pid; log $log; stop with: chartroom dashboard stop)"
+        # the server's warning and network URLs (printed right after the pid file)
+        local j
+        for j in $(seq 1 20); do grep -q '^chartroom dashboard: WARNING' "$log" 2>/dev/null && break; sleep 0.1; done
+        grep '^chartroom dashboard: \(WARNING\|on the network\)' "$log" | sed 's/^chartroom dashboard: //' || true
+      fi
       return 0
     fi
     pid_alive "$child" || break

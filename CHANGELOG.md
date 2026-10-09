@@ -7,6 +7,14 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- The dashboard on the network: `chartroom dashboard --host ADDR` binds another IPv4 address
+  and `--expose` every interface (`CHARTROOM_DASHBOARD_HOST` sets the default; it stays
+  `127.0.0.1`). Beyond loopback every request but `/healthz` needs an access token
+  (`.dashboard.token` in the home, random, `0600`): `?token=` once, then an `HttpOnly` cookie,
+  compared in constant time. Starting it prints a warning naming the bound address and one URL
+  per interface address, with the token; `--no-token` serves without one (the `Host` guard
+  stays). `doctor` shows the bind address, whether a token exists and where a running dashboard
+  listens. Read-only as before.
 - Joining a running session. Tell an agent session you started yourself "join chartroom" (the
   new `join` skill, linked by `install-skills`) and it becomes a supervised worker of the home:
   `chartroom join` records it as a `joined:<agent>` task in its own directory and branch (no

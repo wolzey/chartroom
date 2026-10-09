@@ -155,13 +155,15 @@ chartroom dashboard                  # http://127.0.0.1:4517, Ctrl-C to stop
 chartroom dashboard --daemon --open  # in the background, and open the browser
 chartroom dashboard open             # reuse the running one (or start it), then open the browser
 chartroom dashboard --theme hud      # start with the HUD theme as the default
+chartroom dashboard --daemon --expose  # on the network too, behind an access token (see below)
 chartroom dashboard stop             # (or: status)
 chartroom dashboard --json           # the same lanes, no server
 chartroom board                      # the same lanes in the terminal, one line per item
 ```
 
 A one-page, read-only view of the fleet that refreshes every 5 seconds, so you can see what
-to pull from. It works on a phone-width window and follows your light/dark setting (or a
+to pull from. It works on phones and tablets (lanes stack, nothing scrolls sideways, text is
+12px or larger and every control is a 44px tap target) and follows your light/dark setting (or a
 light/dark toggle in the header). Work in progress visibly moves, changes animate, and
 `prefers-reduced-motion` turns all motion off. It has five lanes, each with a count in the
 header:
@@ -180,11 +182,12 @@ as plain text. Approvals given in chat but not yet in a brief are listed under N
 
 How it is built, and what it promises:
 
-- **Loopback only, read-only.** A Python standard-library server (`python3`, nothing to
-  install) bound to `127.0.0.1`, with no setting to change that. It answers `GET` only, serves
-  just the page, the lanes JSON (`/api/dashboard`) and the five task files above, and refuses
-  requests whose `Host` is not `127.0.0.1` or `localhost` (DNS rebinding). No auth, because
-  nothing off the machine can reach it.
+- **Loopback by default, read-only always.** A Python standard-library server (`python3`,
+  nothing to install) bound to `127.0.0.1` unless you put it on the network (below). It answers
+  `GET` only, serves just the page, the lanes JSON (`/api/dashboard`) and the five task files
+  above, and has no endpoint that changes anything. On loopback it refuses requests whose
+  `Host` is not `127.0.0.1` or `localhost` (DNS rebinding) and needs no auth, because nothing
+  off the machine can reach it.
 - **No external requests from the page.** CSS and JS are inline; no CDNs, fonts or analytics.
 - **Same answer as the CLI.** The lanes come from `chartroom dashboard --json`, built from the
   rows `chartroom status` uses, so the page and the terminal never disagree.
@@ -217,6 +220,54 @@ How it is built, and what it promises:
   `chartroom inbox add <text>` (or `chartroom inbox tag` for lines written by hand); it never
   changes as other items come and go.
 
+### On the network: other devices
+
+To open the board from a phone, a tablet or another computer, bind it beyond loopback:
+
+```bash
+chartroom dashboard --daemon --expose          # every interface (0.0.0.0)
+chartroom dashboard --daemon --host 100.64.0.7 # one address of this machine only
+chartroom dashboard status                     # print the URLs again
+chartroom dashboard stop                       # off the network again
+```
+
+`CHARTROOM_DASHBOARD_HOST` (env or config file) sets the default bind address; `--host` and
+`--expose` override it, and `--host 127.0.0.1` goes back to loopback. Only IPv4 addresses are
+accepted. Starting it prints a warning naming the bound address, then one URL per address
+other devices can use (one per non-loopback interface, VPN and overlay interfaces included),
+each with the access token:
+
+```
+dashboard running: http://127.0.0.1:4517/?token=… (pid 4242; log ~/.chartroom/.dashboard.log; …)
+WARNING: listening on 0.0.0.0:4517 (every interface), beyond this machine; the access token is the only lock
+on the network: http://192.168.1.20:4517/?token=…
+on the network: http://100.64.0.7:4517/?token=…
+```
+
+- **Access token, on by default.** Bound beyond loopback, every request except `/healthz` needs
+  the token in `$CHARTROOM_HOME/.dashboard.token` (random, made on first use, mode `0600`). Open
+  a printed URL once: the server checks `?token=` (in constant time), sets it as an `HttpOnly`,
+  `SameSite=Lax` cookie for 30 days, and redirects to the same page without the token, so it
+  leaves the address bar. Anything else gets `401`. The token survives restarts, so devices stay
+  signed in; to revoke every device, delete the file and restart the dashboard (it makes a new
+  one). With the token on, any name for the machine works in the URL (a DNS name, a LAN name),
+  since a rebinding page never has the cookie.
+- **`--no-token`** turns the token off, for networks where everyone who can reach the port may
+  read the board. It says so in the warning, and the `Host` guard stays on: the URL must use one
+  of the machine's addresses or its host name.
+- **What it shows.** The board shows the commander's inbox and every task's title, last event,
+  brief, report, plan and event log, and local file paths. It never serves environment
+  variables, config, tokens or any file outside those. Anyone with the token (or anyone on the
+  network, with `--no-token`) can read all of that, so treat the token like a password and
+  expose the board only on networks you trust.
+- **Plain HTTP.** The server does not do TLS, so on a shared LAN the token and the page cross
+  the network in the clear. A VPN or overlay network encrypts that hop: for example, with
+  [Tailscale](https://tailscale.com) on both devices, `--host <this machine's tailnet IP>`
+  makes the board reachable only over the tailnet, whose access rules then decide who can
+  reach it at all. Or put a TLS reverse proxy in front of a loopback dashboard (below).
+- `chartroom doctor` shows the configured bind address, whether a token exists, and where a
+  running dashboard listens. `.dashboard.log` (which holds the URLs) is `0600` too.
+
 ### Optional: a local hostname
 
 To open the dashboard at `http://chartroom/` (or `https://chartroom/`) instead of a port, put
@@ -226,7 +277,7 @@ a reverse proxy in front of it on a loopback address of its own, so nothing else
 1. Map the name to a second loopback address: add `127.0.0.2 chartroom` to `/etc/hosts`, and
    alias it with `sudo ifconfig lo0 alias 127.0.0.2 up` (a LaunchDaemon that runs this command
    at load keeps it across reboots; Linux routes all of `127.0.0.0/8` already).
-2. Point Caddy at the dashboard, bound only to that address. The dashboard answers only
+2. Point Caddy at the dashboard, bound only to that address. On loopback the dashboard answers only
    `Host: 127.0.0.1:<port>` or `localhost:<port>` (its DNS-rebinding guard, above), so the
    proxy must present the upstream's own address:
 
@@ -327,6 +378,7 @@ $CHARTROOM_HOME/                    default ~/.chartroom
   tasks/<id>/brief.md  report.md  plan.md  final.md
   tasks/<id>/events.log             one line per event
   .dashboard.pid  .dashboard.log    only while `chartroom dashboard --daemon` runs
+  .dashboard.token                  the dashboard's access token (0600), once it has been on the network
   worktrees/<repo>/<id>/            task worktrees (unless the repo ignores .worktrees/)
 ```
 
@@ -391,6 +443,7 @@ Environment variables win. Otherwise chartroom reads `~/.config/chartroom/config
 | `CHARTROOM_WATCH_INTERVAL` | `3` | seconds |
 | `CHARTROOM_DASHBOARD_RECENT_HOURS` | `48` | how far back the dashboard's Recently finished lane reaches |
 | `CHARTROOM_DASHBOARD_THEME` | `chartroom` | the dashboard's default theme: `chartroom` or `hud` (`--theme` overrides) |
+| `CHARTROOM_DASHBOARD_HOST` | `127.0.0.1` | the IPv4 address the dashboard binds; `0.0.0.0` is every interface (`--host` / `--expose` override). Beyond loopback it needs the access token |
 | `CHARTROOM_GH` | `gh` | the gh binary the dashboard uses for PR states |
 | `CHARTROOM_OPENER` | `open` / `xdg-open` | command `dashboard open` runs with the URL |
 | `CHARTROOM_WAITING_GRACE_MINUTES` | `15` | a `waiting` worker turns `waiting-overdue` this long after its until-time |

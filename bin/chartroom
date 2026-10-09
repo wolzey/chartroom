@@ -960,10 +960,11 @@ cmd_doctor() {
   if [[ $json -eq 1 ]]; then
     printf '%s\n' "${rows[@]}" | jq -s --arg v "$CR_VERSION" --arg h "$CR_HOME" --arg hs "$CR_HOME_SOURCE" --arg o "$CR_BACKEND_ORDER" --arg auto "$first_ok" --arg harness "$CR_HARNESS" \
       --arg bv "$BASH_VERSION" --arg bp "$BASH" --arg bf "$CR_BASH_FROM" --arg added "$added" \
+      --argjson dash "$(dashboard_doctor_json)" \
       '{version:$v,home:$h,home_source:$hs,harness:$harness,
         bash:{version:$bv,path:$bp,rerun_from:(if $bf=="" then null else $bf end)},
         path:{thin:($added!=""),added:($added|split(" ")|map(select(.!="")))},
-        order:($o|split(" ")),auto:(if $auto=="" then null else $auto end),backends:.}'
+        order:($o|split(" ")),auto:(if $auto=="" then null else $auto end),dashboard:$dash,backends:.}'
   else
     echo "chartroom $CR_VERSION"
     echo "home:     $CR_HOME ($CR_HOME_SOURCE)"
@@ -978,6 +979,7 @@ cmd_doctor() {
     echo "tools:    jq $jqv, git $gitv${CI:+, CI=$CI}"
     echo "order:    $CR_BACKEND_ORDER"
     echo "auto:     ${first_ok:-none available}"
+    dashboard_doctor_json | jq -r '"dashboard: bind \(.bind)\(if .bind | startswith("127.") then "" else " (on the network)" end), access token \(if .token_set then "set" else "not set" end), \(if .running then "running on " + .running else "not running" end)"'
     echo
     printf '%s\n' "${rows[@]}" | jq -r '[.backend, (if .available then "ok" else "-" end), .steering, .reason] | @tsv' |
       { printf 'BACKEND\tOK\tSTEERING\tWHY NOT\n'; cat; } | table
@@ -1090,12 +1092,17 @@ chartroom - run a crew of coding agents from one agent session (the XO)
   chartroom peek <id> [n]                 recent events and worker output
   chartroom watch [--once [--timeout S]]  wake stream: one line per event that needs the XO
   chartroom dashboard [--port N] [--open] [--daemon] [--no-gh] [--theme chartroom|hud]
-                                          local read-only web view (127.0.0.1 only, default
-                                          port 4517): needs you / in progress / on hold /
-                                          ready / recently finished. Needs python3. The theme
-                                          default is CHARTROOM_DASHBOARD_THEME (chartroom).
+                      [--host ADDR | --expose] [--no-token]
+                                          read-only web view (127.0.0.1, default port 4517):
+                                          needs you / in progress / on hold / ready / recently
+                                          finished. Needs python3. The theme default is
+                                          CHARTROOM_DASHBOARD_THEME (chartroom). --host binds
+                                          another IPv4 address, --expose every interface
+                                          (default: CHARTROOM_DASHBOARD_HOST); beyond loopback
+                                          it needs the access token in .dashboard.token and
+                                          prints the URLs to open (--no-token: trusted networks)
   chartroom dashboard stop|status|--json  stop a --daemon one, is it up, or print the lanes
-  chartroom dashboard open [--port N] [--no-gh] [--theme NAME]
+  chartroom dashboard open [--port N] [--no-gh] [--theme NAME] [--host ADDR | --expose]
                                           start the dashboard if it is not up (as a daemon),
                                           then open it in the browser (CHARTROOM_OPENER, else
                                           open / xdg-open); prints the URL either way
