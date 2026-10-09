@@ -90,6 +90,10 @@ are stable from 0.1.0.
   the XO skill keeps it current, and `bearings` folds its waiting items into "Needs you".
 
 ### Fixed
+- The dashboard on phones and tablets: the header no longer overlaps itself at tablet widths
+  (768px), lane-count labels wrap instead of being cut, no text is under 12px below 1100px,
+  every control is a 44px tap target on touch screens, and a card's last event shows up to
+  three lines on a phone instead of one cut line.
 - `steer` to a Claude session worker (tmux, cmux, herdr) no longer says `delivered` when only a
   fragment of the message was submitted. The UserPromptSubmit hook now records a signature of
   the submitted prompt (`agent: prompt-received sig=<12 hex> len=<n>`) and delivery is confirmed

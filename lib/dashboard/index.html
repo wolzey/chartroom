@@ -61,7 +61,7 @@
            linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 64px 100%,
            var(--bg); background-attachment: fixed; }
   body { margin: 0; min-height: 100vh; color: var(--ink);
-         font: 14px/1.45 var(--body); -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+         font: 14px/1.45 var(--body); -webkit-font-smoothing: antialiased; overflow-x: hidden; overflow-x: clip; }
   a { color: var(--link); text-decoration: none; }
   a:hover { text-decoration: underline; }
   :focus-visible { outline: 2px solid var(--prog); outline-offset: 2px; border-radius: 4px; }
@@ -437,15 +437,47 @@
   [data-theme=hud] dialog { border-radius: 2px; }
   [data-theme=hud] dialog .bar b { font: 700 16px var(--display); letter-spacing: .1em; text-transform: uppercase; }
 
+  /* tablets: the instruments get a row of their own (beside the brand they overlap it), and a
+     gauge's label wraps instead of being cut */
+  @media (max-width: 1100px) {
+    header.bridge { grid-template-columns: minmax(0, 1fr); }
+    .instruments { grid-column: 1; flex-wrap: wrap; row-gap: 8px; }
+    .counts { grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); }
+    .gauge { align-items: center; }
+    .gauge .lbl { white-space: normal; text-overflow: clip; line-height: 1.25; letter-spacing: .1em; }
+    /* nothing under 12px on a phone or tablet */
+    .brand h1 small, .gauge .lbl, .badge, .sid, .kind, .clock, .log .t, .card .waiting .until,
+    [data-theme=hud] .badge, [data-theme=hud] .lane h2 .alias, [data-theme=hud] .card .links, .reticle .tagline { font-size: 12px; }
+  }
   @media (max-width: 760px) {
-    header.bridge { position: static; grid-template-columns: 1fr; padding: 10px 16px; }
-    .instruments { grid-column: 1; flex-wrap: wrap; }
-    .counts { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+    header.bridge { position: static; padding: 10px 16px; }
     .log { margin: 10px 16px 0; grid-template-columns: 1fr; }
-    .log li { grid-template-columns: 6ch minmax(0, 1fr); }
+    .log li { grid-template-columns: 8ch minmax(0, 1fr); }
     .log .who { display: none; }
     .banner { margin: 10px 16px 0; }
     main { padding: 14px 16px 40px; }
+    /* no hover to read a cut line on a phone: show up to three lines of it instead */
+    .card .last { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+                  line-clamp: 3; overflow-wrap: anywhere; }
+  }
+  /* touch: every control is at least 44px tall and wide (the short id keeps its small chip
+     look; negative margins stop its bigger box pushing the title around) */
+  @media (max-width: 760px), (pointer: coarse) {
+    .theme { min-height: 44px; min-width: 44px; padding: 0 14px; }
+    select.theme { padding-right: 28px; }
+    .gauge { min-height: 48px; }
+    .sid { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; min-width: 44px;
+           margin: -12px -8px -12px 0; padding: 0 8px; border: 0;
+           background: linear-gradient(var(--chip), var(--chip)) center / 100% 24px no-repeat; }
+    .sid:hover, .sid:focus-visible, .sid.copied { background-image: linear-gradient(color-mix(in srgb, var(--accent) 18%, transparent),
+                                                  color-mix(in srgb, var(--accent) 18%, transparent)); }
+    .card .links { gap: 0 4px; margin-top: 4px; }
+    .card .links a { display: inline-flex; align-items: center; min-height: 44px; min-width: 44px; padding: 0 8px; margin-left: -8px; }
+    .card .links .badge { margin-right: 8px; }
+    .log li.open { min-height: 44px; align-items: center; }
+    .more { min-height: 44px; }
+    dialog .bar a, dialog button { display: inline-flex; align-items: center; justify-content: center;
+                                   min-height: 44px; min-width: 44px; padding: 0 12px; }
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
