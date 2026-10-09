@@ -57,6 +57,15 @@ chartroom install-skills    # link the skills into the agents it finds (--claude
 The installer clones into `~/.local/share/chartroom`, links `~/.local/bin/chartroom`, and runs
 `chartroom init`. Re-running it updates the checkout (fast-forward only).
 
+**GUI launchers** (Claude Desktop, IDEs) start the agent from a login, non-interactive shell,
+which skips your interactive rc file: on macOS `bash` there is usually the system's 3.2 and
+Homebrew's dirs may be missing. chartroom handles this itself, with no dotfile changes: it
+re-runs under a bash ≥ 4 found on PATH or in the usual install dirs (`/opt/homebrew/bin`,
+`/usr/local/bin`, `brew --prefix`, Nix profiles, `/opt/local/bin`), and on macOS appends
+Homebrew's bin dirs to PATH when they exist and are missing, after your own entries, so workers
+inherit them too. `chartroom doctor` shows the bash it runs under and flags a thin PATH. A bash
+elsewhere: set `CHARTROOM_BASH_SEARCH` to its directory.
+
 Per agent:
 
 | Agent | How it loads chartroom | How the XO waits for wakes |
@@ -386,6 +395,8 @@ Environment variables win. Otherwise chartroom reads `~/.config/chartroom/config
 | `CHARTROOM_OPENER` | `open` / `xdg-open` | command `dashboard open` runs with the URL |
 | `CHARTROOM_WAITING_GRACE_MINUTES` | `15` | a `waiting` worker turns `waiting-overdue` this long after its until-time |
 | `CHARTROOM_WAITING_MAX_MINUTES` | `120` | ... or this long after the event, when it names no until-time |
+| `CHARTROOM_BASH_SEARCH` | see Install | environment only: colon-separated dirs searched for a bash ≥ 4 when started under an older one (PATH is always searched first) |
+| `CHARTROOM_PATH_APPEND` | `/opt/homebrew/bin:/usr/local/bin` on macOS, else empty | environment only: dirs appended to PATH when they exist and are missing; empty turns it off |
 
 `CAP_PROJECT_ROOTS`, `CAP_CREW_WORKSPACE` and `CAP_WATCH_INTERVAL` are read as legacy fallbacks.
 

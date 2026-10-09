@@ -103,6 +103,18 @@ are stable from 0.1.0.
   a space.
 - `watch` no longer raises "stopped its turn without reporting" for a joined session that ends a
   turn with its listener armed, its normal resting state; it still does when no listener is armed.
+- chartroom works when a GUI app (Claude Desktop, an IDE) launches the agent. Those start a
+  login, non-interactive shell, where `env bash` is often macOS's bash 3.2 and Homebrew's dirs
+  are missing or come after `/bin`. `bin/chartroom` now finds a bash >= 4 (on PATH, then in
+  `/opt/homebrew/bin`, `/usr/local/bin`, `brew --prefix`, Nix profiles and MacPorts'
+  `/opt/local/bin`; `CHARTROOM_BASH_SEARCH` replaces that list) and re-runs itself under it,
+  with a guard so it cannot loop; with none found, the error names where it looked and how to
+  fix it. On macOS it also appends Homebrew's bin dirs to PATH when they exist and are missing,
+  after the user's own entries, so backends and the workers they spawn find herdr, tmux, gh and
+  jq (`CHARTROOM_PATH_APPEND` replaces the list; empty turns it off). `doctor` shows the bash it
+  runs under, what it was re-run from, and a thin PATH (`bash` and `path` in `--json`).
+  `install.sh` applies the same search. The `join` skill's hooks read the session id with `sed`
+  instead of `jq`, since they run in the launching shell before chartroom can fix its PATH.
 
 ### Changed
 - README reads on its own: the comparison with another project is gone; the differences that
