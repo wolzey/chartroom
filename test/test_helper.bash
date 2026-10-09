@@ -21,6 +21,9 @@ common_setup() {
   BIN="$BATS_TEST_TMPDIR/bin"; mkdir -p "$BIN"
   ln -sf "$real_bash" "$BIN/bash"; ln -sf "$real_jq" "$BIN/jq"; ln -sf "$real_git" "$BIN/git"
   export PATH="$BIN:/usr/bin:/bin:/usr/sbin:/sbin"
+  # No PATH hygiene by default: on a Mac with Homebrew it would append the real herdr/tmux/gh.
+  export CHARTROOM_PATH_APPEND=""
+  unset CHARTROOM_BASH_SEARCH _CHARTROOM_REEXEC
   export FAKE_LOG="$BATS_TEST_TMPDIR/fake.log"
   export GIT_CONFIG_GLOBAL="$BATS_TEST_TMPDIR/gitconfig"
   git config --global user.name test; git config --global user.email test@example.invalid

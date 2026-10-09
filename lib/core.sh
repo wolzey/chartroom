@@ -17,6 +17,24 @@ die() { printf 'chartroom: %s\n' "$*" >&2; exit 1; }
 warn() { printf 'chartroom: %s\n' "$*" >&2; }
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
+# A GUI launcher's login shell often lacks Homebrew's bin dirs on macOS (their PATH line
+# usually lives in an interactive rc file), so herdr, tmux, gh and jq go missing for chartroom
+# and for every worker it spawns, which inherits this PATH. Append the dirs that exist and are
+# missing, after the user's own entries so their order still wins. CHARTROOM_PATH_APPEND
+# replaces the list (colon-separated); set it empty to turn this off.
+path_hygiene() {
+  local d def=""
+  [[ "${OSTYPE:-}" == darwin* ]] && def="/opt/homebrew/bin:/usr/local/bin"
+  CR_PATH_ADDED=()
+  local IFS=:
+  for d in ${CHARTROOM_PATH_APPEND-$def}; do
+    [[ -n "$d" && -d "$d" ]] || continue
+    [[ ":$PATH:" == *":$d:"* ]] && continue
+    PATH="${PATH:+$PATH:}$d"; CR_PATH_ADDED+=("$d")
+  done
+  export PATH
+}
+
 # Portable `readlink -f` (macOS < 12.3 lacks -f).
 realpath_f() {
   local p="$1" d

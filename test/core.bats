@@ -12,13 +12,6 @@ setup() { common_setup; }
   [[ "$output" == *"chartroom doctor"* ]]
 }
 
-@test "refuses bash 3 with an install hint" {
-  [[ -x /bin/bash ]] && /bin/bash -c '[[ ${BASH_VERSINFO[0]} -lt 4 ]]' || skip "/bin/bash is not bash 3"
-  run /bin/bash "$CHARTROOM" version
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"bash >= 4 required"* ]]
-}
-
 @test "init creates a generic home" {
   run cr init
   [ "$status" -eq 0 ]

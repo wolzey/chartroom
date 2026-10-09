@@ -15,10 +15,36 @@
 #
 # Usage: chartroom <command> [args]   (chartroom help for the list)
 
+# bash >= 4. A GUI launcher (Claude Desktop, an IDE) starts the agent from a login,
+# non-interactive shell, where `env bash` often finds the system's bash 3.2 (macOS) because
+# the PATH line for a package manager's newer bash lives in an interactive rc file, or comes
+# after /bin. So find a bash >= 4 (on PATH, then in the usual install dirs) and re-run this
+# script under it. Everything up to the check must stay bash-3.2-safe.
+# CHARTROOM_BASH_SEARCH replaces the install-dir list (colon-separated).
 if [[ -z "${BASH_VERSINFO:-}" || "${BASH_VERSINFO[0]}" -lt 4 ]]; then
-  printf 'chartroom: bash >= 4 required (this is %s). On macOS: brew install bash\n' "${BASH_VERSION:-unknown}" >&2
+  _cr_dirs="${CHARTROOM_BASH_SEARCH-/opt/homebrew/bin:/usr/local/bin:/run/current-system/sw/bin:${HOME:-/nonexistent}/.nix-profile/bin:/nix/var/nix/profiles/default/bin:/opt/local/bin}"
+  if [[ -z "${CHARTROOM_BASH_SEARCH+set}" ]] && command -v brew >/dev/null 2>&1; then
+    _cr_dirs="$_cr_dirs:$(brew --prefix 2>/dev/null)/bin"
+  fi
+  # The guard: a re-run that is somehow still bash 3 stops here instead of looping.
+  if [[ -z "${_CHARTROOM_REEXEC:-}" ]]; then
+    _cr_ifs="$IFS"; IFS=:; set -f
+    for _cr_d in ${PATH:-} $_cr_dirs; do
+      [[ -n "$_cr_d" && -f "$_cr_d/bash" && -x "$_cr_d/bash" ]] || continue
+      # shellcheck disable=SC2016
+      "$_cr_d/bash" -c '[ "${BASH_VERSINFO[0]}" -ge 4 ]' 2>/dev/null || continue
+      export _CHARTROOM_REEXEC="${BASH_VERSION:-unknown} at ${BASH:-unknown}"
+      exec "$_cr_d/bash" "$0" "$@"
+    done
+    IFS="$_cr_ifs"; set +f
+  fi
+  printf 'chartroom: bash >= 4 required (this is %s at %s%s). ' "${BASH_VERSION:-unknown}" "${BASH:-unknown}" \
+    "${_CHARTROOM_REEXEC:+, re-run from $_CHARTROOM_REEXEC}" >&2
+  printf 'No bash >= 4 found on PATH or in %s. Install one (macOS: brew install bash), or put its directory in CHARTROOM_BASH_SEARCH.\n' "$_cr_dirs" >&2
   exit 1
 fi
+CR_BASH_FROM="${_CHARTROOM_REEXEC:-}" # what this run was re-run from, for doctor
+unset _CHARTROOM_REEXEC               # workers' own chartroom calls must be free to re-run
 set -euo pipefail
 
 _self="${BASH_SOURCE[0]}"
@@ -28,6 +54,7 @@ CR_ROOT="$(cd "$(dirname "$_self")/.." && pwd)"
 CR_BIN="$CR_ROOT/bin/chartroom"
 # shellcheck source=../lib/core.sh
 source "$CR_ROOT/lib/core.sh"
+path_hygiene
 # shellcheck source=../lib/agents.sh
 source "$CR_ROOT/lib/agents.sh"
 # shellcheck source=../lib/session.sh
@@ -928,15 +955,27 @@ cmd_doctor() {
   for b in joined:claude joined:codex; do
     rows+=("$(jq -cn --arg b "$b" --arg s "$(steer_mode_of "$b")" '{backend:$b,available:false,steering:$s,reason:"not dispatched: a running session joins with chartroom join"}')")
   done
+  # A thin PATH is one chartroom had to fill in (path_hygiene): typical of GUI launchers.
+  local added="${CR_PATH_ADDED[*]:-}"
   if [[ $json -eq 1 ]]; then
     printf '%s\n' "${rows[@]}" | jq -s --arg v "$CR_VERSION" --arg h "$CR_HOME" --arg hs "$CR_HOME_SOURCE" --arg o "$CR_BACKEND_ORDER" --arg auto "$first_ok" --arg harness "$CR_HARNESS" \
-      '{version:$v,home:$h,home_source:$hs,harness:$harness,order:($o|split(" ")),auto:(if $auto=="" then null else $auto end),backends:.}'
+      --arg bv "$BASH_VERSION" --arg bp "$BASH" --arg bf "$CR_BASH_FROM" --arg added "$added" \
+      '{version:$v,home:$h,home_source:$hs,harness:$harness,
+        bash:{version:$bv,path:$bp,rerun_from:(if $bf=="" then null else $bf end)},
+        path:{thin:($added!=""),added:($added|split(" ")|map(select(.!="")))},
+        order:($o|split(" ")),auto:(if $auto=="" then null else $auto end),backends:.}'
   else
     echo "chartroom $CR_VERSION"
     echo "home:     $CR_HOME ($CR_HOME_SOURCE)"
     echo "config:   $CR_CONFIG_FILE$([[ -f "$CR_CONFIG_FILE" ]] || echo ' (not present)')"
     echo "harness:  $CR_HARNESS"
-    echo "bash $BASH_VERSION, jq $jqv, git $gitv${CI:+, CI=$CI}"
+    echo "bash:     $BASH_VERSION at $BASH${CR_BASH_FROM:+ (re-run from $CR_BASH_FROM; the bash on PATH is older than 4)}"
+    if [[ -n "$added" ]]; then
+      echo "path:     thin: added ${added// /, } (missing from the launching shell's PATH, as with GUI launchers; workers inherit the fuller PATH)"
+    else
+      echo "path:     ok"
+    fi
+    echo "tools:    jq $jqv, git $gitv${CI:+, CI=$CI}"
     echo "order:    $CR_BACKEND_ORDER"
     echo "auto:     ${first_ok:-none available}"
     echo
