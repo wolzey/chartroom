@@ -88,7 +88,9 @@ PowerShell or cmd.
   `claude.exe` isn't used, and skills installed in WSL are seen by WSL agents only. For
   `dashboard open`, install `wslu` (`wslview`); without it chartroom falls back to PowerShell's
   `Start-Process`. The Windows browser reaches the dashboard through WSL's localhost forwarding,
-  which is on by default.
+  which is on by default. Other devices reach a `dashboard --expose` in WSL only with WSL's
+  mirrored networking (`networkingMode=mirrored` in `.wslconfig`); in the default NAT mode it is
+  reachable from this Windows machine alone.
 - **Git Bash (Git for Windows): the core, `headless:claude`, `headless:codex`, `command`,
   `subagent` and the dashboard.** There are no session runners: Git for Windows has no tmux,
   cmux is macOS-only, and herdr's Windows build is a preview that chartroom leaves off unless
@@ -103,6 +105,11 @@ PowerShell or cmd.
   - `headless:claude` takes steering between runs, by resuming the session, not live.
   - `stop` ends the worker's whole Windows process tree.
   - `dashboard open` uses `start`.
+  - `dashboard --expose` and `--host` work under the native python, token and all. The first
+    time, Windows Defender Firewall asks whether Python may accept connections: allow it on the
+    networks you mean to use, or other devices cannot connect. NTFS has no `0600` mode, so
+    `.dashboard.token` and `.dashboard.log` are kept private by the home folder's ACL, which
+    under `%USERPROFILE%` only you, SYSTEM and Administrators can read.
   - `chartroom join` is unavailable: it finds the session by its process tree, and a native
     Windows agent is outside Git Bash's. Join a running session from WSL2.
   - Workers that chartroom launches inherit its `jq`: an exported bash function that runs
