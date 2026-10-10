@@ -34,6 +34,7 @@ if [[ -z "${BASH_VERSINFO:-}" || "${BASH_VERSINFO[0]}" -lt 4 ]]; then
       # shellcheck disable=SC2016
       "$_cr_d/bash" -c '[ "${BASH_VERSINFO[0]}" -ge 4 ]' 2>/dev/null || continue
       export _CHARTROOM_REEXEC="${BASH_VERSION:-unknown} at ${BASH:-unknown}"
+      # shellcheck disable=SC2093 # the first bash >= 4 found replaces this run: nothing after it is meant to run
       exec "$_cr_d/bash" "$0" "$@"
     done
     IFS="$_cr_ifs"; set +f
