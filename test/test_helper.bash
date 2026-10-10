@@ -42,6 +42,9 @@ common_setup() {
     PATH="$PATH:$w/System32:$w/System32/WindowsPowerShell/v1.0:$(dirname "$real_git"):$(cygpath -u "$("$real_git" --exec-path)")"
     export CHARTROOM_HERDR_ANY_OS=1 ;;
   esac
+  # No PATH hygiene by default: on a Mac with Homebrew it would append the real herdr/tmux/gh.
+  export CHARTROOM_PATH_APPEND=""
+  unset CHARTROOM_BASH_SEARCH _CHARTROOM_REEXEC
   export FAKE_LOG="$BATS_TEST_TMPDIR/fake.log"
   export GIT_CONFIG_GLOBAL="$BATS_TEST_TMPDIR/gitconfig"
   git config --global user.name test; git config --global user.email test@example.invalid

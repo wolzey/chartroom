@@ -7,6 +7,14 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- The dashboard on the network: `chartroom dashboard --host ADDR` binds another IPv4 address
+  and `--expose` every interface (`CHARTROOM_DASHBOARD_HOST` sets the default; it stays
+  `127.0.0.1`). Beyond loopback every request but `/healthz` needs an access token
+  (`.dashboard.token` in the home, random, `0600`): `?token=` once, then an `HttpOnly` cookie,
+  compared in constant time. Starting it prints a warning naming the bound address and one URL
+  per interface address, with the token; `--no-token` serves without one (the `Host` guard
+  stays). `doctor` shows the bind address, whether a token exists and where a running dashboard
+  listens. Read-only as before.
 - Joining a running session. Tell an agent session you started yourself "join chartroom" (the
   new `join` skill, linked by `install-skills`) and it becomes a supervised worker of the home:
   `chartroom join` records it as a `joined:<agent>` task in its own directory and branch (no
@@ -108,6 +116,10 @@ are stable from 0.1.0.
   the XO skill keeps it current, and `bearings` folds its waiting items into "Needs you".
 
 ### Fixed
+- The dashboard on phones and tablets: the header no longer overlaps itself at tablet widths
+  (768px), lane-count labels wrap instead of being cut, no text is under 12px below 1100px,
+  every control is a 44px tap target on touch screens, and a card's last event shows up to
+  three lines on a phone instead of one cut line.
 - `steer` to a Claude session worker (tmux, cmux, herdr) no longer says `delivered` when only a
   fragment of the message was submitted. The UserPromptSubmit hook now records a signature of
   the submitted prompt (`agent: prompt-received sig=<12 hex> len=<n>`) and delivery is confirmed
@@ -121,6 +133,18 @@ are stable from 0.1.0.
   a space.
 - `watch` no longer raises "stopped its turn without reporting" for a joined session that ends a
   turn with its listener armed, its normal resting state; it still does when no listener is armed.
+- chartroom works when a GUI app (Claude Desktop, an IDE) launches the agent. Those start a
+  login, non-interactive shell, where `env bash` is often macOS's bash 3.2 and Homebrew's dirs
+  are missing or come after `/bin`. `bin/chartroom` now finds a bash >= 4 (on PATH, then in
+  `/opt/homebrew/bin`, `/usr/local/bin`, `brew --prefix`, Nix profiles and MacPorts'
+  `/opt/local/bin`; `CHARTROOM_BASH_SEARCH` replaces that list) and re-runs itself under it,
+  with a guard so it cannot loop; with none found, the error names where it looked and how to
+  fix it. On macOS it also appends Homebrew's bin dirs to PATH when they exist and are missing,
+  after the user's own entries, so backends and the workers they spawn find herdr, tmux, gh and
+  jq (`CHARTROOM_PATH_APPEND` replaces the list; empty turns it off). `doctor` shows the bash it
+  runs under, what it was re-run from, and a thin PATH (`bash` and `path` in `--json`).
+  `install.sh` applies the same search. The `join` skill's hooks read the session id with `sed`
+  instead of `jq`, since they run in the launching shell before chartroom can fix its PATH.
 
 ### Changed
 - README reads on its own: the comparison with another project is gone; the differences that

@@ -275,7 +275,7 @@ start_daemon() {
   [ "$status" -eq 1 ]
 }
 
-@test "server: binds 127.0.0.1 only" {
+@test "server: binds 127.0.0.1 by default, with no token" {
   need_python
   start_daemon --no-gh
   grep -q "chartroom dashboard: http://127.0.0.1:$PORT/" "$CHARTROOM_HOME/.dashboard.log"
@@ -287,9 +287,153 @@ start_daemon() {
     ss -ltn | grep -q "127.0.0.1:$PORT "
     [ -z "$(ss -ltn | grep -E "(\*|0\.0\.0\.0|\[::\]):$PORT " || true)" ]
   fi
-  # and there is no flag or setting that changes the host
-  run cr dashboard --host 0.0.0.0
-  [ "$status" -eq 1 ]; [[ "$output" == *"unknown arg --host"* ]]
+  # loopback needs no token, makes none, and keeps the pid file's two fields
+  [ ! -e "$CHARTROOM_HOME/.dashboard.token" ]
+  [ "$(code "$URL/api/dashboard")" = 200 ]
+  [ "$(cat "$CHARTROOM_HOME/.dashboard.pid")" = "$SRV_PID $PORT" ]
+  run grep -q WARNING "$CHARTROOM_HOME/.dashboard.log"; [ "$status" -eq 1 ]
+}
+
+@test "server: --host takes only an IPv4 address; a bad one fails before anything starts" {
+  need_python
+  local h
+  for h in example.com 300.1.1.1 ::1 1.2.3 ""; do
+    run cr dashboard --daemon --port 0 --host "$h"
+    [ "$status" -eq 1 ]; [[ "$output" == *"--host must be an IPv4 address"* ]]
+  done
+  run cr dashboard --host
+  [ "$status" -eq 1 ]; [[ "$output" == *"--host needs an address"* ]]
+  run env CHARTROOM_DASHBOARD_HOST=bogus "$CHARTROOM" dashboard --daemon --port 0
+  [ "$status" -eq 1 ]; [[ "$output" == *"not 'bogus'"* ]]
+  # the lanes JSON the server itself calls never depends on the bind setting
+  run env CHARTROOM_DASHBOARD_HOST=bogus "$CHARTROOM" dashboard --json
+  [ "$status" -eq 0 ]
+  [ ! -e "$CHARTROOM_HOME/.dashboard.pid" ]
+  [ ! -e "$CHARTROOM_HOME/.dashboard.token" ]
+}
+
+# start_exposed [args...]: a daemon bound beyond loopback; sets SRV_PID PORT HOST_BOUND URL OUT.
+start_exposed() {
+  run cr dashboard --daemon --port 0 --no-gh "$@"
+  [ "$status" -eq 0 ]
+  OUT="$output"
+  read -r SRV_PID PORT HOST_BOUND <"$CHARTROOM_HOME/.dashboard.pid"
+  [[ "$PORT" =~ ^[0-9]+$ && "$PORT" -gt 0 ]]
+  URL="http://127.0.0.1:$PORT"
+}
+
+@test "exposed: --expose binds every interface behind a token: ?token= once, then a cookie" {
+  need_python
+  build_fleet
+  start_exposed --expose
+  [ "$HOST_BOUND" = 0.0.0.0 ]
+  # the token: made on first use, private, and printed in the URLs
+  local tf="$CHARTROOM_HOME/.dashboard.token" t
+  t="$(cat "$tf")"; [[ "$t" =~ ^[A-Za-z0-9_-]{40,}$ ]]
+  [ "$(stat -f %Lp "$tf" 2>/dev/null || stat -c %a "$tf")" = 600 ]
+  [ "$(stat -f %Lp "$CHARTROOM_HOME/.dashboard.log" 2>/dev/null || stat -c %a "$CHARTROOM_HOME/.dashboard.log")" = 600 ]
+  [[ "$OUT" == *"dashboard running: http://127.0.0.1:$PORT/?token=$t (pid $SRV_PID"* ]]
+  [[ "$OUT" == *"WARNING: listening on 0.0.0.0:$PORT (every interface)"*"the access token is the only lock"* ]]
+  # one URL per non-loopback interface address, each with the token
+  local n; n="$(grep -c "^chartroom dashboard: on the network: http://[0-9.]*:$PORT/?token=$t$" "$CHARTROOM_HOME/.dashboard.log" || true)"
+  [ "$(grep -c "on the network: " <<<"$OUT" || true)" -eq "$n" ]
+  run grep -q "on the network: http://127\." "$CHARTROOM_HOME/.dashboard.log"; [ "$status" -eq 1 ]
+  # the listening socket is the wildcard one, where a tool to show it exists
+  if command -v lsof >/dev/null 2>&1 || [[ -x /usr/sbin/lsof ]]; then
+    local l; l="$(PATH="$PATH:/usr/sbin" lsof -nP -a -p "$SRV_PID" -iTCP -sTCP:LISTEN 2>/dev/null || true)"
+    [[ -z "$l" || "$l" == *"*:$PORT (LISTEN)"* ]]
+  fi
+  # without the token: nothing but /healthz
+  [ "$(get "$URL/healthz")" = ok ]
+  [ "$(code "$URL/")" = 401 ]
+  [ "$(code "$URL/task/t-report/report.md")" = 401 ]
+  [ "$(code "$URL/api/dashboard")" = 401 ]
+  [[ "$(get "$URL/api/dashboard" | jq -r .error)" == "access token required"* ]]
+  [ "$(code "$URL/?token=wrong")" = 401 ]
+  [ "$(code -b "chartroom_dashboard=wrong" "$URL/")" = 401 ]
+  [ "$(code -b "chartroom_dashboard=" "$URL/")" = 401 ]
+  [ "$(code -X POST "$URL/api/dashboard")" = 405 ]
+  # ?token= sets an HttpOnly cookie and redirects to the same URL without the token
+  local h; h="$(curl -s -D - -o /dev/null "$URL/?token=$t&x=1" | tr -d '\r')"
+  [[ "$h" == "HTTP/1."*" 303 "* ]]
+  [[ "$h" == *$'\nLocation: /?x=1\n'* ]]
+  [[ "$h" == *"Set-Cookie: chartroom_dashboard=$t; Path=/; Max-Age="*"; HttpOnly; SameSite=Lax"* ]]
+  # a cookie jar does what a browser does
+  local jar="$BATS_TEST_TMPDIR/jar"
+  [ "$(code -L -c "$jar" -b "$jar" "$URL/?token=$t")" = 200 ]
+  [ "$(get -b "$jar" "$URL/api/dashboard" | jq -r .counts.needs_you)" = 5 ]
+  [ "$(get -b "$jar" "$URL/task/t-report/report.md")" = "# Report" ]
+  [ "$(code -b "$jar" "$URL/task/t-report/meta.json")" = 404 ]
+  # with the token, any Host works: the name another device uses for this machine
+  [ "$(code -b "chartroom_dashboard=$t" -H "Host: box.example.net:$PORT" "$URL/")" = 200 ]
+  # status prints the URL again; stop takes it off the network
+  run cr dashboard status
+  [ "$status" -eq 0 ]; [[ "$output" == *"http://127.0.0.1:$PORT/?token=$t (pid $SRV_PID)"*"WARNING"* ]]
+  run cr dashboard stop
+  [ "$status" -eq 0 ]; [[ "$output" == *"host 0.0.0.0"* ]]
+  [ "$(code --max-time 2 "$URL/healthz")" = 000 ]
+  # the token survives a restart (devices keep their cookie) and a rotated one applies at once
+  start_exposed --expose
+  [ "$(cat "$tf")" = "$t" ]
+  [ "$(code -b "chartroom_dashboard=$t" "$URL/")" = 200 ]
+  printf 'rotated-token-1234567890\n' >"$tf"
+  [ "$(code -b "chartroom_dashboard=$t" "$URL/")" = 401 ]
+  [ "$(code -b "chartroom_dashboard=rotated-token-1234567890" "$URL/")" = 200 ]
+  # and a missing token file fails closed
+  rm "$tf"
+  [ "$(code -b "chartroom_dashboard=rotated-token-1234567890" "$URL/")" = 401 ]
+}
+
+@test "exposed: --no-token serves without a token but keeps the Host guard, and says so" {
+  need_python
+  start_exposed --expose --no-token
+  [[ "$OUT" == *"dashboard running: http://127.0.0.1:$PORT/ (pid"* ]]
+  [[ "$OUT" == *"WARNING: listening on 0.0.0.0:$PORT"*"NO access token (--no-token)"* ]]
+  [ ! -e "$CHARTROOM_HOME/.dashboard.token" ]
+  [ "$(code "$URL/api/dashboard")" = 200 ]
+  [ "$(code -H "Host: attacker.example:$PORT" "$URL/")" = 403 ]
+  [ "$(code -H "Host: $(hostname):$PORT" "$URL/")" = 200 ]
+}
+
+@test "exposed: CHARTROOM_DASHBOARD_HOST sets the bind address; --host 127.0.0.1 overrides it" {
+  need_python
+  echo "CHARTROOM_DASHBOARD_HOST=0.0.0.0" >"$CHARTROOM_CONFIG"
+  run cr doctor --json
+  [ "$(jq -c .dashboard <<<"$output")" = '{"bind":"0.0.0.0","token_set":false,"running":null}' ]
+  start_exposed
+  [ "$HOST_BOUND" = 0.0.0.0 ]
+  [ "$(code "$URL/")" = 401 ]
+  run cr doctor
+  [[ "$output" == *"dashboard: bind 0.0.0.0 (on the network), access token set, running on 0.0.0.0:$PORT"* ]]
+  cr dashboard stop >/dev/null
+  start_daemon --no-gh --host 127.0.0.1
+  [ "$(code "$URL/")" = 200 ]
+  run cr doctor
+  [[ "$output" == *"dashboard: bind 0.0.0.0 (on the network), access token set, running on 127.0.0.1:$PORT"* ]]
+}
+
+@test "exposed: dashboard open --expose opens the URL with the token" {
+  need_python
+  export CHARTROOM_OPENER="$BATS_TEST_TMPDIR/opener"
+  printf '#!/bin/sh\necho "$@" >>"%s"\n' "$BATS_TEST_TMPDIR/opened" >"$CHARTROOM_OPENER"; chmod +x "$CHARTROOM_OPENER"
+  run cr dashboard open --port 0 --no-gh --expose
+  [ "$status" -eq 0 ]
+  read -r SRV_PID PORT HOST_BOUND <"$CHARTROOM_HOME/.dashboard.pid"
+  local t; t="$(cat "$CHARTROOM_HOME/.dashboard.token")"
+  [ "$(tail -1 "$BATS_TEST_TMPDIR/opened")" = "http://127.0.0.1:$PORT/?token=$t" ]
+  [[ "$output" == *"dashboard open: http://127.0.0.1:$PORT/?token=$t"* ]]
+  # a running exposed dashboard is reused and answers its health check off loopback too
+  run cr dashboard open --port 0 --no-gh
+  [ "$status" -eq 0 ]
+  [ "$(cut -d' ' -f1 "$CHARTROOM_HOME/.dashboard.pid")" = "$SRV_PID" ]
+}
+
+@test "doctor: shows the dashboard's bind address and whether a token is set" {
+  run cr doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"dashboard: bind 127.0.0.1, access token not set, not running"* ]]
+  run cr doctor --json
+  [ "$(jq -c .dashboard <<<"$output")" = '{"bind":"127.0.0.1","token_set":false,"running":null}' ]
 }
 
 @test "server: --port picks the port; bad and busy ports fail clearly" {

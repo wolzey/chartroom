@@ -16,3 +16,8 @@ It reuses the dashboard already running for this home, or starts one in the back
 opens it in the default browser. Reply with one line: the URL it printed. If it printed
 "open it yourself", say the browser could not be opened and give the URL. If it failed, give
 its error in one line; do not retry, stop, or restart anything on your own.
+
+Only when the commander asks to see the board from another device: tell them to run
+`chartroom dashboard stop` and then `chartroom dashboard open --expose` (or `--host <address>`),
+which puts it on the network behind an access token and prints the URLs to open there. Never
+expose it on your own.

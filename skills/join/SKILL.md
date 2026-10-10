@@ -5,15 +5,15 @@ hooks:
   Stop:
     - hooks:
         - type: command
-          command: 'p="$(cat)"; f="${XDG_STATE_HOME:-$HOME/.local/state}/chartroom/sessions/$(printf %s "$p" | jq -r ".session_id // empty")"; [ -f "$f" ] && printf %s "$p" | "$(cut -f3 "$f")" hook --session stop >/dev/null 2>&1; exit 0'
+          command: 'p="$(cat)"; f="${XDG_STATE_HOME:-$HOME/.local/state}/chartroom/sessions/$(printf %s "$p" | sed -n "s/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\([A-Za-z0-9_-]*\)\".*/\1/p" | head -n 1)"; [ -f "$f" ] && printf %s "$p" | "$(cut -f3 "$f")" hook --session stop >/dev/null 2>&1; exit 0'
   Notification:
     - hooks:
         - type: command
-          command: 'p="$(cat)"; f="${XDG_STATE_HOME:-$HOME/.local/state}/chartroom/sessions/$(printf %s "$p" | jq -r ".session_id // empty")"; [ -f "$f" ] && printf %s "$p" | "$(cut -f3 "$f")" hook --session notification >/dev/null 2>&1; exit 0'
+          command: 'p="$(cat)"; f="${XDG_STATE_HOME:-$HOME/.local/state}/chartroom/sessions/$(printf %s "$p" | sed -n "s/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\([A-Za-z0-9_-]*\)\".*/\1/p" | head -n 1)"; [ -f "$f" ] && printf %s "$p" | "$(cut -f3 "$f")" hook --session notification >/dev/null 2>&1; exit 0'
   UserPromptSubmit:
     - hooks:
         - type: command
-          command: 'p="$(cat)"; f="${XDG_STATE_HOME:-$HOME/.local/state}/chartroom/sessions/$(printf %s "$p" | jq -r ".session_id // empty")"; [ -f "$f" ] && printf %s "$p" | "$(cut -f3 "$f")" hook --session prompt-submit >/dev/null 2>&1; exit 0'
+          command: 'p="$(cat)"; f="${XDG_STATE_HOME:-$HOME/.local/state}/chartroom/sessions/$(printf %s "$p" | sed -n "s/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\([A-Za-z0-9_-]*\)\".*/\1/p" | head -n 1)"; [ -f "$f" ] && printf %s "$p" | "$(cut -f3 "$f")" hook --session prompt-submit >/dev/null 2>&1; exit 0'
 ---
 
 # Join chartroom
