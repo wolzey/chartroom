@@ -125,6 +125,17 @@ def is_loopback(host):
 
 def interface_addrs():
     """This machine's non-loopback IPv4 addresses (LAN, VPN and overlay interfaces alike)."""
+    if os.name == "nt":  # no ip or ifconfig; Windows resolves its own host name to every adapter's address
+        try:
+            found = [ai[4][0] for ai in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)]
+        except OSError:
+            found = []
+        addrs = []
+        for a in found:
+            ip = ipaddress.ip_address(a)
+            if not (ip.is_loopback or ip.is_link_local) and a not in addrs:
+                addrs.append(a)
+        return addrs
     cmds = [["ifconfig", "-a"]] if platform.system() == "Darwin" else [["ip", "-o", "-4", "addr", "show"], ["ifconfig", "-a"]]
     for cmd in cmds:
         exe = shutil.which(cmd[0]) or next((d + "/" + cmd[0] for d in ("/sbin", "/usr/sbin")
@@ -278,6 +289,9 @@ class Server(ThreadingHTTPServer):
 
 
 def main():
+    if os.name == "nt":  # LF in the log on Windows too: bash greps it, line ends included
+        sys.stdout.reconfigure(newline="\n")
+        sys.stderr.reconfigure(newline="\n")
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=4517)
     ap.add_argument("--host", default=LOOPBACK, help="IPv4 address to bind (0.0.0.0: every interface)")

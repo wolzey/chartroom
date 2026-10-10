@@ -330,8 +330,11 @@ start_exposed() {
   # the token: made on first use, private, and printed in the URLs
   local tf="$CHARTROOM_HOME/.dashboard.token" t
   t="$(cat "$tf")"; [[ "$t" =~ ^[A-Za-z0-9_-]{40,}$ ]]
-  [ "$(stat -f %Lp "$tf" 2>/dev/null || stat -c %a "$tf")" = 600 ]
-  [ "$(stat -f %Lp "$CHARTROOM_HOME/.dashboard.log" 2>/dev/null || stat -c %a "$CHARTROOM_HOME/.dashboard.log")" = 600 ]
+  # (Git Bash: NTFS has no POSIX modes; the home's ACL, private under the user profile, applies)
+  case "${OSTYPE:-}" in msys*|cygwin*) ;; *)
+    [ "$(stat -f %Lp "$tf" 2>/dev/null || stat -c %a "$tf")" = 600 ]
+    [ "$(stat -f %Lp "$CHARTROOM_HOME/.dashboard.log" 2>/dev/null || stat -c %a "$CHARTROOM_HOME/.dashboard.log")" = 600 ]
+  esac
   [[ "$OUT" == *"dashboard running: http://127.0.0.1:$PORT/?token=$t (pid $SRV_PID"* ]]
   [[ "$OUT" == *"WARNING: listening on 0.0.0.0:$PORT (every interface)"*"the access token is the only lock"* ]]
   # one URL per non-loopback interface address, each with the token

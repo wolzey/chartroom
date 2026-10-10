@@ -208,7 +208,8 @@ dashboard_open() { # [daemon args...]
   else echo "dashboard running: $url (no browser opener found; open it yourself)"; fi
 }
 
-# Windows browser openers (the URL is always http://127.0.0.1:<port>/).
+# Windows browser openers. The URL is http://<address>:<port>/, with ?token= when exposed: a
+# URL-safe token, so nothing in it reads as cmd or PowerShell syntax.
 open_url_powershell() { powershell.exe -NoProfile -NonInteractive -Command "Start-Process '$1'"; }
 open_url_start() { cmd //c start "" "$1"; }
 
@@ -278,8 +279,8 @@ cmd_dashboard() {
   local child; child="$(cat "$log.pid")"; rm -f "$log.pid"
   for i in $(seq 1 100); do
     # On Git Bash $! is an MSYS pid and the pid file holds python's Windows pid, so a server
-    # that could not bind shows only in its log.
-    [[ "$CR_PLATFORM" == msys ]] && grep -q 'cannot listen' "$log" 2>/dev/null && break
+    # that could not start (bind its port, make its token) shows only in its log.
+    [[ "$CR_PLATFORM" == msys ]] && grep -q '^chartroom dashboard: cannot' "$log" 2>/dev/null && break
     if read -r pid p h < <(dashboard_running) && [[ "$pid" == "$child" || "$CR_PLATFORM" == msys ]]; then
       if [[ "$h" == 127.* ]]; then
         echo "dashboard running: http://$h:$p (pid $pid; log $log; stop with: chartroom dashboard stop)"

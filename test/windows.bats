@@ -253,7 +253,7 @@ get() { curl -s --max-time 10 "$@"; }
   # the board comes through bash, as a native python on Windows needs
   [ "$(get "http://127.0.0.1:$PORT/api/dashboard" | jq -r '.lanes | keys | length')" = 5 ]
   run cr dashboard status
-  [ "$status" -eq 0 ]; [[ "$output" == *"http://127.0.0.1:$PORT (pid $SRV_PID)"* ]]
+  [ "$status" -eq 0 ]; [[ "$output" == *"http://127.0.0.1:$PORT/ (pid $SRV_PID)"* ]]
   grep -q "ProcessId=$SRV_PID" "$FAKE_LOG"
   run cr dashboard stop
   [ "$status" -eq 0 ]; [[ "$output" == *"dashboard stopped (pid $SRV_PID"* ]]
