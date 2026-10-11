@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# fake cygpath (Git Bash): -u turns X:\a\b or X:/a/b into /x/a/b; -w and -m log the call and
+# return each path unchanged, so the real tools on this machine can still use them.
+echo "cygpath $*" >>"${FAKE_LOG:-/dev/null}"
+mode="$1"; shift
+[[ "${1:-}" == -- ]] && shift
+for p in "$@"; do
+  if [[ "$mode" == -u && "$p" =~ ^([A-Za-z]):[\\/](.*)$ ]]; then
+    d="${BASH_REMATCH[1]}" rest="${BASH_REMATCH[2]//\\//}"
+    printf '/%s/%s\n' "$(tr '[:upper:]' '[:lower:]' <<<"$d")" "$rest"
+  else printf '%s\n' "$p"; fi
+done

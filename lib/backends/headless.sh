@@ -6,14 +6,16 @@
 #   headless:claude  `claude -p` with stream-json in and out and a pre-assigned --session-id.
 #                    stdin is a FIFO held open by the wrapper, so `steer` delivers mid-run
 #                    (confirmed by the replayed user message); after the run ends, steer
-#                    resumes the same session with --resume.
+#                    resumes the same session with --resume. On Git Bash, where a Cygwin
+#                    FIFO is not a dependable stdin for a native claude.exe, stdin is an
+#                    anonymous pipe instead, so steer waits for the run to end and resumes.
 # Neither CLI shows a trust dialog in this mode.
 
 headless_probe() { # <agent>
   [[ -n "$(agent_bin "$1")" ]] || { echo "$1 not on PATH"; return 1; }
   return 0
 }
-headless_steer_mode() { [[ "$1" == claude ]] && echo live || echo between-runs; }
+headless_steer_mode() { [[ "$1" == claude && "$CR_PLATFORM" != msys ]] && echo live || echo between-runs; }
 headless_handle_set() { [[ -n "$(meta "$1" pid)" ]]; }
 
 headless_launch() { # <id> <wt> <agent>
@@ -65,15 +67,23 @@ launch_claude_headless() { # <id> <wt> <prompt> [resume]
   # shellcheck disable=SC2206
   [[ -n "$CR_CLAUDE_ALLOWED_TOOLS" ]] && args+=(--allowedTools $CR_CLAUDE_ALLOWED_TOOLS)
   if [[ -n "$resume" ]]; then args+=(--resume "$sid"); else args+=(--session-id "$sid"); fi
-  rm -f "$d/stdin.fifo"; mkfifo "$d/stdin.fifo"
+  local pipe=""
+  if [[ "$CR_PLATFORM" == msys ]]; then pipe=1; else rm -f "$d/stdin.fifo"; mkfifo "$d/stdin.fifo"; fi
   claude_user_line "$prompt" >"$d/stdin.first"
   # The wrapper holds the FIFO open (fd 9) so steer can write more user turns, and closes
   # it once the stream ends on a `result` with nothing new for 3s, then ends claude.
+  # With CR_PIPE (Git Bash), fd 9 is the write end of an anonymous pipe to claude instead.
   (cd "$wt" || exit 1
-  CR_T="$d" CR_CLAUDE="$b" nohup bash -c '
-    "$CR_CLAUDE" "$@" <"$CR_T/stdin.fifo" >>"$CR_T/claude.jsonl" 2>>"$CR_T/claude.err" &
-    cpid=$!
-    exec 9>"$CR_T/stdin.fifo"
+  CR_T="$d" CR_CLAUDE="$b" CR_PIPE="$pipe" nohup bash -c '
+    if [[ -n "$CR_PIPE" ]]; then
+      coproc CLAUDE { exec "$CR_CLAUDE" "$@" >>"$CR_T/claude.jsonl" 2>>"$CR_T/claude.err"; }
+      cpid=$CLAUDE_PID
+      exec 9>&"${CLAUDE[1]}"; cfd="${CLAUDE[1]}"; exec {cfd}>&-
+    else
+      "$CR_CLAUDE" "$@" <"$CR_T/stdin.fifo" >>"$CR_T/claude.jsonl" 2>>"$CR_T/claude.err" &
+      cpid=$!
+      exec 9>"$CR_T/stdin.fifo"
+    fi
     cat "$CR_T/stdin.first" >&9
     quiet=0; last=""
     while kill -0 "$cpid" 2>/dev/null; do
@@ -85,9 +95,15 @@ launch_claude_headless() { # <id> <wt> <prompt> [resume]
     done
     # claude -p (stream-json input) does not exit on a late stdin EOF (verified on 2.1.289):
     # give it 5s, then end it. The session is already persisted, so --resume still works.
+    # With a pipe, claude must see EOF even when kill -0 could not see it (a native process).
+    [[ -z "$CR_PIPE" ]] || exec 9>&-
     for _ in 1 2 3 4 5; do kill -0 "$cpid" 2>/dev/null || break; sleep 1; done
     why=""
-    if kill -0 "$cpid" 2>/dev/null; then kill -TERM "$cpid" 2>/dev/null; why=", ended by chartroom after its final result"; fi
+    if kill -0 "$cpid" 2>/dev/null; then
+      w=""; [[ -n "$CR_PIPE" ]] && w="$(cat "/proc/$cpid/winpid" 2>/dev/null)"
+      if [[ -z "$w" ]] || ! taskkill //T //F //PID "$w" >/dev/null 2>&1; then kill -TERM "$cpid" 2>/dev/null; fi
+      why=", ended by chartroom after its final result"
+    fi
     wait "$cpid"; rc=$?
     jq -r "select(.type==\"result\") | .result // empty" "$CR_T/claude.jsonl" 2>/dev/null | tail -n 1 >"$CR_T/final.md"
     rm -f "$CR_T/stdin.fifo"
@@ -114,6 +130,8 @@ headless_steer() { # <id> <msg>
       log_event "$id" steered "$msg"
       launch_codex "$id" "$wt" "$msg" "$(meta "$id" thread_id)" ;;
     claude)
+      [[ "$CR_PLATFORM" == msys ]] && pid_alive "$(meta "$id" pid)" &&
+        die "claude worker is mid-run; on Git Bash headless claude takes input only between runs. Wait for its stop, or 'chartroom stop $id' first."
       log_event "$id" steered "$msg"
       if pid_alive "$(meta "$id" pid)" && [[ -p "$d/stdin.fifo" ]]; then
         local before i; before="$(wc -c <"$d/claude.jsonl" 2>/dev/null || echo 0)"
@@ -138,7 +156,7 @@ headless_steer() { # <id> <msg>
 
 headless_stop() {
   local pid; pid="$(meta "$1" pid)"
-  if pid_alive "$pid"; then pkill -TERM -P "$pid" 2>/dev/null || true; kill -TERM "$pid" 2>/dev/null || true; fi
+  if pid_alive "$pid"; then kill_tree "$pid"; fi
   return 0
 }
 

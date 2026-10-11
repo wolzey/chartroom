@@ -13,6 +13,7 @@ setup() {
 }
 
 @test "a clean repo passes, including in-repo symlinks" {
+  real_symlinks || skip "ln -s does not make symlinks here"
   mkdir -p "$R/sub"; ln -s ../a.txt "$R/sub/link"; ln -s a.txt "$R/top"
   git -C "$R" add -A; git -C "$R" commit -qm "feat: links"
   run "$GATE"
@@ -21,6 +22,7 @@ setup() {
 }
 
 @test "an absolute symlink fails even when its target is a harmless path" {
+  real_symlinks || skip "ln -s does not make symlinks here"
   ln -s /opt/tool/bin/jq "$R/jq"; git -C "$R" add jq; git -C "$R" commit -qm "chore: oops"
   run "$GATE"
   [ "$status" -eq 1 ]
@@ -28,6 +30,7 @@ setup() {
 }
 
 @test "a relative symlink that climbs out of the repo fails" {
+  real_symlinks || skip "ln -s does not make symlinks here"
   mkdir -p "$R/sub"; ln -s ../../outside "$R/sub/esc"; git -C "$R" add -A; git -C "$R" commit -qm "chore: esc"
   run "$GATE"
   [ "$status" -eq 1 ]
@@ -35,6 +38,7 @@ setup() {
 }
 
 @test "a symlink target with a local temp path is reported as personal data" {
+  real_symlinks || skip "ln -s does not make symlinks here"
   t="/priv""ate/tmp/cla""ude-501/x"
   ln -s "$t" "$R/b"; git -C "$R" add b; git -C "$R" commit -qm "chore: b"
   run "$GATE"

@@ -25,7 +25,7 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install bash jq shellcheck bats-core
       - name: shellcheck
-        run: shellcheck -x -S warning bin/chartroom lib/*.sh lib/backends/*.sh install.sh scripts/*.sh test/stub-agent test/fakes/*
+        run: shellcheck -x -S warning bin/chartroom lib/*.sh lib/backends/*.sh install.sh scripts/*.sh test/stub-agent test/windows-smoke.sh test/fakes/*
       - name: no personal data
         run: scripts/privacy-gate.sh
       - name: bats
@@ -41,3 +41,59 @@ jobs:
           git -C "$GITHUB_WORKSPACE" branch -f ci-install HEAD
           CHARTROOM_REF=ci-install bash install.sh
           "$HOME/.local/bin/chartroom" version
+
+  # Git Bash on Windows. (WSL2 is Linux, which the ubuntu job covers; hosted runners cannot
+  # run WSL2 reliably.)
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    defaults:
+      run:
+        shell: bash
+    # The steps after bats run even when it fails, so each one still reports.
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Tools (Git Bash, the image's native jq.exe and python, bats from source)
+        run: |
+          bash --version | head -1; jq --version; git --version; python --version
+          git clone -q --depth 1 --branch v1.11.1 https://github.com/bats-core/bats-core.git "$(cygpath -u "$RUNNER_TEMP")/bats"
+      - name: the checkout is LF despite core.autocrlf (.gitattributes)
+        run: |
+          bad="$(git ls-files --eol | awk '$1 != "i/-text" && $2 != "w/lf"')"
+          [ -z "$bad" ] || { echo "$bad"; exit 1; }
+      - name: no personal data
+        run: scripts/privacy-gate.sh
+      - name: bats
+        # a hung test fails after BATS_TEST_TIMEOUT; anything hung around the suite, by the step
+        timeout-minutes: 30
+        env:
+          BATS_TEST_TIMEOUT: 300
+        run: '"$(cygpath -u "$RUNNER_TEMP")/bats/bin/bats" --print-output-on-failure test/'
+      - name: doctor with only bash, jq and git
+        if: success() || failure()
+        timeout-minutes: 5
+        run: |
+          export CHARTROOM_HOME="$(cygpath -u "$RUNNER_TEMP")/home"
+          bin/chartroom doctor
+      - name: install.sh and install-skills smoke test into a temp HOME
+        if: success() || failure()
+        timeout-minutes: 10
+        run: |
+          export HOME="$(cygpath -u "$RUNNER_TEMP")/h" CHARTROOM_REPO="$(cygpath -u "$GITHUB_WORKSPACE")"
+          mkdir -p "$HOME"
+          git -C "$CHARTROOM_REPO" branch -f ci-install HEAD
+          CHARTROOM_REF=ci-install bash install.sh
+          "$HOME/.local/bin/chartroom" version
+          "$HOME/.local/bin/chartroom" install-skills --dir "$HOME/skills"
+          again="$("$HOME/.local/bin/chartroom" install-skills --dir "$HOME/skills")"; echo "$again"
+          grep -q '^ok   ' <<<"$again"
+          test -f "$HOME/skills/chartroom/SKILL.md"
+          "$HOME/.local/bin/chartroom" install-skills --dir "$HOME/skills" --uninstall
+          test ! -e "$HOME/skills/chartroom"
+      - name: native interop (a native agent process, the dashboard under native python)
+        if: success() || failure()
+        timeout-minutes: 15
+        run: test/windows-smoke.sh

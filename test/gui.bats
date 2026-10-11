@@ -8,9 +8,15 @@ setup() {
   common_setup
   # Just jq and git: no bash, so the only bash on the GUI PATH is the system one.
   TOOLS="$BATS_TEST_TMPDIR/tools"; mkdir -p "$TOOLS"
-  ln -sf "$(readlink "$BIN/jq")" "$TOOLS/jq"; ln -sf "$(readlink "$BIN/git")" "$TOOLS/git"
-  # Where a package manager put a newer bash (stands in for /opt/homebrew/bin).
-  NEWER="$BATS_TEST_TMPDIR/newer/bin"; mkdir -p "$NEWER"; ln -sf "$(readlink "$BIN/bash")" "$NEWER/bash"
+  NEWER="$BATS_TEST_TMPDIR/newer/bin"; mkdir -p "$NEWER"
+  case "${OSTYPE:-}" in
+    msys*|cygwin*) # (Git Bash: the test tools are wrapper scripts, not symlinks)
+      cp "$BIN/jq" "$BIN/git" "$TOOLS/"; cp "$BIN/bash" "$NEWER/bash" ;;
+    *)
+      ln -sf "$(readlink "$BIN/jq")" "$TOOLS/jq"; ln -sf "$(readlink "$BIN/git")" "$TOOLS/git"
+      # Where a package manager put a newer bash (stands in for /opt/homebrew/bin).
+      ln -sf "$(readlink "$BIN/bash")" "$NEWER/bash" ;;
+  esac
   EMPTY="$BATS_TEST_TMPDIR/empty"; mkdir -p "$EMPTY"
 }
 

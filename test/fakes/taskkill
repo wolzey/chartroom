@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# fake taskkill (Git Bash): logs, and with //F ends each `//PID N` here.
+echo "taskkill $*" >>"${FAKE_LOG:-/dev/null}"
+pids=() force=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in //PID) pids+=("$2"); shift 2 ;; //F) force=1; shift ;; *) shift ;; esac
+done
+[[ ${#pids[@]} -gt 0 ]] || exit 1
+for pid in "${pids[@]}"; do
+  if [[ -n "$force" ]]; then kill -9 "$pid" 2>/dev/null; else kill "$pid" 2>/dev/null; fi
+done
+exit 0

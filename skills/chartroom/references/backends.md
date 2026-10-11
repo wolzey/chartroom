@@ -42,8 +42,8 @@ cmux is implemented against its documented CLI but **unverified on a real cmux i
 
 | Mode | Backends | What `steer` does |
 |---|---|---|
-| live | herdr, cmux, tmux, headless:claude | Delivers now and confirms it was taken: Claude in tmux/cmux by the prompt hook's signature of the submitted text, headless:claude by the replayed message, herdr by its agent state or the text on screen; Codex sessions report `submitted, not verified` |
-| between-runs | headless:codex, command | Refuses while running; afterwards resumes (`codex exec resume`) or re-runs the template with the message. `command` also has `steer --inbox` (best effort) |
+| live | herdr, cmux, tmux, headless:claude (not on Git Bash) | Delivers now and confirms it was taken: Claude in tmux/cmux by the prompt hook's signature of the submitted text, headless:claude by the replayed message, herdr by its agent state or the text on screen; Codex sessions report `submitted, not verified` |
+| between-runs | headless:codex, command, headless:claude on Git Bash | Refuses while running; afterwards resumes (`codex exec resume`) or re-runs the template with the message. `command` also has `steer --inbox` (best effort) |
 | host | subagent | Records it; you deliver it with your harness's message tool |
 | mailbox | joined:<agent> | Writes to the joined session's mailbox; "delivered" only once its listener (or `listen --check`) read it, else "queued, not yet read" |
 
@@ -136,6 +136,8 @@ Headless runs (`claude -p`, `codex exec`) show no dialog.
   wrapper closes stdin. claude 2.1.289 does not exit on that late EOF, so after 5s the wrapper
   ends it (`exited: … ended by chartroom after its final result`). The session is already saved:
   a later `steer` runs `claude -p --resume <uuid>` (verified to keep context).
+- On Git Bash (Windows), stdin is an anonymous pipe instead of a FIFO, so steering is
+  between runs: refused while it runs, then `--resume`. `stop` ends the Windows process tree.
 - `final.md` gets the last `result` text; `peek` summarises messages, tool calls and results.
 
 ## command
@@ -185,6 +187,9 @@ never has to reach into its terminal.
   mid-turn, `working`/`idle`/`blocked` from hooks or herdr's pane state, `stopped` once the pid
   is gone. `watch` records the pid ending once as `exited: joined agent session ended` and wakes
   on it unless the worker had reported.
+- **Not on Git Bash (Windows)**: `join` refuses there, and `doctor` says so. A native Windows
+  agent is outside Git Bash's process tree (whose `ps` has no `-o` either), so neither the
+  agent nor its pid can be found. Join from WSL2, where it works as on Linux.
 - **Hooks (Claude Code)**: the join skill declares Stop, Notification and UserPromptSubmit
   hooks in its frontmatter; Claude Code registers them when the skill is invoked and keeps them
   for the rest of the session. They are static, so they look the task up by the payload's

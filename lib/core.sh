@@ -70,9 +70,11 @@ bin_of() { type -P "$1" 2>/dev/null || true; }
 
 CR_CONFIG_FILE="${CHARTROOM_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/chartroom/config}"
 
+# A trailing CR (a file saved by a Windows editor) is not part of the value.
 cfg_file_value() { # <KEY>
   [[ -f "$CR_CONFIG_FILE" ]] || return 0
-  sed -nE "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$CR_CONFIG_FILE" | tail -1 | sed -E 's/^"(.*)"$/\1/; s/^'"'"'(.*)'"'"'$/\1/'
+  local cr=$'\r'
+  sed -nE "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$CR_CONFIG_FILE" | tail -1 | sed -E "s/$cr\$//; "'s/^"(.*)"$/\1/; s/^'"'"'(.*)'"'"'$/\1/'
 }
 
 cfg() { # <SUFFIX> <legacy CAP_ name or ""> <default>
@@ -96,7 +98,11 @@ resolve_home() {
 }
 
 load_config() {
+  detect_platform
   resolve_home
+  # Git Bash: a Windows-form home (C:\chartroom\home, as a Windows tool would pass it)
+  # becomes /c/chartroom/home, so globs and path joins keep working.
+  if [[ "$CR_PLATFORM" == msys && "$CR_HOME" =~ ^[A-Za-z]:[\\/] ]]; then CR_HOME="$(cygpath -u "$CR_HOME")"; fi
   CR_PROJECT_ROOTS="$(cfg PROJECT_ROOTS CAP_PROJECT_ROOTS '')"
   CR_PROJECT_ROOTS="${CR_PROJECT_ROOTS//\~/$HOME}"
   CR_WORKSPACE="$(cfg WORKSPACE CAP_CREW_WORKSPACE chartroom-crew)"
@@ -117,6 +123,91 @@ load_config() {
   CR_WAITING_GRACE="$(cfg WAITING_GRACE_MINUTES '' 15)"
   CR_WAITING_MAX="$(cfg WAITING_MAX_MINUTES '' 120)"
   [[ "$CR_WAITING_GRACE$CR_WAITING_MAX" =~ ^[0-9]+$ ]] || die "CHARTROOM_WAITING_GRACE_MINUTES and CHARTROOM_WAITING_MAX_MINUTES must be whole minutes"
+}
+
+# ---------------------------------------------------------------- platform
+# CR_PLATFORM: posix (macOS, Linux), wsl (Linux under WSL) or msys (Git for Windows' Git
+# Bash, MSYS2, Cygwin). Windows-only behaviour hangs off this, so macOS and Linux keep their
+# code paths. CHARTROOM_PLATFORM overrides the detection.
+detect_platform() {
+  CR_PLATFORM="$(cfg PLATFORM '' '')"
+  if [[ -z "$CR_PLATFORM" ]]; then
+    case "${OSTYPE:-}" in
+      msys*|cygwin*) CR_PLATFORM=msys ;;
+      linux*)
+        CR_PLATFORM=posix
+        if [[ -n "${WSL_DISTRO_NAME:-}" || "$(cat /proc/sys/kernel/osrelease 2>/dev/null)" == *[Mm]icrosoft* ]]; then CR_PLATFORM=wsl; fi ;;
+      *) CR_PLATFORM=posix ;;
+    esac
+  fi
+  [[ "$CR_PLATFORM" =~ ^(posix|wsl|msys)$ ]] || die "CHARTROOM_PLATFORM must be posix, wsl or msys (got $CR_PLATFORM)"
+  if [[ "$CR_PLATFORM" == msys ]]; then
+    # A native jq.exe under MSYS can write CRLF (jq 1.8.1 does for some output and not for
+    # other), which would leave a CR on captured values; --binary turns that off, so it is
+    # passed whenever this jq accepts it.
+    CR_JQ_BINARY=""; command jq -b -n 1 >/dev/null 2>&1 && CR_JQ_BINARY=1
+    # /tmp's Windows path, so msys_jq converts most file operands without a cygpath each.
+    CR_MSYS_TMP="$(cygpath -m /tmp 2>/dev/null || true)"
+    export CR_JQ_BINARY CR_MSYS_TMP
+    jq() { msys_jq "$@"; }
+    export -f jq msys_jq
+  fi
+  return 0
+}
+
+# Git Bash: run the native jq.exe with its arguments as written. MSYS would rewrite any
+# path-looking argument, so a --arg value such as /tmp/x (a worktree, the home, a steer
+# message starting with /) would be stored as C:/...; with that off, file operands (the
+# ones that exist) are converted to Windows paths here instead: drive and /tmp paths in
+# bash, anything else in one cygpath call (forks are slow on Windows).
+msys_jq() {
+  local a d i=0 skip=0 out=() files=() at=() conv=() bin=()
+  [[ -n "${CR_JQ_BINARY:-}" ]] && bin=(-b)
+  for a in "$@"; do
+    out+=("$a")
+    if (( skip > 0 )); then skip=$((skip - 1))
+    elif [[ "$a" == --arg || "$a" == --argjson ]]; then skip=2
+    elif [[ "$a" == /* && -e "$a" ]]; then
+      if [[ "$a" =~ ^/([A-Za-z])/ ]]; then d="${BASH_REMATCH[1]}"; out[i]="${d^^}:${a:2}"
+      elif [[ -n "${CR_MSYS_TMP:-}" && "$a" == /tmp/* ]]; then out[i]="$CR_MSYS_TMP${a:4}"
+      else files+=("$a"); at+=("$i"); fi
+    fi
+    i=$((i + 1))
+  done
+  if (( ${#files[@]} > 0 )); then
+    mapfile -t conv < <(cygpath -m -- "${files[@]}")
+    for i in "${!at[@]}"; do out[${at[$i]}]="${conv[$i]}"; done
+  fi
+  MSYS2_ARG_CONV_EXCL='*' command jq "${bin[@]}" "${out[@]}"
+}
+
+# A path as native Windows programs (python.exe, claude.exe) read it: C:/chartroom/home on Git
+# Bash, unchanged elsewhere.
+win_path() { if [[ "$CR_PLATFORM" == msys ]]; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
+
+# Stop a process and its children. On Git Bash a native child (claude.exe, codex) does not
+# die with its MSYS parent, and taskkill /T cannot reach one exec'd from a forked subshell
+# (its Windows parent is gone), so the pid and all its MSYS descendants (by
+# <proc>/<pid>/ppid) are ended by their Windows pids. CHARTROOM_PROC (default /proc) lets
+# the tests stand in a process table.
+kill_tree() { # <pid>
+  local pid="$1" proc="${CHARTROOM_PROC:-/proc}" p d x todo args=()
+  if [[ "$CR_PLATFORM" == msys ]]; then
+    todo=("$pid")
+    while (( ${#todo[@]} > 0 )); do
+      p="${todo[0]}"; todo=("${todo[@]:1}")
+      if { read -r x <"$proc/$p/winpid"; } 2>/dev/null; then args+=(//PID "$x"); fi
+      for d in "$proc"/[0-9]*; do
+        { read -r x <"$d/ppid"; } 2>/dev/null && [[ "$x" == "$p" ]] && todo+=("${d##*/}")
+      done
+    done
+    if (( ${#args[@]} > 0 )); then
+      taskkill //F //T "${args[@]}" >/dev/null 2>&1 || true
+    else
+      warn "could not end the Windows process tree of pid $pid; its agent may still be running"
+    fi
+  fi
+  pkill -TERM -P "$pid" 2>/dev/null || true; kill -TERM "$pid" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------- task records
@@ -140,7 +231,7 @@ slugify() {
 }
 
 # The worker's single instruction, identical on every backend.
-task_prompt() { printf 'Read the brief at %s/brief.md and follow it exactly. Your task id is %s.' "$(tdir "$1")" "$1"; }
+task_prompt() { printf 'Read the brief at %s/brief.md and follow it exactly. Your task id is %s.' "$(win_path "$(tdir "$1")")" "$1"; }
 
 # A short signature of a prompt's text: whitespace runs collapsed and trimmed, so a typed
 # message and what the agent's prompt hook received compare equal; first 12 hex of sha256.

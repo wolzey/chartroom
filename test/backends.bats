@@ -13,6 +13,11 @@ setup() { common_setup; }
   [[ "$output" == *"subagent"*"only inside Claude Code"* ]]
   run cr doctor --json
   [ "$(jq -r .auto <<<"$output")" = null ]
+  # Git Bash: herdr stays off unless opted in (test_helper opts in for the other tests)
+  case "${OSTYPE:-}" in msys*|cygwin*)
+    CHARTROOM_HERDR_ANY_OS="" run cr doctor --json
+    [ "$(jq -r '.backends[]|select(.backend=="herdr:claude").reason' <<<"$output")" = "herdr on Windows is unverified (CHARTROOM_HERDR_ANY_OS=1 to try it)" ] ;;
+  esac
 }
 
 @test "doctor: CI disables session runners; harness=claude enables subagent" {
@@ -92,6 +97,7 @@ setup() { common_setup; }
 }
 
 @test "headless:claude: pre-assigned session, live steer over the FIFO, resume after exit" {
+  case "${OSTYPE:-}" in msys*|cygwin*) skip "Git Bash steers headless claude between runs (test/windows.bats)" ;; esac
   use_fake claude
   export FAKE_TURN=8
   id="$(new_task --backend headless:claude)"
@@ -100,6 +106,8 @@ setup() { common_setup; }
   [[ "$output" == *"steering: live"* ]]
   sid="$(meta_of "$id" session_id)"
   [[ "$sid" =~ ^[0-9a-f-]{36}$ ]]
+  # The fake logs its argv once it runs, which can be just after dispatch returns.
+  for _ in $(seq 1 50); do grep -q -- "--session-id $sid" "$FAKE_LOG" 2>/dev/null && break; sleep 0.1; done
   grep -q -- "-p --input-format stream-json --output-format stream-json --verbose --replay-user-messages --permission-mode acceptEdits --add-dir $CHARTROOM_HOME/tasks/$id --allowedTools Bash" "$FAKE_LOG"
   grep -q -- "--session-id $sid" "$FAKE_LOG"
   sleep 1
@@ -160,8 +168,10 @@ setup() { common_setup; }
   id="$(new_task --backend tmux:claude)"
   export FAKE_TMUX_TASK="$id"
   cr dispatch "$id" >/dev/null
-  # the brief's prompt was confirmed by its signature
-  sig="$(printf '%s' "Read the brief at $CHARTROOM_HOME/tasks/$id/brief.md and follow it exactly. Your task id is $id." | (source "$REPO_ROOT/lib/core.sh"; text_sig))"
+  # the brief's prompt was confirmed by its signature (on Git Bash the prompt names the brief by
+  # its Windows path, as a native agent needs)
+  b="$CHARTROOM_HOME/tasks/$id"; case "${OSTYPE:-}" in msys*|cygwin*) b="$(cygpath -m "$b")" ;; esac
+  sig="$(printf '%s' "Read the brief at $b/brief.md and follow it exactly. Your task id is $id." | (source "$REPO_ROOT/lib/core.sh"; text_sig))"
   events "$id" | grep -q "agent: prompt-received sig=$sig len="
   # a full match
   run cr steer "$id" "rebase on main, then rerun the tests"

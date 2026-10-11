@@ -54,11 +54,25 @@ fi
 
 mkdir -p "$BIN_DIR"
 link="$BIN_DIR/chartroom"
-if [[ -L "$link" || ! -e "$link" ]]; then ln -sfn "$DIR/bin/chartroom" "$link"; say "linked $link"
+# Where symlinks are unavailable (Git Bash's `ln -s` copies, and a copy cannot find lib/),
+# the link is a launcher script carrying this marker instead; a re-run rewrites it.
+marker="# chartroom launcher, written by install.sh"
+if [[ -L "$link" || ! -e "$link" ]] || grep -qxF "$marker" "$link" 2>/dev/null; then
+  ln -sfn "$DIR/bin/chartroom" "$link" 2>/dev/null || true
+  if [[ -L "$link" ]]; then say "linked $link"
+  else
+    rm -f "$link"
+    printf '#!/usr/bin/env bash\n%s\nexec %q "$@"\n' "$marker" "$DIR/bin/chartroom" >"$link"
+    chmod +x "$link"
+    say "wrote launcher $link (symlinks are unavailable here)"
+  fi
 else fail "$link exists and is not a symlink; not replacing it"; fi
 
 "$DIR/bin/chartroom" init
-case ":$PATH:" in *":$BIN_DIR:"*) ;; *) say "add $BIN_DIR to your PATH" ;; esac
+case ":$PATH:" in *":$BIN_DIR:"*) ;; *)
+  say "add $BIN_DIR to your PATH"
+  case "${OSTYPE:-}" in msys*|cygwin*) say "  Git Bash: echo 'export PATH=\"$BIN_DIR:\$PATH\"' >> ~/.bashrc" ;; esac ;;
+esac
 say "installed $("$DIR/bin/chartroom" version)"
 cat <<MSG
 

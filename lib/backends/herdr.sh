@@ -4,6 +4,8 @@
 # herdr tracks agent state itself (working/idle/done/blocked), so no hooks are needed.
 
 herdr_probe() {
+  # herdr's Windows build is a preview chartroom has not been verified against.
+  [[ "$CR_PLATFORM" != msys || -n "${CHARTROOM_HERDR_ANY_OS:-}" ]] || { echo "herdr on Windows is unverified (CHARTROOM_HERDR_ANY_OS=1 to try it)"; return 1; }
   [[ -n "$(bin_of herdr)" ]] || { echo "herdr not on PATH"; return 1; }
   herdr workspace list >/dev/null 2>&1 || { echo "herdr server not reachable (is herdr running? HERDR_ENV=${HERDR_ENV:-unset})"; return 1; }
   return 0

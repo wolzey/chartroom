@@ -50,8 +50,9 @@ THEME_SLOT = b'<html lang="en" data-theme="chartroom">'
 class Board:
     """Runs the CLI for the lanes, caches the result, and keeps gh PR states on the side."""
 
-    def __init__(self, cli, home, use_gh):
-        self.cli, self.home = cli, home
+    def __init__(self, cli, home, use_gh, bash=None):
+        # On Windows a native python cannot run bin/chartroom (a bash script) by itself.
+        self.cli, self.home = ([bash] if bash else []) + [cli], home
         self.lock = threading.Lock()
         self.cached, self.cached_at = None, 0.0
         fd, self.pr_file = tempfile.mkstemp(prefix="chartroom-dashboard-prs-", suffix=".json")
@@ -69,7 +70,7 @@ class Board:
         with self.lock:
             if self.cached is not None and time.time() - self.cached_at < CACHE_SECONDS:
                 return self.cached
-            proc = subprocess.run([self.cli, "dashboard", "--json", "--pr-states", self.pr_file],
+            proc = subprocess.run(self.cli + ["dashboard", "--json", "--pr-states", self.pr_file],
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
             if proc.returncode != 0:
                 raise RuntimeError("chartroom dashboard --json failed: " + proc.stderr.decode("utf-8", "replace").strip())
@@ -124,6 +125,17 @@ def is_loopback(host):
 
 def interface_addrs():
     """This machine's non-loopback IPv4 addresses (LAN, VPN and overlay interfaces alike)."""
+    if os.name == "nt":  # no ip or ifconfig; Windows resolves its own host name to every adapter's address
+        try:
+            found = [ai[4][0] for ai in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)]
+        except OSError:
+            found = []
+        addrs = []
+        for a in found:
+            ip = ipaddress.ip_address(a)
+            if not (ip.is_loopback or ip.is_link_local) and a not in addrs:
+                addrs.append(a)
+        return addrs
     cmds = [["ifconfig", "-a"]] if platform.system() == "Darwin" else [["ip", "-o", "-4", "addr", "show"], ["ifconfig", "-a"]]
     for cmd in cmds:
         exe = shutil.which(cmd[0]) or next((d + "/" + cmd[0] for d in ("/sbin", "/usr/sbin")
@@ -265,13 +277,28 @@ def make_handler(board, port, page, host, use_token, home):
     return Handler
 
 
+class Server(ThreadingHTTPServer):
+    """On Windows, SO_REUSEADDR (http.server's default) lets a second server bind a port that
+    one is already listening on; ask for the port exclusively there instead."""
+    if os.name == "nt":
+        allow_reuse_address = False
+
+        def server_bind(self):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            super().server_bind()
+
+
 def main():
+    if os.name == "nt":  # LF in the log on Windows too: bash greps it, line ends included
+        sys.stdout.reconfigure(newline="\n")
+        sys.stderr.reconfigure(newline="\n")
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=4517)
     ap.add_argument("--host", default=LOOPBACK, help="IPv4 address to bind (0.0.0.0: every interface)")
     ap.add_argument("--no-token", action="store_true", help="beyond loopback, serve without the access token")
     ap.add_argument("--pidfile")
     ap.add_argument("--bin", required=True, help="path to bin/chartroom")
+    ap.add_argument("--bash", help="run --bin with this bash (Git Bash on Windows)")
     ap.add_argument("--open", action="store_true")
     ap.add_argument("--no-gh", action="store_true")
     ap.add_argument("--theme", choices=THEMES, default="chartroom", help="the page's default theme")
@@ -297,9 +324,9 @@ def main():
     if page.count(THEME_SLOT) != 1:
         sys.exit("chartroom dashboard: index.html has no single theme slot %r" % THEME_SLOT.decode())
     page = page.replace(THEME_SLOT, THEME_SLOT.replace(b'"chartroom"', b'"%s"' % args.theme.encode()))
-    board = Board(args.bin, home, not args.no_gh)
+    board = Board(args.bin, home, not args.no_gh, args.bash)
     try:
-        httpd = ThreadingHTTPServer((args.host, args.port), None)
+        httpd = Server((args.host, args.port), None)
     except OSError as exc:
         sys.exit("chartroom dashboard: cannot listen on %s:%d: %s" % (args.host, args.port, exc.strerror or exc))
     httpd.daemon_threads = True
@@ -324,7 +351,7 @@ def main():
     signal.signal(signal.SIGINT, cleanup)
     if args.pidfile:
         tmp = args.pidfile + ".tmp"
-        with open(tmp, "w") as fh:
+        with open(tmp, "w", newline="\n") as fh:  # LF on Windows too: bash reads it
             # the bound host only when it is not the default, so a default pid file reads as before
             fh.write("%d %d%s\n" % (os.getpid(), port, "" if args.host == LOOPBACK else " " + args.host))
         os.replace(tmp, args.pidfile)

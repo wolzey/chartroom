@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# fake ln with Git Bash's default `winsymlinks:deepcopy`: `ln -s...` copies the target.
+src="" dst=""
+for a in "$@"; do [[ "$a" == -* ]] && continue; if [[ -z "$src" ]]; then src="$a"; else dst="$a"; fi; done
+rm -f "$dst"; cp -R "$src" "$dst"

@@ -8,11 +8,28 @@ setup() {
   common_setup
   cr init >/dev/null
   PY="$(type -P python3 || true)"
+  case "${OSTYPE:-}" in msys*|cygwin*) PY="${CR_TEST_PYTHON:-}" ;; esac
 }
 
 teardown() {
   cr dashboard stop >/dev/null 2>&1 || true
-  [[ -n "${SRV_PID:-}" ]] && kill "$SRV_PID" 2>/dev/null || true
+  [[ -n "${SRV_PID:-}" ]] && srv_kill "$SRV_PID" || true
+  # a second home's server, should one have started (the busy-port test)
+  CHARTROOM_HOME="$BATS_TEST_TMPDIR/other" cr dashboard stop >/dev/null 2>&1 || true
+}
+
+# The server's pid is python's own. On Git Bash that is a Windows pid, which kill cannot see.
+srv_alive() {
+  case "${OSTYPE:-}" in
+    msys*|cygwin*) tasklist //FI "PID eq $1" //NH 2>/dev/null | grep -qw "$1" ;;
+    *) kill -0 "$1" 2>/dev/null ;;
+  esac
+}
+srv_kill() {
+  case "${OSTYPE:-}" in
+    msys*|cygwin*) taskkill //F //PID "$1" >/dev/null 2>&1 ;;
+    *) kill "$1" 2>/dev/null ;;
+  esac
 }
 
 ago() { jq -rn --argjson s "$1" 'now - $s | floor | todate'; }
@@ -202,12 +219,14 @@ EOF
 
 # ---------------------------------------------------------------- server
 
-need_python() { [[ -n "$PY" ]] || skip "python3 not available"; ln -sf "$PY" "$BIN/python3"; }
-get() { curl -s --max-time 10 "$@"; }
-code() { curl -s -o /dev/null --max-time 10 -w '%{http_code}' "$@"; }
+need_python() { [[ -n "$PY" ]] || skip "python3 not available"; link_tool "$PY" python3; }
+# Git Bash computes the board much more slowly (every process start is expensive there).
+CURL_MAX=10; case "${OSTYPE:-}" in msys*|cygwin*) CURL_MAX=60 ;; esac
+get() { curl -s --max-time "$CURL_MAX" "$@"; }
+code() { curl -s -o /dev/null --max-time "$CURL_MAX" -w '%{http_code}' "$@"; }
 start_daemon() {
   run cr dashboard --daemon --port 0 "$@"
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$CHARTROOM_HOME/.dashboard.log" 2>/dev/null; false; }
   [[ "$output" == *"dashboard running: http://127.0.0.1:"* ]]
   read -r SRV_PID PORT <"$CHARTROOM_HOME/.dashboard.pid"
   [[ "$PORT" =~ ^[0-9]+$ && "$PORT" -gt 0 ]]
@@ -218,7 +237,7 @@ start_daemon() {
   need_python
   build_fleet
   start_daemon --no-gh
-  kill -0 "$SRV_PID"
+  srv_alive "$SRV_PID"
   [ "$(get "$URL/healthz")" = "ok" ]
   # the JSON endpoint is the CLI's board plus the enrichment status
   local j; j="$(get "$URL/api/dashboard")"
@@ -248,7 +267,7 @@ start_daemon() {
   [ "$status" -eq 1 ]; [[ "$output" == *"already running"* ]]
   run cr dashboard stop
   [ "$status" -eq 0 ]; [[ "$output" == *"dashboard stopped (pid $SRV_PID"* ]]
-  run kill -0 "$SRV_PID"; [ "$status" -ne 0 ]
+  run srv_alive "$SRV_PID"; [ "$status" -ne 0 ]
   [ ! -e "$CHARTROOM_HOME/.dashboard.pid" ]
   run cr dashboard stop
   [ "$status" -eq 0 ]; [[ "$output" == "dashboard not running" ]]
@@ -311,8 +330,11 @@ start_exposed() {
   # the token: made on first use, private, and printed in the URLs
   local tf="$CHARTROOM_HOME/.dashboard.token" t
   t="$(cat "$tf")"; [[ "$t" =~ ^[A-Za-z0-9_-]{40,}$ ]]
-  [ "$(stat -f %Lp "$tf" 2>/dev/null || stat -c %a "$tf")" = 600 ]
-  [ "$(stat -f %Lp "$CHARTROOM_HOME/.dashboard.log" 2>/dev/null || stat -c %a "$CHARTROOM_HOME/.dashboard.log")" = 600 ]
+  # (Git Bash: NTFS has no POSIX modes; the home's ACL, private under the user profile, applies)
+  case "${OSTYPE:-}" in msys*|cygwin*) ;; *)
+    [ "$(stat -c %a "$tf" 2>/dev/null || stat -f %Lp "$tf")" = 600 ]
+    [ "$(stat -c %a "$CHARTROOM_HOME/.dashboard.log" 2>/dev/null || stat -f %Lp "$CHARTROOM_HOME/.dashboard.log")" = 600 ]
+  esac
   [[ "$OUT" == *"dashboard running: http://127.0.0.1:$PORT/?token=$t (pid $SRV_PID"* ]]
   [[ "$OUT" == *"WARNING: listening on 0.0.0.0:$PORT (every interface)"*"the access token is the only lock"* ]]
   # one URL per non-loopback interface address, each with the token
@@ -425,7 +447,7 @@ start_exposed() {
   read -r SRV_PID _ <"$CHARTROOM_HOME/.dashboard.pid"
   [ "$(get "http://127.0.0.1:$p/healthz")" = ok ]
   # a second home cannot take the same port
-  run env CHARTROOM_HOME="$BATS_TEST_TMPDIR/other" "$CHARTROOM" dashboard --daemon --port "$p" --no-gh
+  run env CHARTROOM_HOME="$BATS_TEST_TMPDIR/other" "$CHARTROOM" dashboard --daemon --port "$p" --no-gh 3>&-
   [ "$status" -eq 1 ]; [[ "$output" == *"cannot listen on 127.0.0.1:$p"* ]]
   run cr dashboard --port 70000
   [ "$status" -eq 1 ]; [[ "$output" == *"--port must be 0-65535"* ]]
@@ -504,7 +526,7 @@ start_exposed() {
   [[ "$output" == *"taking over"*"dashboard open: http://127.0.0.1:$PORT/"* ]]
   [ ! -e "$CHARTROOM_HOME/.dashboard.lock" ]
   [ "$(grep -c . "$BATS_TEST_TMPDIR/opened")" -eq 3 ]
-  [ "$(pgrep -f "dashboard/server.py.*$CHARTROOM_HOME" | wc -l | tr -d ' ')" -eq 1 ]
+  if command -v pgrep >/dev/null; then [ "$(pgrep -f "dashboard/server.py.*$CHARTROOM_HOME" | wc -l | tr -d ' ')" -eq 1 ]; fi
   cr dashboard stop >/dev/null
   # a stale pid file (this test's own live shell pid: alive, but not a dashboard) is replaced,
   # and that process is never signalled
@@ -529,18 +551,19 @@ start_exposed() {
 @test "server: foreground mode serves until stopped" {
   need_python
   # in a subshell so the server is not our child: a killed child would linger as a zombie
-  ( "$CHARTROOM" dashboard --port 0 --no-gh >"$BATS_TEST_TMPDIR/fg.log" 2>&1 & )
+  ( "$CHARTROOM" dashboard --port 0 --no-gh >"$BATS_TEST_TMPDIR/fg.log" 2>&1 3>&- & )
   local i
   for i in $(seq 1 50); do [[ -s "$CHARTROOM_HOME/.dashboard.pid" ]] && break; sleep 0.1; done
   read -r SRV_PID PORT <"$CHARTROOM_HOME/.dashboard.pid"
   [ "$(get "http://127.0.0.1:$PORT/healthz")" = ok ]
   run cr dashboard stop
   [ "$status" -eq 0 ]
-  run kill -0 "$SRV_PID"; [ "$status" -ne 0 ]
+  run srv_alive "$SRV_PID"; [ "$status" -ne 0 ]
 }
 
 @test "server: PR states come from gh when present, and its absence is reported, not fatal" {
   need_python
+  case "${OSTYPE:-}" in msys*|cygwin*) skip "a native Windows python cannot run the bash fake gh" ;; esac
   use_fake gh
   fixture t-review subagent <<<"100 done: https://github.com/acme/todo-cli/pull/8"
   export FAKE_GH_STATES="$BATS_TEST_TMPDIR/gh.json"

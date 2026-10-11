@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# fake native jq.exe under Git Bash: CRLF line endings unless run with -b (--binary).
+# Wraps the real jq in $REAL_JQ; with FAKE_JQ_LOG, logs MSYS2_ARG_CONV_EXCL and the arguments.
+set -o pipefail
+args="$*"
+[[ -z "${FAKE_JQ_LOG:-}" ]] || printf '%s|%s\n' "${MSYS2_ARG_CONV_EXCL:-}" "${args//$'\n'/ }" >>"$FAKE_JQ_LOG"
+if [[ "${1:-}" == -b ]]; then shift; exec "$REAL_JQ" "$@"; fi
+"$REAL_JQ" "$@" | sed $'s/$/\r/'
