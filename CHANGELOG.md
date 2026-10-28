@@ -55,7 +55,7 @@ are stable from 0.1.0.
   is `done`/`closed` or its `closed` field is non-null, and is kept otherwise, including a
   `state: decision` row whose worker is `live: done` (the filter never looks at `live`); an
   unknown unfinished state stays visible. Input-needed states (`decision`, `blocked`,
-  `awaiting-input`, `waiting-overdue`) draw yellow, being-worked-on (`working`/`running`,
+  `awaiting-input`, `waiting-overdue`, `review`) draw yellow, being-worked-on (`working`/`running`,
   `drafting`) green, quiet states (`stopped-silent`, `waiting`, `failed`, `lost`) dim. It
   auto-shows when the session is interactive and the cwd is the home (resolved through
   `chartroom doctor --json`), and never in a crew worker's session (`CHARTROOM_TASK` set or a
