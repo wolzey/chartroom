@@ -173,7 +173,11 @@ async function detectHomeCwd($: EngineInterface, cwd: string, isInteractive: boo
 }
 
 async function openPane($: EngineInterface, focus: boolean) {
-  return $.ui.open({ id: PANE, title: 'Chartroom', ...(focus ? { focus: true as const } : {}) })
+  // `backgroundColor: 'transparent'` paints nothing under the pane body, so the chat transcript
+  // behind it shows through and the panel blends in instead of sitting in the engine's default
+  // grey docked-pane surface. Transparent is theme-safe: it shows whatever the terminal paints,
+  // in a dark or a light theme alike. It covers the whole body, the empty area below the rows too.
+  return $.ui.open({ id: PANE, title: 'Chartroom', backgroundColor: 'transparent', ...(focus ? { focus: true as const } : {}) })
 }
 
 async function closePane($: EngineInterface) {
@@ -401,8 +405,10 @@ export const register: Register = on => {
           ]
         : rows
 
+    // flexGrow fills the pane's body height and backgroundColor transparent paints nothing, so the
+    // area below the rows blends with the chat too — belt-and-suspenders with the open's backgroundColor.
     return (
-      <Box flexDirection="column">
+      <Box flexDirection="column" flexGrow={1} backgroundColor="transparent">
         {header}
         {status}
         <Text key="gap"> </Text>
