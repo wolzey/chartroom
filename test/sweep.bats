@@ -125,6 +125,15 @@ closed_record() { # <id> [extra-json]
   id="$(finished_task --kind scout)"
   wt="$(meta_of "$id" worktree)"
   ses="$(spawn "$wt" bash "$TOOLS/vite" --add-dir "$CHARTROOM_HOME/tasks/$id")"
+  # the worker's done is review: sweep never closes it, however clean, landed and idle
+  [ "$(cr status --json | jq -r --arg id "$id" '.[] | select(.id == $id) | .state')" = review ]
+  CHARTROOM_SWEEP_SETTLE_MINUTES=0 run cr sweep --apply --json --idle-hours 0
+  [ "$status" -eq 0 ]
+  [ "$(jq '[.items[] | select(.class == "close")] | length' <<<"$output")" -eq 0 ]
+  [[ "$(jq -r '.items[] | select(.class == "session") | .action + " " + .reason' <<<"$output")" == "human reported done "*" ago, awaiting your review (chartroom accept or close)" ]]
+  [ -z "$(meta_of "$id" closed)" ]; [ -d "$wt" ]; alive "$ses"
+  # the commander accepts it: now it is done, and sweep may close it
+  cr accept "$id" >/dev/null
   # just finished: it waits until the XO has had time to see the report
   CHARTROOM_SWEEP_SETTLE_MINUTES=60 run cr sweep --json
   [ "$(jq '.items | length' <<<"$output")" -eq 0 ]
@@ -147,6 +156,7 @@ closed_record() { # <id> [extra-json]
   dirty="$(finished_task --kind scout)"
   echo wip >"$(meta_of "$dirty" worktree)/notes.txt"
   TASK_ENV="STUB_MODE=fail" failed="$(finished_task)"
+  cr accept "$ship" >/dev/null; cr accept "$dirty" >/dev/null
   ses="$(spawn "$BATS_TEST_TMPDIR" bash "$TOOLS/vite" --add-dir "$CHARTROOM_HOME/tasks/$failed")"
   dev="$(spawn "$(meta_of "$dirty" worktree)" bash "$TOOLS/vite" --port 5173)"
   # fresh: nothing is raised yet (the idle threshold, 24h by default)
@@ -274,7 +284,7 @@ closed_record() { # <id> [extra-json]
 }
 
 @test "sweep's default output stays short however busy the home is; --verbose and --json carry the detail" {
-  # 14 done tasks with commits that never landed, and live work to leave alone
+  # 14 done (accepted) tasks with commits that never landed, and live work to leave alone
   git -C "$PROJECT" checkout -q -b feature; echo x >"$PROJECT/f"; git -C "$PROJECT" add f; git -C "$PROJECT" commit -qm feat
   git -C "$PROJECT" checkout -q main
   local i id t; t="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -283,7 +293,7 @@ closed_record() { # <id> [extra-json]
     jq -n --arg id "$id" --arg p "$PROJECT" --arg sha "$(git -C "$PROJECT" rev-parse main)" --arg t "$t" \
       '{schema: 1, id: $id, title: "feature \($id)", kind: "ship", backend: "command", project: $p, base: "main", base_sha: $sha,
         branch: "feature", worktree: "", created: $t, updated: $t, dispatched: $t}' >"$CHARTROOM_HOME/tasks/$id/meta.json"
-    printf '%s note: dispatched via command\n%s done: shipped\n' "$t" "$t" >"$CHARTROOM_HOME/tasks/$id/events.log"
+    printf '%s note: dispatched via command\n%s done: shipped\n%s note: accepted\n' "$t" "$t" "$t" >"$CHARTROOM_HOME/tasks/$id/events.log"
   done
   id="$(finished_task)"; cr close "$id" >/dev/null
   for i in 1 2 3; do spawn "$BATS_TEST_TMPDIR" bash "$TOOLS/vite" --add-dir "$CHARTROOM_HOME/tasks/$id" >/dev/null; done

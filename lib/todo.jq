@@ -6,7 +6,7 @@
 # .todo = {focus, count, held, items}. An item is one thing the commander owes:
 #   inbox              an open "Waiting on the commander" item: a question, or their own (`todo add`)
 #   decision, blocked  a task waiting on their word
-#   ready              finished work to land: a PR or a report to read
+#   ready              finished work in review: a PR or a report to read, until they accept or close it
 #   message, runbook   an open artifact to send or run (a note is not owed)
 # Each is {ref, type, kind, owner, project, title, text, label, why, since, due, breaking, held,
 # tickable, path}: ref is what `todo done` takes (null on an untagged inbox line), owner what
@@ -47,7 +47,7 @@ def verb: {decision: "decide: ", blocked: "blocked: ", message: "send: ", runboo
         text: ((.last_event // "") | if startswith($s + ": ") then .[($s | length) + 2:] else "" end),
         since: .last_at, held: (.held // false), card_breaking: (.breaking // false)}
      | if .text == "" then .text = .title else . end]
-   + [$b.lanes.ready[] | select(.type == "task")
+   + [$b.lanes.needs_you[] | select(.type == "task" and .state == "review")
      | {ref: .short_id, type, kind: "ready", owner: .short_id, project, title, text: .title, why: .reason,
         since: .last_at, held: (.held // false), card_breaking: (.breaking // false)}]
    + [$b.lanes.needs_you[] | select(.type == "inbox")

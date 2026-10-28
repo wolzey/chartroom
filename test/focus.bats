@@ -73,7 +73,7 @@ task_in() { # <project> <kind> [--breaking] <text>
   [ "$(jq -r --arg c "$c" '.lanes[][] | select(.id == $c) | [.in_focus, .held] | @csv' <<<"$BOARD")" = "false,true" ]
   run cr board --no-color
   [[ "${lines[0]}" == "🎯 focus: shop · 4 held (since "* ]]
-  [[ "$output" == *"Needs you (6, 3 held)"* ]]
+  [[ "$output" == *"Needs you (8, 4 held)"* ]]
   grep -qE '\[shopify\] .*\[blocked · held\]' <<<"$output"
   run cr focus --json
   [ "$(jq -r '[.on, .held, (.items | length)] | @csv' <<<"$output")" = "true,4,4" ]

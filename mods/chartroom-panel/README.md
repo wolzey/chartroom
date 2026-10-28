@@ -44,7 +44,7 @@ never reads a task file, derives state of its own, or writes anything.
 
   | states | colour | meaning |
   | --- | --- | --- |
-  | `decision`, `blocked`, `awaiting-input`, `waiting-overdue` | yellow | needs you |
+  | `decision`, `blocked`, `awaiting-input`, `waiting-overdue`, `review` | yellow | needs you |
   | `working`/`running`, `drafting` | green | being worked on |
   | `stopped-silent` (shown `stopped silent`), `waiting`, `failed`, `lost` | dim | quiet / attention |
   | any other unfinished state | plain | kept visible, never dimmed away |
@@ -54,7 +54,8 @@ never reads a task file, derives state of its own, or writes anything.
 ### Filtering (the heart of it)
 
 A row is **hidden** when its `state` is `done` or `closed`, **or** its `closed` field is non-null
-(a finished/closed row). It is **kept** otherwise — including a `state: decision` row whose worker
+(a finished/closed row). A worker reporting done puts its task in `review`, which stays visible
+(yellow, with the input-needed rows) until the commander accepts (`chartroom accept`) or closes it. It is **kept** otherwise — including a `state: decision` row whose worker
 reports `live: done`, which is routine: the filter keys on `state`/`closed` and **never** on
 `live`. An unfinished state the mod has never seen stays visible. There is no completed/history
 section. (This is exactly the Pi panel's filter, so the two siblings hide and keep the same rows.)

@@ -19,12 +19,14 @@
 # summary.kept counts its processes.
 #
 # The rules:
-#   in-flight tasks (anything but done, failed, stopped-silent, closed): never touched.
+#   in-flight tasks (anything but review, done, failed, stopped-silent, closed): never touched.
+#   review (a worker reported done; the commander has not accepted it) is finished but never
+#            closed by sweep: only the commander says it is done (`chartroom accept`/`close`).
 #   session  (the agent chartroom started, its launcher and pane shell, and what runs under it)
 #            closed task -> apply (a leftover herdr pane in its worktree too). done task that closes in this sweep -> apply. A joined
-#            session (the commander's own) -> human. done (not closeable), failed,
+#            session (the commander's own) -> human. review, done (not closeable), failed,
 #            stopped-silent, idle >= $idle -> human. Otherwise kept.
-#   close    done, clean, nothing unlanded, settled -> apply. Not closeable and idle >= $idle,
+#   close    done (accepted), clean, nothing unlanded, settled -> apply. Not closeable and idle >= $idle,
 #            or holding processes -> human.
 #   orphan   `chartroom watch` run from this home whose session is gone (nearest real parent
 #            is init) -> apply; from an unknown home -> human. `listen <id>` of this home's
@@ -32,7 +34,7 @@
 #            (not the one .dashboard.pid tracks) -> apply; an untracked one -> human.
 #   daemon   in a closed task's worktree, or one that closes in this sweep -> apply; in a
 #            dir under this home's worktrees/ that no longer exists -> apply; in any other
-#            chartroom worktree dir no task of this home records -> human; in a done/failed/stopped-silent task's worktree, running
+#            chartroom worktree dir no task of this home records -> human; in a review/done/failed/stopped-silent task's worktree, running
 #            >= $idle with the task idle >= $idle -> human. A process with a terminal is
 #            never apply (someone may be using it): human instead.
 #   other homes  a loop run from another registered home, a listener for its task, a process in
@@ -42,7 +44,7 @@ def base: split("/") | last;
 def words: split(" ") | map(select(length > 0));
 def under($p): . == $p or startswith($p + "/");
 def mentions($p): (.args + " ") | contains($p + "/") or contains($p + " ");
-def finished: IN("done", "failed", "stopped-silent", "closed");
+def finished: IN("review", "done", "failed", "stopped-silent", "closed");
 def dur: floor as $s
   | if $s < 60 then "\($s)s" elif $s < 3600 then "\($s / 60 | floor)m"
     elif $s < 86400 then "\($s / 3600 | floor)h\($s % 3600 / 60 | floor)m"
@@ -190,6 +192,7 @@ def wrapper: (.args | words) as $w | (($w[0] // "") | base) as $b
            elif closing($t) then {action: "apply", reason: "its task closes in this sweep"}
            elif ($t.close.later // false) then {action: "keep"}
            elif stale($t) | not then {action: "keep"}
+           elif $t.state == "review" then {action: "human", reason: "reported done \($t.idle | dur) ago, awaiting your review (chartroom accept or close)"}
            elif $t.state == "done" then {action: "human", reason: "done \($t.idle | dur) ago, not closeable: \($t.close.reason // "no close check")"}
            elif $t.state == "failed" then {action: "human", reason: "failed \($t.idle | dur) ago; its session is still open"}
            else {action: "human", reason: "stopped without reporting \($t.idle | dur) ago; its session is still open"} end)]) as $sessions

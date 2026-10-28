@@ -120,7 +120,7 @@ test('a non-interactive (-p) run registers no command, opens no pane and never p
   expect(polls(w.runs)).toBe(0)
 })
 
-test('active → done disappears without closure; the count follows', async ($, on) => {
+test('a worker reporting done stays as review; only the accept (done) drops it', async ($, on) => {
   const world = XO_WORLD()
   world.status = () => ({ exitCode: 0, stdout: statusJson([{ id: 'auth-108a', state: 'working', title: 'Auth' }]), stderr: '' })
   const w = install(on, world)
@@ -131,7 +131,16 @@ test('active → done disappears without closure; the count follows', async ($, 
   expect(await ui.find({ type: 'Text', text: /1 unfinished/ })).toBeDefined()
   await ui.unmount()
 
-  // The worker finishes: the next poll drops it, with no close event anywhere.
+  // The worker reports done: the task waits on the commander's review, so it stays.
+  world.status = () => ({ exitCode: 0, stdout: statusJson([{ id: 'auth-108a', state: 'review', title: 'Auth' }]), stderr: '' })
+  await w.clock.advance(5_000)
+  ui = await mountPane($)
+  expect(await ui.find({ type: 'Button', key: 'row-108a' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /review/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /1 unfinished/ })).toBeDefined()
+  await ui.unmount()
+
+  // The commander accepts it (state done): the next poll drops it, with no close event anywhere.
   world.status = () => ({ exitCode: 0, stdout: statusJson([{ id: 'auth-108a', state: 'done', title: 'Auth' }]), stderr: '' })
   await w.clock.advance(5_000)
   ui = await mountPane($)

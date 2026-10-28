@@ -472,6 +472,19 @@ are stable from 0.1.0.
   commands hit first).
 
 ### Changed
+- A worker's `done` no longer marks its task done: it puts it in a new `review` state (finished,
+  awaiting the commander's look), and only the commander ends that. `chartroom close <id>` closes
+  it as before; the new `chartroom accept <id>` marks it `done` without closing (a
+  `note: accepted` event; the worktree, branch and session stay). `review` shows in `status` and
+  `board`, leads into the dashboard's Needs you lane (after `awaiting-input`; its reason says PR
+  to review, PR merged or report to read), is on the todo list, is held by focus mode like the
+  other asks, and stays in the Claude Code panel in the input-needed colour (the panel still
+  hides `done`, now the commander's own accept). The dashboard's Ready for you lane holds accepted
+  tasks not yet closed. `sweep` treats `review` as finished but never closes one: it closes only
+  accepted (`done`) tasks, and lists a review task's open session as needing a human. Existing
+  records need no migration: the state is derived from the log, so a task whose `done` event has
+  no accept after it reads as `review`. The `chartroom`, `continue`, `bearings` and `sweep`
+  skills say so.
 - README reads on its own: the comparison with another project is gone; the differences that
   matter are listed under Design.
 - Skills: the `chartroom` skill points at the dashboard and `board`; `continue` appends the

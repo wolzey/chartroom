@@ -8,7 +8,7 @@ const row = (state: string, extra: Record<string, unknown> = {}) => ({ id: state
 test('filter: unfinished rows stay (incl. unknown states); done/closed and any closed value hide', () => {
   // Every unfinished state — including a decision whose worker is live=done, and a state the mod
   // has never heard of — must stay visible. done, closed, and any non-null `closed` must drop off.
-  const kept = ['drafting', 'working', 'running', 'waiting', 'decision', 'blocked', 'failed', 'lost', 'stopped-silent', 'awaiting-input', 'waiting-overdue', 'future-state']
+  const kept = ['drafting', 'working', 'running', 'waiting', 'decision', 'blocked', 'failed', 'lost', 'stopped-silent', 'awaiting-input', 'waiting-overdue', 'review', 'future-state']
   const payload = JSON.stringify([
     ...kept.map(state => row(state, { live: 'done' })), // live=done never hides a visible row
     row('done'),
@@ -31,7 +31,7 @@ test('filter: malformed payloads throw (so the panel keeps stale rows, never an 
 })
 
 test('tone: input-needed vs working vs quiet vs unknown', () => {
-  for (const s of ['decision', 'blocked', 'awaiting-input', 'waiting-overdue']) expect(tone(s)).toBe('input')
+  for (const s of ['decision', 'blocked', 'awaiting-input', 'waiting-overdue', 'review']) expect(tone(s)).toBe('input')
   for (const s of ['working', 'running', 'drafting']) expect(tone(s)).toBe('working')
   for (const s of ['stopped-silent', 'waiting', 'failed', 'lost']) expect(tone(s)).toBe('quiet')
   expect(tone('future-state')).toBe('plain')

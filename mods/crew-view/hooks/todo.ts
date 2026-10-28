@@ -161,7 +161,8 @@ export function todoActions(item: TodoItem | null, list: TodoList, withHeld: boo
 export function doneRefusal(item: TodoItem): string | null {
   if (item.tickable && item.ref) return null
   if (item.type === 'task') {
-    const what = item.kind === 'decision' ? 'waits on your decision' : item.kind === 'blocked' ? 'is blocked on you' : 'is finished work to land'
+    if (item.kind === 'ready') return `${item.owner ?? 'this task'} is finished work awaiting your review: it clears when you accept or close it (o: /continue ${item.owner ?? ''})`.replace(/ \)$/, ')')
+    const what = item.kind === 'decision' ? 'waits on your decision' : 'is blocked on you'
     return `${item.owner ?? 'this task'} ${what}: it clears when the XO relays your answer (o: /continue ${item.owner ?? ''})`.replace(/ \)$/, ')')
   }
   return 'this inbox line has no id yet, so it cannot be ticked (chartroom inbox tag gives it one)'

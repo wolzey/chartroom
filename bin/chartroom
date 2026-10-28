@@ -665,13 +665,18 @@ live_of() { # <id> -> liveness word
   "${r}_live" "$1" 2>/dev/null || echo unknown
 }
 
+# A worker's `done` puts the task in review (finished, awaiting the commander's look); only the
+# commander's `accept` (a "note: accepted" event) makes it done, and `close` closes it. A record
+# from before review existed reads the same way: its `done` event is review until accepted.
 state_of() { # derived from the last wake-worthy event; a restart re-derives the same answer
   local id="$1"
   [[ -n "$(meta "$id" closed)" ]] && { echo closed; return; }
   [[ -n "$(meta "$id" dispatched)" ]] || { echo drafting; return; }
   awk '
     ($2=="note:" && $3=="dispatched") || $2=="steered:" { s="working" }
-    $2 ~ /^(decision|blocked|done|failed):$/ { k=$2; sub(/:$/, "", k); s=k }
+    $2 ~ /^(decision|blocked|failed):$/ { k=$2; sub(/:$/, "", k); s=k }
+    $2=="done:" { s="review" }
+    $2=="note:" && $3=="accepted" && s=="review" { s="done" }
     END { print (s=="" ? "working" : s) }' "$(tdir "$id")/events.log"
 }
 
@@ -969,6 +974,17 @@ cmd_close() {
   if [[ $discard -eq 1 ]]; then log_event "$id" note "closed (uncommitted work discarded on commander's order)"
   else log_event "$id" note "closed"; fi
   echo "closed $id"
+}
+
+# The commander's word that finished work is done, without closing it: the worktree, branch
+# and session stay as they are (close, or sweep --apply once it is landed, removes them).
+cmd_accept() {
+  local id st; [[ $# -eq 1 ]] || die "usage: chartroom accept <id>"
+  id="$(cmd_resolve "$1")" || exit 1; need_task "$id"
+  st="$(state_of "$id")"
+  [[ "$st" == review ]] || die "$id is $st, not awaiting review: accept marks a worker's finished work done"
+  log_event "$id" note "accepted"
+  echo "accepted $id: done (chartroom close $id removes its worktree)"
 }
 
 # ---------------------------------------------------------------- watch
@@ -1447,18 +1463,21 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           plus each home's XO from herdr. radar machines lists
                                           the machines (CHARTROOM_RADAR_MACHINES, else herdr's
                                           saved ones); CHARTROOM_MACHINE_NAME labels this one
+  chartroom accept <id>                   the commander's word that a task in review (a worker
+                                          reported done) is done; keeps its worktree (close
+                                          removes it)
   chartroom close <id> [--discard]        remove a clean worktree, close its tab, mark closed
                                           (a joined task's directory is never touched)
                                           (--discard only on the commander's explicit word)
   chartroom sweep [--apply] [--verbose|--json] [--idle-hours N]
                                           audit what the crew left running: sessions of
-                                          finished tasks, done tasks safe to close, orphaned
+                                          finished tasks, accepted tasks safe to close, orphaned
                                           watch/listen/dashboard loops, dev servers and daemons
                                           in closed or missing worktrees. A dry run by default;
                                           prints one summary line (counts, RSS, CPU, load) and
                                           one line per item that needs a human (--verbose: each
                                           item's age, CPU, RSS). --apply frees only the safe set
-                                          (closes done tasks that are clean with nothing
+                                          (closes accepted tasks that are clean with nothing
                                           unlanded, stops closed tasks' sessions, kills orphans
                                           and those daemons), logs it to sweep.log; never
                                           in-flight work, never --discard
@@ -1480,7 +1499,7 @@ if [[ "$cmd" =~ ^(status|ls|board|todo|inbox|relay)$ ]]; then
   done
 fi
 case "$cmd" in
-  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|steer|stop|attach|close|sweep|watch|dashboard|radar|doctor|homes|version|help) "cmd_$cmd" "$@" ;;
+  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|steer|stop|attach|accept|close|sweep|watch|dashboard|radar|doctor|homes|version|help) "cmd_$cmd" "$@" ;;
   install-skills) cmd_install_skills "$@" ;;
   ls) cmd_status "$@" ;;
   show) cmd_show "$@" ;;

@@ -12,13 +12,14 @@
 #   $focus    focus mode's {projects, since, until}, or null (lib/focus.sh)
 #
 # Rules (README "Dashboard" documents the same table):
-#   needs_you    decision, blocked, failed, awaiting-input; plus inbox "Waiting ..." items
+#   needs_you    decision, blocked, failed, awaiting-input, review (a worker reported done; it
+#                waits on the commander's accept or close); plus inbox "Waiting ..." items
 #   in_progress  working, drafting, or waiting (a stopped worker inside its `waiting` window;
 #                the card carries what it waits on and until when)
 #   on_hold      stopped-silent or waiting-overdue; working/done whose last event (other than
 #                the worker's own `waiting` event) says it waits on a person;
 #                done with an open PR that still needs someone's review (from gh)
-#   ready        done, not closed, nothing above applies (a PR or report to read)
+#   ready        done (accepted by the commander), not closed, nothing above applies
 #   recent       closed within $hours, or done with every known PR merged/closed (gh)
 #
 # Every card carries in_focus and held from its row or inbox item (lib/focus.sh), and breaking
@@ -28,7 +29,7 @@
 def ts: if . == null or . == "" then null else (try fromdateiso8601 catch null) end;
 def waits_on_person:
   (. // "") | test("waiting (on|for)|awaiting (review|approval|response|reply|feedback|merge|sign-?off)|pending (review|approval)|on hold|blocked on (a |the )?(review|approval|person|human)"; "i");
-def priority: {"decision": 0, "blocked": 1, "failed": 2, "awaiting-input": 3}[.] // 4;
+def priority: {"decision": 0, "blocked": 1, "failed": 2, "awaiting-input": 3, "review": 4}[.] // 5;
 def attached($type; $owner): [$artifacts[] | select(.owner_type == $type and .owner == $owner)
   | {ref, owner_type, owner, slug, title, kind, updated}];
 
@@ -49,7 +50,7 @@ now as $now
        breaking: ($t.breaking // false), in_focus: ($t.in_focus != false), held: ($t.held // false)}
     | .lane = (
         if $t.state == "closed" then (if $closed_at != null and $closed_at >= $since then "recent" else null end)
-        elif ($t.state | priority) < 4 then "needs_you"
+        elif ($t.state | priority) < 5 then "needs_you"
         elif $t.state == "stopped-silent" or $t.state == "waiting-overdue" then "on_hold"
         elif $t.state == "waiting" then "in_progress"
         elif $t.state == "done" then
@@ -57,12 +58,14 @@ now as $now
         elif ($ev | waits_on_person) and ($said_waiting | not) then "on_hold"
         else "in_progress" end)
     | .reason = (
-        if .lane == "needs_you" then .state
+        if .lane == "needs_you" and $t.state == "review" then
+          (if $merged then "PR merged" elif ($pr | length) > 0 then "PR to review" elif $t.has_report then "report to read" else "awaiting review" end)
+        elif .lane == "needs_you" then .state
         elif .lane == "on_hold" then
           (if $t.state == "stopped-silent" then "stopped without reporting"
            elif $t.state == "waiting-overdue" then "waiting overdue"
            elif $in_review then "PR awaiting review" else "waiting on someone" end)
-        elif .lane == "ready" then (if ($pr | length) > 0 then "PR to review" elif $t.has_report then "report to read" else "done" end)
+        elif .lane == "ready" then "accepted"
         elif .lane == "recent" then (if $merged then "merged" else "closed" end)
         elif $t.state == "drafting" then "drafting the brief"
         elif $t.state == "waiting" then "waiting"
