@@ -137,6 +137,40 @@ export function paginate(tasks: Task[], capacity: number, page: number): Page {
 /** The command the footer advertises as the available controls. */
 export const CONTROLS = '/chartroom-panel next|prev|off'
 
+// ---------------------------------------------------------------- the home's panel config
+//
+// A durable, harness-neutral setting lives in `$CHARTROOM_HOME/panel.conf` as KEY=VALUE lines, so
+// the Pi panel and a future Codex panel can read the same switch. The panel reads `autoshow`
+// (unset/default = on; `off`/`false`/`0`/`no` = off) to decide whether to auto-show on session start.
+
+const OFF_VALUES = new Set(['off', 'false', '0', 'no', 'n'])
+
+/** A KEY=VALUE config value (last line wins, quotes stripped), or '' when absent. */
+export function configValue(text: string, key: string): string {
+  let value = ''
+  const re = new RegExp(`^\\s*${key}\\s*=\\s*(.*)$`)
+  for (const line of text.split('\n')) {
+    const m = re.exec(line.replace(/\r$/, ''))
+    if (m) value = (m[1] ?? '').trim()
+  }
+  const quoted = /^"(.*)"$/.exec(value) ?? /^'(.*)'$/.exec(value)
+  return quoted ? quoted[1] ?? '' : value
+}
+
+/** `text` with `key` set to `value`: replaces every existing `key=` line and drops blanks, else appends. */
+export function setConfigLine(text: string | null | undefined, key: string, value: string): string {
+  const re = new RegExp(`^\\s*${key}\\s*=`)
+  const kept = (text ?? '').split('\n').filter(line => line.trim() !== '' && !re.test(line.replace(/\r$/, '')))
+  kept.push(`${key}=${value}`)
+  return `${kept.join('\n')}\n`
+}
+
+/** Whether the panel should auto-show, from `panel.conf` text: true unless `autoshow` reads off. */
+export function autoShowEnabled(configText: string | null | undefined): boolean {
+  if (!configText) return true
+  return !OFF_VALUES.has(configValue(configText, 'autoshow').toLowerCase())
+}
+
 // ---------------------------------------------------------------- paths (gating)
 
 /** Two paths are the same once their trailing slashes are dropped. */

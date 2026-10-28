@@ -1,7 +1,7 @@
 // The pure logic — the filter, the tone map, width-safe text and paging. Called directly.
 import { expect, test } from 'claude-code/testing'
 
-import { CHROME_ROWS, capacityFor, clean, columns, paginate, parseTasks, stateLabel, tone, truncate } from '../hooks/model'
+import { CHROME_ROWS, autoShowEnabled, capacityFor, clean, columns, configValue, paginate, parseTasks, setConfigLine, stateLabel, tone, truncate } from '../hooks/model'
 
 const row = (state: string, extra: Record<string, unknown> = {}) => ({ id: state, state, title: 'A task', ...extra })
 
@@ -65,6 +65,23 @@ test('paginate: pages, footer range, wrapping and the empty fleet', () => {
   expect(paginate(tasks, cap, -1).page).toBe(1)
   const empty = paginate([], cap, 3)
   expect([empty.total, empty.pages, empty.footer]).toEqual([0, 1, '0 of 0 · page 1/1'])
+})
+
+test('config: autoShowEnabled (default/on/off), configValue (last wins), setConfigLine (preserves keys)', () => {
+  expect(autoShowEnabled(null)).toBe(true) // unset = default on
+  expect(autoShowEnabled('')).toBe(true)
+  expect(autoShowEnabled('autoshow=on')).toBe(true)
+  expect(autoShowEnabled('autoshow=off')).toBe(false)
+  expect(autoShowEnabled('autoshow=OFF\n')).toBe(false)
+  expect(autoShowEnabled('autoshow=false')).toBe(false)
+  expect(autoShowEnabled('autoshow=0')).toBe(false)
+  expect(autoShowEnabled('other=1')).toBe(true) // an unrelated key leaves the default on
+  expect(configValue('a=1\nautoshow=off\nautoshow=on', 'autoshow')).toBe('on') // last line wins
+  const t = setConfigLine('theme=dark\nautoshow=on\n', 'autoshow', 'off')
+  expect(t).toContain('theme=dark') // other keys preserved
+  expect(autoShowEnabled(t)).toBe(false)
+  expect(setConfigLine(null, 'autoshow', 'off')).toBe('autoshow=off\n')
+  expect(setConfigLine('autoshow=off\nautoshow=off', 'autoshow', 'on')).toBe('autoshow=on\n') // collapses dupes
 })
 
 test('capacityFor: at least one task even on a tiny pane', () => {

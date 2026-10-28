@@ -276,6 +276,47 @@ test('action keys exist only when focused; the footer shows how to get in and ac
   await ui.unmount()
 })
 
+test('durable default off: no auto-show, but /chartroom-panel on still opens it manually', async ($, on) => {
+  const world = XO_WORLD()
+  world.files[`${HOME}/panel.conf`] = 'autoshow=off\n' // the home's durable setting
+  const w = install(on, world)
+  const panel = panelCommand($)
+  await start($)
+  await w.clock.settle()
+  expect(w.opens).toEqual([]) // config off → no auto-show
+  expect(w.commands).toEqual(['chartroom-panel']) // but the command is still there
+  expect(polls(w.runs)).toBe(0) // and nothing polls until it is opened
+  expect((await panel('on')).text).toMatch(/on\.?$/) // manual on works despite the default
+  expect(w.opens.map(o => o.id)).toEqual(['chartroom-panel'])
+})
+
+test('precedence: a session on overrides a durable default off for that session', async ($, on) => {
+  const world = XO_WORLD()
+  world.files[`${HOME}/panel.conf`] = 'autoshow=off\n'
+  const w = install(on, world)
+  const panel = panelCommand($)
+  await start($)
+  await w.clock.settle()
+  expect(w.opens).toEqual([]) // default off wins at startup
+  await panel('on') // session action overrides
+  await w.clock.advance(5_000)
+  expect(polls(w.runs)).toBeGreaterThan(0) // now it polls for the session
+})
+
+test('default on|off writes the durable home config; default with no arg reports it', async ($, on) => {
+  const w = install(on, XO_WORLD()) // no panel.conf → default on
+  const panel = panelCommand($)
+  await start($)
+  await w.clock.settle()
+  const off = await panel('default off')
+  expect(off.text).toMatch(/default set to off/)
+  expect(w.writes.some(x => x.path === `${HOME}/panel.conf` && /autoshow=off/.test(x.text))).toBe(true)
+  expect((await panel('default')).text).toMatch(/Auto-show default is off/) // reports current
+  await panel('default on')
+  expect(w.writes.at(-1)?.text).toMatch(/autoshow=on/)
+  expect((await panel('default')).text).toMatch(/Auto-show default is on/)
+})
+
 test('cleanup: session end cancels the timer, so no poll runs afterwards', async ($, on) => {
   const w = install(on, XO_WORLD())
   await start($)
