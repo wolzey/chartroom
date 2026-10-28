@@ -77,6 +77,7 @@ export function install(on: On, world: World) {
   const copies: string[] = []
   const fills: string[] = []
   const submits: string[] = []
+  const commandRuns: { command: string; args: string }[] = []
   const writes: { path: string; text: string }[] = []
   mock.env(on, world.env)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -166,7 +167,13 @@ export function install(on: On, world: World) {
     commands.push(e.name)
     return { value: { command: e.name } }
   })
-  return { runs, homes, commands, opens, closes, copies, fills, submits, writes, clock }
+  // The bottom for slash commands the plugin runs (e.g. /continue). The plugin's own
+  // /chartroom-panel hook answers above this without next, so it never reaches here.
+  on('command.run', ($, e) => {
+    commandRuns.push({ command: e.command, args: e.args })
+    return { text: `ran /${e.command}` }
+  })
+  return { runs, homes, commands, commandRuns, opens, closes, copies, fills, submits, writes, clock }
 }
 
 /** Starts an interactive session at `cwd` (the home by default), as Claude Code does on launch. */

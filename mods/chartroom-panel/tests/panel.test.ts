@@ -235,11 +235,12 @@ test('renders width-safe at a narrow pane with a long Unicode title', async ($, 
   await ui.unmount()
 })
 
-test('Enter submits /continue for the highlighted task: no fill, no copy, no paste-guidance notice', async ($, on) => {
-  // Enter fires `/continue <id>` as its own turn (fire-and-forget $.prompt.submit) and never touches
-  // the composer. The test kit does not dispatch a plugin's $.prompt.submit (it would run a turn), so
-  // the submit itself is verified live; here we assert the observable contract: no fill, no copy, no
-  // "copied … paste" guidance, and the optimistic "sent" notice.
+test('Enter RUNS /continue for the highlighted task via command.run (not a text submit); no fill, no copy', async ($, on) => {
+  // Enter dispatches `/continue <id>` with $.command.run (runs the command as if typed), which
+  // actually starts the continue turn — unlike $.prompt.submit, which only submitted the text and
+  // showed a false "sent". It never touches the composer. (command.run, like any queued-till-idle
+  // call, isn't dispatched by the kit mid-handler, so the turn running is verified live; here we
+  // assert the observable contract and that the notice is the honest "running …", never "sent".)
   const w = install(on, XO_WORLD())
   await startXo($)
   await w.clock.settle()
@@ -248,8 +249,9 @@ test('Enter submits /continue for the highlighted task: no fill, no copy, no pas
   await w.clock.settle()
   expect(w.fills).toEqual([]) // the composer is never written (no fill)
   expect(w.copies).toEqual([]) // nothing copied to the clipboard
-  expect(await ui.find({ type: 'Text', text: /copied|paste/i })).toBeUndefined() // obsolete guidance gone
-  expect(await ui.find({ type: 'Text', text: /sent \/continue 108a/ })).toBeDefined()
+  expect(w.submits).toEqual([]) // no text submit — the old broken path is gone
+  expect(await ui.find({ type: 'Text', text: /copied|paste|sent/i })).toBeUndefined() // no false success / stale guidance
+  expect(await ui.find({ type: 'Text', text: /running \/continue 108a/ })).toBeDefined()
   await ui.unmount()
 })
 
