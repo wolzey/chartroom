@@ -35,7 +35,11 @@ are stable from 0.1.0.
   off across sessions: `/chartroom-panel default on|off` writes `autoshow=on|off` to a harness-neutral
   `$CHARTROOM_HOME/panel.conf` (KEY=VALUE, not a Claude-Code-only setting, so the Pi/Codex panels can
   read the same switch); unset = on, and a session `/chartroom-panel on|off` still overrides the
-  default for that session. Installs alongside `crew-view`; they share no command.
+  default for that session. **Enter** on the highlighted task now *submits* `/continue <short_id>` in
+  one press (fire-and-forget `$.prompt.submit`, focus returns to chat) rather than only pre-filling —
+  `/continue` just navigates, so auto-submit is safe — and it never touches the composer, so a draft
+  is left intact; the obsolete "copied … paste it at the prompt" notice is gone. `s` recap stays
+  fill-only. Installs alongside `crew-view`; they share no command.
 - Relays between homes: XO-to-XO messages on one machine, with no daemon. `chartroom relay
   <home> [--re <id>] [--project P] [--from <this home>] <message|->` appends one record to the
   other home's mailbox, `relays/inbox.ndjson`, and writes nothing else there; a copy goes to this

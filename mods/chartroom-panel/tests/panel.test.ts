@@ -176,37 +176,47 @@ test('renders width-safe at a narrow pane with a long Unicode title', async ($, 
   await ui.unmount()
 })
 
-test('selection pre-fills /continue into an empty prompt; a draft is copied instead', async ($, on) => {
-  const world = XO_WORLD()
-  const w = install(on, world)
+test('Enter submits /continue for the highlighted task: no fill, no copy, no paste-guidance notice', async ($, on) => {
+  // Enter fires `/continue <id>` as its own turn (fire-and-forget $.prompt.submit) and never touches
+  // the composer, so there is no fill, no clipboard copy and no "copied … paste it at the prompt"
+  // message. The optimistic "sent …" notice shows. (The turn actually running is verified live.)
+  const w = install(on, XO_WORLD())
   await start($)
   await w.clock.settle()
-
-  // Empty prompt: Enter on the row pre-fills /continue <short_id>, nothing submitted.
-  let ui = await mountPane($)
+  // (The test kit does not dispatch a plugin's $.prompt.submit — it would run as a turn — so the
+  // submit itself is verified live; here we assert the observable contract: no fill, no copy, no
+  // paste guidance, and the optimistic "sent" notice.)
+  const ui = await mountPane($)
   await ui.press({ key: 'row-108a' })
-  expect(w.fills).toEqual(['/continue 108a'])
-  await ui.unmount()
-  ui = await mountPane($)
-  expect(await ui.find({ type: 'Text', text: /\/continue 108a is in the prompt/ })).toBeDefined()
-  await ui.unmount()
-
-  // A draft in the prompt is never replaced: the line is copied instead.
-  world.draft = 'half-written thought'
-  ui = await mountPane($)
-  await ui.press({ key: 'row-108a' })
-  expect(w.fills).toEqual(['/continue 108a']) // no new fill
-  expect(w.copies).toContain('/continue 108a')
+  await w.clock.settle()
+  expect(w.fills).toEqual([]) // the composer is never written (no fill)
+  expect(w.copies).toEqual([]) // nothing copied to the clipboard
+  expect(await ui.find({ type: 'Text', text: /copied|paste/i })).toBeUndefined() // obsolete guidance gone
+  expect(await ui.find({ type: 'Text', text: /sent \/continue 108a/ })).toBeDefined()
   await ui.unmount()
 })
 
-test('pick <id> selects a task from the command line', async ($, on) => {
+test('Enter never touches a draft in the composer (fire-and-forget submit)', async ($, on) => {
+  const world = XO_WORLD()
+  world.draft = 'half-written thought'
+  const w = install(on, world)
+  await start($)
+  await w.clock.settle()
+  const ui = await mountPane($)
+  await ui.press({ key: 'row-108a' })
+  await w.clock.settle()
+  expect(w.fills).toEqual([]) // the composer is never written, so the draft is safe
+  expect(w.copies).toEqual([])
+  await ui.unmount()
+})
+
+test('pick <id> brings a task in via /continue (usage on a bare pick)', async ($, on) => {
   const w = install(on, XO_WORLD())
   const panel = panelCommand($)
   await start($)
   await w.clock.settle()
   expect((await panel('pick 108a')).text).toBe('Chartroom panel: picked 108a.')
-  expect(w.fills).toEqual(['/continue 108a'])
+  expect(w.fills).toEqual([]) // submits (live), never fills
   expect((await panel('pick')).text).toMatch(/Usage/)
 })
 

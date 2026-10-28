@@ -269,19 +269,25 @@ async function putInPrompt($: EngineInterface, text: string, surface?: RenderSur
   return { via: copied.isCopied ? 'copy' : 'none', draft }
 }
 
-/** Brings `sid` into the chat: `/continue <sid>` into an empty prompt (Enter runs it), else copied. */
-async function continued($: EngineInterface, sid: string, surface?: RenderSurface): Promise<string> {
+/**
+ * Enter / pick: bring the task into the chat by SUBMITTING `/continue <sid>` as its own turn, in one
+ * press (focus returns to chat). `/continue` only navigates, so auto-submit is safe.
+ *
+ * Fire-and-forget on purpose: `$.prompt.submit` runs as a turn once the session is idle, so AWAITING
+ * it inside this key handler would deadlock (the handler keeps the session busy). We `void` it (as
+ * the API's own example does) and never touch the composer, so any draft is left intact and nothing
+ * is copied.
+ */
+function continueSubmit($: EngineInterface, sid: string): string {
   const line = `/continue ${sid}`
-  const r = await putInPrompt($, line, surface)
-  if (r.via === 'fill') return `${line} is in the prompt — press Enter to run it`
-  const why = r.draft ? 'the prompt holds a draft, kept' : 'the prompt cannot take it now'
-  return r.via === 'copy' ? `${line} copied (${why}): paste it at the prompt` : `${why}; type ${line}`
+  void $.prompt.submit({ text: line }).catch(() => {})
+  return `sent ${line}`
 }
 
-/** Selects a task by its short id: records the ring and brings it into the chat. */
-async function pick($: EngineInterface, sid: string, surface?: RenderSurface) {
+/** Selects a task by its short id: records the ring and brings it into the chat (submitting /continue). */
+async function pick($: EngineInterface, sid: string) {
   await update($, selected, () => sid)
-  await say($, await continued($, sid, surface))
+  await say($, continueSubmit($, sid))
 }
 
 /** The highlighted task: the ring's row (tracked via ui.focus), else the first visible task. */
@@ -514,7 +520,7 @@ export const register: Register = on => {
             key={key}
             plain
             {...((t.short_id ?? t.id) === ringId ? { autoFocus: true as const } : {})}
-            onPress={press => void pick($, t.short_id ?? t.id, press.surface)}
+            onPress={() => void pick($, t.short_id ?? t.id)}
           >
             <Text color="subtle">{sid}</Text>
             {' '}
