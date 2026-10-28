@@ -22,6 +22,7 @@ import type { EngineInterface, Register, RenderSurface, Timer } from 'claude-cod
 import type { Snapshot, Task, Tone } from '../types'
 import {
   CONTROLS,
+  autoShowEnabled,
   capacityFor,
   clean,
   columns,
@@ -29,6 +30,7 @@ import {
   paginate,
   parseTasks,
   samePath,
+  setConfigLine,
   stateLabel,
   tone,
   truncate,
@@ -153,6 +155,24 @@ async function ensureHome($: EngineInterface): Promise<void> {
   } catch {
     // doctor gave no usable home; status will let the CLI resolve it.
   }
+}
+
+/** The durable, harness-neutral panel config in the home (`autoshow` etc.); read-only here. */
+function panelConfPath(): string {
+  return `${home}/panel.conf`
+}
+
+/** The home's panel.conf text, or null when there is no home or no file. */
+async function readPanelConf($: EngineInterface): Promise<string | null> {
+  if (!home) return null
+  const path = panelConfPath()
+  if (!(await $.fs.exists(path).catch(() => false))) return null
+  return $.fs.read(path).catch(() => null)
+}
+
+/** The durable default: whether auto-show is on for this home (unset = on). */
+async function autoShowDefault($: EngineInterface): Promise<boolean> {
+  return autoShowEnabled(await readPanelConf($))
 }
 
 /**
@@ -330,7 +350,7 @@ export const register: Register = on => {
     await $.command
       .register({
         name: 'chartroom-panel',
-        description: 'Live, read-only Chartroom tasks: on|off|toggle|refresh|next|prev|focus|pick <id>',
+        description: 'Live, read-only Chartroom tasks: on|off|toggle|refresh|next|prev|focus|pick <id>|default on|off',
       })
       .catch(() => {})
 
@@ -339,8 +359,8 @@ export const register: Register = on => {
       if (!timer) timer = $.clock.every(POLL_MS, () => void tick($))
       void poll($)
       await openPane($, false)
-    } else if (homeIsCwd && !(await read($, closedByUser))) {
-      // Fresh start at the home: auto-show, without taking the keyboard.
+    } else if (homeIsCwd && !(await read($, closedByUser)) && (await autoShowDefault($))) {
+      // Fresh start at the home, and the home's durable default allows it: auto-show, without the keyboard.
       await activatePanel($, false)
     }
     return next(e)
@@ -391,6 +411,26 @@ export const register: Register = on => {
       const opened = await activatePanel($, false)
       return { text: opened.isPlaced ? 'Chartroom panel on.' : 'Chartroom panel is waiting for room: widen the terminal.' }
     }
+    if (sub === 'default') {
+      // The durable, home-level default (across sessions, and readable by the Pi/Codex panels):
+      // `$CHARTROOM_HOME/panel.conf`, key `autoshow`. A session on/off still overrides it per session.
+      await ensureHome($)
+      if (!home) return { text: 'Cannot set the default: no Chartroom home resolved here.' }
+      const val = argId.toLowerCase()
+      if (val !== 'on' && val !== 'off') {
+        const current = (await autoShowDefault($)) ? 'on' : 'off'
+        return { text: `Auto-show default is ${current} for this home (${panelConfPath()}). Set it with /chartroom-panel default on|off.` }
+      }
+      const text = setConfigLine(await readPanelConf($), 'autoshow', val)
+      try {
+        await $.fs.write(panelConfPath(), text)
+      } catch (err) {
+        return { text: `Could not write ${panelConfPath()}: ${String(err).split('\n')[0]}` }
+      }
+      return {
+        text: `Auto-show default set to ${val} for this home (${panelConfPath()}) — it governs every session, and the Pi/Codex panels can read the same switch. A session /chartroom-panel on|off still overrides it for the current session.`,
+      }
+    }
     if (sub === 'refresh') {
       if (!(await read($, active))) await activatePanel($, false)
       await poll($)
@@ -411,7 +451,7 @@ export const register: Register = on => {
       const opened = await activatePanel($, true)
       return { text: opened.isPlaced ? FOCUSED : WAITING }
     }
-    if (sub && sub !== 'toggle') return { text: 'Usage: /chartroom-panel [on|off|toggle|refresh|next|prev|focus|pick <id>]' }
+    if (sub && sub !== 'toggle') return { text: 'Usage: /chartroom-panel [on|off|toggle|refresh|next|prev|focus|pick <id>|default on|off]' }
 
     // Bare /chartroom-panel (and `toggle`) is show/hide: open-and-focus when hidden, close when
     // shown. The pane is never focused when a composer command runs (the composer holds the keys

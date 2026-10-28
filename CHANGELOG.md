@@ -31,7 +31,11 @@ are stable from 0.1.0.
   success the task drops on re-poll), and `s` pre-fills a non-mutating recap request into the chat
   prompt. Close is the only mutation; everything else is read-only. The footer lists the keys in
   both states (`Ctrl+X Tab to select` when unfocused; the full `c close · s recap · ↑↓ · Enter ·
-  Esc` legend when focused). Installs alongside `crew-view`; they share no command.
+  Esc` legend when focused). Auto-show is on by default, and a durable per-home setting can turn it
+  off across sessions: `/chartroom-panel default on|off` writes `autoshow=on|off` to a harness-neutral
+  `$CHARTROOM_HOME/panel.conf` (KEY=VALUE, not a Claude-Code-only setting, so the Pi/Codex panels can
+  read the same switch); unset = on, and a session `/chartroom-panel on|off` still overrides the
+  default for that session. Installs alongside `crew-view`; they share no command.
 - Relays between homes: XO-to-XO messages on one machine, with no daemon. `chartroom relay
   <home> [--re <id>] [--project P] [--from <this home>] <message|->` appends one record to the
   other home's mailbox, `relays/inbox.ndjson`, and writes nothing else there; a copy goes to this

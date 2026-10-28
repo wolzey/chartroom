@@ -72,6 +72,29 @@ run. The home check reads two env vars and one file (`commander.md`) before it e
 `/chartroom-panel` turns the panel on anywhere (manual activation away from the home is fine). It
 never shadows the `/chartroom` skill command.
 
+### Default auto-show (durable, per home)
+
+Auto-show is on by default. To turn it off durably — across every session — set the home's config:
+
+```
+/chartroom-panel default off     # stop auto-showing on session start (for this home)
+/chartroom-panel default on      # restore the default auto-show
+/chartroom-panel default         # report the current default
+```
+
+This writes a single, harness-neutral setting in the **Chartroom home**, not in Claude Code
+settings, so the Pi panel and a future Codex panel can read the **same** switch:
+
+```
+# $CHARTROOM_HOME/panel.conf
+autoshow=off
+```
+
+`panel.conf` is plain `KEY=VALUE` lines; the panel reads `autoshow` (unset or any value other than
+`off`/`false`/`0`/`no` means on). Edit the file by hand or use the command above. When the default
+is off, `/chartroom-panel on` still opens the panel for the current session, and an explicit session
+`on`/`off` always overrides the default for that session.
+
 ## Commands
 
 ```
@@ -82,6 +105,7 @@ never shadows the `/chartroom` skill command.
 /chartroom-panel refresh         read the fleet now
 /chartroom-panel next | prev     page through the tasks
 /chartroom-panel pick <short_id> bring that task into the chat (see below)
+/chartroom-panel default on|off  the durable, per-home auto-show default (see below)
 ```
 
 The pane is never focused at the moment you type a command (the composer holds the keys then), so

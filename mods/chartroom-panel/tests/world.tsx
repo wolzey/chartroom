@@ -76,6 +76,7 @@ export function install(on: On, world: World) {
   const closes: string[] = []
   const copies: string[] = []
   const fills: string[] = []
+  const writes: { path: string; text: string }[] = []
   mock.env(on, world.env)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', () => ({ sessionId: 'test-session' }))
@@ -94,6 +95,11 @@ export function install(on: On, world: World) {
     const text = world.files[e.path]
     if (text === undefined) throw new Error(`ENOENT: ${e.path}`)
     return { value: text }
+  })
+  on('fs.write', ($, e) => {
+    world.files[e.path] = e.text
+    writes.push({ path: e.path, text: e.text })
+    return { value: undefined }
   })
   on('fs.stat', ($, e) => ({
     value: { kind: world.dirs.includes(e.path) ? ('dir' as const) : ('file' as const), size: 0, mtimeMs: 0, isLink: false, realPath: e.path },
@@ -150,7 +156,7 @@ export function install(on: On, world: World) {
     commands.push(e.name)
     return { value: { command: e.name } }
   })
-  return { runs, homes, commands, opens, closes, copies, fills, clock }
+  return { runs, homes, commands, opens, closes, copies, fills, writes, clock }
 }
 
 /** Starts an interactive session at `cwd` (the home by default), as Claude Code does on launch. */
