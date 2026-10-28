@@ -47,7 +47,10 @@ are stable from 0.1.0.
   intent is caught by three deduped triggers — `skill.prompt`, the `prompt.submit` of the
   `/chartroom`/`/captain` command, and the `Skill` tool call — so it still fires when a builtin
   plugin's `skill.prompt` handler runs first and sends the event past ours (`cc-plugin-sec-default`
-  does). Installs alongside `crew-view`; they share no command.
+  does). **Enter runs `/continue <short_id>` via `$.command.run`** (dispatching the slash command as
+  if typed), not `$.prompt.submit` — submitting the text did not re-parse the command, so the
+  continue skill never ran and the panel showed a false "sent"; it now shows an honest "running …"
+  and a refusal corrects it. Installs alongside `crew-view`; they share no command.
 - Relays between homes: XO-to-XO messages on one machine, with no daemon. `chartroom relay
   <home> [--re <id>] [--project P] [--from <this home>] <message|->` appends one record to the
   other home's mailbox, `relays/inbox.ndjson`, and writes nothing else there; a copy goes to this

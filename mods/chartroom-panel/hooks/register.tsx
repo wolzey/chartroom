@@ -285,18 +285,20 @@ async function putInPrompt($: EngineInterface, text: string, surface?: RenderSur
 }
 
 /**
- * Enter / pick: bring the task into the chat by SUBMITTING `/continue <sid>` as its own turn, in one
- * press (focus returns to chat). `/continue` only navigates, so auto-submit is safe.
+ * Enter / pick: bring the task into the chat by RUNNING `/continue <sid>` in one press (focus returns
+ * to chat). `/continue` only navigates, so auto-running it is safe.
  *
- * Fire-and-forget on purpose: `$.prompt.submit` runs as a turn once the session is idle, so AWAITING
- * it inside this key handler would deadlock (the handler keeps the session busy). We `void` it (as
- * the API's own example does) and never touch the composer, so any draft is left intact and nothing
- * is copied.
+ * Uses `$.command.run`, which dispatches the slash command "as if the person typed `/continue <sid>`"
+ * — unlike `$.prompt.submit`, which submits the text and does NOT re-parse it as a command, so the
+ * continue skill never ran (it only showed a false "sent"). Fire-and-forget: the command is queued
+ * and runs once the session is idle, so awaiting it inside this key handler would deadlock. The
+ * composer is never touched (a draft is safe), and a rejection (unknown command, Stop, a limit)
+ * corrects the notice — success is never faked.
  */
 function continueSubmit($: EngineInterface, sid: string): string {
   const line = `/continue ${sid}`
-  void $.prompt.submit({ text: line }).catch(() => {})
-  return `sent ${line}`
+  void $.command.run({ command: 'continue', args: sid }).catch(() => void say($, `could not run ${line}`))
+  return `running ${line}…`
 }
 
 /** Selects a task by its short id: records the ring and brings it into the chat (submitting /continue). */
