@@ -81,6 +81,7 @@ export function install(on: On, world: World) {
   mock.env(on, world.env)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', () => ({ sessionId: 'test-session' }))
+  on('skill.prompt', ($, e) => ({ text: e.text }))
   // The engine's own pane beneath the plugin: what a pass-through draws.
   on('ui.render', ($, e) => {
     const { Box, Text } = $.ui.resolve(e)
@@ -170,6 +171,17 @@ export function install(on: On, world: World) {
 /** Starts an interactive session at `cwd` (the home by default), as Claude Code does on launch. */
 export async function start($: Engine, cwd = HOME, isInteractive = true) {
   return $.session.start({ cwd, surface: 'terminal', isInteractive })
+}
+
+/** Loads the XO skill (the chartroom/captain command, the Skill tool, a preload) — the auto-show trigger. */
+export async function loadSkill($: Engine, skill = 'chartroom') {
+  return $.skill.prompt({ skill, text: `the ${skill} skill` })
+}
+
+/** Starts a session and makes it the XO by loading the skill (how the panel normally comes up). */
+export async function startXo($: Engine, cwd = HOME) {
+  await start($, cwd)
+  return loadSkill($)
 }
 
 /** Runs `/chartroom-panel <args>` as the composer does. */

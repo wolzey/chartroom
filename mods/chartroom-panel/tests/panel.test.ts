@@ -1,24 +1,30 @@
-// The live panel: auto-show gating, the timer poll, stale-on-error, on/off/toggle, paging,
-// cleanup at session end, and selection into the prompt. Drives the mod through the test kit.
+// The live panel: intent-based auto-show (the XO skill, any directory), the timer poll,
+// stale-on-error, on/off/toggle, paging, action keys, the durable default, and selection into the
+// chat. Drives the mod through the test kit.
 import { expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { HOME, PANE_PROPS, XO_WORLD, install, panelCommand, start, statusJson } from './world'
+import { HOME, PANE_PROPS, XO_WORLD, install, loadSkill, panelCommand, start, startXo, statusJson } from './world'
 
 const mountPane = ($: Engine, width = 90, over = {}) =>
   $.ui.mount({ plugin: 'chartroom-panel', surface: 'terminal', component: 'Pane', requestId: 'chartroom-panel', props: PANE_PROPS(width, over) })
 
 const polls = (runs: string[][]) => runs.filter(r => r[1] === 'status').length
 
-test('auto-shows at the home: registers the command, opens the pane, polls, draws the fleet', async ($, on) => {
+test('auto-shows when the XO skill loads — in any directory, not tied to the home', async ($, on) => {
   const w = install(on, XO_WORLD())
-  await start($)
+  // The commander runs the XO from a project repo, not the home.
+  await start($, '/srv/project-repo')
   await w.clock.settle()
-  expect(w.commands).toEqual(['chartroom-panel'])
+  expect(w.opens).toEqual([]) // session start alone does not auto-show
+  expect(w.commands).toEqual(['chartroom-panel']) // the command is registered though
+
+  await loadSkill($, 'chartroom') // becoming the XO is the trigger
+  await w.clock.settle()
   expect(w.opens.map(o => o.id)).toEqual(['chartroom-panel'])
   expect(w.opens[0]?.focus).toBeUndefined() // auto-show never grabs the keyboard
-  expect(w.opens[0]?.backgroundColor).toBe('transparent') // blends with the chat, no grey box
-  // Every status read names this session's home (the doctor probe runs before home is known).
+  expect(w.opens[0]?.backgroundColor).toBe('transparent') // blends with the chat
+  // Status still reads the resolved home (via chartroom doctor), though the cwd was a project repo.
   const statusHomes = w.runs.map((r, i) => (r[1] === 'status' ? w.homes[i] : null)).filter(h => h !== null)
   expect(statusHomes.length).toBeGreaterThan(0)
   expect(statusHomes.every(h => h === HOME)).toBe(true)
@@ -33,28 +39,38 @@ test('auto-shows at the home: registers the command, opens the pane, polls, draw
   await ui.unmount()
 })
 
-test('does not auto-show in a worktree, with CHARTROOM_TASK set, or non-interactively', async ($, on) => {
-  const worktree = install(on, XO_WORLD())
-  await start($, `${HOME}/worktrees/shop/task-abcd`)
-  await worktree.clock.settle()
-  expect(worktree.opens).toEqual([]) // interactive, command exists, but no auto pane
-  expect(worktree.commands).toEqual(['chartroom-panel'])
-  expect(polls(worktree.runs)).toBe(0)
+test('the legacy captain skill also triggers auto-show', async ($, on) => {
+  const w = install(on, XO_WORLD())
+  await startXo($, '/srv/another-repo') // startXo loads chartroom; here we also check captain
+  await w.clock.settle()
+  expect(w.opens.map(o => o.id)).toEqual(['chartroom-panel'])
 })
 
-test('a crew-worker session (CHARTROOM_TASK set) stays fully inert', async ($, on) => {
+test('inert in a crew worktree even when the XO skill loads', async ($, on) => {
+  const w = install(on, XO_WORLD())
+  await start($, `${HOME}/worktrees/shop/task-abcd`)
+  await loadSkill($)
+  await w.clock.settle()
+  expect(w.opens).toEqual([]) // never auto-shows in a worker
+  expect(w.commands).toEqual([]) // not even the command
+  expect(polls(w.runs)).toBe(0)
+})
+
+test('inert in a crew-worker session (CHARTROOM_TASK set) even when the skill loads', async ($, on) => {
   const world = XO_WORLD()
   world.env = { ...world.env, CHARTROOM_TASK: 'some-task-1234' }
   const w = install(on, world)
-  await start($)
+  await startXo($)
   await w.clock.settle()
   expect(w.opens).toEqual([])
+  expect(w.commands).toEqual([])
   expect(polls(w.runs)).toBe(0)
 })
 
 test('a non-interactive (-p) run registers no command, opens no pane and never polls', async ($, on) => {
   const w = install(on, XO_WORLD())
   await start($, HOME, false)
+  await loadSkill($)
   await w.clock.settle()
   expect(w.commands).toEqual([])
   expect(w.opens).toEqual([])
@@ -65,7 +81,7 @@ test('active → done disappears without closure; the count follows', async ($, 
   const world = XO_WORLD()
   world.status = () => ({ exitCode: 0, stdout: statusJson([{ id: 'auth-108a', state: 'working', title: 'Auth' }]), stderr: '' })
   const w = install(on, world)
-  await start($)
+  await startXo($)
   await w.clock.settle()
   let ui = await mountPane($)
   expect(await ui.find({ type: 'Button', key: 'row-108a' })).toBeDefined()
@@ -86,7 +102,7 @@ test('a refresh failure keeps the last known tasks, shown STALE — never an emp
   const world = XO_WORLD()
   world.status = () => ({ exitCode: 0, stdout: statusJson([{ id: 'auth-108a', state: 'blocked', title: 'Auth' }]), stderr: '' })
   const w = install(on, world)
-  await start($)
+  await startXo($)
   await w.clock.settle()
 
   world.status = () => 'missing' // chartroom vanishes
@@ -108,7 +124,7 @@ test('a refresh failure keeps the last known tasks, shown STALE — never an emp
 test('off stops the refresh work and closes the pane; on brings it back', async ($, on) => {
   const w = install(on, XO_WORLD())
   const panel = panelCommand($)
-  await start($)
+  await startXo($)
   await w.clock.settle()
   const before = polls(w.runs)
   expect((await panel('off')).text).toMatch(/off for this session/)
@@ -123,7 +139,7 @@ test('off stops the refresh work and closes the pane; on brings it back', async 
 test('toggle: closes when shown, opens-and-asks-for-focus when hidden; focus re-asks for the keys', async ($, on) => {
   const w = install(on, XO_WORLD())
   const panel = panelCommand($)
-  await start($) // auto-shown
+  await startXo($) // auto-shown
   await w.clock.settle()
   // Shown → the bare command closes it (the composer holds the keys, so the pane is never focused here).
   expect((await panel()).text).toBe('Chartroom panel closed.')
@@ -148,7 +164,7 @@ test('paging: next and prev move the window; the footer reports the range', asyn
   world.status = () => ({ exitCode: 0, stdout: statusJson(rows), stderr: '' })
   const w = install(on, world)
   const panel = panelCommand($)
-  await start($)
+  await startXo($)
   await w.clock.settle()
   let ui = await mountPane($) // bodyRows 30 → capacity 12 → 2 pages
   expect(await ui.find({ type: 'Text', text: '1–12 of 15 · page 1/2' })).toBeDefined()
@@ -167,7 +183,7 @@ test('renders width-safe at a narrow pane with a long Unicode title', async ($, 
   const world = XO_WORLD()
   world.status = () => ({ exitCode: 0, stdout: statusJson([{ id: 'u-9z9z', state: 'decision', title: '長い👩🏽‍💻タイトル'.repeat(8) }]), stderr: '' })
   const w = install(on, world)
-  await start($)
+  await startXo($)
   await w.clock.settle()
   const ui = await mountPane($, 40)
   expect(await ui.find({ type: 'Text', text: /Chartroom · 1 unfinished/ })).toBeDefined()
@@ -178,14 +194,12 @@ test('renders width-safe at a narrow pane with a long Unicode title', async ($, 
 
 test('Enter submits /continue for the highlighted task: no fill, no copy, no paste-guidance notice', async ($, on) => {
   // Enter fires `/continue <id>` as its own turn (fire-and-forget $.prompt.submit) and never touches
-  // the composer, so there is no fill, no clipboard copy and no "copied … paste it at the prompt"
-  // message. The optimistic "sent …" notice shows. (The turn actually running is verified live.)
+  // the composer. The test kit does not dispatch a plugin's $.prompt.submit (it would run a turn), so
+  // the submit itself is verified live; here we assert the observable contract: no fill, no copy, no
+  // "copied … paste" guidance, and the optimistic "sent" notice.
   const w = install(on, XO_WORLD())
-  await start($)
+  await startXo($)
   await w.clock.settle()
-  // (The test kit does not dispatch a plugin's $.prompt.submit — it would run as a turn — so the
-  // submit itself is verified live; here we assert the observable contract: no fill, no copy, no
-  // paste guidance, and the optimistic "sent" notice.)
   const ui = await mountPane($)
   await ui.press({ key: 'row-108a' })
   await w.clock.settle()
@@ -200,7 +214,7 @@ test('Enter never touches a draft in the composer (fire-and-forget submit)', asy
   const world = XO_WORLD()
   world.draft = 'half-written thought'
   const w = install(on, world)
-  await start($)
+  await startXo($)
   await w.clock.settle()
   const ui = await mountPane($)
   await ui.press({ key: 'row-108a' })
@@ -213,7 +227,7 @@ test('Enter never touches a draft in the composer (fire-and-forget submit)', asy
 test('pick <id> brings a task in via /continue (usage on a bare pick)', async ($, on) => {
   const w = install(on, XO_WORLD())
   const panel = panelCommand($)
-  await start($)
+  await start($) // pick activates on demand; no skill needed
   await w.clock.settle()
   expect((await panel('pick 108a')).text).toBe('Chartroom panel: picked 108a.')
   expect(w.fills).toEqual([]) // submits (live), never fills
@@ -222,7 +236,7 @@ test('pick <id> brings a task in via /continue (usage on a bare pick)', async ($
 
 test('c: two-press confirm closes the highlighted task (one press only arms); it drops on re-poll', async ($, on) => {
   const w = install(on, XO_WORLD())
-  await start($)
+  await startXo($)
   await w.clock.settle()
   const ui = await mountPane($, 90, { isFocused: true })
   // first c: arms with an inline confirm, runs no close, the task stays
@@ -230,10 +244,10 @@ test('c: two-press confirm closes the highlighted task (one press only arms); it
   expect(await ui.find({ type: 'Text', text: /Close 108a\? press c again to confirm/ })).toBeDefined()
   expect(w.runs.some(r => r[1] === 'close')).toBe(false)
   expect(await ui.find({ type: 'Button', key: 'row-108a' })).toBeDefined()
-  // second c: runs chartroom close 108a (keeping the branch, no --discard), the task drops off
+  // second c: runs chartroom close auth-108a (the FULL id, keeping the branch, no --discard)
   await ui.press({ key: 'act-close' })
   const closeRuns = w.runs.filter(r => r[1] === 'close')
-  expect(closeRuns.map(r => r.slice(1))).toEqual([['close', 'auth-108a']]) // the FULL id, never --discard
+  expect(closeRuns.map(r => r.slice(1))).toEqual([['close', 'auth-108a']])
   expect(await ui.find({ type: 'Button', key: 'row-108a' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /0 unfinished/ })).toBeDefined()
   await ui.unmount()
@@ -241,21 +255,21 @@ test('c: two-press confirm closes the highlighted task (one press only arms); it
 
 test('c: a chartroom close refusal is surfaced verbatim and the task stays', async ($, on) => {
   const world = XO_WORLD()
-  world.close = () => ({ exitCode: 1, stdout: '', stderr: 'chartroom: worktree has uncommitted changes; commit or discard first' })
+  world.close = () => ({ exitCode: 1, stdout: '', stderr: 'chartroom: refusing to close: uncommitted work in the worktree' })
   const w = install(on, world)
-  await start($)
+  await startXo($)
   await w.clock.settle()
   const ui = await mountPane($, 120, { isFocused: true })
   await ui.press({ key: 'act-close' }) // arm
   await ui.press({ key: 'act-close' }) // confirm → refused
-  expect(await ui.find({ type: 'Text', text: /worktree has uncommitted changes; commit or discard first/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /refusing to close: uncommitted work in the worktree/ })).toBeDefined()
   expect(await ui.find({ type: 'Button', key: 'row-108a' })).toBeDefined() // not closed
   await ui.unmount()
 })
 
 test('s: pre-fills a non-mutating recap request for the highlighted task', async ($, on) => {
   const w = install(on, XO_WORLD())
-  await start($)
+  await startXo($)
   await w.clock.settle()
   const ui = await mountPane($, 90, { isFocused: true })
   await ui.press({ key: 'act-recap' })
@@ -266,7 +280,7 @@ test('s: pre-fills a non-mutating recap request for the highlighted task', async
 
 test('action keys exist only when focused; the footer shows how to get in and act (both states)', async ($, on) => {
   const w = install(on, XO_WORLD())
-  await start($)
+  await startXo($)
   await w.clock.settle()
   // Unfocused: no action Buttons (keys inert), and the footer says how to get in.
   let ui = await mountPane($, 90, { isFocused: false })
@@ -286,12 +300,12 @@ test('action keys exist only when focused; the footer shows how to get in and ac
   await ui.unmount()
 })
 
-test('durable default off: no auto-show, but /chartroom-panel on still opens it manually', async ($, on) => {
+test('durable default off: the XO skill does not auto-show, but /chartroom-panel on still opens it', async ($, on) => {
   const world = XO_WORLD()
   world.files[`${HOME}/panel.conf`] = 'autoshow=off\n' // the home's durable setting
   const w = install(on, world)
   const panel = panelCommand($)
-  await start($)
+  await startXo($) // loads the skill, but the default is off
   await w.clock.settle()
   expect(w.opens).toEqual([]) // config off → no auto-show
   expect(w.commands).toEqual(['chartroom-panel']) // but the command is still there
@@ -305,7 +319,7 @@ test('precedence: a session on overrides a durable default off for that session'
   world.files[`${HOME}/panel.conf`] = 'autoshow=off\n'
   const w = install(on, world)
   const panel = panelCommand($)
-  await start($)
+  await startXo($)
   await w.clock.settle()
   expect(w.opens).toEqual([]) // default off wins at startup
   await panel('on') // session action overrides
@@ -329,7 +343,7 @@ test('default on|off writes the durable home config; default with no arg reports
 
 test('cleanup: session end cancels the timer, so no poll runs afterwards', async ($, on) => {
   const w = install(on, XO_WORLD())
-  await start($)
+  await startXo($)
   await w.clock.settle()
   const before = polls(w.runs)
   await $.session.end({ reason: 'other', sessionId: 'test-session', resume: { id: 'test-session' } })

@@ -39,7 +39,12 @@ are stable from 0.1.0.
   one press (fire-and-forget `$.prompt.submit`, focus returns to chat) rather than only pre-filling —
   `/continue` just navigates, so auto-submit is safe — and it never touches the composer, so a draft
   is left intact; the obsolete "copied … paste it at the prompt" notice is gone. `s` recap stays
-  fill-only. Installs alongside `crew-view`; they share no command.
+  fill-only. Auto-show is triggered by **intent**, not the working directory: the panel appears when
+  the session becomes the XO (the `/chartroom` or legacy `/captain` skill loads, via `skill.prompt`)
+  in any directory, so running the XO from a project repo works; the home for reading `status` is
+  still resolved through `chartroom doctor`. It stays inert in crew workers (`CHARTROOM_TASK` /
+  `worktrees`) and `-p` runs, and `/chartroom-panel on` works in any eligible session.
+  Installs alongside `crew-view`; they share no command.
 - Relays between homes: XO-to-XO messages on one machine, with no daemon. `chartroom relay
   <home> [--re <id>] [--project P] [--from <this home>] <message|->` appends one record to the
   other home's mailbox, `relays/inbox.ndjson`, and writes nothing else there; a copy goes to this
