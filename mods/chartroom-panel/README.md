@@ -62,15 +62,20 @@ section. (This is exactly the Pi panel's filter, so the two siblings hide and ke
 ## Activation & scope
 
 Installed at user scope the mod loads in every Claude Code session but does nothing — no command,
-no timer, no process, no pane — unless the session is **interactive**. When the working directory
-is the configured Chartroom home (resolved through `chartroom doctor --json`) it **auto-shows**,
-without taking the keyboard. A crew worker's session never auto-shows: it is skipped when
-`CHARTROOM_TASK` is set or the path has a `worktrees` segment, and in any non-interactive (`-p`)
-run. The home check reads two env vars and one file (`commander.md`) before it ever spawns
-`chartroom doctor`, so an unrelated session costs nothing.
+no timer, no process, no pane — unless the session is **interactive** and not a crew worker. It
+**auto-shows by intent**: when the session becomes the XO — i.e. when the `/chartroom` (or legacy
+`/captain`) skill is invoked, whether by the slash command, the Skill tool or a preload — **in any
+directory**. This is deliberately not tied to the working directory: the commander runs the XO from
+project repos, so a cwd check would miss the real case. The home used to read `chartroom status` is
+resolved separately, through `chartroom doctor --json`, so the panel still shows the right fleet
+wherever it is run.
 
-`/chartroom-panel` turns the panel on anywhere (manual activation away from the home is fine). It
-never shadows the `/chartroom` skill command.
+A crew worker's session never auto-shows and stays fully inert (no command, no pane): it is skipped
+when `CHARTROOM_TASK` is set or the path has a `worktrees` segment, and in any non-interactive
+(`-p`) run.
+
+`/chartroom-panel` turns the panel on **anywhere** (any directory, any eligible session). It never
+shadows the `/chartroom` skill command.
 
 ### Default auto-show (durable, per home)
 

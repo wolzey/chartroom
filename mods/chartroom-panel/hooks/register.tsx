@@ -29,7 +29,6 @@ import {
   isUnderWorktrees,
   paginate,
   parseTasks,
-  samePath,
   setConfigLine,
   stateLabel,
   tone,
@@ -43,6 +42,8 @@ const CONFIRM_MS = 5_000
 const EMPTY: Snapshot = { tasks: null, error: null, updated: null }
 const FOCUSED = 'Chartroom panel focused: ↑↓ to choose, Enter brings a task in, Esc back to chat.'
 const WAITING = 'Chartroom panel is waiting for room: widen the terminal.'
+// Loading one of these skills makes the session the XO — the auto-show trigger, in any directory.
+const XO_SKILLS = ['captain', 'chartroom']
 
 const active = atom({ plugin: 'chartroom-panel', key: 'active' } as const, false)
 const closedByUser = atom({ plugin: 'chartroom-panel', key: 'closedByUser' } as const, false)
@@ -61,10 +62,10 @@ const TONE_PROPS: Record<Tone, { color?: string; dimColor?: boolean }> = {
   plain: {},
 }
 
-// The XO's home, resolved at session.start; a reload re-runs it. '' when unknown.
+// The XO's home for reading status, resolved lazily through `chartroom doctor`. '' when unknown.
 let home = ''
-// Whether this session's cwd is that home (so it auto-shows).
-let homeIsCwd = false
+// Whether this session may run the panel at all (interactive, not a crew worker); set at session.start.
+let eligible = false
 // The poll timer, while one runs; cancelled on off and at session end.
 let timer: Timer | undefined
 // A poll in flight, and one asked for while it ran (coalesced into a single follow-up).
@@ -176,29 +177,16 @@ async function autoShowDefault($: EngineInterface): Promise<boolean> {
 }
 
 /**
- * True when this session should auto-show: interactive, not a crew worker, and the cwd is the
- * Chartroom home (resolved through `chartroom doctor --json`). Reads env and one file before
- * spawning doctor, so an unrelated session costs nothing.
+ * Whether this session may run the panel at all: interactive, and not a crew worker (no
+ * CHARTROOM_TASK, not under a `worktrees/` path). It is NOT tied to any directory — the XO is run
+ * from project repos, so auto-show is triggered by intent (loading the chartroom/captain skill),
+ * not by the cwd. The home for reading status is resolved separately, through `chartroom doctor`.
  */
-async function detectHomeCwd($: EngineInterface, cwd: string, isInteractive: boolean): Promise<boolean> {
+async function isEligible($: EngineInterface, cwd: string, isInteractive: boolean): Promise<boolean> {
   if (!isInteractive) return false
   if (await $.env.get('CHARTROOM_TASK')) return false
   if (isUnderWorktrees(cwd)) return false
-  if (!(await $.fs.exists(`${cwd}/commander.md`))) return false // cheap pre-gate: a home has commander.md
-  const ran = await runCli($, ['doctor', '--json'])
-  if ('error' in ran) return false
-  let h: unknown
-  try {
-    h = (JSON.parse(ran.stdout) as { home?: unknown }).home
-  } catch {
-    return false
-  }
-  if (typeof h !== 'string' || !h) return false
-  home = h
-  if (samePath(cwd, h)) return true
-  const real = async (p: string) => (await $.fs.stat(p, { resolve: true }).catch(() => undefined))?.realPath
-  const [a, b] = await Promise.all([real(cwd), real(h)])
-  return !!a && !!b && samePath(a, b)
+  return true
 }
 
 async function openPane($: EngineInterface, focus: boolean) {
@@ -348,10 +336,10 @@ async function actRecap($: EngineInterface, surface?: RenderSurface) {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    // A reload resets the module variables; re-resolve the home and whether the cwd is it.
+    // A reload resets the module variables; re-decide eligibility. The home is resolved lazily.
     home = ''
-    homeIsCwd = await detectHomeCwd($, e.cwd, e.isInteractive).catch(() => false)
-    if (!e.isInteractive) return next(e)
+    eligible = await isEligible($, e.cwd, e.isInteractive).catch(() => false)
+    if (!eligible) return next(e) // non-interactive, or a crew worker: stay fully inert
 
     await $.command
       .register({
@@ -360,14 +348,26 @@ export const register: Register = on => {
       })
       .catch(() => {})
 
+    // A reload of a session that was already on resumes it; a fresh session waits for the XO skill
+    // (skill.prompt) to auto-show — auto-show is triggered by intent, not by the working directory.
     if (await read($, active)) {
-      // Resume after a reload: restart the timer and poll, redraw the pane (never steal focus).
+      await ensureHome($)
       if (!timer) timer = $.clock.every(POLL_MS, () => void tick($))
       void poll($)
       await openPane($, false)
-    } else if (homeIsCwd && !(await read($, closedByUser)) && (await autoShowDefault($))) {
-      // Fresh start at the home, and the home's durable default allows it: auto-show, without the keyboard.
-      await activatePanel($, false)
+    }
+    return next(e)
+  })
+
+  // The session becomes the XO when it loads the `chartroom` (or legacy `captain`) skill — by the
+  // slash command, the Skill tool, or a preload. That is the auto-show trigger, in ANY directory.
+  // Still gated: eligible (interactive, not a crew worker), not already on, not turned off by the
+  // commander this session, and the home's durable default allows it.
+  on('skill.prompt', async ($, e, next) => {
+    const name = e.skill.split(':').pop() ?? ''
+    if (eligible && XO_SKILLS.includes(name) && !(await read($, active)) && !(await read($, closedByUser))) {
+      await ensureHome($) // resolve the home so panel.conf (and status) read the right place
+      if (await autoShowDefault($)) await activatePanel($, false) // auto-show, without taking the keyboard
     }
     return next(e)
   })
