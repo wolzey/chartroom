@@ -25,7 +25,13 @@ are stable from 0.1.0.
   submitting), Esc hands the keys back. The pane opens with a transparent background, so it blends
   with the chat transcript instead of sitting in the engine's default grey docked-pane surface (a
   theme-safe choice: transparent shows the terminal's own background in a dark or light theme
-  alike). Installs alongside `crew-view`; they share no command.
+  alike). While the pane is focused, single-letter keys act on the highlighted task (inert while
+  typing in chat): `c` closes it with a two-press confirm (`chartroom close <id>`, keeping the
+  branch, never `--discard`; the CLI's exact refusal is surfaced and success never faked; on
+  success the task drops on re-poll), and `s` pre-fills a non-mutating recap request into the chat
+  prompt. Close is the only mutation; everything else is read-only. The footer lists the keys in
+  both states (`Ctrl+X Tab to select` when unfocused; the full `c close · s recap · ↑↓ · Enter ·
+  Esc` legend when focused). Installs alongside `crew-view`; they share no command.
 - Relays between homes: XO-to-XO messages on one machine, with no daemon. `chartroom relay
   <home> [--re <id>] [--project P] [--from <this home>] <message|->` appends one record to the
   other home's mailbox, `relays/inbox.ndjson`, and writes nothing else there; a copy goes to this

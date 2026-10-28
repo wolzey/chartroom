@@ -210,6 +210,72 @@ test('pick <id> selects a task from the command line', async ($, on) => {
   expect((await panel('pick')).text).toMatch(/Usage/)
 })
 
+test('c: two-press confirm closes the highlighted task (one press only arms); it drops on re-poll', async ($, on) => {
+  const w = install(on, XO_WORLD())
+  await start($)
+  await w.clock.settle()
+  const ui = await mountPane($, 90, { isFocused: true })
+  // first c: arms with an inline confirm, runs no close, the task stays
+  await ui.press({ key: 'act-close' })
+  expect(await ui.find({ type: 'Text', text: /Close 108a\? press c again to confirm/ })).toBeDefined()
+  expect(w.runs.some(r => r[1] === 'close')).toBe(false)
+  expect(await ui.find({ type: 'Button', key: 'row-108a' })).toBeDefined()
+  // second c: runs chartroom close 108a (keeping the branch, no --discard), the task drops off
+  await ui.press({ key: 'act-close' })
+  const closeRuns = w.runs.filter(r => r[1] === 'close')
+  expect(closeRuns.map(r => r.slice(1))).toEqual([['close', 'auth-108a']]) // the FULL id, never --discard
+  expect(await ui.find({ type: 'Button', key: 'row-108a' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /0 unfinished/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('c: a chartroom close refusal is surfaced verbatim and the task stays', async ($, on) => {
+  const world = XO_WORLD()
+  world.close = () => ({ exitCode: 1, stdout: '', stderr: 'chartroom: worktree has uncommitted changes; commit or discard first' })
+  const w = install(on, world)
+  await start($)
+  await w.clock.settle()
+  const ui = await mountPane($, 120, { isFocused: true })
+  await ui.press({ key: 'act-close' }) // arm
+  await ui.press({ key: 'act-close' }) // confirm → refused
+  expect(await ui.find({ type: 'Text', text: /worktree has uncommitted changes; commit or discard first/ })).toBeDefined()
+  expect(await ui.find({ type: 'Button', key: 'row-108a' })).toBeDefined() // not closed
+  await ui.unmount()
+})
+
+test('s: pre-fills a non-mutating recap request for the highlighted task', async ($, on) => {
+  const w = install(on, XO_WORLD())
+  await start($)
+  await w.clock.settle()
+  const ui = await mountPane($, 90, { isFocused: true })
+  await ui.press({ key: 'act-recap' })
+  expect(w.fills).toContain("Recap 108a (Auth): where it stands and what's pending")
+  expect(w.runs.some(r => r[1] === 'close')).toBe(false) // never mutates
+  await ui.unmount()
+})
+
+test('action keys exist only when focused; the footer shows how to get in and act (both states)', async ($, on) => {
+  const w = install(on, XO_WORLD())
+  await start($)
+  await w.clock.settle()
+  // Unfocused: no action Buttons (keys inert), and the footer says how to get in.
+  let ui = await mountPane($, 90, { isFocused: false })
+  expect(await ui.find({ type: 'Button', key: 'act-close' })).toBeUndefined()
+  expect(await ui.find({ type: 'Button', key: 'act-recap' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /Ctrl\+X Tab to select/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '/chartroom-panel next|prev|off' })).toBeDefined()
+  await ui.unmount()
+  // Focused: the action Buttons carry their single-letter hotkeys, and the legend lists them.
+  ui = await mountPane($, 90, { isFocused: true })
+  const c = await ui.find({ type: 'Button', key: 'act-close' })
+  const s = await ui.find({ type: 'Button', key: 'act-recap' })
+  expect([c?.props.hotkey, c?.props.label]).toEqual(['c', 'close'])
+  expect([s?.props.hotkey, s?.props.label]).toEqual(['s', 'recap'])
+  expect(await ui.find({ type: 'Text', text: /↑↓ move · Enter \/continue · Esc chat/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Ctrl\+X Tab to select/ })).toBeUndefined()
+  await ui.unmount()
+})
+
 test('cleanup: session end cancels the timer, so no poll runs afterwards', async ($, on) => {
   const w = install(on, XO_WORLD())
   await start($)

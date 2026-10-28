@@ -98,8 +98,8 @@ export function truncate(text: string, width: number): string {
 
 // ---------------------------------------------------------------- the panel's data and paging
 
-/** The chrome rows the panel always draws: header, status, gap, two footer lines. */
-export const CHROME_ROWS = 5
+/** The chrome rows the panel always draws: header, status, gap, two footer lines, the controls hint. */
+export const CHROME_ROWS = 6
 
 /** How many tasks fit given the body's rows: two lines each, after the chrome. At least one. */
 export function capacityFor(bodyRows: number): number {

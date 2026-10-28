@@ -100,6 +100,28 @@ and leaves the pane open; normal typing is never captured. If the prompt already
 is never replaced — the `/continue` line is copied instead, with a note. (`pick <short_id>` does
 the same from the command line.)
 
+## Action keys on the highlighted task (focused only)
+
+While the pane holds the keyboard, single-letter keys act on the highlighted row. They fire **only**
+while the pane is focused — never while you are typing in the chat — and the footer legend lists
+them:
+
+- **`c` — close (two-press confirm).** The first `c` arms it and shows `Close <id>? press c again
+  to confirm` (it resets after a few seconds); a second `c` on the same row runs
+  `chartroom close <id>` against the home, **keeping the branch — it never passes `--discard`**. It
+  relies on `chartroom close`'s own guard: if the close is refused (a dirty or unlanded worktree,
+  or any error) the panel shows the CLI's exact message and does **not** claim success. On success
+  the fleet re-polls and the task drops off. Closing is the **only** mutation the panel performs;
+  there is no discard/remove key and everything else stays read-only.
+- **`s` — recap (non-mutating).** Pre-fills the chat prompt with
+  `Recap <short_id> (<title>): where it stands and what's pending` (same `$.prompt.fill` as Enter,
+  never submitted) for the commander to send; the XO answers. No jump, no mutation.
+- Plus the existing `↑/↓` (move), **Enter** (`/continue`), **Esc** (back to chat).
+
+The footer makes the keys discoverable in both states: unfocused it shows `Ctrl+X Tab to select`
+beside `/chartroom-panel next|prev|off`; focused it shows the full legend
+`c: close  s: recap  ↑↓ move · Enter /continue · Esc chat`, truncated gracefully on a narrow pane.
+
 ## Refresh, safety, resilience
 
 The fleet refreshes every 5 seconds on a timer, with **no model call**, idle or streaming. Reads
