@@ -7,6 +7,22 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- `chartroom-panel`, a Claude Code mod (`mods/chartroom-panel`): the commander's live Chartroom
+  fleet in a read-only pane beside the chat, the sibling of the Pi panel. It reads
+  `chartroom status --json` only and shows the unfinished tasks — a row drops off when its `state`
+  is `done`/`closed` or its `closed` field is non-null, and is kept otherwise, including a
+  `state: decision` row whose worker is `live: done` (the filter never looks at `live`); an
+  unknown unfinished state stays visible. Input-needed states (`decision`, `blocked`,
+  `awaiting-input`, `waiting-overdue`) draw yellow, being-worked-on (`working`/`running`,
+  `drafting`) green, quiet states (`stopped-silent`, `waiting`, `failed`, `lost`) dim. It
+  auto-shows when the session is interactive and the cwd is the home (resolved through
+  `chartroom doctor --json`), and never in a crew worker's session (`CHARTROOM_TASK` set or a
+  `worktrees` path), nor in a `-p` run. It refreshes every 5 s on a timer with no model call,
+  keeps the last tasks visibly STALE on any failure (never an empty fleet on error), and never
+  runs `chartroom watch`. `/chartroom-panel [on|off|toggle|refresh|next|prev|pick <id>]` controls
+  it (it never shadows `/chartroom`); the pane takes the keyboard on demand, the arrows walk the
+  tasks and Enter brings one into the chat by pre-filling `/continue <short_id>` (never
+  submitting), Esc hands the keys back. Installs alongside `crew-view`; they share no command.
 - Relays between homes: XO-to-XO messages on one machine, with no daemon. `chartroom relay
   <home> [--re <id>] [--project P] [--from <this home>] <message|->` appends one record to the
   other home's mailbox, `relays/inbox.ndjson`, and writes nothing else there; a copy goes to this

@@ -1,0 +1,9 @@
+{
+  "name": "chartroom-panel",
+  "version": "0.1.0",
+  "description": "The commander's live Chartroom fleet in a read-only pane beside the chat: unfinished tasks only (completed drop off), input-needed set apart from being-worked-on, refreshed on a timer with no model call; the arrows pick a task and Enter brings it into the chat as /continue.",
+  "author": { "name": "wolzey", "url": "https://github.com/wolzey" },
+  "homepage": "https://github.com/wolzey/chartroom",
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}
