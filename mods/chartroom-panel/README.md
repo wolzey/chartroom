@@ -66,7 +66,11 @@ no timer, no process, no pane — unless the session is **interactive** and not 
 **auto-shows by intent**: when the session becomes the XO — i.e. when the `/chartroom` (or legacy
 `/captain`) skill is invoked, whether by the slash command, the Skill tool or a preload — **in any
 directory**. This is deliberately not tied to the working directory: the commander runs the XO from
-project repos, so a cwd check would miss the real case. The home used to read `chartroom status` is
+project repos, so a cwd check would miss the real case. Three hooks catch the intent and share a
+once-only guard, because no single one is reliable: `skill.prompt`, the `prompt.submit` of the
+`/chartroom`/`/captain` command, and the `Skill` tool call. (A builtin plugin's `skill.prompt`
+handler can run first and send the event on past ours — `cc-plugin-sec-default` does — so the
+prompt-submit and tool-call triggers cover that case.) The home used to read `chartroom status` is
 resolved separately, through `chartroom doctor --json`, so the panel still shows the right fleet
 wherever it is run.
 

@@ -66,6 +66,9 @@ const TONE_PROPS: Record<Tone, { color?: string; dimColor?: boolean }> = {
 let home = ''
 // Whether this session may run the panel at all (interactive, not a crew worker); set at session.start.
 let eligible = false
+// Set once this session has auto-shown (or decided not to), so the several XO-skill triggers
+// (skill.prompt, the /chartroom|/captain prompt submit, the Skill tool call) activate it only once.
+let autoShown = false
 // The poll timer, while one runs; cancelled on off and at session end.
 let timer: Timer | undefined
 // A poll in flight, and one asked for while it ran (coalesced into a single follow-up).
@@ -174,6 +177,30 @@ async function readPanelConf($: EngineInterface): Promise<string | null> {
 /** The durable default: whether auto-show is on for this home (unset = on). */
 async function autoShowDefault($: EngineInterface): Promise<boolean> {
   return autoShowEnabled(await readPanelConf($))
+}
+
+/**
+ * The session has become the XO — auto-show the panel, once. Several triggers call this (the
+ * chartroom/captain skill via skill.prompt, the same slash command via prompt.submit when another
+ * plugin's skill.prompt handler preempts ours, and the Skill tool call), so it dedupes: it claims
+ * `autoShown` synchronously before any await, and respects eligibility, a session already on/closed,
+ * and the home's durable default. Intent-based — no working-directory check.
+ */
+async function maybeAutoShow($: EngineInterface): Promise<void> {
+  if (!eligible || autoShown) return
+  autoShown = true // claimed before awaiting, so concurrent triggers activate the panel only once
+  if ((await read($, active)) || (await read($, closedByUser))) return
+  await ensureHome($) // resolve the home so panel.conf (and status) read the right place
+  if (await autoShowDefault($)) await activatePanel($, false) // auto-show, without taking the keyboard
+}
+
+/** The XO skill a prompt submission names, if any: from the resolved command, else the typed text. */
+function xoSkillOf(command: { name: string } | undefined, text: string): string {
+  const fromCommand = (command?.name ?? '').split(':').pop() ?? ''
+  if (XO_SKILLS.includes(fromCommand)) return fromCommand
+  const fromText = (/^\/\s*([A-Za-z0-9_:-]+)/.exec(text) ?? [])[1]
+  const name = (fromText ?? '').split(':').pop() ?? ''
+  return XO_SKILLS.includes(name) ? name : ''
 }
 
 /**
@@ -359,16 +386,23 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // The session becomes the XO when it loads the `chartroom` (or legacy `captain`) skill — by the
-  // slash command, the Skill tool, or a preload. That is the auto-show trigger, in ANY directory.
-  // Still gated: eligible (interactive, not a crew worker), not already on, not turned off by the
-  // commander this session, and the home's durable default allows it.
+  // Becoming the XO is the auto-show trigger, in ANY directory. Three hooks catch it, deduped by
+  // maybeAutoShow, because no single one is reliable: a builtin plugin's skill.prompt handler can run
+  // first and send the event on past ours (cc-plugin-sec-default does), so the prompt submit of the
+  // `/chartroom` (or `/captain`) command and the Skill tool call cover the case where skill.prompt
+  // never reaches us.
   on('skill.prompt', async ($, e, next) => {
-    const name = e.skill.split(':').pop() ?? ''
-    if (eligible && XO_SKILLS.includes(name) && !(await read($, active)) && !(await read($, closedByUser))) {
-      await ensureHome($) // resolve the home so panel.conf (and status) read the right place
-      if (await autoShowDefault($)) await activatePanel($, false) // auto-show, without taking the keyboard
-    }
+    if (XO_SKILLS.includes(e.skill.split(':').pop() ?? '')) await maybeAutoShow($)
+    return next(e)
+  })
+
+  on('prompt.submit', async ($, e, next) => {
+    if (xoSkillOf(e.command, e.text)) await maybeAutoShow($)
+    return next(e)
+  })
+
+  on('tool.call', { tool: 'Skill' }, async ($, e, next) => {
+    if (XO_SKILLS.includes((e.skill ?? '').split(':').pop() ?? '')) await maybeAutoShow($)
     return next(e)
   })
 
