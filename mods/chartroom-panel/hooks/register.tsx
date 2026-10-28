@@ -36,6 +36,8 @@ import {
 
 const PANE = 'chartroom-panel'
 const POLL_MS = 5_000
+// How long a first `c` stays armed before the two-press close confirm resets.
+const CONFIRM_MS = 5_000
 const EMPTY: Snapshot = { tasks: null, error: null, updated: null }
 const FOCUSED = 'Chartroom panel focused: ↑↓ to choose, Enter brings a task in, Esc back to chat.'
 const WAITING = 'Chartroom panel is waiting for room: widen the terminal.'
@@ -46,6 +48,8 @@ const snapshot = atom({ plugin: 'chartroom-panel', key: 'snapshot' } as const, E
 const page = atom({ plugin: 'chartroom-panel', key: 'page' } as const, 0)
 const selected = atom({ plugin: 'chartroom-panel', key: 'selected' } as const, null as string | null)
 const notice = atom({ plugin: 'chartroom-panel', key: 'notice' } as const, null as string | null)
+// The short_id a first `c` armed for close; a second `c` on the same row confirms. null = unarmed.
+const armed = atom({ plugin: 'chartroom-panel', key: 'armed' } as const, null as string | null)
 
 /** How each tone draws: input-needed yellow, working green, quiet dim, unknown plain (default colour). */
 const TONE_PROPS: Record<Tone, { color?: string; dimColor?: boolean }> = {
@@ -66,13 +70,17 @@ let polling = false
 let pollAgain = false
 // Bumped on every off so a late poll result is dropped, never written over a fresh state.
 let pollGen = 0
+// The reset timer for an armed two-press close; cancelled on confirm, re-arm, off and session end.
+let armTimer: Timer | undefined
 
 /**
  * One `chartroom <args>` run: `$CHARTROOM_BIN`, else `chartroom` on PATH, then ~/.local/bin (a
  * thin GUI PATH). Once `home` is known every run names it (`CHARTROOM_HOME`), so the panel reads
- * this session's home whatever the CLI would otherwise resolve. Never throws.
+ * this session's home whatever the CLI would otherwise resolve. Never throws. On a failure it
+ * returns `error` (a one-line summary) and `detail` (the CLI's own stdout+stderr, verbatim and
+ * trimmed) so a refusal can be surfaced word for word.
  */
-async function runCli($: EngineInterface, args: string[]): Promise<{ stdout: string } | { error: string }> {
+async function runCli($: EngineInterface, args: string[]): Promise<{ stdout: string } | { error: string; detail?: string }> {
   const bin = await $.env.get('CHARTROOM_BIN')
   const userHome = (await $.env.get('HOME')) ?? ''
   const candidates = bin ? [bin] : ['chartroom', `${userHome}/.local/bin/chartroom`]
@@ -81,8 +89,9 @@ async function runCli($: EngineInterface, args: string[]): Promise<{ stdout: str
       const ran = await $.process.run([path, ...args], { timeoutMs: 8_000, ...(home ? { env: { CHARTROOM_HOME: home } } : {}) })
       if (ran.exitCode === 0) return { stdout: ran.stdout }
       if (ran.exitCode === 127) continue // not this candidate; try the next
+      const detail = `${ran.stderr}\n${ran.stdout}`.trim()
       const why = (ran.stderr.trim().split('\n')[0] ?? '').replace(/^chartroom:\s*/, '')
-      return { error: `chartroom ${args[0]} failed${why ? `: ${why}` : ` (exit ${ran.exitCode})`}` }
+      return { error: `chartroom ${args[0]} failed${why ? `: ${why}` : ` (exit ${ran.exitCode})`}`, ...(detail ? { detail } : {}) }
     } catch (err) {
       // A rejection is a command that could not start (try the next), or one still running at the timeout.
       if (/timed? ?out/i.test(String(err))) return { error: `chartroom ${args[0]} timed out` }
@@ -201,11 +210,13 @@ async function activatePanel($: EngineInterface, focus: boolean) {
   return openPane($, focus)
 }
 
-/** Stops the refresh and forgets the selection notice; shared by `off` and the person's close. */
+/** Stops the refresh (poll timer and any armed-close timer); shared by `off`, the person's close and exit. */
 function stopRefresh() {
   pollGen++ // a poll in flight must not write after this
   timer?.cancel()
   timer = undefined
+  armTimer?.cancel()
+  armTimer = undefined
 }
 
 /** Turns the panel off for the session: no draw, no poll; auto-show will not re-open it. */
@@ -213,33 +224,100 @@ async function deactivatePanel($: EngineInterface) {
   await update($, active, () => false)
   await update($, closedByUser, () => true)
   await update($, notice, () => null)
+  await update($, armed, () => null)
   stopRefresh()
   await closePane($)
 }
 
+/** Sets the panel's one-line notice. */
+async function say($: EngineInterface, text: string | null) {
+  await update($, notice, () => text).catch(() => {})
+}
+
 /**
- * Brings `sid` into the chat as the next prompt's focus: `/continue <sid>` into an empty prompt
- * (the keys then go to the prompt, so Enter runs it). A draft is never replaced — it is copied
- * instead, with a note. Returns what happened.
+ * Puts `text` into an empty chat prompt via `$.prompt.fill` (the keys then go to the prompt). A
+ * draft is never replaced — the text is copied to the clipboard instead. Nothing is ever submitted.
  */
+async function putInPrompt($: EngineInterface, text: string, surface?: RenderSurface): Promise<{ via: 'fill' | 'copy' | 'none'; draft: boolean }> {
+  const box = await $.prompt.read()
+  const draft = box.text.trim() !== ''
+  if (!draft) {
+    const filled = await $.prompt.fill({ text, mode: 'replace' })
+    if (filled.isFilled) return { via: 'fill', draft: false }
+  }
+  const copied = await $.ui.copy({ text, ...(surface ? { surface } : {}) })
+  return { via: copied.isCopied ? 'copy' : 'none', draft }
+}
+
+/** Brings `sid` into the chat: `/continue <sid>` into an empty prompt (Enter runs it), else copied. */
 async function continued($: EngineInterface, sid: string, surface?: RenderSurface): Promise<string> {
   const line = `/continue ${sid}`
-  const box = await $.prompt.read()
-  if (box.text.trim() === '') {
-    const filled = await $.prompt.fill({ text: line, mode: 'replace' })
-    if (filled.isFilled) return `${line} is in the prompt — press Enter to run it`
-  }
-  const copied = await $.ui.copy({ text: line, ...(surface ? { surface } : {}) })
-  const why = box.text.trim() ? 'the prompt holds a draft, kept' : 'the prompt cannot take it now'
-  return copied.isCopied ? `${line} copied (${why}): paste it at the prompt` : `${why}; type ${line}`
+  const r = await putInPrompt($, line, surface)
+  if (r.via === 'fill') return `${line} is in the prompt — press Enter to run it`
+  const why = r.draft ? 'the prompt holds a draft, kept' : 'the prompt cannot take it now'
+  return r.via === 'copy' ? `${line} copied (${why}): paste it at the prompt` : `${why}; type ${line}`
 }
 
 /** Selects a task by its short id: records the ring and brings it into the chat. */
 async function pick($: EngineInterface, sid: string, surface?: RenderSurface) {
   await update($, selected, () => sid)
-  await update($, notice, () => `${sid}…`)
-  const said = await continued($, sid, surface)
-  await update($, notice, () => said)
+  await say($, await continued($, sid, surface))
+}
+
+/** The highlighted task: the ring's row (tracked via ui.focus), else the first visible task. */
+async function currentTask($: EngineInterface): Promise<Task | null> {
+  const tasks = (await read($, snapshot)).tasks ?? []
+  if (!tasks.length) return null
+  const sel = await read($, selected)
+  return tasks.find(t => (t.short_id ?? t.id) === sel) ?? tasks[0] ?? null
+}
+
+/** Clears an armed close (on timeout, re-arm, off): forgets the arm and its confirm notice. */
+async function disarm($: EngineInterface) {
+  armTimer?.cancel()
+  armTimer = undefined
+  if (!(await read($, armed).catch(() => null))) return
+  await update($, armed, () => null).catch(() => {})
+  await update($, notice, n => (n && n.startsWith('Close ') ? null : n)).catch(() => {})
+}
+
+/**
+ * `c` on the highlighted task: complete → close, two presses. The first arms it (and shows an
+ * inline confirm with a reset timeout); a second `c` on the same row runs `chartroom close <id>`
+ * (keeping the branch, never `--discard`) against the resolved home. On refusal the CLI's exact
+ * message is shown and nothing is claimed; on success the fleet re-polls and the task drops off.
+ */
+async function actClose($: EngineInterface) {
+  const task = await currentTask($)
+  if (!task) return say($, 'no task highlighted')
+  const sid = task.short_id ?? task.id // shown to the person and armed on the short id
+  if ((await read($, armed)) === sid) {
+    armTimer?.cancel()
+    armTimer = undefined
+    await update($, armed, () => null)
+    const ran = await runCli($, ['close', task.id]) // chartroom close takes the FULL id, not the short id
+    if ('error' in ran) return say($, ran.detail || ran.error) // the CLI's exact refusal, never a fake success
+    await say($, ran.stdout.trim().split('\n')[0] || `closed ${sid}`)
+    await poll($) // so it drops off the list
+    return
+  }
+  await update($, armed, () => sid)
+  await say($, `Close ${sid}? press c again to confirm`)
+  armTimer?.cancel()
+  armTimer = $.clock.after(CONFIRM_MS, () => void disarm($))
+}
+
+/** `s` on the highlighted task: pre-fill a non-mutating recap request into the chat prompt. */
+async function actRecap($: EngineInterface, surface?: RenderSurface) {
+  await disarm($) // any other action cancels a pending close
+  const task = await currentTask($)
+  if (!task) return say($, 'no task highlighted')
+  const sid = task.short_id ?? task.id
+  const text = `Recap ${sid} (${clean(task.title ?? sid)}): where it stands and what's pending`
+  const r = await putInPrompt($, text, surface)
+  if (r.via === 'fill') return say($, `recap request is in the prompt — edit or press Enter to send`)
+  const why = r.draft ? 'the prompt holds a draft, kept' : 'the prompt cannot take it now'
+  await say($, r.via === 'copy' ? `recap copied (${why})` : `${why}; recap: ${text}`)
 }
 
 export const register: Register = on => {
@@ -283,9 +361,22 @@ export const register: Register = on => {
       await update($, active, () => false)
       await update($, closedByUser, () => true)
       await update($, notice, () => null)
+      await update($, armed, () => null)
       stopRefresh()
     }
     return closed
+  })
+
+  // The ring follows the person's arrows/Tab; tracking it as `selected` lets `c`/`s` and Enter act
+  // on the highlighted row. Moving to a different row cancels a pending two-press close.
+  on('ui.focus', async ($, e, next) => {
+    const moved = await next(e)
+    if (e.requestId === PANE && e.plugin === 'chartroom-panel' && e.element?.startsWith('row-') && !moved?.deny) {
+      const sid = e.element.slice(4)
+      await update($, selected, () => sid).catch(() => {})
+      if ((await read($, armed).catch(() => null)) && (await read($, armed)) !== sid) await disarm($)
+    }
+    return moved
   })
 
   on('command.run', { command: 'chartroom-panel' }, async ($, e) => {
@@ -420,10 +511,25 @@ export const register: Register = on => {
           {CONTROLS}
         </Text>
         {e.props.isFocused ? (
-          <Text key="foot-nav" dimColor wrap="truncate">
-            ↑↓ move · Enter → /continue · Esc → chat
+          // Focused: the action keys are real Buttons (their hotkeys fire only while the pane holds
+          // the keyboard), drawn as `c: close  s: recap`, then the rest of the legend. wrap=truncate
+          // keeps it on one line on a narrow pane; the Buttons give way gracefully before the text.
+          <Box key="foot-actions" flexDirection="row" flexWrap="wrap">
+            <Box marginRight={1}>
+              <Button key="act-close" plain hotkey="c" label="close" onPress={() => void actClose($)} />
+            </Box>
+            <Box marginRight={1}>
+              <Button key="act-recap" plain hotkey="s" label="recap" onPress={press => void actRecap($, press.surface)} />
+            </Box>
+            <Text dimColor wrap="truncate">
+              ↑↓ move · Enter /continue · Esc chat
+            </Text>
+          </Box>
+        ) : (
+          <Text key="foot-select" dimColor wrap="truncate">
+            Ctrl+X Tab to select
           </Text>
-        ) : null}
+        )}
         {note ? (
           <Text key="notice" color="success" wrap="truncate">
             {note}

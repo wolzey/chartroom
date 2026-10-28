@@ -33,6 +33,8 @@ export type World = {
   doctorHome: string
   /** What `chartroom status --json` prints; a Ran, or 'missing' for a command-not-found. */
   status: () => Ran | 'missing'
+  /** What `chartroom close <full_id>` does; default success drops the task from `status`. */
+  close: (fullId: string) => Ran
   /** The prompt box's draft. */
   draft: string
   /** Command names a person's own command/skill already holds: registering one is refused. */
@@ -41,16 +43,26 @@ export type World = {
   panes: { id: string; title: string; isShown: boolean; isFocused: boolean; isPlaced: boolean }[]
 }
 
-export const XO_WORLD = (): World => ({
-  env: { HOME },
-  files: { [`${HOME}/commander.md`]: '# commander\n' },
-  dirs: [HOME],
-  doctorHome: HOME,
-  status: () => ({ exitCode: 0, stdout: statusJson([{ id: 'auth-108a', state: 'decision', live: 'done', title: 'Auth' }]), stderr: '' }),
-  draft: '',
-  taken: [],
-  panes: [],
-})
+export const XO_WORLD = (): World => {
+  // The default fleet, less any task `close` removed, so a successful close drops it from `status`.
+  const base: Row[] = [{ id: 'auth-108a', state: 'decision', live: 'done', title: 'Auth' }]
+  const closed: string[] = []
+  const world: World = {
+    env: { HOME },
+    files: { [`${HOME}/commander.md`]: '# commander\n' },
+    dirs: [HOME],
+    doctorHome: HOME,
+    status: () => ({ exitCode: 0, stdout: statusJson(base.filter(t => !closed.includes(t.id ?? ''))), stderr: '' }),
+    close: fullId => {
+      closed.push(fullId)
+      return { exitCode: 0, stdout: `closed ${fullId}`, stderr: '' }
+    },
+    draft: '',
+    taken: [],
+    panes: [],
+  }
+  return world
+}
 
 /**
  * Installs the world; returns the argv of every process run, the CHARTROOM_HOME each named, the
@@ -99,6 +111,9 @@ export function install(on: On, world: World) {
       const out = world.status()
       if (out === 'missing') return { deny: 'spawn chartroom ENOENT' }
       return { value: { ...out, isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+    if (argv[1] === 'close') {
+      return { value: { ...world.close(argv[2] ?? ''), isStdoutTruncated: false, isStderrTruncated: false } }
     }
     return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })

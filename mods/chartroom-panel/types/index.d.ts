@@ -48,8 +48,10 @@ declare module 'claude-code' {
       page: number
       /** The short_id the focus ring rests on (the last opened/selected), or null. */
       selected: string | null
-      /** What the last selection did (pre-filled, copied, or why not), or null. */
+      /** What the last selection/action did (pre-filled, copied, closed, a refusal, or why not), or null. */
       notice: string | null
+      /** The short_id a first `c` armed for close; a second `c` on the same row confirms. null = unarmed. */
+      armed: string | null
     }
   }
 }
