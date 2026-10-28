@@ -117,12 +117,12 @@ hand (the frame's ✕ or **ctrl+x x**) turns the panel off for the session, exac
 ## Picking a task into the chat
 
 `/chartroom-panel` hands the keyboard to the pane: the arrows walk the task rows and **Enter**
-brings the highlighted task into the chat as the next prompt's focus — it pre-fills the prompt
-with `/continue {short_id}` (the existing Chartroom continue skill) and stops there; nothing is
-submitted, so the commander edits or adds before sending. **Esc** hands the keys back to the chat
-and leaves the pane open; normal typing is never captured. If the prompt already holds a draft it
-is never replaced — the `/continue` line is copied instead, with a note. (`pick <short_id>` does
-the same from the command line.)
+brings the highlighted task into the chat — it **submits** `/continue {short_id}` (the existing
+Chartroom continue skill) in one press and returns focus to the chat. `/continue` only navigates,
+so auto-submitting it is safe; the commander does not have to press Enter a second time. **Esc**
+hands the keys back to the chat and leaves the pane open; normal typing is never captured. The
+submit is its own turn and never touches whatever is in the composer, so a draft is left intact.
+(`pick <short_id>` does the same from the command line.)
 
 ## Action keys on the highlighted task (focused only)
 
@@ -140,7 +140,7 @@ them:
 - **`s` — recap (non-mutating).** Pre-fills the chat prompt with
   `Recap <short_id> (<title>): where it stands and what's pending` (same `$.prompt.fill` as Enter,
   never submitted) for the commander to send; the XO answers. No jump, no mutation.
-- Plus the existing `↑/↓` (move), **Enter** (`/continue`), **Esc** (back to chat).
+- Plus the existing `↑/↓` (move), **Enter** (submit `/continue <id>`), **Esc** (back to chat).
 
 The footer makes the keys discoverable in both states: unfocused it shows `Ctrl+X Tab to select`
 beside `/chartroom-panel next|prev|off`; focused it shows the full legend

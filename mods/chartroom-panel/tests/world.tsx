@@ -76,6 +76,7 @@ export function install(on: On, world: World) {
   const closes: string[] = []
   const copies: string[] = []
   const fills: string[] = []
+  const submits: string[] = []
   const writes: { path: string; text: string }[] = []
   mock.env(on, world.env)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -151,12 +152,19 @@ export function install(on: On, world: World) {
     fills.push(e.text)
     return { isFilled: true }
   })
+  // NOTE: the kit rejects a plugin's in-handler $.prompt.submit (it would run as its own turn, once
+  // idle), so this stub records a submit only when called from an idle context (e.g. the test's own
+  // $). The Enter path's real submit is verified live; see report.md.
+  on('prompt.submit', ($, e) => {
+    submits.push(e.text)
+    return { text: e.text }
+  })
   on('command.register', ($, e) => {
     if (world.taken.includes(e.name)) return { deny: `"/${e.name}" refused: it is the user's /${e.name}` }
     commands.push(e.name)
     return { value: { command: e.name } }
   })
-  return { runs, homes, commands, opens, closes, copies, fills, writes, clock }
+  return { runs, homes, commands, opens, closes, copies, fills, submits, writes, clock }
 }
 
 /** Starts an interactive session at `cwd` (the home by default), as Claude Code does on launch. */
