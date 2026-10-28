@@ -478,7 +478,7 @@ are stable from 0.1.0.
   hides `done`, now the commander's own accept). The dashboard's Ready for you lane holds accepted
   tasks not yet closed. `sweep` treats `review` as finished but never closes one: it closes only
   accepted (`done`) tasks, and lists a review task's open session as needing a human. Existing
-  records need no migration: the state is derived from the log, so a task whose `done` event has
+  records are not rewritten: the state is derived from the log, so a task whose `done` event has
   no accept after it reads as `review`. The `chartroom`, `continue`, `bearings` and `sweep`
   skills say so.
 - README reads on its own: the comparison with another project is gone; the differences that
