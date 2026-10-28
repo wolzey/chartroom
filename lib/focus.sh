@@ -5,7 +5,7 @@
 #   {"schema": 1, "projects": ["shop"], "scope": ["IR-006"], "since": "<UTC>", "until": "<UTC>"|null}
 # No file, or an until in the past, means focus is off. While it is on, every item out of focus
 # that would ask something of the commander is held: a task in decision, blocked, failed,
-# awaiting-input or done, and an inbox "Waiting" item. Held items stay on the board and still
+# awaiting-input or review, and an inbox "Waiting" item. Held items stay on the board and still
 # wake the XO (marked [held]); status, board, the dashboard and the crew views count them, so a
 # focus is never left on by accident.
 #
@@ -35,7 +35,7 @@ def focus_item($f):
 def focus_marks($f; $kind; $brk):
   if $f == null then {in_focus: true, held: false}
   else ($brk or focus_item($f)) as $in
-    | {in_focus: $in, held: (($in | not) and ($kind == "inbox" or (.state | test("^(decision|blocked|failed|awaiting-input|done)$"))))}
+    | {in_focus: $in, held: (($in | not) and ($kind == "inbox" or (.state | test("^(decision|blocked|failed|awaiting-input|review)$"))))}
   end;
 def focus_dur: floor as $s
   | def two($big; $bu; $small; $su): "\($big)\($bu)" + (if $small > 0 then "\($small)\($su)" else "" end);

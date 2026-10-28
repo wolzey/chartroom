@@ -7,7 +7,8 @@
 #   session  the agent chartroom started for a task (it, its launcher or wrapper passes the
 #            agent the task's directory; or it is the agent in the task's worktree), the pane
 #            shell it runs in, and everything under it
-#   close    a done task: closeable when its worktree is clean and nothing on it is unlanded
+#   close    a done task (accepted by the commander; one still in review never closes here):
+#            closeable when its worktree is clean and nothing on it is unlanded
 #   orphan   a chartroom loop left behind: `watch`/`listen` whose session is gone (its nearest
 #            real parent is init), a listener of a closed task, a second dashboard for the home
 #   daemon   anything else running from a task's worktree (dev servers, watchers, daemons:
@@ -19,7 +20,7 @@
 # worktree), stops sessions of closed tasks, kills the rest of the safe set (TERM, then KILL
 # after 5s), and logs every act to $CHARTROOM_HOME/sweep.log and the task's events.log.
 
-CR_SWEEP_FINISHED='done|failed|stopped-silent|closed'
+CR_SWEEP_FINISHED='review|done|failed|stopped-silent|closed'
 
 sweep_log() { printf '%s %s\n' "$(now)" "${*//$'\n'/ }" >>"$CR_HOME/sweep.log"; }
 

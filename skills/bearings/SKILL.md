@@ -35,7 +35,8 @@ never from conversation memory. (If `chartroom` is not on PATH, use
    `chartroom todo --all-homes` for each home's open artifacts. A task's records are under its home's `path`. Lead every line with its home,
    `**[<home> · <project>]**`, and give each home's focus line if it has one. In step 3, walk
    only this home's decisions; for another home's, say which home's XO to answer it in.
-   For every task in `done`, `decision`, `blocked`, `failed`, `stopped-silent`,
+   For every task in `review` (a worker reported done; it waits on the commander's look),
+   `decision`, `blocked`, `failed`, `stopped-silent`,
    `waiting-overdue`, `awaiting-input` or `lost` state, read its `$CHARTROOM_HOME/tasks/<id>/report.md` if one
    exists, and the last few lines of `events.log`. Run `chartroom peek <id>` only when those
    don't explain the state. If the commander says "include PRs", also check PR state for tasks
@@ -53,7 +54,8 @@ never from conversation memory. (If `chartroom` is not on PATH, use
    it with `chartroom artifact copy <ref>`): `**[<project>]** send: <title> (<ref>)`, or
    `run: <title> (<ref>)`. Put it on the line of the inbox item it belongs to, if any.
 
-   **Ready**: finished work waiting for the commander's word (review, merge, or PR). One line
+   **Ready**: finished work waiting for the commander's word (tasks in `review`: a worker
+   reported done, and only the commander's accept or close ends it). One line
    each: the outcome, the risk, the evidence ("tests pass", "3 files"), and the full PR URL if there is one.
    A task with an open `page` artifact (a report to read) names its ref too: `read: <ref>`
    (`chartroom artifact open <ref>` shows it).

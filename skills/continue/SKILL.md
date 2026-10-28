@@ -31,9 +31,12 @@ not on PATH, use `../../bin/chartroom` relative to this skill's directory.)
      worker (and append the commander's words to the brief's intent), write approvals into the
      brief, record lasting preferences with `chartroom rule add`, and remove the answered `inbox.md` line.
    - Every other answer below also starts with `**[<project>]**`.
-   - `done`: Verify (chartroom skill step 7) if you have not already, then give the outcome,
-     the risk and the evidence in two or three lines, with full PR URLs, and ask how to land it
-     (merge locally / open a PR / leave it).
+   - `review` (the worker reported `done`; it waits on the commander): Verify (chartroom skill
+     step 7) if you have not already, then give the outcome, the risk and the evidence in two or
+     three lines, with full PR URLs, and ask how to land it (merge locally / open a PR / leave
+     it). It leaves `review` only on the commander's word: `chartroom close <id>` once it has
+     landed or they drop it, or `chartroom accept <id>` when they call it done but want it kept.
+   - `done`: the commander accepted it; one line on whether it has landed, and offer to close it.
    - `failed`, `stopped-silent`, `waiting-overdue`: one line on what went wrong and what you
      propose; ask only if it needs the commander's call.
    - `working`, `drafting`, `waiting`: one line of status (for `waiting`: on what, until when).

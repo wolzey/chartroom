@@ -253,10 +253,10 @@ header:
 
 | Lane | What lands there |
 |---|---|
-| **Needs you** | tasks in `decision`, `blocked`, `failed` or `awaiting-input` (in that order), then the "Waiting on ..." items in `inbox.md` with their question text; every card leads with its project |
+| **Needs you** | tasks in `decision`, `blocked`, `failed`, `awaiting-input` or `review` (in that order; `review` is a worker's finished work awaiting your look: a PR to review, a merged PR or a report to read), then the "Waiting on ..." items in `inbox.md` with their question text; every card leads with its project |
 | **In progress** | `working` and `drafting` tasks, and `waiting` ones: a worker that ended its turn right after a `waiting` event, inside its window (the card shows what it waits on and until when) |
 | **On hold** | `stopped-silent` and `waiting-overdue` tasks; tasks whose last event (other than their own `waiting` event) says they wait on a person ("waiting on/for", "awaiting review", "pending approval", "on hold"); done tasks whose open PR still needs someone's review |
-| **Ready for you** | `done` tasks that are not closed: a PR to review or a report to read |
+| **Ready for you** | `done` tasks (ones you accepted) that are not closed yet |
 | **Recently finished** | tasks closed in the last 48 hours (`CHARTROOM_DASHBOARD_RECENT_HOURS`), and done tasks whose PRs are all merged |
 
 Each card shows the title, project (above the title on a Needs you card, so you can tell which
@@ -292,8 +292,9 @@ How it is built, and what it promises:
 - **Same answer as the CLI.** The lanes come from `chartroom dashboard --json`, built from the
   rows `chartroom status` uses, so the page and the terminal never disagree.
 - **PR states are optional.** If `gh` is on your PATH, the server looks up the state of the PR
-  links it found (cached, refreshed every 5 minutes) to move a merged PR to Recently finished and
-  one awaiting review to On hold. That is the only network traffic, and it is GitHub's API with
+  links it found (cached, refreshed every 5 minutes): a task in `review` says whether its PR is
+  merged or still to review; an accepted (`done`) one moves to Recently finished once merged, or
+  to On hold while its PR awaits someone's review. That is the only network traffic, and it is GitHub's API with
   your own `gh` login. `--no-gh` turns it off; without `gh`, or offline, the page just shows the
   links.
 - `--daemon` writes `.dashboard.pid` (pid and port) and `.dashboard.log` in the home. One
@@ -512,7 +513,7 @@ chartroom focus off             # ends it and lists what was held
 ```
 
 - **What is held.** While a focus is on, an item of a project out of focus is held when it would
-  ask something of you: a task in `decision`, `blocked`, `failed`, `awaiting-input` or `done`, or
+  ask something of you: a task in `decision`, `blocked`, `failed`, `awaiting-input` or `review`, or
   a "Waiting on the commander" inbox item. The count is exactly that, read from disk, so
   `status`, `board`, the dashboard and the crew views always agree. Workers in other projects
   keep working: focus changes what reaches you, not what runs.
@@ -648,7 +649,7 @@ typed in twice:
 
 - open inbox items under "Waiting on the commander" (the XO's questions, and your own items);
 - open artifacts to send (`message`) or run (`runbook`); notes are not on it;
-- tasks waiting on your word: a `decision`, a `blocked` worker, finished work to land (`ready`).
+- tasks waiting on your word: a `decision`, a `blocked` worker, finished work in `review` (`ready`).
 
 ```bash
 chartroom todo                        # the list (--json for the views; --all with focus mode's held items)
@@ -672,7 +673,7 @@ chartroom todo add --project shop "renew the cert by 2026-10-22"   # your own it
   (the section reads `- (none)` again once it is empty) or marks the artifact done. An inbox
   item's artifacts outlive its line, so a message to send stays on the list after its question is
   answered. A task is never ticked here: a decision clears when the XO relays your answer, and
-  finished work when it lands.
+  finished work when you accept (`chartroom accept`) or close it.
 - **Focus mode.** While `chartroom focus` is on, the list shows only what focus mode does not
   hold, and the focus line says how many items it holds (`--all` shows them). Focus mode alone
   decides what is held: urgency only orders the list. An artifact follows its owner's card. The
@@ -822,7 +823,8 @@ either. herdr's agent and pane lists add the sessions it hosts. All the rules li
 
 `--apply` acts only on the safe set:
 
-- closes done tasks whose worktree is clean and whose commits are all in the base ref (as of the
+- closes done tasks (ones you accepted: a task still in `review` is never closed by sweep) whose
+  worktree is clean and whose commits are all in the base ref (as of the
   last fetch: it never fetches), through `chartroom close`, which still refuses a dirty worktree.
   A task that reported done less than `CHARTROOM_SWEEP_SETTLE_MINUTES` ago waits, so the XO sees
   its report first;
@@ -836,11 +838,11 @@ either. herdr's agent and pane lists add the sessions it hosts. All the rules li
 Kills are TERM, then KILL after 5 seconds, and only if the pid still runs what the plan saw. Every
 act is logged to `sweep.log` in the home and, when it belongs to a task, to its `events.log`.
 
-It never touches in-flight work (anything but done, failed, stopped-silent or closed), never
+It never touches in-flight work (anything but review, done, failed, stopped-silent or closed), never
 `--discard`s, never closes a task with uncommitted, unpushed or unmerged work, never treats a
 joined session's own directory as a worktree, and never kills a process with a terminal outside
 a task's session (someone may be using it). Whatever it is not sure about is listed under "needs
-a human" with the reason: a done task that has not landed, a failed or silently stopped task whose
+a human" with the reason: a task in review with its session still open, a done task that has not landed, a failed or silently stopped task whose
 session is still open, a long-running process in an open task's worktree, an orphaned loop from
 another home. Those are raised only once the task has been idle for `--idle-hours`
 (`CHARTROOM_SWEEP_IDLE_HOURS`, default 24), so fresh work is not nagged about.
@@ -866,6 +868,12 @@ directories or argv); WSL2 works.
   wins. `chartroom rule add --topic <slug> "<text>"` records one and rewrites a generated block
   in `commander.md` with the live set, so a preference that changed three times reads as one
   line, and `rule list --all` still shows the whole chain. Text outside the block stays yours.
+- **Review, done, closed.** A worker's `done` report never marks the task done: it puts it in
+  `review` (finished, awaiting your look), and it stays on `status`, the dashboard's Needs you
+  lane and the panel until you say so. `chartroom close <id>` closes it (removing a clean
+  worktree); `chartroom accept <id>` marks it `done` and keeps everything (a `note: accepted`
+  event). A task from before `review` existed reads the same way: its `done` event is `review`
+  until accepted. The state is derived from the log; nothing is rewritten.
 - **Authority is explicit.** Workers never push, open PRs, merge, or delete branches unless the
   brief grants it for that task. `close` refuses a dirty worktree, and branches are never deleted.
 
@@ -951,7 +959,7 @@ write them:
 | `progress` | worker | no |
 | `waiting` | worker, right before ending a turn to wait on CI, a review, a timer or a person: what, and until when (`... until 2026-01-05T15:30:00Z`) if known | no; once, as `waiting overdue: ...`, if the worker is still stopped when the window runs out |
 | `decision` `blocked` `done` `failed` | worker | yes |
-| `note` | chartroom (created, dispatched, worktree, fallback, closed, `waiting overdue`) | no |
+| `note` | chartroom (created, dispatched, worktree, fallback, accepted, closed, `waiting overdue`) | no |
 | `steered` | chartroom (`steer`) | no |
 | `exited` | process wrappers (`... (exit N)`) | yes, unless the worker reported first |
 | `agent` | hooks: `turn-ended`, `awaiting-input: <why>`, `prompt-received` | `turn-ended` without a report, and `awaiting-input` |

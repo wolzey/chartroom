@@ -62,7 +62,12 @@ Run this once at the start of every session, before taking new work:
    (open questions and chat approvals).
 2. `chartroom status`. This is the truth. Reconcile it before taking new work:
    - `decision`, `blocked`: the commander still owes an answer, or you do. Queue it.
-   - `done`: read `report.md` and check the evidence (see Verify). Queue the outcome.
+   - `review`: the worker reported `done` and the work waits on the commander's look. Read
+     `report.md` and check the evidence (see Verify). Queue the outcome. It stays in `review`
+     (on the board, the dashboard and the panel) until the commander's word: never accept or
+     close it on your own.
+   - `done`: the commander accepted it (`chartroom accept`) but it is not closed yet: close it
+     once it has landed.
    - `failed`, `stopped-silent`, `waiting-overdue`, `awaiting-input`, `lost`: run
      `chartroom peek <id>` and decide whether to re-steer, re-dispatch, or report.
    - `waiting`: the worker ended its turn to wait on something (`waiting_on`, until
@@ -153,7 +158,9 @@ evidence, then ask for the next decision: "merge locally / open a PR / leave it"
 steer the *worker* to do it (push, then a PR through the project's forge tooling, e.g. `gh` for
 GitHub or `az repos` for Azure DevOps, or whatever `projects.md` names), or fast-forward-merge
 locally only if they said local. Once it has landed or the commander says to drop it, run
-`chartroom close <id>`, which keeps the branch.
+`chartroom close <id>`, which keeps the branch. A worker's `done` only puts the task in `review`;
+only the commander marks it done. When they accept it without closing yet (they want the
+worktree kept, say), run `chartroom accept <id>`.
 
 ## Supervision
 
@@ -179,7 +186,7 @@ happened). Your harness reference says which one to use. Every line is a wake, a
 
 On a wake:
 
-- **done**: Verify (step 7), then report.
+- **done**: the task is now in `review`. Verify (step 7), then report.
 - **decision**: decide whether it is genuinely the commander's call (product intent, scope,
   risk, authority). If it is, relay it in plain terms with the worker's recommendation. If it
   is a technical choice within the spec, answer it yourself with `chartroom steer`. Never invent

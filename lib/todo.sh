@@ -44,8 +44,8 @@ inbox_remove() { # <i-xxxx>
 }
 
 # `todo done <ref>`: an artifact (<owner>/<slug>) is marked done, an inbox item's line removed. A
-# task is never ticked: its decision clears when the XO relays the answer, finished work when it
-# lands.
+# task is never ticked: its decision clears when the XO relays the answer, finished work when the
+# commander accepts or closes it.
 todo_done() { # <ref>
   [[ $# -eq 1 ]] || die "usage: chartroom todo done <ref> (the ref chartroom todo prints: i-7f3a, 21ba/reply-to-review)"
   if [[ "$1" == */* ]]; then artifact_done "$1"; return; fi
@@ -60,7 +60,7 @@ todo_done() { # <ref>
   case "$st" in
     decision) die "$sid waits on your decision: it clears when the XO relays your answer (/continue $sid), not from the list" ;;
     blocked) die "$sid is blocked on you: it clears when the XO relays your answer (/continue $sid), not from the list" ;;
-    done) die "$sid is finished work to land: it clears once it lands and the XO closes it (/continue $sid)" ;;
+    review) die "$sid is finished work awaiting your review: it clears when you accept or close it (chartroom accept $sid, /continue $sid)" ;;
     *) die "$sid is a task in $st, not something on your list (open artifacts are ticked as <id>/<slug>: chartroom todo)" ;;
   esac
 }

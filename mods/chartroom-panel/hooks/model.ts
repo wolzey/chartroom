@@ -12,6 +12,8 @@ import type { Snapshot, Task, Tone } from '../types'
  * Hide a task when `state ∈ {done, closed}` OR `closed` is non-null (`closed == null` keeps a
  * row whose `closed` is null or absent; any non-null value, a timestamp or even "", hides it).
  * The filter never looks at `live`: a `state: decision` row with `live: done` stays visible.
+ * A worker's `done` report puts its task in `review` (awaiting the commander), which stays visible;
+ * `done` is the commander's own accept, so only then does the row leave.
  *
  * Throws on anything that is not an array of rows each carrying a string `id` and `state`, so a
  * malformed payload surfaces as an error (stale rows kept) rather than an empty fleet.
@@ -29,8 +31,8 @@ export function parseTasks(text: string): Task[] {
 
 // ---------------------------------------------------------------- state → label and tone
 
-// "needing input" (decision/blocked/awaiting-input and the overdue-wait), per the brief's filtering map.
-const INPUT = new Set(['decision', 'blocked', 'awaiting-input', 'waiting-overdue'])
+// "needing input" (decision/blocked/awaiting-input, the overdue-wait, and finished work awaiting review).
+const INPUT = new Set(['decision', 'blocked', 'awaiting-input', 'waiting-overdue', 'review'])
 // "being worked on".
 const WORKING = new Set(['working', 'running', 'drafting'])
 // Quiet/attention states that stay visible but recede.

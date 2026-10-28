@@ -119,7 +119,7 @@ EOF
   [[ "$output" == *"[$id]"*"done: stub finished"* ]]
   wait_event "$id" ' exited: command ended \(exit 0\)'
   run cr status --json
-  [ "$(jq -r '.[0].state' <<<"$output")" = done ]
+  [ "$(jq -r '.[0].state' <<<"$output")" = review ]
   [ "$(jq -r '.[0].live' <<<"$output")" = stopped ]
   wt="$(meta_of "$id" worktree)"
   [ "$(git -C "$wt" log --oneline -1 --format=%s)" = "feat: stub change" ]
@@ -279,6 +279,35 @@ EOF
   [ "$status" -eq 0 ]
   [ ! -d "$wt" ]
   events "$id" | grep -q "discarded on commander's order"
+}
+
+@test "a worker's done is review until the commander accepts it; only accept or close ends it" {
+  id="$(new_task --backend command --command "$STUB {id}")"
+  d="$CHARTROOM_HOME/tasks/$id"
+  jq '. + {dispatched: "2026-01-02T10:00:00Z"}' "$d/meta.json" >"$d/m" && mv "$d/m" "$d/meta.json"
+  cr event "$id" progress "halfway" >/dev/null
+  run cr accept "$id"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"$id is working, not awaiting review"* ]]
+  # done (also how a record from before review reads: no rewrite, derived from the log)
+  cr event "$id" done "PR ready" >/dev/null
+  [ "$(cr status --json | jq -r --arg id "$id" '.[] | select(.id == $id) | .state')" = review ]
+  run cr todo done "$(cr resolve "$id" --json | jq -r .short_id)"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"awaiting your review"*"chartroom accept"* ]]
+  # accept takes a short id, and keeps the task (open, its worktree untouched)
+  run cr accept "$(cr resolve "$id" --json | jq -r .short_id)"
+  [ "$status" -eq 0 ]
+  [ "$output" = "accepted $id: done (chartroom close $id removes its worktree)" ]
+  events "$id" | grep -qE ' note: accepted$'
+  [ "$(cr status --json | jq -r --arg id "$id" '.[] | select(.id == $id) | [.state, .closed] | @tsv')" = $'done\t' ]
+  run cr accept "$id"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"$id is done, not awaiting review"* ]]
+  # more work after the accept: its next done is in review again
+  printf '%s steered: one more thing\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$d/events.log"
+  cr event "$id" done "fixed too" >/dev/null
+  [ "$(cr status --json | jq -r --arg id "$id" '.[] | select(.id == $id) | .state')" = review ]
 }
 
 @test "scout worktrees are detached; worktree_created is recorded" {

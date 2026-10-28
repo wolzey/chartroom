@@ -26,7 +26,7 @@ dispatched_task() {
   id="$(dispatched_task)"
   short="$(cr resolve "$id" --json | jq -r .short_id)"
   detail="$(cr show "$short" --json)"
-  [ "$(jq -r '[.type, .id, .title, .state, .lane, .reason] | join("|")' <<<"$detail")" = "task|$id|Fix login|done|ready|PR to review" ]
+  [ "$(jq -r '[.type, .id, .title, .state, .lane, .reason] | join("|")' <<<"$detail")" = "task|$id|Fix login|review|needs_you|PR to review" ]
   [ "$(jq -r .intent <<<"$detail")" = "Please do the thing." ]
   [ "$(jq -c '[.events[] | .kind]' <<<"$detail")" = '["progress","decision","done"]' ]
   [ "$(jq -r '.events[1].text' <<<"$detail")" = "pick A or B (recommend A), see https://github.com/acme/todo-cli/pull/7" ]

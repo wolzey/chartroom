@@ -74,6 +74,7 @@ build_fleet() {
   fixture t-pr subagent <<'EOF'
 900 progress: opened https://github.com/acme/todo-cli/pull/7 (draft)
 800 done: PR https://github.com/acme/todo-cli/pull/7 ready
+700 note: accepted
 EOF
   printf 'See https://github.com/acme/todo-cli/pull/7 and https://gitlab.example.com/acme/todo-cli/-/merge_requests/3.\n' \
     >"$CHARTROOM_HOME/tasks/t-pr/report.md"
@@ -98,18 +99,22 @@ EOF
 @test "lanes: every state lands in the right lane, needs-you ordered by priority" {
   build_fleet
   BOARD="$(cr dashboard --json)"
-  [ "$(lane_ids needs_you)" = "t-decision t-blocked t-failed inbox-0 inbox-1" ]
+  # a worker's done is review (awaiting the commander): needs you, after awaiting-input
+  [ "$(lane_ids needs_you)" = "t-decision t-blocked t-failed t-report inbox-0 inbox-1" ]
   [ "$(lane_ids in_progress)" = "t-working t-draft" ]
   [ "$(lane_ids on_hold)" = "t-waiting t-silent" ]
-  [ "$(lane_ids ready)" = "t-report t-pr" ]
+  # done is the commander's accept: ready for them to land or close, off needs-you
+  [ "$(lane_ids ready)" = "t-pr" ]
   [ "$(lane_ids recent)" = "t-closed-recent" ]
   # counts are the lane lengths
-  [ "$(jq -c .counts <<<"$BOARD")" = '{"needs_you":5,"in_progress":2,"on_hold":2,"ready":2,"recent":1}' ]
+  [ "$(jq -c .counts <<<"$BOARD")" = '{"needs_you":6,"in_progress":2,"on_hold":2,"ready":1,"recent":1}' ]
+  [ "$(card t-report | jq -r .state)" = review ]
+  [ "$(card t-pr | jq -r .state)" = done ]
   # reasons
   [ "$(card t-silent | jq -r .reason)" = "stopped without reporting" ]
   [ "$(card t-waiting | jq -r .reason)" = "waiting on someone" ]
   [ "$(card t-report | jq -r .reason)" = "report to read" ]
-  [ "$(card t-pr | jq -r .reason)" = "PR to review" ]
+  [ "$(card t-pr | jq -r .reason)" = "accepted" ]
   [ "$(card t-draft | jq -r .reason)" = "drafting the brief" ]
 }
 
@@ -134,7 +139,7 @@ EOF
 EOF
   BOARD="$(cr dashboard --json)"
   [ "$(card t-asked | jq -c '[.state,.lane,.waiting_on]')" = '["decision","needs_you",null]' ]
-  [ "$(card t-shipped | jq -c '[.state,.waiting_on]')" = '["done",null]' ]
+  [ "$(card t-shipped | jq -c '[.state,.waiting_on]')" = '["review",null]' ]
   [ "$(lane_ids in_progress)" = "t-wait-live t-wait" ]
   [ "$(lane_ids on_hold)" = "t-resumed t-wait-past t-wait-old" ]
   [ "$(card t-wait | jq -c '[.state,.reason,.waiting_on,.waiting_until]')" = "[\"waiting\",\"waiting\",\"CI on PR 7 until $until\",\"$until\"]" ]
@@ -165,20 +170,27 @@ EOF
 }
 
 @test "lanes: gh PR states move done tasks to on hold (in review) or recently finished (merged)" {
-  fixture t-review subagent <<<"100 done: https://github.com/acme/todo-cli/pull/8"
-  fixture t-merged subagent <<<"100 done: https://github.com/acme/todo-cli/pull/9"
-  fixture t-approved subagent <<<"100 done: https://github.com/acme/todo-cli/pull/10"
+  local n
+  for n in review:8 merged:9 approved:10; do
+    fixture "t-${n%%:*}" subagent <<<"100 done: https://github.com/acme/todo-cli/pull/${n#*:}"
+    printf '%s\n' "100 done: https://github.com/acme/todo-cli/pull/${n#*:}" "50 note: accepted" | fixture "t-${n%%:*}-ok" subagent
+  done
   cat >"$BATS_TEST_TMPDIR/prs.json" <<'EOF'
 {"https://github.com/acme/todo-cli/pull/8": {"state": "OPEN", "reviewDecision": "REVIEW_REQUIRED", "isDraft": false},
  "https://github.com/acme/todo-cli/pull/9": {"state": "MERGED", "reviewDecision": "APPROVED", "isDraft": false},
  "https://github.com/acme/todo-cli/pull/10": {"state": "OPEN", "reviewDecision": "APPROVED", "isDraft": false}}
 EOF
   BOARD="$(cr dashboard --json --pr-states "$BATS_TEST_TMPDIR/prs.json")"
-  [ "$(lane_ids on_hold)" = "t-review" ]
-  [ "$(card t-review | jq -r .reason)" = "PR awaiting review" ]
-  [ "$(lane_ids recent)" = "t-merged" ]
-  [ "$(card t-merged | jq -r .reason)" = "merged" ]
-  [ "$(lane_ids ready)" = "t-approved" ]
+  # in review (not yet accepted), every one needs the commander, merged or not
+  [ "$(lane_ids needs_you | tr ' ' '\n' | sort | tr '\n' ' ')" = "t-approved t-merged t-review " ]
+  [ "$(card t-review | jq -r .reason)" = "PR to review" ]
+  [ "$(card t-merged | jq -r .reason)" = "PR merged" ]
+  # accepted (done): the PR's state places it
+  [ "$(lane_ids on_hold)" = "t-review-ok" ]
+  [ "$(card t-review-ok | jq -r .reason)" = "PR awaiting review" ]
+  [ "$(lane_ids recent)" = "t-merged-ok" ]
+  [ "$(card t-merged-ok | jq -r .reason)" = "merged" ]
+  [ "$(lane_ids ready)" = "t-approved-ok" ]
   # an unreadable states file is ignored, not fatal
   echo 'not json' >"$BATS_TEST_TMPDIR/bad.json"
   BOARD="$(cr dashboard --json --pr-states "$BATS_TEST_TMPDIR/bad.json")"
@@ -242,7 +254,7 @@ start_daemon() {
   # the JSON endpoint is the CLI's board plus the enrichment status
   local j; j="$(get "$URL/api/dashboard")"
   [ "$(jq -r '.lanes | keys | join(",")' <<<"$j")" = "in_progress,needs_you,on_hold,ready,recent" ]
-  [ "$(jq -c .counts <<<"$j")" = '{"needs_you":5,"in_progress":2,"on_hold":2,"ready":2,"recent":1}' ]
+  [ "$(jq -c .counts <<<"$j")" = '{"needs_you":6,"in_progress":2,"on_hold":2,"ready":1,"recent":1}' ]
   [ "$(jq -r .pr_enrichment.enabled <<<"$j")" = false ]
   [ "$(jq -r '.lanes.needs_you[0] | [.id,.title,.project,.last_event] | join("|")' <<<"$j")" = "t-decision|Task t-decision|todo-cli|decision: pick option A or B (recommend A)" ]
   # the page: self-contained, no external scripts, styles or fonts
@@ -367,7 +379,7 @@ start_exposed() {
   # a cookie jar does what a browser does
   local jar="$BATS_TEST_TMPDIR/jar"
   [ "$(code -L -c "$jar" -b "$jar" "$URL/?token=$t")" = 200 ]
-  [ "$(get -b "$jar" "$URL/api/dashboard" | jq -r .counts.needs_you)" = 5 ]
+  [ "$(get -b "$jar" "$URL/api/dashboard" | jq -r .counts.needs_you)" = 6 ]
   [ "$(get -b "$jar" "$URL/task/t-report/report.md")" = "# Report" ]
   [ "$(code -b "$jar" "$URL/task/t-report/meta.json")" = 404 ]
   # with the token, any Host works: the name another device uses for this machine
@@ -592,7 +604,7 @@ start_exposed() {
   need_python
   case "${OSTYPE:-}" in msys*|cygwin*) skip "a native Windows python cannot run the bash fake gh" ;; esac
   use_fake gh
-  fixture t-review subagent <<<"100 done: https://github.com/acme/todo-cli/pull/8"
+  printf '%s\n' "100 done: https://github.com/acme/todo-cli/pull/8" "50 note: accepted" | fixture t-review subagent
   export FAKE_GH_STATES="$BATS_TEST_TMPDIR/gh.json"
   echo '{"https://github.com/acme/todo-cli/pull/8": {"state":"OPEN","reviewDecision":"REVIEW_REQUIRED","isDraft":false}}' >"$FAKE_GH_STATES"
   start_daemon
@@ -650,7 +662,7 @@ EOF2
   [ "$status" -eq 0 ]
   [[ "$output" != *$'\e['* ]]   # piped: no color
   # the same lanes, counts and order as dashboard --json
-  [ "$(grep -E '^[A-Z]' <<<"$output" | tr '\n' '|')" = "Needs you (6)|In progress (2)|On hold (2)|Ready for you (2)|Recently finished (1)|" ]
+  [ "$(grep -E '^[A-Z]' <<<"$output" | tr '\n' '|')" = "Needs you (7)|In progress (2)|On hold (2)|Ready for you (1)|Recently finished (1)|" ]
   local want got
   want="$(cr dashboard --json | jq -r '.lanes[][] | .short_id // "-"' | tr '\n' ' ')"
   got="$(grep -E '^  [^ ]' <<<"$output" | grep -v '^  none$' | awk '{print $1}' | tr '\n' ' ')"
