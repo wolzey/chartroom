@@ -4,7 +4,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { HOME, PANE_PROPS, XO_WORLD, install, loadSkill, panelCommand, start, startXo, statusJson } from './world'
+import { HOME, PANE_PROPS, XO_WORLD, install, loadSkill, panelCommand, start, startXo, statusJson, submitPrompt } from './world'
 
 const mountPane = ($: Engine, width = 90, over = {}) =>
   $.ui.mount({ plugin: 'chartroom-panel', surface: 'terminal', component: 'Pane', requestId: 'chartroom-panel', props: PANE_PROPS(width, over) })
@@ -41,9 +41,52 @@ test('auto-shows when the XO skill loads — in any directory, not tied to the h
 
 test('the legacy captain skill also triggers auto-show', async ($, on) => {
   const w = install(on, XO_WORLD())
-  await startXo($, '/srv/another-repo') // startXo loads chartroom; here we also check captain
+  await start($, '/srv/another-repo')
+  await loadSkill($, 'captain')
   await w.clock.settle()
   expect(w.opens.map(o => o.id)).toEqual(['chartroom-panel'])
+})
+
+test('prompt-submitting /chartroom auto-shows even when skill.prompt is preempted by another plugin', async ($, on) => {
+  // The real bug: a builtin plugin's skill.prompt handler runs first and sends the event past ours.
+  // Here skill.prompt is never delivered to us; the submitted slash command still triggers auto-show.
+  const w = install(on, XO_WORLD())
+  await start($, '/srv/project-repo')
+  await w.clock.settle()
+  expect(w.opens).toEqual([])
+  await submitPrompt($, '/chartroom')
+  await w.clock.settle()
+  expect(w.opens.map(o => o.id)).toEqual(['chartroom-panel'])
+})
+
+test('the Skill tool loading chartroom auto-shows the panel', async ($, on) => {
+  const w = install(on, XO_WORLD())
+  await start($, '/srv/project-repo')
+  await w.clock.settle()
+  await $.tool.call({ tool: 'Skill', skill: 'chartroom' })
+  await w.clock.settle()
+  expect(w.opens.map(o => o.id)).toEqual(['chartroom-panel'])
+})
+
+test('dedupe: several XO triggers for one invocation auto-show the panel exactly once', async ($, on) => {
+  const w = install(on, XO_WORLD())
+  await start($, '/srv/project-repo')
+  await w.clock.settle()
+  await loadSkill($) // skill.prompt
+  await submitPrompt($, '/chartroom') // prompt.submit
+  await $.tool.call({ tool: 'Skill', skill: 'chartroom' }) // Skill tool
+  await w.clock.settle()
+  expect(w.opens.map(o => o.id)).toEqual(['chartroom-panel']) // one open, one pane
+})
+
+test('an ordinary prompt submit (or /continue) does not auto-show the panel', async ($, on) => {
+  const w = install(on, XO_WORLD())
+  await start($, '/srv/project-repo')
+  await w.clock.settle()
+  await submitPrompt($, 'just a normal message')
+  await submitPrompt($, '/continue 108a') // not an XO skill
+  await w.clock.settle()
+  expect(w.opens).toEqual([])
 })
 
 test('inert in a crew worktree even when the XO skill loads', async ($, on) => {

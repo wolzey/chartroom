@@ -43,8 +43,11 @@ are stable from 0.1.0.
   the session becomes the XO (the `/chartroom` or legacy `/captain` skill loads, via `skill.prompt`)
   in any directory, so running the XO from a project repo works; the home for reading `status` is
   still resolved through `chartroom doctor`. It stays inert in crew workers (`CHARTROOM_TASK` /
-  `worktrees`) and `-p` runs, and `/chartroom-panel on` works in any eligible session.
-  Installs alongside `crew-view`; they share no command.
+  `worktrees`) and `-p` runs, and `/chartroom-panel on` works in any eligible session. The auto-show
+  intent is caught by three deduped triggers — `skill.prompt`, the `prompt.submit` of the
+  `/chartroom`/`/captain` command, and the `Skill` tool call — so it still fires when a builtin
+  plugin's `skill.prompt` handler runs first and sends the event past ours (`cc-plugin-sec-default`
+  does). Installs alongside `crew-view`; they share no command.
 - Relays between homes: XO-to-XO messages on one machine, with no daemon. `chartroom relay
   <home> [--re <id>] [--project P] [--from <this home>] <message|->` appends one record to the
   other home's mailbox, `relays/inbox.ndjson`, and writes nothing else there; a copy goes to this

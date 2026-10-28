@@ -82,6 +82,7 @@ export function install(on: On, world: World) {
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', () => ({ sessionId: 'test-session' }))
   on('skill.prompt', ($, e) => ({ text: e.text }))
+  on('tool.call', () => ({ result: {} }))
   // The engine's own pane beneath the plugin: what a pass-through draws.
   on('ui.render', ($, e) => {
     const { Box, Text } = $.ui.resolve(e)
@@ -176,6 +177,11 @@ export async function start($: Engine, cwd = HOME, isInteractive = true) {
 /** Loads the XO skill (the chartroom/captain command, the Skill tool, a preload) — the auto-show trigger. */
 export async function loadSkill($: Engine, skill = 'chartroom') {
   return $.skill.prompt({ skill, text: `the ${skill} skill` })
+}
+
+/** Submits a prompt as the composer does, filling the engine-set fields the kit's type requires. */
+export async function submitPrompt($: Engine, text: string, command?: { name: string; args: string }) {
+  return $.prompt.submit({ text, wait: false, origin: { kind: 'composer' }, ...(command ? { command } : {}) })
 }
 
 /** Starts a session and makes it the XO by loading the skill (how the panel normally comes up). */
