@@ -22,7 +22,10 @@ are stable from 0.1.0.
   runs `chartroom watch`. `/chartroom-panel [on|off|toggle|refresh|next|prev|pick <id>]` controls
   it (it never shadows `/chartroom`); the pane takes the keyboard on demand, the arrows walk the
   tasks and Enter brings one into the chat by pre-filling `/continue <short_id>` (never
-  submitting), Esc hands the keys back. Installs alongside `crew-view`; they share no command.
+  submitting), Esc hands the keys back. The pane opens with a transparent background, so it blends
+  with the chat transcript instead of sitting in the engine's default grey docked-pane surface (a
+  theme-safe choice: transparent shows the terminal's own background in a dark or light theme
+  alike). Installs alongside `crew-view`; they share no command.
 - Relays between homes: XO-to-XO messages on one machine, with no daemon. `chartroom relay
   <home> [--re <id>] [--project P] [--from <this home>] <message|->` appends one record to the
   other home's mailbox, `relays/inbox.ndjson`, and writes nothing else there; a copy goes to this

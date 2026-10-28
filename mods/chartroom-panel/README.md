@@ -24,7 +24,11 @@ tasks needing the commander's input set apart from the ones being worked on.
 
 The frame, the title and the right-hand dock are the engine's: Claude Code docks a pane beside
 the transcript in fullscreen (from 110 columns), so the "right-anchored bordered box" is the dock
-itself — the mod draws the contents, never its own border.
+itself — the mod draws the contents, never its own border. The pane opens with a **transparent
+background** (`$.ui.open({ backgroundColor: 'transparent' })`), so the whole body — header through
+footer, and the empty area below the rows — blends with the chat transcript instead of sitting in
+the engine's default grey docked-pane surface. Transparent is theme-safe: it shows the terminal's
+own background in a dark or a light theme alike, with no hardcoded colour to break either.
 
 ## What it shows
 

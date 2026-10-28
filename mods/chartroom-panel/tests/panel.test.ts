@@ -17,6 +17,7 @@ test('auto-shows at the home: registers the command, opens the pane, polls, draw
   expect(w.commands).toEqual(['chartroom-panel'])
   expect(w.opens.map(o => o.id)).toEqual(['chartroom-panel'])
   expect(w.opens[0]?.focus).toBeUndefined() // auto-show never grabs the keyboard
+  expect(w.opens[0]?.backgroundColor).toBe('transparent') // blends with the chat, no grey box
   // Every status read names this session's home (the doctor probe runs before home is known).
   const statusHomes = w.runs.map((r, i) => (r[1] === 'status' ? w.homes[i] : null)).filter(h => h !== null)
   expect(statusHomes.length).toBeGreaterThan(0)

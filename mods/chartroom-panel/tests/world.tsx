@@ -60,7 +60,7 @@ export function install(on: On, world: World) {
   const runs: string[][] = []
   const homes: (string | undefined)[] = []
   const commands: string[] = []
-  const opens: { id: string; focus?: true }[] = []
+  const opens: { id: string; focus?: true; backgroundColor?: string }[] = []
   const closes: string[] = []
   const copies: string[] = []
   const fills: string[] = []
@@ -103,7 +103,7 @@ export function install(on: On, world: World) {
     return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('ui.open', ($, e) => {
-    opens.push({ id: e.id, focus: e.focus })
+    opens.push({ id: e.id, focus: e.focus, backgroundColor: e.backgroundColor })
     const existing = world.panes.find(p => p.id === e.id)
     if (existing) {
       existing.isShown = true
