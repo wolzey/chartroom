@@ -234,6 +234,22 @@ EOF
   [ "$status" -ne 0 ]
 }
 
+@test "event --detail: the text stays the headline and the rest is its Details part, on the same one line" {
+  id="$(new_task --backend command --command "$STUB {id}")"
+  cr event "$id" decision --detail "Options: (1) RECOMMENDED retry; (2) roll back. Report: report.md" "Deploy failed on step 3: pick a fix"
+  cr event "$id" blocked --breaking --detail $'two\nlines' "Prod is down."
+  cr event "$id" progress "no detail, as before"
+  [ "$(grep -c . "$CHARTROOM_HOME/tasks/$id/events.log")" -eq "$(grep -cE '^[0-9TZ:-]{20} [a-z]+: ' "$CHARTROOM_HOME/tasks/$id/events.log")" ]
+  run tail -3 "$CHARTROOM_HOME/tasks/$id/events.log"
+  [[ "${lines[0]}" == *" decision: Deploy failed on step 3: pick a fix. Details: Options: (1) RECOMMENDED retry; (2) roll back. Report: report.md" ]]
+  [[ "${lines[1]}" == *" blocked: [breaking] Prod is down. Details: two lines" ]]
+  [[ "${lines[2]}" == *" progress: no detail, as before" ]]
+  run cr event "$id" progress --detail
+  [ "$status" -ne 0 ]; [[ "$output" == *"--detail needs its text"* ]]
+  run cr event "$id" progress --detail "x"
+  [ "$status" -ne 0 ]; [[ "$output" == *"usage: chartroom event <id> <kind> [--breaking] [--detail <details>] <text>"* ]]
+}
+
 @test "hooks: a turn end without a report wakes; after a report it does not; prompts always wake" {
   id="$(new_task --backend command --command "$STUB {id}")"
   cr event "$id" note "dispatched via tmux:claude"
@@ -349,6 +365,9 @@ EOF
   b="$CHARTROOM_HOME/tasks/$id/brief.md"
   grep -q "CHARTROOM_HOME=$CHARTROOM_HOME $CHARTROOM event $id" "$b"
   grep -q "Do NOT push" "$b"
+  # and how to write an event: a headline first, the labelled parts, the rest in report.md
+  grep -q "How to write one: a headline first, at most ~140 characters" "$b"
+  grep -q 'Options: (1) ... (2) ...' "$b"
 }
 
 @test "dispatch returns at once even when its output is captured (worker detached)" {
@@ -386,8 +405,9 @@ shorts() { cr status --all --json | jq -r 'map("\(.id)=\(.short_id)") | join(" "
   [ "$(cr status --all --json | jq -r '.[] | select(.id == "old-7f3a") | .short_id')" = d-7f3a ]
   # every short id is distinct
   [ "$(cr status --all --json | jq '[.[].short_id] | (unique | length) == length')" = true ]
-  # status --json keeps every existing field and only adds short_id (and focus mode's breaking, in_focus, held)
-  [ "$(cr status --json | jq -c '.[0] | keys - ["breaking", "in_focus", "held"]')" = '["backend","branch","closed","created","dispatched","has_report","id","kind","last","last_at","live","project","short_id","state","title","updated","waiting_on","waiting_since","waiting_until"]' ]
+  # status --json keeps every existing field and only adds short_id (and focus mode's breaking,
+  # in_focus, held, and the radar stacks' base and mentions)
+  [ "$(cr status --json | jq -c '.[0] | keys - ["breaking", "in_focus", "held", "base", "mentions"]')" = '["backend","branch","closed","created","dispatched","has_report","id","kind","last","last_at","live","project","short_id","state","title","updated","waiting_on","waiting_since","waiting_until"]' ]
 }
 
 @test "short ids: an id whose suffix would start with a dash grows past it" {

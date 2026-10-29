@@ -330,6 +330,10 @@ brief_report_steps() { # <id>
    Only for a production outage, an active security exposure or data loss, add \`--breaking\`
    after the kind (\`event $id blocked --breaking "<what>"\`; decision, blocked or failed): it
    reaches the commander even while they focus on another project.
+   How to write one: a headline first, at most ~140 characters, saying what happened and what
+   is needed. Details follow under labels the dashboard shows as blocks: \`Cause:\`,
+   \`Options: (1) ... (2) ...\` (mark one RECOMMENDED), \`Need:\`, \`Report:\`; or pass them as
+   \`--detail "<the rest>"\`. Anything longer than a few lines goes in report.md.
 3. Before \`done\` or \`failed\`, write $d/report.md containing: outcome; what changed
    (files, commits) or what you found; validation you actually ran with real results (never claim
    a check you did not run); risks and open questions.
@@ -602,18 +606,34 @@ cmd_dispatch() {
 # ---------------------------------------------------------------- event / hook / status / peek
 
 # --breaking (a production outage, an active security exposure, data loss) starts the text
-# with "[breaking] ", which focus mode never holds (lib/focus.sh); the line format is unchanged.
+# with "[breaking] ", which focus mode never holds (lib/focus.sh). --detail "<the rest>" keeps the
+# text a headline and appends the rest as its "Details:" part, on the same line: the line format
+# is unchanged either way, so every reader of events.log reads it as before.
 cmd_event() {
-  [[ $# -ge 3 ]] || die "usage: chartroom event <id> <kind> [--breaking] <text>"
-  local id="$1" kind="$2" mark=""; shift 2
+  local usage="usage: chartroom event <id> <kind> [--breaking] [--detail <details>] <text>"
+  [[ $# -ge 3 ]] || die "$usage"
+  local id="$1" kind="$2" mark="" detail="" text; shift 2
   need_task "$id"
   [[ "$kind" =~ ^($EVENT_KINDS)$ ]] || die "event kind must be one of: ${EVENT_KINDS//|/, }"
-  if [[ "$1" == --breaking ]]; then
-    [[ "$kind" =~ ^(decision|blocked|failed)$ ]] || die "--breaking goes with decision, blocked or failed"
-    shift; mark="[breaking] "
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --breaking)
+        [[ "$kind" =~ ^(decision|blocked|failed)$ ]] || die "--breaking goes with decision, blocked or failed"
+        shift; mark="[breaking] " ;;
+      --detail)
+        [[ $# -ge 2 && -n "$2" ]] || die "--detail needs its text"
+        detail="$2"; shift 2 ;;
+      *) break ;;
+    esac
+  done
+  [[ $# -ge 1 ]] || die "$usage"
+  text="$*"
+  if [[ -n "$detail" ]]; then
+    text="${text%"${text##*[![:space:]]}"}"
+    [[ "$text" =~ [.!?]$ ]] || text+="."
+    text+=" Details: $detail"
   fi
-  [[ $# -ge 1 ]] || die "usage: chartroom event <id> <kind> [--breaking] <text>"
-  log_event "$id" "$kind" "$mark$*"
+  log_event "$id" "$kind" "$mark$text"
 }
 
 # Agent-native signals -> events. Called by Claude Code hooks (JSON on stdin) and by
@@ -687,14 +707,18 @@ state_of() { # derived from the last wake-worthy event; a restart re-derives the
 # describe the open `waiting` event whatever the state, and are null without one.
 # short_id is the task's short id (short_ids_json), which `resolve` maps back.
 # breaking: the state comes from a `--breaking` report; in_focus/held: focus mode's marks
-# (lib/focus.sh; in focus and not held while focus is off).
+# (lib/focus.sh; in focus and not held while focus is off). base: the branch it was cut from;
+# mentions: the other open tasks its brief or events name by id (a handoff, a follow-up), which
+# the radar stacks it with (lib/dashboard/stacks.js); [] for a closed task.
 status_rows() { # [--all] [--id ID]
-  local all=0 only="" id st d dirs live lastline wait shorts focus brk
+  local all=0 only="" id st d dirs live lastline wait shorts focus brk open_ids ment
   while [[ $# -gt 0 ]]; do
     case "$1" in --all) all=1; shift ;; --id) only="$2"; all=1; shift 2 ;; *) shift ;; esac
   done
   shorts="$(short_ids_json)"; focus="$(focus_json)"
   shopt -s nullglob
+  local metas=("$CR_HOME"/tasks/*/meta.json)
+  open_ids=""; [[ ${#metas[@]} -gt 0 ]] && open_ids="$(jq -r 'select((.closed // "") == "") | .id' "${metas[@]}" 2>/dev/null || true)"
   dirs=("$CR_HOME"/tasks/*/)
   [[ -n "$only" ]] && dirs=("$CR_HOME/tasks/$only/") # one task (resolve, show): read only its record
   for d in "${dirs[@]}"; do
@@ -713,12 +737,15 @@ status_rows() { # [--all] [--id ID]
     [[ "$st" == working && "$live" == blocked ]] && st="awaiting-input"
     lastline="$(grep -vE ' note: ' "$d/events.log" 2>/dev/null | tail -1 || true)"
     brk=false; breaking_of "$id" "$st" && brk=true
+    ment=""
+    [[ "$st" != closed && -n "$open_ids" ]] &&
+      ment="$(cat "$d/brief.md" "$d/events.log" 2>/dev/null | grep -owF -f <(printf '%s\n' "$open_ids") | grep -vxF -- "$id" | sort -u || true)"
     jq -c --arg st "$st" --arg live "$live" --arg last "${lastline:21}" --arg last_at "${lastline:0:20}" \
-      --argjson wait "${wait:-null}" --argjson shorts "$shorts" --argjson focus "$focus" --argjson brk "$brk" \
+      --argjson wait "${wait:-null}" --argjson shorts "$shorts" --argjson focus "$focus" --argjson brk "$brk" --arg ment "$ment" \
       --argjson has_report "$([[ -s "$d/report.md" ]] && echo true || echo false)" \
       "$FOCUS_JQ"'{id,title,kind,backend:(if (.backend//"")=="" then "auto" else .backend end),project:((.project//"")|rtrimstr("/")|split("/")|last),
         state:$st,live:$live,created,last:$last,last_at:(if $last_at=="" then null else $last_at end),
-        updated,dispatched,closed,branch,has_report:$has_report,
+        updated,dispatched,closed,branch,base:(.base // null),mentions:($ment | split("\n") | map(select(length > 0))),has_report:$has_report,
         waiting_on:($wait.on // null),waiting_until:($wait.until // null),waiting_since:($wait.since // null),
         short_id:($shorts[.id] // .id),breaking:$brk}
        | . + focus_marks($focus; "task"; $brk)' "$d/meta.json"
@@ -1320,12 +1347,13 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           to its mailbox; "delivered" only once it is read)
   chartroom stop <id>                     interrupt a worker
   chartroom attach <id>                   open a session worker's terminal (herdr/cmux/tmux)
-  chartroom event <id> <kind> [--breaking] <text>
+  chartroom event <id> <kind> [--breaking] [--detail <details>] <text>
                                           append a status event (workers use this; kinds: progress,
                                           waiting, decision, blocked, done, failed). --breaking
                                           (decision, blocked, failed; a production outage, an
                                           active security exposure, data loss) is never held by
-                                          focus mode
+                                          focus mode. --detail keeps <text> a headline and adds the
+                                          rest as its "Details:" part, on the same line
   chartroom status [--json] [--all]       fleet view, derived from disk + live backends
   chartroom status|board|todo|inbox list|relay list ... --all-homes
                                           the same, read-only, in every home on this machine,

@@ -214,7 +214,16 @@ hot or slow, run the `sweep` skill (`chartroom sweep --apply`, one line to relay
 The dashboard shows the same fleet in a browser: `waiting` tasks under In progress, overdue
 ones under On hold. `chartroom dashboard open` (or the `dashboard` skill, `/dashboard`) opens
 it, starting it if needed; `chartroom board` prints the same lanes in the terminal, short id
-first.
+first. Every task has a page of its own there, `/task/<home>/<id>`: the commander's intent, the
+latest decision or blocker, every event as a timeline, `report.md` rendered, and its pane. Point
+the commander at it rather than pasting a long event.
+
+**How an event should read** (the brief's protocol asks workers for it; hold your own steers to
+it too, since the timeline shows them as "XO → worker"): a headline first, at most ~140
+characters, saying what happened and what is needed. Details follow under labels the dashboard
+shows as blocks: `Cause:`, `Options: (1) ... (2) ...` with one marked RECOMMENDED, `Need:`,
+`Report:`. A worker whose events are walls of text gets one steer asking for the headline and
+labels, with the long part in report.md.
 
 Answer a worker with `chartroom steer <id> "<answer>"`. Live backends type it in (or write it
 to the stream) and confirm it was taken. Between-runs backends refuse while the worker is

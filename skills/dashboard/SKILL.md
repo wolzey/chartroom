@@ -18,7 +18,9 @@ opens it in the default browser. Reply with one line: the URL it printed. If it 
 its error in one line; do not retry, stop, or restart anything on your own.
 
 When the commander asks to see every agent across machines, or the radar, give the same URL
-with `radar` appended to its path (`http://127.0.0.1:4517/radar`).
+with `radar` appended to its path (`http://127.0.0.1:4517/radar`). For one task on a page of
+its own (its intent, events, report and pane, printable), append `task/<home>/<id>` instead,
+with `?m=<machine>` for another machine's task; the radar's panel and the board's cards link it.
 
 Only when the commander asks to see the board from another device: tell them to run
 `chartroom dashboard stop` and then `chartroom dashboard open --expose` (or `--host <address>`),
