@@ -384,6 +384,11 @@ def make_handler(board, port, page, viewer, host, use_token, home):
                 art = ARTIFACT_FILE.match(parts[4])
                 f = os.path.join(board.home, "tasks" if parts[1] == "task" else "inbox", parts[2], "artifacts", parts[4])
             if art and art.group(2) == "pdf":
+                # The one request that starts something (a Chrome): never for another site's page,
+                # which could ask for it without the token on loopback (an <img> to this URL).
+                # Browsers say where a request comes from; curl and older browsers say nothing.
+                if self.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none"):
+                    return self.send(403, "a PDF is printed only from this dashboard\n", "text/plain; charset=utf-8")
                 # printed from the page beside it, never a .pdf file that happens to be there
                 src = f[:-4] + ".html"
                 if not (os.path.isfile(src) and page_sidecar(src)):

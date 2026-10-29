@@ -287,7 +287,8 @@ How it is built, and what it promises:
   dashboard itself (`frame-ancestors 'self'`). The viewer frames it with the `sandbox` attribute
   too, so its links open in a new tab and nothing in it can reach the dashboard. Its PDF
   (`.../<slug>.pdf`) is printed on request by `chartroom artifact pdf`, one at a time, and
-  nothing else ever runs a page.
+  never for a request another site's page makes (a browser's `Sec-Fetch-Site` says so); nothing
+  else ever runs a page.
 - **Same answer as the CLI.** The lanes come from `chartroom dashboard --json`, built from the
   rows `chartroom status` uses, so the page and the terminal never disagree.
 - **PR states are optional.** If `gh` is on your PATH, the server looks up the state of the PR

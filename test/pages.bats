@@ -71,6 +71,7 @@ EOF
   [ "$(cr artifact show "$ref" --path)" = "$f" ]
   [ "$(cr artifact show "$ref.html" --path)" = "$f" ]
   cr artifact show "$ref" >"$BATS_TEST_TMPDIR/shown"; cmp "$BATS_TEST_TMPDIR/shown" "$f"
+  CHARTROOM_CLIPBOARD=- cr artifact copy "$ref" >"$BATS_TEST_TMPDIR/copied"; cmp "$BATS_TEST_TMPDIR/copied" "$f"
   events "$id" | grep -qE ' note: artifact q3-review-draft \(page\) added: Q3 <review> "draft"$'
   # from stdin too (no images to read there: a relative src is left, and said)
   run cr artifact add "$id" --kind page --title "From stdin" - <<<'<p>hi</p><img src="x.png">'
@@ -360,8 +361,15 @@ start_daemon() {
   [ "$(sed -n 1p "$BATS_TEST_TMPDIR/dl.pdf")" = "%PDF-1.4" ]
   grep -qF '<h2>Findings</h2>' "$BATS_TEST_TMPDIR/dl.pdf"
   grep -q '^chrome --headless=new ' "$FAKE_LOG"
-  # not a page, or no page at all: 404, and nothing printed
+  # the viewer's own fetch says same-origin, a typed URL none; another site's page (an <img> to
+  # this URL, which needs no token on loopback) never starts a print
+  [ "$(code -H 'Sec-Fetch-Site: same-origin' "$URL/task/$ID/artifacts/weekly-report.pdf")" = 200 ]
+  [ "$(code -H 'Sec-Fetch-Site: none' "$URL/task/$ID/artifacts/weekly-report.pdf")" = 200 ]
   local n; n="$(grep -c '^chrome ' "$FAKE_LOG")"
+  [ "$(code -H 'Sec-Fetch-Site: cross-site' "$URL/task/$ID/artifacts/weekly-report.pdf")" = 403 ]
+  [ "$(code -H 'Sec-Fetch-Site: same-site' "$URL/task/$ID/artifacts/weekly-report.pdf")" = 403 ]
+  [[ "$(get -H 'Sec-Fetch-Site: cross-site' "$URL/task/$ID/artifacts/weekly-report.pdf")" == "a PDF is printed only from this dashboard" ]]
+  # not a page, or no page at all: 404; and none of these printed anything
   [ "$(code "$URL/task/$ID/artifacts/plain.pdf")" = 404 ]
   [ "$(code "$URL/task/$ID/artifacts/nope.pdf")" = 404 ]
   [ "$(grep -c '^chrome ' "$FAKE_LOG")" -eq "$n" ]

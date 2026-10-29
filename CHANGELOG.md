@@ -33,7 +33,8 @@ are stable from 0.1.0.
 - The dashboard serves pages: a **pages** link in the header lists them (`/pages`, from the new
   `/api/pages`), and a page's chip on a card opens its viewer (`/pages/<task|inbox>/<id>/<slug>`,
   `lib/dashboard/pages.html`), which shows the page in a sandboxed frame with **Download PDF** (the
-  same `artifact pdf`, one print at a time, as an attachment) and **open alone**. A page's HTML is
+  same `artifact pdf`, one print at a time, as an attachment, and never for a request another site's
+  page makes, by its `Sec-Fetch-Site`) and **open alone**. A page's HTML is
   served only when its sidecar says it is a page, under its own policy: `sandbox` (so it runs no
   scripts and has an opaque origin even when opened alone), `default-src 'none'` with inline
   styles and `data:` images only, and `frame-ancestors 'self'` with `X-Frame-Options:
