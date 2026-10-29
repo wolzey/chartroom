@@ -55,6 +55,8 @@ never from conversation memory. (If `chartroom` is not on PATH, use
 
    **Ready**: finished work waiting for the commander's word (review, merge, or PR). One line
    each: the outcome, the risk, the evidence ("tests pass", "3 files"), and the full PR URL if there is one.
+   A task with an open `page` artifact (a report to read) names its ref too: `read: <ref>`
+   (`chartroom artifact open <ref>` shows it).
 
    **Under way**: one line per project, saying what is being worked on. No progress chatter.
    A `waiting` task is under way: say what it waits on and until when (`waiting_on`,

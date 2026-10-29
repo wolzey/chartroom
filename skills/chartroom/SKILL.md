@@ -142,7 +142,8 @@ commander in a line, in outcome terms: "Got it. Someone's on the flaky login tes
 
 **6. Supervise.** See Supervision. Stay quiet while work is under way.
 
-**7. Verify** before reporting `done`. Read `report.md`. For ship work, check the branch yourself
+**7. Verify** before reporting `done`. Read `report.md` (and glance at the page, if the worker
+made one, so what the commander reads matches it). For ship work, check the branch yourself
 (read-only): `git -C <worktree> log --oneline <base>..HEAD`, `git diff --stat`, and confirm
 that the validation the report names was actually run and passed. If the evidence is thin, steer
 the worker to produce it. Don't escalate that to the commander.
@@ -265,6 +266,22 @@ others read between steps. `close` only marks it closed; its directory is never 
   dashboard card shows it as a chip that opens and copies it, and `chartroom artifact copy <ref>`
   copies it. A runbook is the commands themselves, ready to paste. To revise, `add` the same
   title again. Once the commander says it went out or ran, `chartroom artifact done <ref>`.
+- **Pages.** A report the commander will read (findings, a review, an audit, a comparison) is
+  also a page, not a Claude artifact or a wall of chat: HTML they open in the dashboard's
+  viewer and print to PDF. `report.md` stays your record; the page is its readable view. The
+  brief tells workers to make one (`chartroom artifact add <id> --kind page --title "<one line>"
+  --description "<one line>" <file>`) and to name its ref in their `done` event; make one
+  yourself the same way when you write something long for them. The file is an HTML body:
+  headings, lists, tables and the classes `chartroom artifact template --body` shows, which
+  `add` wraps in the default page (light and dark, print styles); a whole document is kept as
+  written. No scripts and nothing loaded from elsewhere (neither would run or load); images as
+  files beside it, which `add` inlines. Never put a secret in a page: `add` refuses one that
+  looks like it holds one (`--no-secret-check` only for a false alarm). Give the commander the
+  ref and a line: `chartroom artifact open <ref>` shows it, `chartroom artifact pdf <ref> --out
+  <file>` prints it (headless Chrome; `doctor` says whether there is one), and the dashboard's
+  Pages list has every page with a Download PDF button. `chartroom artifact publish` is the
+  hook for hosting a page later and refuses for now: nothing is uploaded. Once the commander
+  has read a page, `chartroom artifact done <ref>`.
 - **The commander's todo list.** `chartroom todo` is the commander's own list of next steps,
   made from your records: the open Waiting inbox items, the open message and runbook artifacts,
   and the tasks in `decision`, `blocked` or `ready`. It shows under the crew view's band in

@@ -19,7 +19,8 @@ not on PATH, use `../../bin/chartroom` relative to this skill's directory.)
      `plan.md` only if the decision is a plan gate.
    - Either: its open drafts, `chartroom artifact list <id>`. Give each one's ref and title in
      your answer (`chartroom artifact copy <ref>` copies it), and `chartroom artifact done
-     <ref>` once the commander says it went out or ran.
+     <ref>` once the commander says it went out or ran. A `page` is a report to read: offer
+     `chartroom artifact open <ref>` (the dashboard's viewer) or `chartroom artifact pdf <ref>`.
 3. **Bring the commander to the point**, by state:
    - `decision`, `blocked`, `awaiting-input`, or an inbox item: ask that one question, in plain
      terms, with your agent's question tool (AskUserQuestion in Claude Code, its `header` the

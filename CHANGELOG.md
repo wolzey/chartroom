@@ -7,6 +7,46 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- Pages: reports the commander reads in the dashboard and prints to PDF, instead of Claude
+  artifacts. `chartroom artifact add <id> --kind page --title T [--description D] <file|->` keeps
+  one self-contained HTML file, `tasks/<id>/artifacts/<slug>.html` (an inbox item's under
+  `inbox/<i-xxxx>/artifacts/`), beside the usual sidecar, which now also holds `description` and
+  `task`. A fragment is wrapped in the default page (`templates/page.html`, `templates/page.css`:
+  the title, description, project and date on top; light and dark from the reader's setting; print
+  styles with page margins, repeated table headers, unsplit rows and wrapped code; callouts,
+  badges, key-number tiles); a whole document is kept as written. Either way the page policy goes
+  first in it (no scripts, nothing fetched; inline styles and `data:` images only), images given as
+  files beside the source are inlined as `data:` URIs, and scripts or references to other sites are
+  warned about. A page that looks like it holds a secret (the relay check) is refused and nothing
+  is saved; `--no-secret-check` is for a false alarm. Refs, `list`, `show`, `copy` and `done` work
+  as for the other kinds; a slug that changes kind keeps one text file. New subcommands:
+  `artifact open <ref>` (the dashboard's viewer, starting the dashboard if it is not up),
+  `artifact export <ref> [--out FILE|DIR]` (the file itself), `artifact pdf <ref> [--out FILE|DIR]
+  [--paper SIZE] [--landscape]` (headless Chrome, Chromium or Edge: `CHARTROOM_CHROME`, else PATH,
+  else the usual app locations; a copy of the page with the policy first, in a throwaway profile
+  that never touches the macOS keychain or the network by itself, with no Chrome left running;
+  paper from `CHARTROOM_PDF_PAPER`, default letter; `CHARTROOM_PDF_TIMEOUT`, default 60s), and
+  `artifact template [--body]` (the default page around a sample body). `artifact publish <ref>
+  --to <provider>` is the documented hook for hosting a page later (Vercel, or a link service of
+  our own): it refuses with "publishing is not configured" and uploads nothing. `doctor` reports
+  the Chrome it would print with (`pdf` in `--json`), or why there is none.
+- The dashboard serves pages: a **pages** link in the header lists them (`/pages`, from the new
+  `/api/pages`), and a page's chip on a card opens its viewer (`/pages/<task|inbox>/<id>/<slug>`,
+  `lib/dashboard/pages.html`), which shows the page in a sandboxed frame with **Download PDF** (the
+  same `artifact pdf`, one print at a time, as an attachment) and **open alone**. A page's HTML is
+  served only when its sidecar says it is a page, under its own policy: `sandbox` (so it runs no
+  scripts and has an opaque origin even when opened alone), `default-src 'none'` with inline
+  styles and `data:` images only, and `frame-ancestors 'self'` with `X-Frame-Options:
+  SAMEORIGIN`; its links open in a new tab. Behind the access token like the rest when exposed.
+- Workers make pages: the brief's protocol (launched and joined) tells a worker to make one when
+  the commander will read the result themselves, with the default template's rules, never a
+  secret in it, `report.md` still the XO's record, and the page's ref named in the `done` event.
+  The chartroom skill says the same for the XO, and `bearings` and `continue` name a task's page.
+
+### Changed
+- The open-artifact counts (`status`, `board`, the lanes JSON's `.artifacts`) count pages too:
+  `{open, message, runbook, note, page}`, and "1 page" on the status line. A page stays open until
+  `artifact done` (read); the todo list does not owe one.
 - `chartroom-panel`, a Claude Code mod (`mods/chartroom-panel`): the commander's live Chartroom
   fleet in a read-only pane beside the chat, the sibling of the Pi panel. It reads
   `chartroom status --json` only and shows the unfinished tasks — a row drops off when its `state`

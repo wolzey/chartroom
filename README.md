@@ -264,7 +264,8 @@ project a question is for at a glance), age, the last worker event, PR/MR links 
 `events.log` and `report.md`, and links that open the task's brief, report, plan and event log
 as plain text. A task or inbox card with open [artifacts](#artifacts-drafts-that-outlive-the-chat)
 (drafts for you to send or run) shows a chip for each: one click copies the text and opens it,
-with a copy button beside it. Approvals given in chat but not yet in a brief are listed under
+with a copy button beside it; a [page](#pages-reports-to-read-and-print)'s chip opens it in the
+viewer instead. The header's **pages** link lists every page. Approvals given in chat but not yet in a brief are listed under
 Needs you, and so are open [relays from other homes](#talking-between-homes) (for the XO to
 weigh; they are not cards). Above the lanes, a "Your next steps" strip shows [your todo list](#your-next-steps-the-todo-list):
 the first five items, each with its short id (a click copies `/continue <id>`).
@@ -274,10 +275,19 @@ How it is built, and what it promises:
 - **Loopback by default, read-only always.** A Python standard-library server (`python3`,
   nothing to install) bound to `127.0.0.1` unless you put it on the network (below). It answers
   `GET` only, serves just the page, the lanes JSON (`/api/dashboard`), the five task files
-  above and artifact texts, and has no endpoint that changes anything. On loopback it refuses requests whose
+  above, artifact texts and pages (the pages list and viewer at `/pages`, and its JSON at
+  `/api/pages`), and has no endpoint that changes anything. On loopback it refuses requests whose
   `Host` is not `127.0.0.1` or `localhost` (DNS rebinding) and needs no auth, because nothing
   off the machine can reach it.
 - **No external requests from the page.** CSS and JS are inline; no CDNs, fonts or analytics.
+- **Pages are untrusted.** A page is HTML a worker wrote, so it is served only from its own
+  route (`/task/<id>/artifacts/<slug>.html`, and only when its sidecar says it is a page), under
+  its own policy: `sandbox` (no scripts, an opaque origin, even when opened alone), nothing
+  fetched (`default-src 'none'`, inline styles and `data:` images only), and framed only by the
+  dashboard itself (`frame-ancestors 'self'`). The viewer frames it with the `sandbox` attribute
+  too, so its links open in a new tab and nothing in it can reach the dashboard. Its PDF
+  (`.../<slug>.pdf`) is printed on request by `chartroom artifact pdf`, one at a time, and
+  nothing else ever runs a page.
 - **Same answer as the CLI.** The lanes come from `chartroom dashboard --json`, built from the
   rows `chartroom status` uses, so the page and the terminal never disagree.
 - **PR states are optional.** If `gh` is on your PATH, the server looks up the state of the PR
@@ -483,7 +493,7 @@ chartroom artifact done 21ba/reply-to-the-review   # sent: it stops showing as o
 ```
 
 - **Kinds.** `message` is text to send, `runbook` is commands to run (written ready to paste),
-  `note` is anything else worth keeping.
+  `note` is anything else worth keeping, and `page` is a report to read, as HTML ([below](#pages-reports-to-read-and-print)).
 - **Refs** are `<id>/<slug>`: the task's short id or the inbox item's `i-xxxx` tag, as the
   dashboard shows them (a full task id works too), and a slug of the title (`--slug` picks
   another). The id alone works when it has one open artifact. Adding the same slug again
@@ -503,6 +513,55 @@ chartroom artifact done 21ba/reply-to-the-review   # sent: it stops showing as o
 
 The chartroom skill has the XO save anything it drafts for you to send or run as an artifact
 before showing it, and give you the ref, never the text in chat alone.
+
+### Pages: reports to read and print
+
+A long report (findings, a review, an audit) reads badly in a terminal. A page is that report as
+one HTML file, kept with its task, that you read in the dashboard and print to PDF, instead of
+a Claude artifact:
+
+```bash
+chartroom artifact add 21ba --kind page --title "Login audit" --description "What we found" audit.html
+chartroom artifact open 21ba/login-audit        # the dashboard's viewer, in the browser
+chartroom artifact pdf 21ba/login-audit --out ~/Desktop/login-audit.pdf   # --paper a4, --landscape
+chartroom artifact export 21ba/login-audit --out ~/Desktop   # the .html itself
+chartroom artifact template --body              # the sample body: the classes the default page styles
+```
+
+- **What `add` keeps.** One self-contained file, `tasks/<id>/artifacts/<slug>.html`, beside the
+  usual sidecar (which also holds the description and the task). A fragment (no `<html>` or
+  doctype) is wrapped in the default page (`templates/page.html` and `templates/page.css`): your
+  title, description, project and date on top; light and dark, following the reader's setting;
+  print styles with page margins, table headers repeated on each page, rows never split and code
+  wrapped rather than cut; components such as callouts, badges and a row of key numbers. A whole
+  document is kept as written. Either way the page policy goes first in it: no scripts, nothing
+  fetched, inline styles and `data:` images only. Images given as files beside the source
+  (`<img src="chart.png">`) are inlined as `data:` URIs; `add` says what it could not inline,
+  and warns about scripts or references to other sites, which would neither run nor load.
+- **Never a secret.** A page that looks like it holds one (a private key, a token, a
+  `password=` assignment) is refused and nothing is saved; `--no-secret-check` is only for a
+  false alarm. Pages may be shared or hosted later, so the brief tells workers to say where a
+  secret is kept instead.
+- **Who writes them.** The brief's protocol tells a worker to make a page when you will read the
+  result yourself, and to name its ref in its `done` event; `report.md` stays the record the XO
+  reads, the page its readable view. The XO makes one the same way when it writes something
+  long for you.
+- **In the dashboard.** The header's **pages** link lists every page (newest first; read ones,
+  marked `done`, on request), and a card's page chip opens it in the viewer: the page in a
+  sandboxed frame, with **Download PDF** and **open alone**. See [the dashboard](#dashboard)
+  for how it is served.
+- **PDF.** `pdf` prints with headless Chrome, Chromium or Edge: `CHARTROOM_CHROME` if set (a path
+  or a command name), else the first on `PATH`, else the usual app locations (`chartroom doctor`
+  says which, or why there is none). It prints a copy of the page with the policy first and
+  scripts blocked, in a throwaway profile, on letter paper unless `--paper` or
+  `CHARTROOM_PDF_PAPER` says otherwise, and replaces `--out` only once a PDF came out (default:
+  `<slug>.pdf` in the current directory). The viewer's button runs the same command.
+- **Hosting, later.** `chartroom artifact publish <ref> --to <provider>` is the one interface for
+  putting a page online (Vercel, or a link service of our own). Nothing is built yet: it refuses
+  with "publishing is not configured" and uploads nothing. A provider would upload the page's
+  single file and nothing else, check it for secrets again, record `{provider, url, at}` under
+  `published` in its sidecar, note it in the task's events and print the link; publishing stays
+  the commander's call (an outward-facing step, so a `decision` for a worker).
 
 ## Your next steps: the todo list
 
@@ -784,7 +843,8 @@ $CHARTROOM_HOME/                    default ~/.chartroom
   tasks/<id>/brief.md  report.md  plan.md  final.md
   tasks/<id>/events.log             one line per event
   tasks/<id>/artifacts/<slug>.md    a draft for the commander (message, runbook, note), verbatim,
-  tasks/<id>/artifacts/<slug>.json  with its title, kind, project, created, updated and done
+  tasks/<id>/artifacts/<slug>.html  or a page (kind page): one self-contained HTML file,
+  tasks/<id>/artifacts/<slug>.json  with its title, kind, description, task, project, created, updated and done
   inbox/<i-xxxx>/artifacts/         the same, for an inbox item
   relays/inbox.ndjson               relays from other homes' XOs, and this home's acks, one JSON record per line
   relays/outbox.ndjson              the relays this home sent
@@ -843,6 +903,10 @@ CLI flags may change before 1.0.
 - Interactive workers use your agent's own settings unless the task sets `--permission`.
 - A relay from another home is delivered, never acted on: chartroom runs nothing because one
   arrived, and the XO treats its text as data to weigh.
+- A page is crew-written HTML, so it is treated as untrusted everywhere: kept with a policy that
+  runs no scripts and fetches nothing, served sandboxed and framed only by the dashboard, and
+  printed with scripts blocked in a throwaway browser profile. `add` refuses one that looks like
+  it holds a secret, and nothing uploads a page (`publish` refuses until hosting is built).
 
 ## Configuration
 
@@ -874,6 +938,9 @@ to the config file.
 | `CHARTROOM_GH` | `gh` | the gh binary the dashboard uses for PR states |
 | `CHARTROOM_OPENER` | `open` / `xdg-open` (WSL: `wslview`, PowerShell; Git Bash: `start`) | command `dashboard open` runs with the URL |
 | `CHARTROOM_CLIPBOARD` | `pbcopy` / `wl-copy` / `xclip` / `xsel`, whichever is there | command `artifact copy` pipes the text into (split on spaces); `-` prints it instead |
+| `CHARTROOM_CHROME` | the first of `google-chrome`, `chromium`, `chrome`, `msedge` (and kin) on PATH, else the usual app locations | the Chrome or Chromium `artifact pdf` prints with: a path or a command name; when set, nothing else is tried |
+| `CHARTROOM_PDF_PAPER` | `letter` | the paper `artifact pdf` prints on: `letter`, `legal`, `ledger`, `tabloid`, `a3`, `a4`, `a5`, `b4`, `b5` (`--paper` overrides) |
+| `CHARTROOM_PDF_TIMEOUT` | `60` | seconds `artifact pdf` waits for Chrome before giving up |
 | `CHARTROOM_PLATFORM` | *(detected)* | `posix`, `wsl` or `msys` (Git Bash); override only if detection is wrong |
 | `CHARTROOM_HERDR_ANY_OS` | *(unset)* | `1` offers herdr on Git Bash, where its Windows preview is unverified |
 | `CHARTROOM_WAITING_GRACE_MINUTES` | `15` | a `waiting` worker turns `waiting-overdue` this long after its until-time |
@@ -911,6 +978,7 @@ through your forge's CLI.
 ```bash
 shellcheck -x -S warning bin/chartroom lib/*.sh lib/backends/*.sh install.sh scripts/*.sh test/stub-agent test/windows-smoke.sh test/fakes/*
 bats test/                 # no herdr/tmux/cmux/claude/codex needed: fakes and a stub agent
+CHARTROOM_TEST_REAL_CHROME=1 bats test/pages.bats   # also print one page with a real Chrome (opt-in: the rest use a fake)
 scripts/privacy-gate.sh    # no personal data in tracked files
 claude plugin test mods/crew-view   # the Claude Code mod's tests (verified on Claude Code 2.1.302 and 2.1.303)
 ```
