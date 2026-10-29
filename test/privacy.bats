@@ -85,6 +85,23 @@ setup() {
   [[ "$output" != *"author <"* ]]
 }
 
+@test "a listed collaborator's noreply passes as author, committer and trailer; any other email still fails" {
+  c="198639793+cbrannelly@users.noreply.github.com"
+  echo x >>"$R/a.txt"; git -C "$R" add -A
+  git -C "$R" -c user.name=cbrannelly -c user.email="$c" commit -qm "feat: by a collaborator" -m "Co-Authored-By: cbrannelly <$c>"
+  git -C "$R" commit -q --allow-empty -m "feat: paired with one" -m "Co-Authored-By: cbrannelly <$c>"
+  run "$GATE"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # the list is exact: the same name under another address, or another account's noreply, fails
+  e="cbrannelly@order""protection.com"
+  echo y >>"$R/a.txt"; git -C "$R" add -A
+  git -C "$R" -c user.name=cbrannelly -c user.email="$e" commit -qm "fix: work email"
+  run "$GATE"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"commit identity other than $OWNER or a listed collaborator"* && "$output" == *"author <$e>"* ]]
+  [[ "$output" != *"<$c>"* ]]
+}
+
 @test "a Co-Authored-By trailer passes for noreply@anthropic.com and fails for anyone else" {
   echo x >>"$R/a.txt"; git -C "$R" add -A
   git -C "$R" commit -qm "feat: pair" -m "Co-Authored-By: Claude <noreply@anthropic.com>"

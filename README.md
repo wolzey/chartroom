@@ -1069,7 +1069,7 @@ through your forge's CLI.
 shellcheck -x -S warning bin/chartroom lib/*.sh lib/backends/*.sh install.sh scripts/*.sh test/stub-agent test/windows-smoke.sh test/fakes/*
 bats test/                 # no herdr/tmux/cmux/claude/codex needed: fakes and a stub agent
 CHARTROOM_TEST_REAL_CHROME=1 bats test/pages.bats   # also print one page with a real Chrome (opt-in: the rest use a fake)
-scripts/privacy-gate.sh    # no personal data in tracked files or commits; only the owner's noreply email in history
+scripts/privacy-gate.sh    # no personal data in tracked files or commits; only the owner's (or a listed collaborator's) noreply email in history
 claude plugin test mods/crew-view   # the Claude Code mod's tests (verified on Claude Code 2.1.302 and 2.1.303)
 ```
 
@@ -1077,8 +1077,9 @@ Maintainers: merge by fast-forward pushing `main` from a local clone whose commi
 GitHub noreply identity as both author and committer. Never merge through the GitHub web UI:
 squash, rebase and merge-commit merges all stamp the merging account's name and primary email
 on the commit, which the privacy gate (rightly) rejects on `main`: every author and committer
-email in history must be the owner's GitHub noreply address (`owner_email` in the gate), and an
-email in a trailer such as Co-Authored-By must be on its short allowlist (`trailer_ok`). The PR
+email in history must be the owner's GitHub noreply address (`owner_email` in the gate) or a
+listed collaborator's (`collaborators`), and an email in a trailer such as Co-Authored-By must be
+on its short allowlist (`trailer_ok`: those addresses and `noreply@anthropic.com`). The PR
 shows as merged once its commits land on `main`.
 
 ## License

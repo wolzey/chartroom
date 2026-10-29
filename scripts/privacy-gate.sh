@@ -6,16 +6,19 @@
 #      climbs out of the repo fails outright (a link into a local temp dir leaks paths)
 #   3. commit metadata reachable from HEAD: author/committer names and emails, messages
 #   4. commit identities reachable from HEAD: every author and committer email must be
-#      owner_email, and every email in a trailer (Co-Authored-By and the like) one of
-#      trailer_ok. GitHub's web merges stamp the merging account's own email, which the
-#      pattern alone can miss.
+#      owner_email or a listed collaborator's GitHub noreply (collaborators), and every email in
+#      a trailer (Co-Authored-By and the like) one of trailer_ok. GitHub's web merges stamp the
+#      merging account's own email, which the pattern alone can miss.
 # The only allowed mention is the public owner handle (wolzey/chartroom).
 # Usage: scripts/privacy-gate.sh [repo-dir]   (default: this checkout)
 set -euo pipefail
 cd "${1:-$(dirname "$0")/..}"
 pattern='ethan|wolz[^e]|/Users/|/home/[a-z]|fluid|guardhouse|zenshift|azure.*create-pr|core:|migration:|gh-axi|launchdarkly|work/github\.com|\.captain/tasks|/private/tmp/|claude-501'
 owner_email='11860354+wolzey@users.noreply.github.com'
-trailer_ok=("$owner_email" 'noreply@anthropic.com')
+# collaborators who commit under their own GitHub noreply address, as author, committer or trailer
+collaborators=('198639793+cbrannelly@users.noreply.github.com')
+ids_ok=("$owner_email" "${collaborators[@]}")
+trailer_ok=("$owner_email" "${collaborators[@]}" 'noreply@anthropic.com')
 fail=0
 report() { printf 'privacy gate: %s\n' "$1"; fail=1; }
 
@@ -44,8 +47,8 @@ if git rev-parse --verify --quiet HEAD >/dev/null; then
   [[ -z "$meta" ]] || report "personal data in commit metadata:"$'\n'"$meta"
 
   # 4. commit identities (%ae/%ce, not %aE/%cE: a .mailmap must not hide an address)
-  ids="$(git log --format='%h author <%ae>%n%h committer <%ce>' HEAD | grep -viF "<$owner_email>" || true)"
-  [[ -z "$ids" ]] || report "commit identity other than $owner_email:"$'\n'"$ids"
+  ids="$(git log --format='%h author <%ae>%n%h committer <%ce>' HEAD | grep -viF -f <(printf '<%s>\n' "${ids_ok[@]}") || true)"
+  [[ -z "$ids" ]] || report "commit identity other than $owner_email or a listed collaborator:"$'\n'"$ids"
   trailers="$(git log --format='@%h%n%(trailers:only,unfold)' HEAD | awk -v ok="${trailer_ok[*]}" '
     BEGIN { n = split(tolower(ok), a, " "); for (i = 1; i <= n; i++) allowed[a[i]] = 1 }
     /^@/ { h = substr($0, 2); next }

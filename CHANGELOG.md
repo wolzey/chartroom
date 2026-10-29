@@ -47,9 +47,11 @@ are stable from 0.1.0.
 
 ### Changed
 - The privacy gate fails on any author or committer email other than the owner's GitHub noreply
-  address, and on an email in a trailer (Co-Authored-By and the like) outside its allowlist
-  (`trailer_ok`: that address and `noreply@anthropic.com`). A merge through the GitHub web UI
-  stamps the merging account's own email, which the name pattern alone can miss.
+  address or a listed collaborator's (`collaborators`), and on an email in a trailer
+  (Co-Authored-By and the like) outside its allowlist (`trailer_ok`: those addresses and
+  `noreply@anthropic.com`). A merge through the GitHub web UI stamps the merging account's own
+  email, which the name pattern alone can miss. A collaborator's earlier commits on `main` were
+  rewritten to their GitHub noreply (same trees, messages and dates), so the whole history passes.
 - The open-artifact counts (`status`, `board`, the lanes JSON's `.artifacts`) count pages too:
   `{open, message, runbook, note, page}`, and "1 page" on the status line. A page stays open until
   `artifact done` (read); the todo list does not owe one.
