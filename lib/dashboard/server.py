@@ -63,6 +63,9 @@ TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 # A home as the radar labels it: a registered name (lib/homes.sh CR_HOME_NAME_RE), "default" (an
 # older chartroom's one home), or "(this home)" (an unregistered one).
 HOME_LABEL = re.compile(r"^(?:[a-z][a-z0-9-]{0,31}|\(this home\))$")
+# A task id on a task's page: never a dot (ids are [a-z][a-z0-9_-]), so /task/<id>/meta.json or any
+# other file name is never read as /task/<home>/<id>
+PAGE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 TASK_FILES = ("brief.md", "report.md", "plan.md", "final.md", "events.log")
 INBOX_TAG = re.compile(r"^i-[0-9a-f]{4,16}$")
 ARTIFACT_FILE = re.compile(r"^([a-z0-9][a-z0-9-]{0,63})\.(md|html|pdf)$")
@@ -710,7 +713,7 @@ def make_handler(board, port, page, viewer, host, use_token, home):
                                                       or (parts[2] == "inbox" and INBOX_TAG.match(parts[3])))):
                 return self.send(200, viewer.get(), "text/html; charset=utf-8", csp=VIEWER_CSP)
             # a task's page: /task/<home>/<id> (a task file's own route, /task/<id>/<file>, wins)
-            if (len(parts) == 4 and parts[1] == "task" and parts[3] not in TASK_FILES and TASK_ID.match(parts[3])
+            if (len(parts) == 4 and parts[1] == "task" and PAGE_ID.match(parts[3])
                     and HOME_LABEL.match(unquote(parts[2])) and task_page):
                 return self.send(200, task_page.get(), "text/html; charset=utf-8")
             f, art = None, None

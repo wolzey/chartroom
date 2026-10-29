@@ -451,9 +451,11 @@ radar_until() {
   [ "$(code "$URL/task/acme/t-blocked/extra")" = 404 ]
   [ "$(code "$URL/task/acme%3Bx/t-blocked")" = 404 ]
   [ "$(code -X POST "$URL/task/acme/t-blocked")" = 405 ]
-  # a task file's own route still wins: /task/<id>/<file>
+  # a task file's own route still wins: /task/<id>/<file>; any other file name is no task's page
   [ "$(get "$URL/task/t-blocked/report.md")" = "# Report" ]
   [ "$(code "$URL/task/acme/report.md")" = 404 ]
+  [ "$(code "$URL/task/t-blocked/meta.json")" = 404 ]
+  [ "$(code "$URL/task/t-blocked/report.pdf")" = 404 ]
 }
 
 @test "server: a shared script that is missing, or would end its <script> early, keeps the last good page" {
