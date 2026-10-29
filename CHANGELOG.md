@@ -93,6 +93,30 @@ are stable from 0.1.0.
   if typed), not `$.prompt.submit` — submitting the text did not re-parse the command, so the
   continue skill never ran and the panel showed a false "sent"; it now shows an honest "running …"
   and a refusal corrects it. Installs alongside `crew-view`; they share no command.
+- **The fleet radar** (`/radar` on the dashboard, `chartroom radar`) shows every open task on every
+  home of this machine, and of other machines, as a ship on a scope. The six sectors are
+  decision, blocked, adrift, under way, holding and docked. It is built to tell *blocked* (the
+  worker said so, or the agent is at a prompt) from *waiting* (its own `waiting` report, with a
+  countdown to its until-time).
+  - **Records.** There is one record per task, keyed by machine, home and id. Each carries an
+    honest state and a reason, what it waits on and until when, its last event, and its last
+    activity. The state table lives in `lib/dashboard/radar.jq`, and its inferred-wait rule is
+    the board's own.
+  - **Panel.** Clicking a ship opens a read-only panel with the task's details, the worker's
+    newest report, links to its files, and a live tail of its events and terminal (its own
+    `chartroom peek`).
+  - **XOs.** Each home's XO comes from herdr and sits on a bridge, marked "untracked: no events".
+  - **Motion follows state.** Ships move only when their state changes, and a ping marks a real
+    new event. With reduced motion they are placed without flights.
+  - **Access.** It has keyboard navigation, a table view and a phone layout.
+  - **Other machines.** They come from `CHARTROOM_RADAR_MACHINES`, else herdr's saved machines.
+    They are read over `ssh -o BatchMode=yes` and only ever read: `status --json --all-homes`,
+    `peek` and `cat` of a task file.
+  - **Degrading cleanly.** An older chartroom is read as its default home and labelled as such.
+    An unreachable machine keeps its last ships, marked stale.
+  - **Cost.** The server collects off the request path, only while a radar page is open, with a
+    change gate for this machine and process-group timeouts.
+  - **Machine label.** `CHARTROOM_MACHINE_NAME` labels this machine (default: the host name).
 - Relays between homes: XO-to-XO messages on one machine, with no daemon. `chartroom relay
   <home> [--re <id>] [--project P] [--from <this home>] <message|->` appends one record to the
   other home's mailbox, `relays/inbox.ndjson`, and writes nothing else there; a copy goes to this

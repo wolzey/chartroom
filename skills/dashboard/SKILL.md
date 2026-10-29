@@ -17,6 +17,9 @@ opens it in the default browser. Reply with one line: the URL it printed. If it 
 "open it yourself", say the browser could not be opened and give the URL. If it failed, give
 its error in one line; do not retry, stop, or restart anything on your own.
 
+When the commander asks to see every agent across machines, or the radar, give the same URL
+with `radar` appended to its path (`http://127.0.0.1:4517/radar`).
+
 Only when the commander asks to see the board from another device: tell them to run
 `chartroom dashboard stop` and then `chartroom dashboard open --expose` (or `--host <address>`),
 which puts it on the network behind an access token and prints the URLs to open there. Never

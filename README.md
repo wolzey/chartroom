@@ -334,6 +334,83 @@ How it is built, and what it promises:
   it lead every question it puts to you with `**[project]**` (and, in Claude Code, use the
   project as the question's header).
 
+### The fleet radar: every agent on every machine
+
+`/radar` on the same dashboard (the **radar →** link in the board's header) shows every open
+task on every home of this machine, and of your other machines, as a ship on a dark scope, in
+six sectors by state. Click a ship, or tab to it and press Enter, for a side panel with:
+
+- its details and the reason for its state
+- what it waits on and until when, with a live countdown
+- its last event and the worker's newest report
+- links to the task's report, plan, brief and events
+- the recent events and the last lines of its terminal (`chartroom peek`, refreshed every 10s)
+
+Each home's XO sits on a bridge above the sectors. It comes from herdr and is marked "untracked:
+no events".
+
+```bash
+chartroom radar                      # the same, in the terminal (this machine)
+chartroom radar --json               # one machine's records, as the page reads them
+chartroom radar machines             # the machines it reads, and how often
+```
+
+| Sector | States | |
+|---|---|---|
+| **Decision** | `decision` | asked for your call |
+| **Blocked** | `blocked`, `awaiting-input` | the worker said it cannot proceed, or the agent is stopped at a permission or question prompt |
+| **Adrift** | `overdue`, `stopped-silent`, `lost` | waited past its window; stopped without reporting; its session is gone |
+| **Under way** | `working` | working; a hollow "?" hull when its backend could not be checked |
+| **Holding** | `waiting` | its own `waiting` report, inside its window (a ring counts down to the until-time); or, marked *inferred*, a last message that says it waits on someone |
+| **Docked** | `done`, `failed` | a report to read; a wreck for a failure |
+
+Telling *blocked* from *waiting* is the point. The view keeps itself honest in these ways:
+
+- A ship moves only when its state changes it to another sector, flying to its new slot. The
+  comms log records the change.
+- A sonar ping means a real new event.
+- Nothing drifts or bobs to look busy.
+- A ship keeps its slot while it stays in its sector.
+- With `prefers-reduced-motion`, ships are placed without flights, and the log still records
+  every change.
+
+Arrow keys move between ships, `t` shows the same data as a table, `m` splits the map by
+machine, and `/` filters. It works at phone width, where the panel becomes a bottom sheet.
+
+**Machines.** Every ship and table row names its machine. Each machine has a chip in the header
+showing when it was last read, or why it could not be.
+
+- **This machine.** Its label is `CHARTROOM_MACHINE_NAME`, set in the environment, the home's
+  config or the config file. Without it, the label is the host name. This machine's homes are
+  read with the same `status --json` the CLI uses.
+- **Other machines.** They come from `CHARTROOM_RADAR_MACHINES` (`label[=ssh-target] ...`, or
+  `none`), else herdr's enabled saved machines (`herdr machine list`). Each is read over
+  `ssh -o BatchMode=yes` with `chartroom status --json --all-homes`. Its XOs come from
+  `herdr --machine <m> agent list`.
+- **Read-only, always.** Nothing ever runs on another machine except that status call, its
+  `chartroom peek <id>`, and `cat` of one of the five task files. Each is built only from ids and
+  home paths that machine reported.
+- **An older chartroom** ignores `--all-homes` and answers for its default home only. The radar
+  tells this from the shape of the answer, since the version string may not have changed, and
+  says so on the machine's chip.
+- **An unreachable machine** keeps its last ships, dimmed and marked stale, and the chip says
+  "no contact" with ssh's own message. A machine never read shows no ships at all.
+
+**Cost.** The server reads in the background, never on a page request, and only while a radar
+page has asked in the last 90 seconds. An idle dashboard runs nothing and reaches no other
+machine.
+
+- **This machine** is re-read when its task files or herdr's agent states change. That happens
+  at most every `CHARTROOM_RADAR_LOCAL_MIN_SECONDS` (15), and at least every
+  `CHARTROOM_RADAR_LOCAL_MAX_SECONDS` (60).
+- **Other machines** are re-read every `CHARTROOM_RADAR_REMOTE_SECONDS` (60), backing off up to
+  5 minutes after failures.
+- **Every call is bounded.** Each runs in its own process group, which is killed after 90
+  seconds (25 for a peek), so no ssh outlives it. ssh reuses one connection per machine, while
+  its control socket's path is short enough for a socket.
+- **Same lock as the board.** On the network, the radar and its peeks sit behind the same access
+  token.
+
 ### On the network: other devices
 
 To open the board from a phone, a tablet or another computer, bind it beyond loopback:
@@ -937,6 +1014,10 @@ to the config file.
 | `CHARTROOM_DASHBOARD_THEME` | `chartroom` | the dashboard's default theme: `chartroom` or `hud` (`--theme` overrides) |
 | `CHARTROOM_DASHBOARD_HOST` | `127.0.0.1` | the IPv4 address the dashboard binds; `0.0.0.0` is every interface (`--host` / `--expose` override). Beyond loopback it needs the access token |
 | `CHARTROOM_GH` | `gh` | the gh binary the dashboard uses for PR states |
+| `CHARTROOM_MACHINE_NAME` | the host name | this machine's label on the [fleet radar](#the-fleet-radar-every-agent-on-every-machine) |
+| `CHARTROOM_RADAR_MACHINES` | herdr's saved machines | the other machines the radar reads, read-only over ssh: `label[=ssh-target] ...`, or `none` |
+| `CHARTROOM_RADAR_REMOTE_PATH` | `$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin` | put first on PATH on another machine (its non-interactive ssh shell lacks them) |
+| `CHARTROOM_RADAR_LOCAL_MIN_SECONDS` / `_LOCAL_MAX_SECONDS` / `_REMOTE_SECONDS` | `15` / `60` / `60` | while the radar is open: this machine is re-read on a change at most this often, and at least this often; another machine this often |
 | `CHARTROOM_OPENER` | `open` / `xdg-open` (WSL: `wslview`, PowerShell; Git Bash: `start`) | command `dashboard open` runs with the URL |
 | `CHARTROOM_CLIPBOARD` | `pbcopy` / `wl-copy` / `xclip` / `xsel`, whichever is there | command `artifact copy` pipes the text into (split on spaces); `-` prints it instead |
 | `CHARTROOM_CHROME` | the first of `google-chrome`, `chromium`, `chrome`, `msedge` (and kin) on PATH, else the usual app locations | the Chrome or Chromium `artifact pdf` prints with: a path or a command name; when set, nothing else is tried |
