@@ -260,13 +260,13 @@ const SECTORS = [
   { k: "adrift", name: "ADRIFT", sub: "silent, lost, or waited past its window" },
   { k: "underway", name: "UNDER WAY", sub: "working" },
   { k: "holding", name: "HOLDING", sub: "waiting on something, inside its window" },
-  { k: "docked", name: "DOCKED", sub: "done or failed: a report to read" },
+  { k: "docked", name: "DOCKED", sub: "in review, done or failed: a report to read" },
 ];
 const ORDER2 = ["decision", "blocked", "holding", "adrift", "underway", "docked"]; // two columns: what needs you first
 const SECTOR_RANK = Object.fromEntries(SECTORS.map((s, i) => [s.k, i]));
-const STATE_COLOR = { decision: "decision", blocked: "blocked", "awaiting-input": "blocked", failed: "failed", done: "docked",
+const STATE_COLOR = { decision: "decision", blocked: "blocked", "awaiting-input": "blocked", failed: "failed", review: "docked", done: "docked",
   waiting: "holding", overdue: "adrift", "stopped-silent": "adrift", lost: "adrift", unknown: "adrift", working: "underway" };
-const STATE_LABEL = { decision: "decision", blocked: "blocked", "awaiting-input": "at a prompt", failed: "failed", done: "done",
+const STATE_LABEL = { decision: "decision", blocked: "blocked", "awaiting-input": "at a prompt", failed: "failed", review: "review", done: "done",
   waiting: "waiting", overdue: "overdue", "stopped-silent": "silent", lost: "lost", unknown: "unknown", working: "working" };
 const MACHINE_COLORS = ["#b48cff", "#ff8ad8", "#c4f06a", "#9fe7d8", "#ffa45c", "#7fb2ff"];
 
@@ -381,7 +381,7 @@ function glyph(r) {
   } else if (s === "lost") {
     hull = '<path class="hull" d="M-1,-13 L3,-2 L-4,1 Z"/><path class="hull" d="M5,2 L10,12 L1,7 Z"/><path class="hull" d="M-5,4 L-1,7 L-10,12 Z"/>';
     extra = '<circle class="nosig" r="18"/>';
-  } else if (s === "done") {
+  } else if (s === "done" || s === "review") {
     rot = 90;
     extra = '<text class="mark" x="14" y="-14" font-size="11">✓</text>';
   } else if (s === "failed") {
