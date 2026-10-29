@@ -338,17 +338,36 @@ How it is built, and what it promises:
 ### The fleet radar: every agent on every machine
 
 `/radar` on the same dashboard (the **radar →** link in the board's header) shows every open
-task on every home of this machine, and of your other machines, as a ship on a dark scope, in
-six sectors by state. Click a ship, or tab to it and press Enter, for a side panel with:
+task on every home of this machine, and of your other machines, as a small robot on a dark scope,
+in six sectors by state. The robot itself shows the state: eyes lit and antenna blinking while it
+works, an hourglass in hand while it waits, a red "!" sign when blocked, a "?" bubble at a
+decision, dimmed and asleep ("zz") when silent, a broken outline when lost, docked with a check
+when done or in review, tipped over when it failed. Click a robot, or tab to it and press Enter,
+for a side panel with:
 
 - its details and the reason for its state
 - what it waits on and until when, with a live countdown
-- its last event and the worker's newest report
-- links to the task's report, plan, brief and events
-- the recent events and the last lines of its terminal (`chartroom peek`, refreshed every 10s)
+- its last event, written out as a note (see [Readable events](#readable-events-and-a-page-per-task))
+- the recent events as a timeline, and the last lines of its terminal (`chartroom peek`, every 10s)
+- links to the task's report (rendered), plan, brief and events, and to its full page
 
-Each home's XO sits on a bridge above the sectors. It comes from herdr and is marked "untracked:
-no events".
+Each home's XO sits on a bridge above the sectors: a bigger robot with a captain's cap. It comes
+from herdr and is marked "untracked: no events".
+
+**Stacks.** Related tasks stand in one stack: the robot of the one that needs you most, the
+others in a row behind it, and a count. Click it (or press Enter) to fan them out over the map;
+`Esc` folds it. Two tasks are related when they share a ticket key (`ENG-2752`, from the title,
+the id or the branch), when one's brief or events name the other's id (a handoff, a follow-up),
+when one was cut from the other's branch, or when they share a project and a title but for a
+trailing number ("QA dashboard T1", "T2"). A stack sits in its most urgent member's sector, and
+the grouping depends only on the set of tasks, so it holds from one poll to the next.
+
+**Active only.** The default view leaves out what is over: a docked task (review, done, failed)
+quiet for `CHARTROOM_RADAR_DONE_HOURS` (24), and a task whose session is gone and that has been
+quiet for `CHARTROOM_RADAR_STALE_DAYS` (3), decisions and blockers included. They fold into an
+**archive (N)** chip beside each machine; one click (or `a`) shows them, and the browser remembers
+the choice. The header counts both: "N active · M archived". A `--breaking` report is never
+archived.
 
 ```bash
 chartroom radar                      # the same, in the terminal (this machine)
@@ -367,18 +386,20 @@ chartroom radar machines             # the machines it reads, and how often
 
 Telling *blocked* from *waiting* is the point. The view keeps itself honest in these ways:
 
-- A ship moves only when its state changes it to another sector, flying to its new slot. The
+- A robot moves only when its state changes it to another sector, flying to its new slot. The
   comms log records the change.
 - A sonar ping means a real new event.
-- Nothing drifts or bobs to look busy.
-- A ship keeps its slot while it stays in its sector.
-- With `prefers-reduced-motion`, ships are placed without flights, and the log still records
-  every change.
+- Nothing drifts or bobs to look busy. A working robot's antenna blinks because it is working.
+- A robot keeps its slot while it stays in its sector. A stack fans out over the map, not into
+  it, so nothing else moves.
+- With `prefers-reduced-motion`, robots are placed without flights, pings or blinks, and the log
+  still records every change.
 
-Arrow keys move between ships, `t` shows the same data as a table, `m` splits the map by
-machine, and `/` filters. It works at phone width, where the panel becomes a bottom sheet.
+Arrow keys move between agents, `t` shows the same data as a table, `m` splits the map by
+machine, `a` toggles active only, and `/` filters. It works at phone width, where the panel
+becomes a bottom sheet.
 
-**Machines.** Every ship and table row names its machine. Each machine has a chip in the header
+**Machines.** Every robot and table row names its machine. Each machine has a chip in the header
 showing when it was last read, or why it could not be.
 
 - **This machine.** Its label is `CHARTROOM_MACHINE_NAME`, set in the environment, the home's
@@ -394,8 +415,8 @@ showing when it was last read, or why it could not be.
 - **An older chartroom** ignores `--all-homes` and answers for its default home only. The radar
   tells this from the shape of the answer, since the version string may not have changed, and
   says so on the machine's chip.
-- **An unreachable machine** keeps its last ships, dimmed and marked stale, and the chip says
-  "no contact" with ssh's own message. A machine never read shows no ships at all.
+- **An unreachable machine** keeps its last robots, dimmed and marked stale, and the chip says
+  "no contact" with ssh's own message. A machine never read shows no robots at all.
 
 **Cost.** The server reads in the background, never on a page request, and only while a radar
 page has asked in the last 90 seconds. An idle dashboard runs nothing and reaches no other
@@ -411,6 +432,46 @@ machine.
   its control socket's path is short enough for a socket.
 - **Same lock as the board.** On the network, the radar and its peeks sit behind the same access
   token.
+
+### Readable events and a page per task
+
+A worker's event is one line in `events.log`, often a long one. The radar's panel and the task
+page set it as a note rather than a wall of text, in a proportional face at a reading width, with
+monospace kept for ids, SHAs, paths and commands:
+
+- the kind as a badge, and `[breaking]` as a red tag;
+- a **headline**: the first sentence or clause, up to the first ":" or ".";
+- labelled parts (`Cause:`, `Options:`, `Need:`, `Recommend:`, `Report:` and the like) as small
+  headed blocks;
+- numbered options (`(1) ... (2)`, `(A) ... (B)`, `1) ... 2)`) as a list, the recommended one
+  highlighted;
+- several `; `-separated facts as bullets;
+- a task file's path as a link to that task's page (a report path opens its report), and a URL in
+  a new tab.
+
+The parser (`lib/dashboard/eventfmt.js`) only adds structure: whatever it cannot place stays the
+worker's words as paragraphs, and every word comes back in order (its tests hold it to that,
+garbage included). Nothing it renders is HTML: markup in an event is shown as text.
+
+A task's events read as a timeline, newest first, with relative times (the exact time on hover)
+and a filter by kind. A decision or blocker, the XO's steers answering it ("XO → worker", set
+apart from the worker's own reports) and the worker's follow-up form one thread, collapsed to its
+latest line until clicked; a run of progress reports collapses to the newest; agent noise
+(prompts received, turns ended, records) folds into an "N system events" toggle.
+
+`/task/<home>/<id>` (`?m=<machine>` for another machine's) is the task on a page of its own,
+linked from the radar's panel and from each card on the board. It has the title, project, home,
+machine, state, what it waits on and last activity on top, then the latest decision or blocker,
+the commander's intent from the brief, every event, `report.md` rendered as Markdown (tables
+included, raw HTML shown as text, links only to http(s)), its artifacts and pages, its live pane
+(read-only), and a `/continue <id>` copy button. It prints with every thread opened, and fits a
+phone. Another machine's task is read the radar's way, over the same read-only calls; a task the
+radar does not draw (closed, drafting) shows from its own home's dashboard.
+
+**Better events in the first place.** The brief asks workers for a headline first (at most ~140
+characters: what happened and what is needed), then the labelled parts, and the long part in
+report.md. `chartroom event <id> <kind> --detail "<the rest>" "<headline>"` writes the rest as
+the headline's `Details:` part on the same line, so the log format does not change.
 
 ### On the network: other devices
 
@@ -1026,6 +1087,7 @@ to the config file.
 | `CHARTROOM_RADAR_MACHINES` | herdr's saved machines | the other machines the radar reads, read-only over ssh: `label[=ssh-target] ...`, or `none` |
 | `CHARTROOM_RADAR_REMOTE_PATH` | `$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin` | put first on PATH on another machine (its non-interactive ssh shell lacks them) |
 | `CHARTROOM_RADAR_LOCAL_MIN_SECONDS` / `_LOCAL_MAX_SECONDS` / `_REMOTE_SECONDS` | `15` / `60` / `60` | while the radar is open: this machine is re-read on a change at most this often, and at least this often; another machine this often |
+| `CHARTROOM_RADAR_DONE_HOURS` / `_STALE_DAYS` | `24` / `3` | the radar's "active only" view archives a docked task quiet this many hours, and a task whose session is gone and quiet this many days |
 | `CHARTROOM_OPENER` | `open` / `xdg-open` (WSL: `wslview`, PowerShell; Git Bash: `start`) | command `dashboard open` runs with the URL |
 | `CHARTROOM_CLIPBOARD` | `pbcopy` / `wl-copy` / `xclip` / `xsel`, whichever is there | command `artifact copy` pipes the text into (split on spaces); `-` prints it instead |
 | `CHARTROOM_CHROME` | the first of `google-chrome`, `chromium`, `chrome`, `msedge` (and kin) on PATH, else the usual app locations | the Chrome or Chromium `artifact pdf` prints with: a path or a command name; when set, nothing else is tried |

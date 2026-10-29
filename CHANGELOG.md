@@ -7,6 +7,46 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- Readable events. The radar's side panel and the new task page set a worker's event as a note:
+  the kind as a badge and `[breaking]` as a red tag, a headline (the first sentence or clause),
+  labelled parts (`Cause:`, `Options:`, `Need:`, `Report:` ...) as headed blocks, numbered options
+  as a list with the recommended one marked, several `; `-separated facts as bullets, task-file
+  paths as links to that task's page and URLs in a new tab; prose in a proportional face at a
+  reading width, monospace only for ids, SHAs, paths and commands. The parser
+  (`lib/dashboard/eventfmt.js`) is pure and tolerant: what it cannot place stays as paragraphs,
+  and every word comes back in order. Events read as a timeline, newest first, with relative times
+  and a filter by kind: a decision or blocker, the XO's steers ("XO → worker") and the worker's
+  follow-up form one collapsible thread, a run of progress collapses to the newest, and agent noise
+  folds into an "N system events" toggle (buttons with `aria-expanded`).
+- A page per task: `/task/<home>/<id>` (`?m=<machine>` for another machine's), linked from the
+  radar's panel ("open full page") and every card on the board. The header (title, project, home,
+  machine, state, waiting on and until, last activity), the latest decision or blocker, the
+  commander's intent, the events timeline, `report.md` rendered as sanitized Markdown with tables
+  (`lib/dashboard/markdown.js`), artifacts and pages, the live pane (read-only), and a
+  `/continue <id>` copy button; printable and phone-sized. It is a thin client of the radar's
+  calls, and of the board for a task the radar does not draw. The server splices its shared
+  scripts and styles (`eventfmt.js`, `markdown.js`, `stacks.js`, `eventfmt.css`) into each page at
+  `<!--@include:...-->`, so the pages stay self-contained under the same CSP; a shared file that is
+  missing, or holds what could end its `<script>` early, keeps the last good page.
+- The radar's ships are robots: each state shows in the robot (lit eyes and a blinking antenna
+  while working, an hourglass while waiting, a red "!" sign when blocked, a "?" bubble at a
+  decision, asleep when silent, broken when lost, docked with a check, tipped over when failed);
+  the XOs wear a captain's cap.
+- Radar stacks: related tasks (a shared ticket key; one naming the other in its brief or events;
+  a branch cut from another's; one project and one title but for a trailing number) stand in one
+  stack in the sector of the most urgent member, with a count, fanned out over the map on a click
+  (`lib/dashboard/stacks.js`, deterministic). `status --json` rows add `base` and `mentions` (the
+  other open tasks a task's brief or events name) for it; an older chartroom's tasks still stack by
+  ticket and title.
+- The radar's "active only" view, the default: a docked task quiet for `CHARTROOM_RADAR_DONE_HOURS`
+  (24) and a task whose session is gone and quiet for `CHARTROOM_RADAR_STALE_DAYS` (3) fold into
+  each machine's **archive (N)**, shown with one click (`a`), remembered by the browser; the header
+  says "N active · M archived". A breaking report is never archived. `radar machines` prints both
+  cutoffs and `/api/radar` carries them.
+- `chartroom event <id> <kind> --detail "<the rest>" <headline>`: the rest as the headline's
+  `Details:` part, on the same one line. The brief's protocol gains a short rule for writing an
+  event (a headline of at most ~140 characters first, then the labelled parts, the long part in
+  report.md), and the chartroom skill holds the XO's own steers to it.
 - Pages: reports the commander reads in the dashboard and prints to PDF, instead of Claude
   artifacts. `chartroom artifact add <id> --kind page --title T [--description D] <file|->` keeps
   one self-contained HTML file, `tasks/<id>/artifacts/<slug>.html` (an inbox item's under
