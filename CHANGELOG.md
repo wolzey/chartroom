@@ -46,6 +46,10 @@ are stable from 0.1.0.
   The chartroom skill says the same for the XO, and `bearings` and `continue` name a task's page.
 
 ### Changed
+- The privacy gate fails on any author or committer email other than the owner's GitHub noreply
+  address, and on an email in a trailer (Co-Authored-By and the like) outside its allowlist
+  (`trailer_ok`: that address and `noreply@anthropic.com`). A merge through the GitHub web UI
+  stamps the merging account's own email, which the name pattern alone can miss.
 - The open-artifact counts (`status`, `board`, the lanes JSON's `.artifacts`) count pages too:
   `{open, message, runbook, note, page}`, and "1 page" on the status line. A page stays open until
   `artifact done` (read); the todo list does not owe one.
