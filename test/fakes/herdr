@@ -7,9 +7,19 @@
 #   $S/agents/<n>  live agents, "<pane> <tab> <status>"; a leftover one makes start agent_name_taken.
 #   $S/panes/<p>   panes `pane list/get/close` know besides agents' (sweep), "<tab> <cwd>".
 # `agent prompt` simulates Claude's UserPromptSubmit hook for task $FAKE_HERDR_TASK.
+#   $S/machines.json   what `machine list --json` prints (default: none saved)
+#   $S/agent-list.json what `agent list` prints (the radar's flagships; without it `agent list` is
+#                      unknown, as before); `--machine <m>` reads
+#                      $S/machine-<m>/ instead, and `agent read` of a pane listed there shows
+#                      the screen; a `hang` file there makes `agent list` never answer
 [[ -n "${FAKE_HERDR_DIR:-}" ]] || { echo "herdr: could not connect to server socket" >&2; exit 1; }
 S="$FAKE_HERDR_DIR"; mkdir -p "$S/agents"
 printf '%s\n' "$*" >>"$S/calls.log"
+L="$S" # where `agent list` reads from: this machine, or a saved one (--machine)
+if [[ "${1:-}" == --machine ]]; then
+  L="$S/machine-${2:-}"; shift 2
+  [[ -d "$L" ]] || { echo "herdr: machine is not reachable" >&2; exit 1; }
+fi
 arg() { local k="$1"; shift; while [[ $# -gt 0 ]]; do [[ "$1" == "$k" ]] && { printf '%s' "$2"; return; }; shift; done; }
 err() { printf '{"error":{"code":"%s","message":"%s"},"id":"cli:fake"}\n' "$1" "$2" >&2; exit 1; }
 next() { local n; n=$(( $(cat "$S/n" 2>/dev/null || echo 0) + 1 )); echo "$n" >"$S/n"; printf '%s' "$n"; }
@@ -38,7 +48,14 @@ case "$cmd" in
     [[ -f "$S/agents/$1" ]] || err agent_not_found "agent target $1 not found"
     read -r pane tab st <"$S/agents/$1"
     printf '{"result":{"agent":{"agent_status":"%s","pane_id":"%s","tab_id":"%s"}}}\n' "$st" "$pane" "$tab" ;;
-  "agent read") [[ -f "$S/agents/$1" ]] || err agent_not_found "agent target $1 not found"; screen ;;
+  "agent read")
+    [[ -f "$S/agents/$1" ]] || grep -qF "\"$1\"" "$L/agent-list.json" 2>/dev/null || err agent_not_found "agent target $1 not found"
+    screen ;;
+  "agent list") # only when a test gives one: without it, callers keep their `agent get` fallback (sweep)
+    [[ -f "$L/hang" ]] && exec sleep 60 # a herdr that never answers (a dead saved machine)
+    [[ -f "$L/agent-list.json" ]] || err unknown "unknown command $cmd"
+    cat "$L/agent-list.json" ;;
+  "machine list") if [[ -f "$S/machines.json" ]]; then cat "$S/machines.json"; else echo '[]'; fi ;;
   "agent send-keys")
     [[ -f "$S/agents/$1" ]] || err agent_not_found "agent target $1 not found"
     [[ "$2" == enter ]] && trust_up && rm -f "$S/screen" ;;

@@ -1,0 +1,1023 @@
+<!doctype html>
+<html lang="en" data-theme="chartroom">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>radar · chartroom</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2302080e'/%3E%3Ccircle cx='16' cy='16' r='11' fill='none' stroke='%2341c9e2' stroke-width='1.5' opacity='.5'/%3E%3Cpath d='M16 7 22 24 16 20 10 24Z' fill='none' stroke='%2341c9e2' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+  /* The fleet radar: every crew agent on every machine, as vector ships on a dark scope, in
+     sectors by state. The data is lib/radar.sh + radar.jq's, served by /api/radar.
+     Honesty rules (the point of this view is telling blocked from waiting, so nothing may
+     suggest work that is not happening):
+       1. a ship moves only when its sector changes (its state did), flying old slot -> new slot;
+       2. a sonar ping only when its last event's time changes (a real event);
+       3. nothing drifts, bobs or orbits: the countdown ring on a waiting ship is real time to a
+          real deadline, and the needs-you beacons blink because the state needs you, not because
+          anything is happening;
+       4. a machine that cannot be read dims its ships, says since when, and they never move;
+       5. a ship keeps its slot while it stays in its sector, so neighbours never shuffle;
+       6. reduced motion: ships are placed at once, no flights or pings; the comms log still
+          records every change.
+     The ships are real buttons over a canvas background, so focus, keyboard and screen readers
+     work; the table is the same data. */
+  :root {
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --bg: #02080e; --bg2: #06131d; --panel: #051420; --ink: #d4ecf5; --muted: #84a3b6; --faint: #4f6b7e;
+    --line: rgba(120,200,235,.2); --line2: rgba(120,200,235,.08); --glow: #41c9e2;
+    --decision: #ff9d4d; --blocked: #ff4f6d; --adrift: #8d9cab; --underway: #41c9e2; --holding: #f0c14b;
+    --docked: #5ed592; --failed: #ff4f6d; --scan: rgba(0,0,0,.22);
+    color-scheme: dark;
+  }
+  :root[data-theme=hud] {
+    --bg: #090202; --bg2: #170505; --panel: #120404; --ink: #f6e2dc; --muted: #d09a90; --faint: #7f4c44;
+    --line: rgba(255,72,52,.26); --line2: rgba(255,72,52,.1); --glow: #ffb01f;
+    --decision: #ff8a3d; --blocked: #ff4637; --adrift: #a98a83; --underway: #ffb01f; --holding: #ffe08a;
+    --docked: #fff1e8; --failed: #ff4637; --scan: rgba(0,0,0,.3);
+  }
+  * { box-sizing: border-box; }
+  html { background: radial-gradient(1200px 800px at 70% -20%, var(--bg2), transparent 70%), var(--bg); background-attachment: fixed; }
+  body { margin: 0; min-height: 100vh; color: var(--ink); font: 13px/1.45 var(--mono); -webkit-font-smoothing: antialiased;
+         overflow-x: hidden; overflow-x: clip; }
+  a { color: var(--glow); }
+  button { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--glow); outline-offset: 2px; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  /* scanlines over everything, never over the controls' hit areas */
+  body::after { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 50;
+                background: repeating-linear-gradient(0deg, var(--scan) 0 1px, transparent 1px 3px); opacity: .45; }
+
+  header { position: sticky; top: 0; z-index: 20; padding: 10px 16px 8px; border-bottom: 1px solid var(--line);
+           background: color-mix(in srgb, var(--bg) 86%, transparent);
+           -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+  .top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand svg { width: 30px; height: 30px; flex: none; }
+  .brand h1 { margin: 0; font: 700 16px/1 var(--mono); letter-spacing: .28em; color: var(--glow);
+              text-shadow: 0 0 12px color-mix(in srgb, var(--glow) 60%, transparent); }
+  .brand small { display: block; margin-top: 4px; font-size: 11px; letter-spacing: .06em; color: var(--muted); }
+  nav.views { display: flex; gap: 6px; margin-left: auto; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 2px 10px; border-radius: 3px;
+          border: 1px solid var(--line); background: var(--line2); color: var(--muted); cursor: pointer;
+          text-decoration: none; white-space: nowrap; font-size: 12px; }
+  .chip:hover, .chip[aria-pressed=true], .chip[aria-current=page] { color: var(--ink); border-color: color-mix(in srgb, var(--glow) 60%, transparent); }
+  .chip[aria-pressed=true], .chip[aria-current=page] { background: color-mix(in srgb, var(--glow) 14%, transparent); }
+  .tally { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; color: var(--muted); font-size: 12px; }
+  .tally b { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .tally span[data-s] b { color: var(--c); }
+  .machines { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .mchip { max-width: 100%; }
+  .mchip .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--mc); box-shadow: 0 0 8px var(--mc); flex: none; }
+  .mchip .lbl { color: var(--ink); font-weight: 700; }
+  .mchip .st { overflow: hidden; text-overflow: ellipsis; }
+  .mchip.off { opacity: .45; }
+  .mchip.bad .dot { background: transparent; border: 1.5px solid var(--mc); box-shadow: none; }
+  .mchip.bad .st { color: var(--blocked); }
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+  .controls input { flex: 1 1 180px; min-width: 0; min-height: 28px; padding: 2px 10px; border-radius: 3px; border: 1px solid var(--line);
+                    background: var(--line2); color: var(--ink); font: inherit; font-size: 12px; }
+  .banner { display: none; margin: 10px 16px 0; padding: 8px 12px; border: 1px solid var(--blocked); color: var(--blocked);
+            background: color-mix(in srgb, var(--blocked) 8%, transparent); overflow-wrap: anywhere; }
+
+  /* the comms log: every state change this page has seen, newest first */
+  .comms { margin: 10px 16px 0; padding: 6px 10px; border: 1px solid var(--line2); background: color-mix(in srgb, var(--panel) 70%, transparent); }
+  .comms h2 { margin: 0 0 4px; font-size: 11px; letter-spacing: .2em; color: var(--muted); font-weight: 600; }
+  .comms ol { margin: 0; padding: 0; list-style: none; max-height: 7.6em; overflow: auto; }
+  .comms li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+  .comms li b { color: var(--ink); font-weight: 600; }
+  .comms li .arrow { color: var(--c, var(--ink)); }
+  .comms li:first-child { color: var(--ink); }
+
+  /* the map */
+  .stage { position: relative; margin: 12px 16px 24px; }
+  #map { position: relative; width: 100%; min-height: 360px; }
+  #map canvas { position: absolute; left: 0; top: 0; pointer-events: none; }
+  #map #fx { z-index: 1; }
+  #map .frame { position: absolute; border: 1px solid var(--line); background: linear-gradient(180deg, color-mix(in srgb, var(--c) 5%, transparent), transparent 60%); }
+  #map .frame::before, #map .frame::after { content: ""; position: absolute; width: 10px; height: 10px; border: 2px solid var(--c); opacity: .8; }
+  #map .frame::before { left: -2px; top: -2px; border-right: 0; border-bottom: 0; }
+  #map .frame::after { right: -2px; bottom: -2px; border-left: 0; border-top: 0; }
+  #map .frame h3 { margin: 0; padding: 7px 10px 0; font-size: 12px; letter-spacing: .2em; color: var(--c); display: flex; gap: 8px; align-items: baseline; }
+  #map .frame h3 .n { color: var(--ink); font-variant-numeric: tabular-nums; }
+  #map .frame p { margin: 0; padding: 1px 10px 0; font-size: 11px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #map .frame .clear { position: absolute; left: 0; right: 0; top: 55%; text-align: center; color: var(--faint); font-size: 11px; letter-spacing: .3em; }
+  #map .frame .more { position: absolute; right: 8px; top: 6px; font: inherit; font-size: 11px; padding: 2px 6px; border: 1px solid var(--line); background: var(--bg);
+                      color: var(--muted); cursor: pointer; border-radius: 2px; }
+  #map .zone { position: absolute; left: 0; right: 0; font-size: 12px; letter-spacing: .14em; color: var(--muted); display: flex; gap: 10px; align-items: center; }
+  #map .zone b { color: var(--mc); letter-spacing: .18em; }
+  #map .zone::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  #map .bridge { position: absolute; border: 1px dashed var(--line); }
+  #map .bridge h3 { margin: 0; padding: 6px 10px 0; font-size: 11px; letter-spacing: .2em; color: var(--muted); font-weight: 600;
+                    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .ship { position: absolute; left: 0; top: 0; width: var(--cw); height: var(--ch); padding: 0; border: 0; background: none; cursor: pointer;
+          display: flex; flex-direction: column; align-items: center; justify-content: flex-start; color: var(--c); z-index: 2;
+          will-change: transform; border-radius: 4px; }
+  .ship svg { width: 42px; height: 42px; overflow: visible; flex: none; filter: drop-shadow(0 0 4px color-mix(in srgb, var(--c) 70%, transparent)); }
+  .ship .hull { fill: color-mix(in srgb, var(--mc) 22%, transparent); stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
+  .ship .lbl { margin-top: 1px; width: 100%; font-size: 10.5px; line-height: 1.15; text-align: center; white-space: nowrap; overflow: hidden; }
+  .ship .lbl b { color: var(--c); font-weight: 700; }
+  .ship .lbl i { display: block; font-style: normal; color: var(--mc); font-size: 9.5px; overflow: hidden; text-overflow: ellipsis; padding: 0 2px; }
+  .ship:hover .hull, .ship.sel .hull { stroke-width: 2.4; }
+  .ship.sel::before { content: ""; position: absolute; inset: -3px; pointer-events: none;
+    background:
+      linear-gradient(var(--c), var(--c)) left top / 9px 2px no-repeat, linear-gradient(var(--c), var(--c)) left top / 2px 9px no-repeat,
+      linear-gradient(var(--c), var(--c)) right top / 9px 2px no-repeat, linear-gradient(var(--c), var(--c)) right top / 2px 9px no-repeat,
+      linear-gradient(var(--c), var(--c)) left bottom / 9px 2px no-repeat, linear-gradient(var(--c), var(--c)) left bottom / 2px 9px no-repeat,
+      linear-gradient(var(--c), var(--c)) right bottom / 9px 2px no-repeat, linear-gradient(var(--c), var(--c)) right bottom / 2px 9px no-repeat; }
+  .ship.stale { opacity: .38; filter: grayscale(.8); }
+  .ship.dim { opacity: .1; pointer-events: none; }
+  .ship .ring-track { fill: none; stroke: currentColor; stroke-opacity: .2; stroke-width: 2; }
+  .ship .ring { fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; transform: rotate(-90deg); transform-origin: 0 0; }
+  .ship .ring.open { stroke-dasharray: 3 4; stroke-opacity: .7; transform: none; }
+  .ship .flame { fill: var(--c); fill-opacity: .75; stroke: none; }
+  .ship .mark { fill: currentColor; font: 700 11px var(--mono); text-anchor: middle; dominant-baseline: central; }
+  .ship .beacon { animation: blink 1.6s steps(2, jump-none) infinite; }
+  .ship .nosig { fill: none; stroke: currentColor; stroke-width: 1.2; stroke-dasharray: 1.5 3.5; }
+  .ship .shield { fill: none; stroke: currentColor; stroke-width: 1.4; stroke-dasharray: 4 3; }
+  .ship.xo { height: calc(var(--ch) + 10px); }
+  .ship.xo svg { width: 48px; height: 48px; }
+  @keyframes blink { 0% { opacity: 1; } 100% { opacity: .25; } }
+  .ping { position: absolute; left: 0; top: 0; width: 44px; height: 44px; margin: -22px 0 0 -22px; border-radius: 50%;
+          border: 1.5px solid var(--c); pointer-events: none; opacity: 0; z-index: 1; }
+
+  /* the table: the same data, for reading and for screen readers */
+  .tablewrap { margin: 12px 16px 24px; overflow-x: auto; border: 1px solid var(--line); }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { padding: 6px 8px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line2); }
+  th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 600; letter-spacing: .08em; white-space: nowrap; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover, tbody tr:focus-visible { background: var(--line2); }
+  td.st { color: var(--c); white-space: nowrap; font-weight: 700; }
+  td.m { color: var(--mc); white-space: nowrap; }
+  td .stale { color: var(--blocked); }
+
+  /* the side panel: a drawer on the right, a bottom sheet on a phone */
+  .panel { position: fixed; z-index: 30; right: 0; top: 0; bottom: 0; width: min(460px, 100vw); display: flex; flex-direction: column;
+           background: color-mix(in srgb, var(--panel) 96%, transparent); border-left: 1px solid var(--line);
+           box-shadow: -20px 0 50px -20px rgba(0,0,0,.8); }
+  .panel[hidden] { display: none; }
+  .p-head { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  .p-head .k { flex: none; padding: 2px 6px; border: 1px solid var(--c); color: var(--c); font-size: 11px; letter-spacing: .12em; font-weight: 700; }
+  .p-head h2 { flex: 1; margin: 0; font-size: 14px; line-height: 1.35; overflow-wrap: anywhere; outline: none; }
+  .p-head button { flex: none; min-width: 32px; min-height: 32px; border: 1px solid var(--line); background: var(--line2); cursor: pointer; border-radius: 3px; }
+  .p-body { flex: 1; overflow: auto; padding: 12px 14px 20px; }
+  .p-body .why { font-size: 14px; color: var(--c); margin: 0 0 10px; overflow-wrap: anywhere; }
+  .p-body .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .p-body .chips .chip { cursor: default; }
+  .p-body .chips .mc { color: var(--mc); border-color: color-mix(in srgb, var(--mc) 50%, transparent); }
+  .p-body button.chip { cursor: pointer; }
+  .p-body dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; margin: 0 0 12px; }
+  .p-body dt { color: var(--faint); }
+  .p-body dd { margin: 0; overflow-wrap: anywhere; }
+  .p-body .wait { margin: 0 0 12px; padding: 8px 10px; border-left: 3px solid var(--holding); background: color-mix(in srgb, var(--holding) 7%, transparent); overflow-wrap: anywhere; }
+  .p-body .wait.over { border-color: var(--blocked); background: color-mix(in srgb, var(--blocked) 7%, transparent); }
+  .p-body .ev { margin: 0 0 12px; padding: 8px 10px; border: 1px solid var(--line2); overflow-wrap: anywhere; white-space: pre-wrap; }
+  .p-body .ev .kind { color: var(--c2, var(--muted)); font-weight: 700; }
+  .p-body .links { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+  .p-body h4 { margin: 14px 0 6px; font-size: 11px; letter-spacing: .2em; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+  .p-body h4 .src { letter-spacing: normal; color: var(--faint); font-weight: 400; }
+  .p-body h4 button { margin-left: auto; }
+  .p-body pre { margin: 0; padding: 8px 10px; background: rgba(0,0,0,.35); border: 1px solid var(--line2); white-space: pre-wrap;
+                overflow-wrap: anywhere; font: 11.5px/1.45 var(--mono); max-height: 40vh; overflow: auto; color: color-mix(in srgb, var(--ink) 88%, var(--muted)); }
+  .p-body .note { color: var(--faint); font-size: 12px; }
+  .p-body .err { color: var(--blocked); }
+
+  dialog { width: min(900px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; border: 1px solid var(--line);
+           background: var(--panel); color: var(--ink); }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+  dialog .bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); }
+  dialog .bar b { flex: 1; overflow-wrap: anywhere; }
+  dialog pre { margin: 0; padding: 14px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 var(--mono); }
+  footer { margin: 0 16px 24px; color: var(--faint); font-size: 11px; }
+  kbd { padding: 0 4px; border: 1px solid var(--line); border-radius: 2px; font: inherit; color: var(--muted); }
+
+  @media (max-width: 760px) {
+    header { position: static; }
+    nav.views { margin-left: 0; }
+    .panel { top: auto; left: 0; right: 0; width: 100%; height: min(78vh, 640px); border-left: 0; border-top: 1px solid var(--line);
+             box-shadow: 0 -20px 50px -20px rgba(0,0,0,.8); }
+    .chip, .controls input, .p-head button { min-height: 44px; }
+    .mchip { min-height: 44px; }
+    .ship .lbl { font-size: 10px; }
+    .comms ol { max-height: 4.6em; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="top">
+    <div class="brand">
+      <svg viewBox="-16 -16 32 32" aria-hidden="true"><circle r="14" fill="none" stroke="currentColor" opacity=".35" style="color:var(--glow)"/><circle r="8" fill="none" stroke="currentColor" opacity=".25" style="color:var(--glow)"/><path d="M0 -10 7 9 0 5 -7 9Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" style="color:var(--glow)"/></svg>
+      <div><h1>FLEET RADAR</h1><small id="meta">sounding…</small></div>
+    </div>
+    <nav class="views" aria-label="views"><a class="chip" href="/">board</a><a class="chip" href="/radar" aria-current="page">radar</a></nav>
+  </div>
+  <div class="tally" id="tally" aria-label="agents by sector"></div>
+  <div class="machines" id="machines" aria-label="machines (click to show or hide one)"></div>
+  <div class="controls">
+    <input id="filter" type="search" placeholder="filter: id, title, project, home, machine  ( / )" aria-label="filter the agents">
+    <button class="chip" id="split" type="button" aria-pressed="false" title="one map per machine (m)">split by machine</button>
+    <button class="chip" id="tableBtn" type="button" aria-pressed="false" title="the same data as a table (t)">table</button>
+  </div>
+</header>
+<div class="banner" id="banner" role="alert"></div>
+<section class="comms" aria-labelledby="comms-h"><h2 id="comms-h">COMMS LOG</h2><ol id="comms" aria-live="polite"></ol></section>
+<div class="stage" id="stage">
+  <div id="map" role="group" aria-label="fleet map: one button per agent, in sectors by state">
+    <canvas id="sky" aria-hidden="true"></canvas>
+    <canvas id="fx" aria-hidden="true"></canvas>
+  </div>
+</div>
+<div class="tablewrap" id="tablewrap" hidden>
+  <table>
+    <caption class="sr">every agent on the radar</caption>
+    <thead><tr><th scope="col">machine</th><th scope="col">home</th><th scope="col">id</th><th scope="col">task</th><th scope="col">project</th>
+      <th scope="col">state</th><th scope="col">why / waiting</th><th scope="col">last event</th><th scope="col">last activity</th></tr></thead>
+    <tbody id="tbody"></tbody>
+  </table>
+</div>
+<footer>keys: <kbd>←</kbd><kbd>↑</kbd><kbd>→</kbd><kbd>↓</kbd> move between ships · <kbd>Enter</kbd> open · <kbd>Esc</kbd> close · <kbd>t</kbd> table · <kbd>m</kbd> split by machine · <kbd>/</kbd> filter.
+  Ships move only when their state changes; a ping is a new event. Read-only: nothing here acts on an agent.</footer>
+<aside class="panel" id="panel" hidden aria-labelledby="p-title">
+  <div class="p-head"><span class="k" id="p-k"></span><h2 id="p-title" tabindex="-1"></h2><button id="p-close" type="button" aria-label="close the panel">✕</button></div>
+  <div class="p-body"><div id="p-facts"></div><div id="p-peek"></div></div>
+</aside>
+<dialog id="viewer" aria-labelledby="viewer-title">
+  <div class="bar"><b id="viewer-title"></b><button class="chip" id="viewer-close" type="button">close</button></div>
+  <pre id="viewer-body"></pre>
+</dialog>
+<script>
+"use strict";
+const POLL_MS = 5000, PEEK_MS = 10000;
+const reduced = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : { matches: false };
+const SECTORS = [
+  { k: "decision", name: "DECISION", sub: "asked for your call" },
+  { k: "blocked", name: "BLOCKED", sub: "cannot proceed, or stopped at a prompt" },
+  { k: "adrift", name: "ADRIFT", sub: "silent, lost, or waited past its window" },
+  { k: "underway", name: "UNDER WAY", sub: "working" },
+  { k: "holding", name: "HOLDING", sub: "waiting on something, inside its window" },
+  { k: "docked", name: "DOCKED", sub: "done or failed: a report to read" },
+];
+const ORDER2 = ["decision", "blocked", "holding", "adrift", "underway", "docked"]; // two columns: what needs you first
+const SECTOR_RANK = Object.fromEntries(SECTORS.map((s, i) => [s.k, i]));
+const STATE_COLOR = { decision: "decision", blocked: "blocked", "awaiting-input": "blocked", failed: "failed", done: "docked",
+  waiting: "holding", overdue: "adrift", "stopped-silent": "adrift", lost: "adrift", unknown: "adrift", working: "underway" };
+const STATE_LABEL = { decision: "decision", blocked: "blocked", "awaiting-input": "at a prompt", failed: "failed", done: "done",
+  waiting: "waiting", overdue: "overdue", "stopped-silent": "silent", lost: "lost", unknown: "unknown", working: "working" };
+const MACHINE_COLORS = ["#b48cff", "#ff8ad8", "#c4f06a", "#9fe7d8", "#ffa45c", "#7fb2ff"];
+
+const $ = (id) => document.getElementById(id);
+function el(tag, attrs, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") n.className = v; else if (k === "text") n.textContent = v; else n.setAttribute(k, v === true ? "" : v);
+  }
+  for (const k of kids) if (k != null) n.append(k);
+  return n;
+}
+function svg(markup) { const t = document.createElement("template"); t.innerHTML = markup; return t.content.firstChild; }
+function stored(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
+function store(key, v) { try { if (v == null) localStorage.removeItem(key); else localStorage.setItem(key, v); } catch (e) { /* not remembered */ } }
+function hash(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+function ms(iso) { return iso ? Date.parse(iso) : NaN; }
+function dur(msec) {
+  let s = Math.max(0, Math.floor(msec / 1000));
+  if (s < 60) return s + "s";
+  let m = Math.floor(s / 60); s %= 60;
+  if (m < 60) return m + "m " + String(s).padStart(2, "0") + "s";
+  let h = Math.floor(m / 60); m %= 60;
+  if (h < 48) return h + "h " + String(m).padStart(2, "0") + "m";
+  return Math.floor(h / 24) + "d " + (h % 24) + "h";
+}
+function ago(iso) { const t = ms(iso); return isNaN(t) ? "" : dur(Date.now() - t); }
+function hhmm(iso) { const t = ms(iso); return isNaN(t) ? "?" : new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
+// Spans the 1s tick keeps current: data-since (elapsed) or data-until (countdown / overdue).
+function ticker(kind, iso, suffix) {
+  const t = ms(iso);
+  if (isNaN(t)) return el("span", { text: "?" });
+  const n = el("b", { title: iso, "data-suffix": suffix || null });
+  n.dataset[kind] = String(t);
+  paint(n, Date.now());
+  return n;
+}
+function paint(n, now) {
+  let txt;
+  if (n.dataset.since) txt = dur(now - +n.dataset.since) + (n.dataset.suffix || "");
+  else { const t = +n.dataset.until; txt = t >= now ? "in " + dur(t - now) : dur(now - t) + " overdue"; }
+  if (n.textContent !== txt) n.textContent = txt;
+}
+function stripAnsi(s) { return s.replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, "").replace(/\x1b\][^\x07]*\x07/g, ""); }
+function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+  const t = el("textarea", { readonly: "", style: "position:fixed;opacity:0" });
+  t.value = text; document.body.append(t); t.select();
+  try { return document.execCommand("copy") ? Promise.resolve() : Promise.reject(new Error("copy refused")); } finally { t.remove(); }
+}
+
+// Theme: the board's choice in this browser, else the server's default.
+const SERVER_THEME = document.documentElement.dataset.theme;
+const chosen = stored("chartroom-theme-name");
+if (chosen === "hud" || chosen === "chartroom") document.documentElement.dataset.theme = chosen;
+function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+// ---------------------------------------------------------------- state
+
+let data = null, lastOk = 0, first = true;
+let split = stored("chartroom-radar-split") === "1";
+let tableOn = stored("chartroom-radar-table") === "1";
+let filterText = "";
+const hiddenMachines = new Set();
+const machineColor = new Map();
+const slots = new Map();      // key -> {group, idx}: a ship's place in its sector, kept while it stays there
+const ships = new Map();      // key -> button
+const prev = new Map();       // key -> {state, sector, at, short, machine}: what the data said last time
+let reported = new Set();     // machines that had reported by the last render
+let selected = null, selectedFrom = null;
+const comms = [];
+
+function colorOf(machine) {
+  if (!machineColor.has(machine)) machineColor.set(machine, MACHINE_COLORS[machineColor.size % MACHINE_COLORS.length]);
+  return machineColor.get(machine);
+}
+function matches(r) {
+  if (hiddenMachines.has(r.machine)) return false;
+  if (!filterText) return true;
+  const hay = [r.short_id, r.id, r.title, r.project, r.home, r.machine, r.state].join(" ").toLowerCase();
+  return filterText.split(/\s+/).every((w) => hay.includes(w));
+}
+function aria(r) {
+  if (r.kind === "xo") return "XO of home " + r.home + " on " + r.machine + ": herdr says " + r.status + ". Untracked: no events.";
+  return r.short_id + " on " + r.machine + " (" + r.home + "): " + (STATE_LABEL[r.state] || r.state) + ", " + r.why + ". " + r.title +
+    (r.stale ? ". Stale: its machine cannot be read now." : "");
+}
+
+// ---------------------------------------------------------------- ship glyphs (one per state)
+
+const HULL = "M0,-13 L9,11 L0,6 L-9,11 Z";
+function glyph(r) {
+  const s = r.kind === "xo" ? "xo" : r.state;
+  let extra = "", hull = '<path class="hull" d="' + HULL + '"/>', rot = 0;
+  if (s === "working") {
+    extra = r.live_uncertain ? '<text class="mark" x="0" y="0" font-size="10">?</text>' : '<path class="flame" d="M-4,8.5 L0,17 L4,8.5 Z"/>';
+    if (r.live_uncertain) hull = '<path class="hull" d="' + HULL + '" stroke-dasharray="3 2.5"/>';
+  } else if (s === "waiting") {
+    extra = '<circle class="ring-track" r="18"/>' + (r.waiting && r.waiting.until && !r.inferred
+      ? '<circle class="ring" r="18" pathLength="100" stroke-dasharray="100 100" data-since="' + (ms(r.waiting.since) || ms(r.last_activity_at) || 0) + '" data-until="' + ms(r.waiting.until) + '"/>'
+      : '<circle class="ring open" r="18"/>');
+  } else if (s === "blocked" || s === "awaiting-input") {
+    extra = '<path class="shield" d="M0,-19 16.5,-9.5 16.5,9.5 0,19 -16.5,9.5 -16.5,-9.5Z"/>' +
+      '<g class="beacon"><circle cx="15" cy="-15" r="6" fill="var(--bg)" stroke="currentColor" stroke-width="1.4"/><text class="mark" x="15" y="-15" font-size="9">' + (s === "blocked" ? "!" : "›") + '</text></g>';
+  } else if (s === "decision") {
+    extra = '<g class="beacon"><path d="M15,-22 L21,-15 L15,-8 L9,-15 Z" fill="var(--bg)" stroke="currentColor" stroke-width="1.4"/><text class="mark" x="15" y="-15" font-size="9">?</text></g>';
+  } else if (s === "overdue") {
+    extra = '<circle class="nosig" r="18"/><circle cx="14" cy="-14" r="5" fill="var(--bg)" stroke="currentColor" stroke-width="1.3"/><path d="M14,-17 V-14 H16.5" fill="none" stroke="currentColor" stroke-width="1.3"/>';
+  } else if (s === "stopped-silent" || s === "unknown") {
+    extra = '<circle class="nosig" r="18"/>';
+  } else if (s === "lost") {
+    hull = '<path class="hull" d="M-1,-13 L3,-2 L-4,1 Z"/><path class="hull" d="M5,2 L10,12 L1,7 Z"/><path class="hull" d="M-5,4 L-1,7 L-10,12 Z"/>';
+    extra = '<circle class="nosig" r="18"/>';
+  } else if (s === "done") {
+    rot = 90;
+    extra = '<text class="mark" x="14" y="-14" font-size="11">✓</text>';
+  } else if (s === "failed") {
+    hull = '<path class="hull" d="M-1,-13 L4,0 L-5,2 Z"/><path class="hull" d="M6,3 L11,12 L2,7 Z"/><path class="hull" d="M-6,5 L-2,8 L-11,12 Z"/>';
+    extra = '<text class="mark" x="14" y="-14" font-size="11">✕</text>';
+  } else if (s === "xo") {
+    hull = '<path class="hull" d="M0,-15 L11,13 L0,7 L-11,13 Z"/><path d="M0,-15 V-26 L9,-22.5 L0,-19" fill="currentColor" fill-opacity=".8" stroke="currentColor" stroke-width="1.2"/>';
+    extra = r.status === "working" ? '<path class="flame" d="M-4.5,10 L0,19 L4.5,10 Z"/>' : r.status === "blocked" ? '<g class="beacon"><circle cx="15" cy="-15" r="6" fill="var(--bg)" stroke="currentColor" stroke-width="1.4"/><text class="mark" x="15" y="-15" font-size="9">›</text></g>' : "";
+  }
+  const rest = rot + ((hash(r.key) % 31) - 15); // a resting heading of its own: still, never turning
+  return '<svg viewBox="-24 -24 48 48" aria-hidden="true"><g class="body" style="transform:rotate(' + rest + 'deg)" data-rest="' + rest + '">' + hull + "</g>" + extra + "</svg>";
+}
+function stateColor(r) {
+  if (r.kind === "xo") return r.status === "working" ? "var(--underway)" : r.status === "blocked" ? "var(--blocked)" : "var(--adrift)";
+  return "var(--" + (STATE_COLOR[r.state] || "adrift") + ")";
+}
+
+function shipNode(r) {
+  const b = el("button", { type: "button", class: "ship" + (r.kind === "xo" ? " xo" : ""), "data-key": r.key });
+  b.addEventListener("click", () => openPanel(r.key, b));
+  b.addEventListener("keydown", arrowKeys);
+  return b;
+}
+function paintShip(b, r) {
+  const sig = [r.kind, r.state, r.status, r.live_uncertain, r.inferred, r.waiting && r.waiting.until, r.stale, r.machine].join("|");
+  b.style.setProperty("--c", stateColor(r));
+  b.style.setProperty("--mc", colorOf(r.machine));
+  b.setAttribute("aria-label", aria(r));
+  b.title = aria(r);
+  b.classList.toggle("stale", !!r.stale);
+  if (b._sig === sig) return;
+  b._sig = sig;
+  b.replaceChildren(svg(glyph(r)), el("span", { class: "lbl" },
+    el("b", { text: r.kind === "xo" ? "XO " + r.home : r.short_id }), el("i", { text: r.kind === "xo" ? r.machine : r.machine + (r.stale ? " · stale" : "") })));
+}
+
+// ---------------------------------------------------------------- layout: zones, sectors, slots
+
+const map = $("map"), sky = $("sky"), fx = $("fx");
+let geo = null; // {W, H, cellW, cellH, rects: Map group -> rect, bridges: Map zone -> rect}
+
+function groupsOf(d) {
+  const zones = split ? d.machines.map((m) => m.machine) : ["fleet"];
+  const narrow = map.clientWidth < 760;
+  const caps = { docked: narrow ? 12 : 24 };
+  const groups = new Map(), overflow = new Map(), bridges = new Map();
+  for (const z of zones) {
+    bridges.set(z, []);
+    for (const s of SECTORS) { groups.set(z + "|" + s.k, []); overflow.set(z + "|" + s.k, 0); }
+  }
+  for (const r of d.agents) {
+    const g = (split ? r.machine : "fleet") + "|" + r.sector;
+    if (groups.has(g)) groups.get(g).push(r);
+  }
+  for (const f of d.flagships) { const z = split ? f.machine : "fleet"; if (bridges.has(z)) bridges.get(z).push(f); }
+  // Attention first within a sector (a breaking report, then the newest), so a cap keeps what matters.
+  for (const [g, items] of groups) {
+    items.sort((a, b) => (b.breaking - a.breaking) || (ms(b.last_activity_at) || 0) - (ms(a.last_activity_at) || 0) || a.key.localeCompare(b.key));
+    const cap = caps[g.split("|")[1]];
+    if (cap && items.length > cap) { overflow.set(g, items.length - cap); items.length = cap; }
+  }
+  return { zones, groups, overflow, bridges };
+}
+
+// Stable slots: a ship keeps its index while it stays in its group; a newcomer takes the
+// lowest free index. Nobody is moved to close a gap.
+function assignSlots(groups) {
+  const used = new Map([...groups.keys()].map((g) => [g, new Set()]));
+  const pending = [];
+  for (const [g, items] of groups) for (const r of items) {
+    const s = slots.get(r.key);
+    if (s && s.group === g && !used.get(g).has(s.idx)) used.get(g).add(s.idx); else pending.push([g, r]);
+  }
+  for (const [g, r] of pending) { const u = used.get(g); let i = 0; while (u.has(i)) i++; u.add(i); slots.set(r.key, { group: g, idx: i }); }
+  const live = new Set(); for (const items of groups.values()) for (const r of items) live.add(r.key);
+  for (const k of [...slots.keys()]) if (!live.has(k)) slots.delete(k);
+  const top = new Map(); for (const [g, u] of used) top.set(g, u.size ? Math.max(...u) + 1 : 0);
+  return top;
+}
+
+function layout(d, G, top) {
+  const W = map.clientWidth, narrow = W < 760;
+  const cols = W >= 900 ? 3 : 2, gap = narrow ? 8 : 12;
+  const cellW = narrow ? 62 : 78, cellH = narrow ? 66 : 70, head = 46, pad = 10;
+  const sw = (W - gap * (cols - 1)) / cols, perRow = Math.max(1, Math.floor((sw - pad * 2) / cellW));
+  const order = cols === 3 ? SECTORS.map((s) => s.k) : ORDER2;
+  const rects = new Map(), bridges = new Map(), zoneHeads = [];
+  let y = 0;
+  for (const z of G.zones) {
+    if (split) { zoneHeads.push({ z, y }); y += 30; }
+    const fl = G.bridges.get(z) || [];
+    if (fl.length) {
+      const per = Math.max(1, Math.floor((W - pad * 2) / (cellW + 6)));
+      const h = 26 + Math.ceil(fl.length / per) * (cellH + 14) + 6; // an XO's hull is taller than a crew ship's
+      bridges.set(z, { x: 0, y, w: W, h, per });
+      y += h + gap;
+    }
+    for (let row = 0; row * cols < order.length; row++) {
+      const keys = order.slice(row * cols, row * cols + cols);
+      const need = Math.max(...keys.map((k) => Math.max(1, Math.ceil((top.get(z + "|" + k) || 0) / perRow))));
+      const h = Math.max(narrow ? 150 : 170, head + need * cellH + pad);
+      keys.forEach((k, i) => rects.set(z + "|" + k, { x: i * (sw + gap), y, w: sw, h, perRow }));
+      y += h + gap;
+    }
+    y += split ? 10 : 0;
+  }
+  return { W, H: Math.max(360, y), cellW, cellH, head, pad, rects, bridges, zoneHeads };
+}
+
+function slotXY(r) {
+  const s = slots.get(r.key), rect = s && geo.rects.get(s.group);
+  if (!rect) return null;
+  const col = s.idx % rect.perRow, row = Math.floor(s.idx / rect.perRow), h = hash(r.key);
+  const jx = ((h % 13) - 6) * 0.8, jy = (((h >>> 8) % 11) - 5) * 0.8; // a fixed offset of its own, so the grid reads as space
+  return { x: rect.x + geo.pad + col * geo.cellW + geo.cellW / 2 + jx, y: rect.y + geo.head + row * geo.cellH + geo.cellH / 2 - 4 + jy };
+}
+function bridgeXY(f, i, z) {
+  const b = geo.bridges.get(z);
+  if (!b) return null;
+  return { x: b.x + geo.pad + (i % b.per) * (geo.cellW + 6) + geo.cellW / 2, y: b.y + 26 + Math.floor(i / b.per) * (geo.cellH + 14) + geo.cellH / 2 };
+}
+function put(b, p) { b._p = p; b.style.transform = "translate(" + (p.x - geo.cellW / 2).toFixed(1) + "px," + (p.y - 22).toFixed(1) + "px)"; }
+
+// Static background: stars and the sector frames' corner ticks. Drawn on resize and when the
+// layout changes; never animated.
+function drawSky() {
+  const dpr = window.devicePixelRatio || 1;
+  for (const c of [sky, fx]) { c.width = geo.W * dpr; c.height = geo.H * dpr; c.style.width = geo.W + "px"; c.style.height = geo.H + "px"; }
+  const g = sky.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, geo.W, geo.H);
+  let seed = 7;
+  const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  const ink = cssVar("--ink") || "#d4ecf5";
+  for (let i = 0, n = Math.round(geo.W * geo.H / 2600); i < n; i++) {
+    g.globalAlpha = 0.08 + rnd() * 0.35;
+    g.fillStyle = ink;
+    const r = rnd() < 0.92 ? 0.6 : 1.2;
+    g.fillRect(rnd() * geo.W, rnd() * geo.H, r, r);
+  }
+  g.globalAlpha = 1;
+  g.strokeStyle = cssVar("--line2") || "rgba(120,200,235,.08)";
+  g.lineWidth = 1;
+  for (let x = 0; x < geo.W; x += 48) { g.beginPath(); g.moveTo(x + 0.5, 0); g.lineTo(x + 0.5, geo.H); g.stroke(); }
+  for (let y = 0; y < geo.H; y += 48) { g.beginPath(); g.moveTo(0, y + 0.5); g.lineTo(geo.W, y + 0.5); g.stroke(); }
+}
+
+let frameKey = "";
+function drawFrames(d, G) {
+  const key = JSON.stringify([geo.W, geo.H, split, [...geo.rects.entries()], [...geo.bridges.entries()], [...G.overflow.entries()],
+    [...G.groups.entries()].map(([g, a]) => [g, a.length]), d.machines.map((m) => m.machine)]);
+  if (key === frameKey) return;
+  frameKey = key;
+  map.querySelectorAll(".frame,.zone,.bridge").forEach((n) => n.remove());
+  const frag = document.createDocumentFragment();
+  for (const { z, y } of geo.zoneHeads) {
+    const m = d.machines.find((x) => x.machine === z);
+    const n = el("div", { class: "zone", style: "top:" + (y + 6) + "px;--mc:" + colorOf(z) }, el("b", { text: z.toUpperCase() }),
+      el("span", { text: m ? machineState(m) : "" }));
+    frag.append(n);
+  }
+  for (const [z, b] of geo.bridges) {
+    frag.append(el("div", { class: "bridge", style: "left:" + b.x + "px;top:" + b.y + "px;width:" + b.w + "px;height:" + b.h + "px" },
+      el("h3", { text: "BRIDGE · each home's XO (from herdr; untracked: no events)" })));
+  }
+  for (const [g, rect] of geo.rects) {
+    const k = g.split("|")[1], s = SECTORS[SECTOR_RANK[k]], n = G.groups.get(g).length, more = G.overflow.get(g);
+    const f = el("div", { class: "frame", style: "left:" + rect.x + "px;top:" + rect.y + "px;width:" + rect.w + "px;height:" + rect.h + "px;--c:var(--" + k + ")" },
+      el("h3", {}, el("span", { text: s.name }), el("span", { class: "n", text: String(n + more) })), el("p", { text: s.sub }),
+      n ? null : el("div", { class: "clear", text: "— clear —" }));
+    if (more) {
+      const b = el("button", { class: "more", type: "button", text: "+" + more + " more in the table" });
+      b.addEventListener("click", () => setTable(true));
+      f.append(b);
+    }
+    frag.append(f);
+  }
+  map.prepend(frag);
+  map.prepend(fx); map.prepend(sky);
+}
+
+// ---------------------------------------------------------------- motion (state changes only)
+
+const trails = [];
+let fxRunning = false;
+function bez(a, c, b, t) { const u = 1 - t; return { x: u * u * a.x + 2 * u * t * c.x + t * t * b.x, y: u * u * a.y + 2 * u * t * c.y + t * t * b.y }; }
+function fly(b, from, to, key) {
+  put(b, to);
+  if (reduced.matches || document.hidden || !from) return;
+  const dx = to.x - from.x, dy = to.y - from.y, dist = Math.hypot(dx, dy) || 1;
+  const bend = Math.min(140, dist * 0.28) * (hash(key) % 2 ? 1 : -1);
+  const c = { x: (from.x + to.x) / 2 - dy / dist * bend, y: (from.y + to.y) / 2 + dx / dist * bend };
+  const off = (p) => "translate(" + (p.x - geo.cellW / 2).toFixed(1) + "px," + (p.y - 22).toFixed(1) + "px)";
+  const frames = [];
+  for (let i = 0; i <= 10; i++) frames.push({ transform: off(bez(from, c, to, i / 10)) });
+  const D = 1300;
+  b.animate(frames, { duration: D, easing: "cubic-bezier(.45,.05,.35,1)" });
+  const body = b.querySelector(".body"), rest = body ? +body.dataset.rest : 0;
+  const heading = Math.atan2(dy, dx) * 180 / Math.PI + 90;
+  if (body) body.animate([{ transform: "rotate(" + rest + "deg)" }, { transform: "rotate(" + heading + "deg)", offset: 0.15 },
+    { transform: "rotate(" + heading + "deg)", offset: 0.85 }, { transform: "rotate(" + rest + "deg)" }], { duration: D, easing: "ease-in-out" });
+  trails.push({ a: from, c, b: to, t0: performance.now(), D, color: getComputedStyle(b).color });
+  if (!fxRunning) { fxRunning = true; requestAnimationFrame(drawFx); }
+}
+function drawFx(now) {
+  const dpr = window.devicePixelRatio || 1, g = fx.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, geo.W, geo.H);
+  for (let i = trails.length - 1; i >= 0; i--) {
+    const t = trails[i], p = (now - t.t0) / t.D;
+    if (p > 1.6) { trails.splice(i, 1); continue; }
+    const head = Math.min(1, p), fade = p > 1 ? 1 - (p - 1) / 0.6 : 1;
+    g.strokeStyle = t.color; g.lineWidth = 1.6; g.setLineDash([4, 5]);
+    for (let s = 0; s < 24; s++) {
+      const t0 = head * s / 24, t1 = head * (s + 1) / 24, q0 = bez(t.a, t.c, t.b, t0), q1 = bez(t.a, t.c, t.b, t1);
+      g.globalAlpha = Math.max(0, fade * (0.15 + 0.6 * (s / 24)));
+      g.beginPath(); g.moveTo(q0.x, q0.y); g.lineTo(q1.x, q1.y); g.stroke();
+    }
+  }
+  g.globalAlpha = 1; g.setLineDash([]);
+  if (trails.length) requestAnimationFrame(drawFx); else { fxRunning = false; g.clearRect(0, 0, geo.W, geo.H); }
+}
+function ping(b) {
+  if (reduced.matches || document.hidden || !b._p) return;
+  const p = el("div", { class: "ping", style: "left:" + b._p.x + "px;top:" + (b._p.y - 3) + "px;--c:" + b.style.getPropertyValue("--c"), "aria-hidden": "true" });
+  map.append(p);
+  p.animate([{ opacity: 0.9, transform: "scale(.4)" }, { opacity: 0, transform: "scale(2.2)" }], { duration: 1100, easing: "cubic-bezier(.2,.6,.3,1)" }).onfinish = () => p.remove();
+}
+
+function log(text, cls) {
+  comms.unshift({ t: new Date(), text, cls });
+  comms.length = Math.min(comms.length, 40);
+  $("comms").replaceChildren(...comms.slice(0, 12).map((c) => el("li", { style: c.cls ? "--c:var(--" + c.cls + ")" : null },
+    el("span", { text: c.t.toLocaleTimeString([], { hour12: false }) + "  " }), ...c.text)));
+}
+
+// ---------------------------------------------------------------- render
+
+function machineState(m) {
+  const homes = (m.homes || []).length;
+  if (m.contact === "sounding") return "sounding…";
+  if (m.contact !== "ok") {
+    const why = m.contact === "unreachable" ? "no contact" : m.contact === "no-chartroom" ? "no chartroom there" : "could not read it";
+    return why + (m.ok_at ? " since " + hhmm(m.attempt_at) + " (showing " + hhmm(m.ok_at) + ")" : "") + (m.error ? ": " + m.error : "");
+  }
+  return (m.local ? "this machine · " : "") + (m.capability === "single-home" ? "older chartroom: its default home only" : homes + " home" + (homes === 1 ? "" : "s")) +
+    (m.drafting ? " · " + m.drafting + " drafting" : "") + " · read " + ago(m.ok_at || m.fetched_at) + " ago";
+}
+
+function renderMachines(d) {
+  const box = $("machines");
+  const want = d.machines.map((m) => {
+    const off = hiddenMachines.has(m.machine), bad = m.contact !== "ok" && m.contact !== "sounding";
+    const b = el("button", { class: "chip mchip" + (off ? " off" : "") + (bad ? " bad" : ""), type: "button", "aria-pressed": off ? "false" : "true",
+      style: "--mc:" + colorOf(m.machine), title: (off ? "show " : "hide ") + m.machine + "'s agents" + (m.note ? "\n" + m.note : "") + (m.error ? "\n" + m.error : "") },
+      el("span", { class: "dot", "aria-hidden": "true" }), el("span", { class: "lbl", text: m.machine }), el("span", { class: "st", text: machineState(m) }));
+    b.addEventListener("click", () => { if (off) hiddenMachines.delete(m.machine); else hiddenMachines.add(m.machine); render(true); });
+    return b;
+  });
+  box.replaceChildren(...want);
+}
+
+function renderTally(d) {
+  const shown = d.agents.filter(matches);
+  const by = {}; for (const r of shown) by[r.sector] = (by[r.sector] || 0) + 1;
+  $("tally").replaceChildren(...SECTORS.map((s) => el("span", { "data-s": s.k, style: "--c:var(--" + s.k + ")" }, el("b", { text: String(by[s.k] || 0) }), " " + s.name.toLowerCase())),
+    el("span", {}, el("b", { text: String(d.flagships.length) }), " XO" + (d.flagships.length === 1 ? "" : "s")));
+  const needs = (by.decision || 0) + (by.blocked || 0);
+  document.title = (needs ? "(" + needs + ") " : "") + "radar · chartroom";
+}
+
+// quiet: a relayout (split toggled), not news: no flights, pings or log lines.
+function render(quiet) {
+  const d = data;
+  const calm = first || quiet;
+  if (!d) return;
+  for (const m of d.machines) colorOf(m.machine);
+  renderMachines(d);
+  renderTally(d);
+  const metaBits = [d.agents.length + " agents", d.machines.length + " machine" + (d.machines.length === 1 ? "" : "s"), "updated " + hhmm(d.generated_at)];
+  $("meta").textContent = metaBits.join(" · ");
+  banner(d.error || "");
+  const G = groupsOf(d);
+  const top = assignSlots(G.groups);
+  const before = geo && geo.W;
+  geo = layout(d, G, top);
+  map.style.height = geo.H + "px";
+  map.style.setProperty("--cw", geo.cellW + "px");
+  map.style.setProperty("--ch", geo.cellH + "px");
+  if (!before || before !== geo.W || sky.height !== Math.round(geo.H * (window.devicePixelRatio || 1))) drawSky();
+  drawFrames(d, G);
+
+  // News (the comms log) comes from the data, never from what is drawn: a ship a sector's cap
+  // leaves out has not left the radar, and one it brings back has not arrived.
+  const inData = new Map(d.agents.map((r) => [r.key, r]));
+  const arrow = (was, r) => el("span", { class: "arrow", text: (STATE_LABEL[was.state] || was.state) + " → " + (STATE_LABEL[r.state] || r.state) });
+  const known = new Set(d.machines.filter((m) => m.ok_at).map((m) => m.machine));
+  if (!calm) {
+    for (const m of known) if (!reported.has(m)) log(["contact with " + m + ": " + d.agents.filter((r) => r.machine === m).length + " agents"], null);
+    for (const r of d.agents) {
+      if (!reported.has(r.machine)) continue; // its first report: one contact line above, not one per agent
+      const was = prev.get(r.key);
+      if (!was) log([el("b", { text: r.short_id }), " · " + r.machine + " · on the radar: " + (STATE_LABEL[r.state] || r.state)], STATE_COLOR[r.state]);
+      else if (was.state !== r.state) log([el("b", { text: r.short_id }), " · " + r.machine + " · " + r.title.slice(0, 40) + "  ", arrow(was, r)], STATE_COLOR[r.state]);
+    }
+    for (const [k, was] of prev) if (!inData.has(k) && known.has(was.machine)) log([el("b", { text: was.short }), " · " + was.machine + " · left the radar (closed, or no longer open)"], null);
+  }
+  const seen = new Set(), all = [];
+  for (const items of G.groups.values()) for (const r of items) all.push(r);
+  all.forEach((r, i) => {
+    let b = ships.get(r.key);
+    const fresh = !b, p = slotXY(r), was = prev.get(r.key);
+    if (!p) return;
+    seen.add(r.key);
+    if (fresh) { b = shipNode(r); ships.set(r.key, b); map.append(b); }
+    paintShip(b, r);
+    b.classList.toggle("dim", !matches(r));
+    b.tabIndex = matches(r) ? 0 : -1;
+    // the only movement: a ship already on screen whose sector changed flies to its new slot
+    if (!calm && !fresh && was && was.sector !== r.sector) fly(b, b._p, p, r.key);
+    else put(b, p);
+    if (!calm && !fresh && was && was.sector === r.sector && was.at && r.last_activity_at && was.at !== r.last_activity_at) ping(b);
+    if (fresh && first && !reduced.matches) b.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 500, delay: Math.min(i, 40) * 12, fill: "backwards" });
+  });
+  reported = known;
+  prev.clear();
+  for (const r of d.agents) prev.set(r.key, { state: r.state, sector: r.sector, at: r.last_activity_at, short: r.short_id, machine: r.machine });
+  // the XOs, on their bridge
+  for (const [z, fl] of G.bridges) fl.forEach((f, i) => {
+    const p = bridgeXY(f, i, z);
+    if (!p) return;
+    seen.add(f.key);
+    let b = ships.get(f.key);
+    if (!b) { b = shipNode(f); ships.set(f.key, b); map.append(b); }
+    paintShip(b, f);
+    b.classList.toggle("dim", !matches(f));
+    put(b, p);
+  });
+  for (const [k, b] of ships) {
+    if (seen.has(k)) continue;
+    ships.delete(k);
+    if (reduced.matches || calm) b.remove(); else b.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 400 }).onfinish = () => b.remove();
+  }
+  // Tab order: top to bottom, left to right. Moved only when it changed, and focus kept: moving a
+  // node restarts its CSS animations and drops focus.
+  const ordered = [...ships.values()].filter((b) => b._p).sort((a, b) => (a._p.y - b._p.y) || (a._p.x - b._p.x));
+  const now = [...map.querySelectorAll(".ship")];
+  if (ordered.length !== now.length || ordered.some((b, i) => b !== now[i])) {
+    const active = document.activeElement;
+    for (const b of ordered) map.append(b);
+    if (active && active.classList && active.classList.contains("ship") && active.isConnected) active.focus({ preventScroll: true });
+  }
+  if (first) log(["contact: " + d.agents.length + " agents and " + d.flagships.length + " XOs on " + d.machines.length + " machine" + (d.machines.length === 1 ? "" : "s")], null);
+  first = false;
+  if (tableOn) renderTable(d);
+  if (selected) renderFacts();
+}
+
+// ---------------------------------------------------------------- table
+
+function renderTable(d) {
+  const rows = [...d.agents].filter(matches).sort((a, b) => (SECTOR_RANK[a.sector] - SECTOR_RANK[b.sector]) || (ms(b.last_activity_at) || 0) - (ms(a.last_activity_at) || 0));
+  const out = rows.map((r) => {
+    const w = r.waiting ? (r.waiting.on || "") + (r.waiting.until ? " · until " + r.waiting.until : "") : "";
+    const tr = el("tr", { tabindex: "0", "data-key": r.key, style: "--c:" + stateColor(r) + ";--mc:" + colorOf(r.machine), "aria-label": aria(r) },
+      el("td", { class: "m", text: r.machine }), el("td", { text: r.home }), el("td", { text: r.short_id }), el("td", { text: r.title }),
+      el("td", { text: r.project || "" }), el("td", { class: "st", text: STATE_LABEL[r.state] || r.state }),
+      el("td", {}, r.why + (w && !r.why.includes(w) ? " — " + w : ""), r.stale ? el("span", { class: "stale", text: " (stale)" }) : null),
+      el("td", { text: r.last_event ? (r.last_event.kind ? r.last_event.kind + ": " : "") + r.last_event.text.slice(0, 140) : "" }),
+      el("td", { text: r.last_activity_at ? ago(r.last_activity_at) + " ago" : "", title: r.last_activity_at || "" }));
+    tr.addEventListener("click", () => openPanel(r.key, tr));
+    tr.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openPanel(r.key, tr); } });
+    return tr;
+  });
+  for (const f of d.flagships.filter(matches)) {
+    const tr = el("tr", { tabindex: "0", style: "--c:" + stateColor(f) + ";--mc:" + colorOf(f.machine), "aria-label": aria(f) },
+      el("td", { class: "m", text: f.machine }), el("td", { text: f.home }), el("td", { text: "XO" }), el("td", { text: f.title }), el("td", { text: "" }),
+      el("td", { class: "st", text: f.status }), el("td", { text: f.why }), el("td", { text: "" }), el("td", { text: "" }));
+    tr.addEventListener("click", () => openPanel(f.key, tr));
+    tr.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openPanel(f.key, tr); } });
+    out.push(tr);
+  }
+  $("tbody").replaceChildren(...out);
+}
+function setTable(on) {
+  tableOn = on; store("chartroom-radar-table", on ? "1" : null);
+  $("tableBtn").setAttribute("aria-pressed", String(on));
+  $("tablewrap").hidden = !on; $("stage").hidden = on;
+  if (on && data) renderTable(data);
+  if (!on) render(true);
+}
+
+// ---------------------------------------------------------------- the side panel
+
+function recOf(key) { return data && (data.agents.find((r) => r.key === key) || data.flagships.find((f) => f.key === key)); }
+let peekTimer = null, peekAbort = null, peekKey = null;
+function openPanel(key, from) {
+  selected = key; selectedFrom = from || null;
+  for (const b of ships.values()) b.classList.toggle("sel", b.dataset.key === key);
+  $("panel").hidden = false;
+  $("p-peek").replaceChildren();
+  peekKey = null;
+  renderFacts();
+  $("p-title").focus();
+  loadPeek();
+  clearInterval(peekTimer);
+  peekTimer = setInterval(() => { if (!document.hidden && selected) loadPeek(); }, PEEK_MS);
+}
+function closePanel() {
+  selected = null;
+  clearInterval(peekTimer);
+  if (peekAbort) peekAbort.abort();
+  $("panel").hidden = true;
+  for (const b of ships.values()) b.classList.remove("sel");
+  if (selectedFrom && selectedFrom.isConnected) selectedFrom.focus();
+}
+function q(r, extra) {
+  const p = new URLSearchParams({ m: r.machine, h: r.home });
+  if (r.kind === "xo") p.set("pane", r.pane); else p.set("id", r.id);
+  for (const [k, v] of Object.entries(extra || {})) p.set(k, v);
+  return p.toString();
+}
+function prLinks(text) {
+  return [...new Set((text || "").match(/https?:\/\/[^\s<>()"'`\]\[]+\/(?:pull|pulls|merge_requests|pullrequest)\/\d+/g) || [])];
+}
+let factsSig = "";
+function renderFacts() {
+  const r = recOf(selected), box = $("p-facts");
+  const sig = JSON.stringify(r || null);
+  if (sig === factsSig && box.childNodes.length) return;
+  factsSig = sig;
+  if (!r) {
+    $("p-k").textContent = "GONE";
+    box.replaceChildren(el("p", { class: "note", text: "This agent is no longer on the radar (closed, or its machine dropped it). The last pane and events below stay as they were." }));
+    return;
+  }
+  $("panel").style.setProperty("--c", stateColor(r));
+  $("panel").style.setProperty("--mc", colorOf(r.machine));
+  $("p-k").textContent = r.kind === "xo" ? "XO" : (STATE_LABEL[r.state] || r.state).toUpperCase();
+  $("p-title").textContent = r.kind === "xo" ? "XO of " + r.home + " — " + r.title : r.title;
+  const chips = el("div", { class: "chips" }, el("span", { class: "chip mc", text: "⬢ " + r.machine }), el("span", { class: "chip", text: "home " + r.home }),
+    r.project ? el("span", { class: "chip", text: r.project }) : null);
+  if (r.kind !== "xo") {
+    const cmd = "/continue " + r.short_id;
+    const c = el("button", { class: "chip", type: "button", title: "copy " + cmd + " (for the XO of home " + r.home + " on " + r.machine + ")", text: cmd });
+    c.addEventListener("click", () => copyText(cmd).then(() => { c.textContent = "copied"; }, () => { c.textContent = "copy failed"; }).finally(() => setTimeout(() => { c.textContent = cmd; }, 1400)));
+    chips.append(c);
+  }
+  // a waiting agent's "on what" is in its own block just below
+  const why = r.state === "waiting" && !r.inferred ? "waiting" + (/still live$/.test(r.why) ? "; its process is still live" : "") : r.why;
+  const out = [chips, el("p", { class: "why", text: why })];
+  if (r.stale) out.push(el("p", { class: "err", text: "Stale: " + r.machine + " cannot be read now; this is what it said at " + hhmm((data.machines.find((m) => m.machine === r.machine) || {}).ok_at) + "." }));
+  if (r.waiting) {
+    const w = el("div", { class: "wait" + (r.state === "overdue" ? " over" : "") }, el("div", {}, (r.inferred ? "seems to wait on: " : "waiting on: ") + (r.waiting.on || "?")));
+    const t = el("div", {});
+    if (r.waiting.until) t.append("until " + r.waiting.until + " (", ticker("until", r.waiting.until), ")");
+    else t.append("no deadline given");
+    if (r.waiting.since) t.append(" · since ", ticker("since", r.waiting.since, " ago"));
+    w.append(t);
+    out.push(w);
+  }
+  if (r.kind === "xo") {
+    out.push(el("dl", {}, el("dt", { text: "herdr" }), el("dd", { text: r.status }), el("dt", { text: "agent" }), el("dd", { text: r.agent }),
+      el("dt", { text: "pane" }), el("dd", { text: r.pane || "?" }), el("dt", { text: "home" }), el("dd", { text: r.home_path || "?" })));
+    out.push(el("p", { class: "note", text: "Untracked: an XO writes no events, so only herdr's word for its state is shown, and its screen below." }));
+  } else {
+    const dl = el("dl", {});
+    const add = (k, v) => { if (v != null && v !== "") dl.append(el("dt", { text: k }), el("dd", {}, v)); };
+    add("state", (r.state) + (r.status_state !== r.state ? " (status: " + r.status_state + ")" : "") + (r.inferred ? ", inferred" : ""));
+    add("process", r.live + (r.live_uncertain ? " (could not be checked)" : ""));
+    add("last activity", r.last_activity_at ? ticker("since", r.last_activity_at, " ago") : "none yet");
+    add("dispatched", r.dispatched ? ticker("since", r.dispatched, " ago") : "not yet");
+    add("backend", r.backend); add("kind", r.kind); add("task", r.id);
+    add("home path", r.home_path || "(its default home; an older chartroom reports no path)");
+    out.push(dl);
+    if (r.last_event) {
+      const ev = el("div", { class: "ev", style: "--c2:var(--" + (STATE_COLOR[r.last_event.kind] || "adrift") + ")" }, r.last_event.kind ? el("span", { class: "kind", text: r.last_event.kind + ": " }) : null, r.last_event.text);
+      out.push(el("h4", { text: "LAST EVENT" }), ev);
+    }
+    const links = el("div", { class: "links" });
+    for (const f of ["report.md", "plan.md", "brief.md", "events.log"]) {
+      if (f === "report.md" && !r.has_report) continue;
+      if (!r.home_path && f !== "report.md") continue;
+      const a = el("a", { class: "chip", href: "/api/radar/file?" + q(r, { f }), text: f.replace(/\.(md|log)$/, "") });
+      a.addEventListener("click", (e) => { if (e.metaKey || e.ctrlKey) return; e.preventDefault(); viewFile(r, f, a.href); });
+      links.append(a);
+    }
+    for (const u of prLinks(r.last_event && r.last_event.text)) links.append(el("a", { class: "chip", href: u, target: "_blank", rel: "noopener noreferrer", text: u.replace(/^https?:\/\/[^/]+\//, "") }));
+    if (links.childNodes.length) out.push(links);
+  }
+  box.replaceChildren(...out);
+}
+
+async function loadPeek() {
+  const r = recOf(selected);
+  if (!r) return;
+  const box = $("p-peek"), key = selected;
+  if (peekKey !== key) {
+    peekKey = key;
+    box.replaceChildren(el("h4", {}, "LIVE", el("span", { class: "src", text: "asking " + r.machine + "…" })));
+  }
+  if (peekAbort) peekAbort.abort();
+  peekAbort = new AbortController();
+  let p;
+  try {
+    const res = await fetch("/api/radar/peek?" + q(r, { n: 15 }), { cache: "no-store", signal: peekAbort.signal });
+    p = await res.json();
+    if (!res.ok) throw new Error(p.error || res.statusText);
+  } catch (e) {
+    if (e.name === "AbortError") return;
+    p = { error: e.message, text: "", fetched_at: null };
+  }
+  if (selected !== key) return;
+  const refresh = el("button", { class: "chip", type: "button", text: "↻ refresh" });
+  refresh.addEventListener("click", loadPeek);
+  const head = el("h4", {}, "LIVE", el("span", { class: "src" }, "from " + r.machine + (p.fetched_at ? " · read " : ""), p.fetched_at ? ticker("since", p.fetched_at, " ago") : null,
+    " · read-only, every " + PEEK_MS / 1000 + "s"), refresh);
+  const parts = [head];
+  if (p.error) parts.push(el("p", { class: "err", text: "could not read it: " + p.error }));
+  // `chartroom peek` prints "== <section>" headings: events, the pane or screen, the report's path
+  let cur = null;
+  for (const line of stripAnsi(p.text || "").split("\n")) {
+    const m = /^== (.+)$/.exec(line);
+    if (m) { cur = { name: m[1], lines: [] }; parts.push(cur); continue; }
+    if (!cur) { cur = { name: "output", lines: [] }; parts.push(cur); }
+    cur.lines.push(line);
+  }
+  // The worker's own newest report, from those events: often the reason itself (the status row's
+  // last line may be an agent hook such as "awaiting-input").
+  const evs = parts.find((x) => !(x instanceof Node) && x.name === "events");
+  const rep = evs && [...evs.lines].reverse().map((l) => /^(\S+) (progress|waiting|decision|blocked|done|failed): ([\s\S]*)$/.exec(l)).find(Boolean);
+  const same = rep && r.last_event && r.last_event.kind === rep[2] && r.last_event.text === rep[3]; // already shown above
+  if (rep && !same) parts.splice(p.error ? 2 : 1, 0, el("h4", {}, "LAST REPORT", el("span", { class: "src" }, rep[2] + " · ", ticker("since", rep[1], " ago"))),
+    el("div", { class: "ev", style: "--c2:var(--" + (STATE_COLOR[rep[2]] || "underway") + ")" }, el("span", { class: "kind", text: rep[2] + ": " }), rep[3]));
+  box.replaceChildren(...parts.map((x) => {
+    if (x instanceof Node) return x;
+    if (/^report: /.test(x.name)) return el("p", { class: "note", text: x.name });
+    const pre = el("pre", { tabindex: "0", "aria-label": x.name, text: x.lines.join("\n").replace(/\s+$/, "") || "(nothing)" });
+    return el("div", {}, el("h4", { text: x.name.toUpperCase() }), pre);
+  }));
+  for (const pre of box.querySelectorAll("pre")) pre.scrollTop = pre.scrollHeight; // the newest lines in view
+}
+
+async function viewFile(r, f, href) {
+  const dlg = $("viewer");
+  $("viewer-title").textContent = r.short_id + " · " + r.machine + " — " + f;
+  const body = $("viewer-body");
+  body.textContent = "loading…";
+  if (!dlg.open) dlg.showModal();
+  try {
+    const res = await fetch(href, { cache: "no-store" });
+    body.textContent = res.ok ? await res.text() : "could not load " + f + " (" + res.status + "): " + await res.text();
+  } catch (e) { body.textContent = "could not load " + f + ": " + e.message; }
+}
+$("viewer-close").addEventListener("click", () => $("viewer").close());
+$("p-close").addEventListener("click", closePanel);
+
+// ---------------------------------------------------------------- keyboard
+
+function arrowKeys(e) {
+  const dirs = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+  const d = dirs[e.key];
+  if (!d) return;
+  e.preventDefault();
+  const me = e.currentTarget._p;
+  let best = null, bestScore = Infinity;
+  for (const b of ships.values()) {
+    if (b === e.currentTarget || b.classList.contains("dim") || !b._p) continue;
+    const dx = b._p.x - me.x, dy = b._p.y - me.y, along = dx * d[0] + dy * d[1], across = Math.abs(dx * d[1] + dy * d[0]);
+    if (along <= 2) continue;
+    const score = along + across * 2.5;
+    if (score < bestScore) { bestScore = score; best = b; }
+  }
+  if (best) best.focus();
+}
+document.addEventListener("keydown", (e) => {
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
+  if (e.key === "Escape") {
+    if ($("viewer").open) return;
+    if (typing) { e.target.blur(); return; }
+    if (selected) { e.preventDefault(); closePanel(); }
+    return;
+  }
+  if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === "t") { e.preventDefault(); setTable(!tableOn); }
+  else if (e.key === "m") { e.preventDefault(); $("split").click(); }
+  else if (e.key === "/") { e.preventDefault(); $("filter").focus(); }
+  // a bottom sheet on a phone holds focus while it is open
+  else if (e.key === "Tab" && selected && window.innerWidth <= 760 && $("panel").contains(document.activeElement)) {
+    const f = [...$("panel").querySelectorAll("button, a[href], pre[tabindex], h2[tabindex]")].filter((n) => n.offsetParent);
+    if (!f.length) return;
+    if (e.shiftKey && document.activeElement === f[0]) { e.preventDefault(); f[f.length - 1].focus(); }
+    else if (!e.shiftKey && document.activeElement === f[f.length - 1]) { e.preventDefault(); f[0].focus(); }
+  }
+});
+
+// ---------------------------------------------------------------- controls, polling, the clock
+
+$("filter").addEventListener("input", (e) => { filterText = e.target.value.trim().toLowerCase(); render(true); });
+$("split").setAttribute("aria-pressed", String(split));
+$("split").addEventListener("click", () => {
+  split = !split; store("chartroom-radar-split", split ? "1" : null);
+  $("split").setAttribute("aria-pressed", String(split));
+  slots.clear(); // new groups: everyone is placed afresh, with no flight (nothing changed state)
+  render(true);
+});
+$("tableBtn").addEventListener("click", () => setTable(!tableOn));
+
+function banner(msg) { const b = $("banner"); b.textContent = msg || ""; b.style.display = msg ? "block" : "none"; }
+
+async function refresh() {
+  try {
+    const r = await fetch("/api/radar", { cache: "no-store" });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || r.statusText);
+    data = d; lastOk = Date.now();
+    render();
+  } catch (e) {
+    banner("Could not refresh: " + e.message + (data ? " (showing the last good view)" : ""));
+  }
+}
+function tick() {
+  const now = Date.now();
+  for (const n of document.querySelectorAll("[data-since]:not(circle),[data-until]:not(circle)")) paint(n, now);
+  // a waiting ship's ring: the share of its window still to run (real time, real deadline)
+  for (const c of document.querySelectorAll("circle.ring[data-until]")) {
+    const a = +c.dataset.since, z = +c.dataset.until, left = z > a ? Math.max(0, Math.min(1, (z - now) / (z - a))) : 0;
+    c.setAttribute("stroke-dasharray", (left * 100).toFixed(2) + " 100");
+  }
+}
+window.addEventListener("resize", () => { if (data) { frameKey = ""; render(true); } });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+if (tableOn) setTable(true);
+refresh();
+setInterval(() => { if (!document.hidden) refresh(); }, POLL_MS);
+setInterval(() => { if (!document.hidden) tick(); }, 1000);
+</script>
+</body>
+</html>

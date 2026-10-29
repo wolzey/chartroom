@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# fake ssh for the radar. Without $FAKE_SSH_DIR: every host is unreachable, as ssh says it.
+# With it, each target answers from $FAKE_SSH_DIR/<target>/:
+#   exit          an exit code to give, with stderr from `stderr` (255: ssh's own failure)
+#   status.json   what `chartroom status --json --all-homes` prints there
+#   peek.txt      what `chartroom peek` prints there
+#   files/<name>  what `cat <home>/tasks/<id>/<name>` prints
+# Every call is logged as "<target> <remote command>" to $FAKE_SSH_DIR/calls.log.
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o|-p|-l|-i|-F) shift 2 ;;
+    --) shift; break ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+target="${1:-}"; shift || true
+cmd="$*"
+[[ -n "${FAKE_SSH_DIR:-}" ]] || { echo "ssh: connect to host $target port 22: Connection refused" >&2; exit 255; }
+printf '%s %s\n' "$target" "$cmd" >>"$FAKE_SSH_DIR/calls.log"
+d="$FAKE_SSH_DIR/$target"
+[[ -d "$d" ]] || { echo "ssh: Could not resolve hostname $target: nodename nor servname provided, or not known" >&2; exit 255; }
+if [[ -f "$d/exit" ]]; then cat "$d/stderr" >&2 2>/dev/null; exit "$(cat "$d/exit")"; fi
+case "$cmd" in
+  *"chartroom status --json --all-homes"*) cat "$d/status.json" ;;
+  *"chartroom peek "*) cat "$d/peek.txt" ;;
+  "cat '"*) f="${cmd%\'}"; f="${f##*/}"; [[ -f "$d/files/$f" ]] || { echo "cat: no such file" >&2; exit 1; }; cat "$d/files/$f" ;;
+  *) echo "fake ssh: unexpected remote command: $cmd" >&2; exit 99 ;;
+esac

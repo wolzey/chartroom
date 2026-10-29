@@ -145,6 +145,7 @@
                    url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 5"><path d="M0 0h8L4 5z" fill="%23888"/></svg>'); }
   select.theme option { background: var(--panel); color: var(--ink); }
   .theme:hover { color: var(--ink); }
+  a.theme { display: inline-flex; align-items: center; text-decoration: none; }
 
   .counts { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
   .gauge { position: relative; display: flex; align-items: baseline; gap: 8px; padding: 6px 10px 8px; border-radius: 8px;
@@ -567,6 +568,7 @@
       <svg viewBox="0 0 20 20" aria-hidden="true"><circle class="track" cx="10" cy="10" r="8" fill="none" stroke-width="2"/><circle class="arc" id="arc" cx="10" cy="10" r="8" fill="none" stroke-width="2" stroke-linecap="round"/></svg>
       <span id="sounded">sounding…</span>
     </span>
+    <a class="theme" href="/radar" title="the fleet radar: every agent on every machine">radar →</a>
     <select class="theme" id="skin" aria-label="dashboard theme"></select>
     <button class="theme" id="mode" type="button">auto</button>
     <a class="theme" href="/pages" title="reports from the crew, as pages to read and print">pages</a>

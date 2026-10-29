@@ -85,6 +85,8 @@ source "$CR_ROOT/lib/focus.sh"
 source "$CR_ROOT/lib/homes.sh"
 # shellcheck source=../lib/relay.sh
 source "$CR_ROOT/lib/relay.sh"
+# shellcheck source=../lib/radar.sh
+source "$CR_ROOT/lib/radar.sh"
 for _f in "$CR_ROOT"/lib/backends/*.sh; do
   # shellcheck source=/dev/null
   source "$_f"
@@ -1438,6 +1440,13 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           start the dashboard if it is not up (as a daemon),
                                           then open it in the browser (CHARTROOM_OPENER, else
                                           open / xdg-open); prints the URL either way
+  chartroom radar [--json] [--machine L --ssh T]
+                                          the fleet radar's data (the dashboard's /radar): every
+                                          open task on every home of this machine (or of machine
+                                          L, read-only over ssh) with its state, sector and why,
+                                          plus each home's XO from herdr. radar machines lists
+                                          the machines (CHARTROOM_RADAR_MACHINES, else herdr's
+                                          saved ones); CHARTROOM_MACHINE_NAME labels this one
   chartroom close <id> [--discard]        remove a clean worktree, close its tab, mark closed
                                           (a joined task's directory is never touched)
                                           (--discard only on the commander's explicit word)
@@ -1471,7 +1480,7 @@ if [[ "$cmd" =~ ^(status|ls|board|todo|inbox|relay)$ ]]; then
   done
 fi
 case "$cmd" in
-  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|steer|stop|attach|close|sweep|watch|dashboard|doctor|homes|version|help) "cmd_$cmd" "$@" ;;
+  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|steer|stop|attach|close|sweep|watch|dashboard|radar|doctor|homes|version|help) "cmd_$cmd" "$@" ;;
   install-skills) cmd_install_skills "$@" ;;
   ls) cmd_status "$@" ;;
   show) cmd_show "$@" ;;

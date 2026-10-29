@@ -19,11 +19,18 @@ first use): `?token=` once, then an HttpOnly cookie. --no-token turns that off. 
                         the pages list and the viewer (pages.html, beside index.html)
   /api/pages            `chartroom artifact list --all --json`, cached like the board
   /healthz              "ok"
-Lane logic lives in the CLI (lib/dashboard.sh + lanes.jq), never here. The optional gh
+  /radar                the fleet radar (radar.html next to this file): every agent on every machine
+  /api/radar            its data: `chartroom radar --json` per machine, collected off the request path
+  /api/radar/peek, /api/radar/file
+                        one radar agent's recent events and pane, or one of its task files (read-only)
+Lane logic lives in the CLI (lib/dashboard.sh + lanes.jq), never here; so does the radar's state
+table (lib/radar.sh + radar.jq). The optional gh
 enrichment only looks up the state of PR links already found in task files.
 Python 3.8+ (macOS /usr/bin/python3 is 3.9).
 """
 import argparse
+import glob
+import hashlib
 import hmac
 import ipaddress
 import json
@@ -180,6 +187,299 @@ class Board:
             self.gh_wake.clear()
 
 
+# ---------------------------------------------------------------- the fleet radar (/radar)
+
+RADAR_WATCH_SECONDS = 90      # a page that asked this recently keeps the collectors running
+RADAR_GATE_SECONDS = 5        # how often this machine's change gate is checked
+RADAR_CACHE_SECONDS = 5       # a peek or file is served from cache this long
+RADAR_MACHINES_SECONDS = 300  # how often the list of machines is read again
+RADAR_TIMEOUT = 90            # one machine's collection, at most
+RADAR_PEEK_TIMEOUT = 25
+RADAR_BACKOFF_MAX = 300
+PANE_ID = re.compile(r"^[A-Za-z0-9:_-]{1,64}$")
+
+
+def iso(t):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t)) if t else None
+
+
+def run_cli(argv, timeout):
+    """argv in a process group of its own, the whole group killed on timeout, so an ssh it started
+    never outlives it. Returns (returncode, stdout, stderr); raises subprocess.TimeoutExpired."""
+    kw = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
+    proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kw)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
+        proc.communicate()
+        raise
+    return proc.returncode, out, err
+
+
+def last_line(b):
+    lines = [x.strip() for x in b.decode("utf-8", "replace").splitlines() if x.strip()]
+    return lines[-1] if lines else ""
+
+
+class RadarSource:
+    """One machine the radar reads: its last good snapshot and how the latest run went."""
+
+    def __init__(self, spec):
+        self.spec, self.label = spec, spec["machine"]
+        self.wake = threading.Event()
+        self.good = None        # the last snapshot whose contact was ok
+        self.latest = None      # the machine record of the latest run, whatever its contact
+        self.attempt_at = self.ok_at = 0.0
+        self.fails = 0
+        self.gate = None        # this machine's change fingerprint at its last run
+        self.retired = False
+
+
+class Radar:
+    """The radar's data. One collector thread per machine runs `chartroom radar --json` off the
+    request path, and only while a page has asked in the last RADAR_WATCH_SECONDS: an idle
+    dashboard runs nothing and never reaches another machine. This machine re-reads when its
+    change gate (the task files' mtimes and herdr's agent states) moves, and at least every
+    local_max seconds; another machine every `remote` seconds; failures back off. The last good
+    snapshot is kept and marked stale while a machine cannot be read. What a state means is the
+    CLI's (lib/dashboard/radar.jq); this schedules, caches and merges."""
+
+    def __init__(self, cli):
+        self.cli = cli
+        self.lock = threading.Lock()
+        self.sources = {}
+        self.settings = {"local_min": 15, "local_max": 60, "remote": 60}
+        self.watched_at = 0.0
+        self.discovered_at = 0.0
+        self.discover_lock = threading.Lock()
+        self.discover_error = None
+        self.cache, self.flight = {}, {}
+        self.herdr = shutil.which("herdr")
+
+    def watched(self):
+        return time.time() - self.watched_at < RADAR_WATCH_SECONDS
+
+    # -- the machines
+    def discover(self):
+        if not self.discover_lock.acquire(blocking=False):
+            return
+        try:
+            rc, out, err = run_cli(self.cli + ["radar", "machines", "--json"], 30)
+            if rc != 0:
+                raise RuntimeError(last_line(err) or "chartroom radar machines exited %d" % rc)
+            listing = json.loads(out.decode("utf-8"))
+            for k, v in (listing.get("settings") or {}).items():
+                if k in self.settings and isinstance(v, int) and v > 0:
+                    self.settings[k] = v
+            specs = listing.get("machines") or []
+            with self.lock:
+                labels = [m["machine"] for m in specs]
+                for label, src in list(self.sources.items()):
+                    if label not in labels:
+                        src.retired = True
+                        src.wake.set()
+                        del self.sources[label]
+                for spec in specs:
+                    if spec["machine"] not in self.sources:
+                        src = RadarSource(spec)
+                        self.sources[spec["machine"]] = src
+                        threading.Thread(target=self.loop, args=(src,), daemon=True).start()
+            self.discover_error = None
+            self.discovered_at = time.time()
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.TimeoutExpired) as exc:
+            self.discover_error = "could not list the machines: %s" % exc
+            self.discovered_at = time.time() - RADAR_MACHINES_SECONDS + 15  # try again soon, not in 5 minutes
+        finally:
+            self.discover_lock.release()
+
+    # -- collecting
+    def fingerprint(self, src):
+        """This machine's change gate: every home's task files (mtime, size) and herdr's agent states."""
+        h = hashlib.sha1()
+        for home in ((src.good or {}).get("machine") or {}).get("homes") or []:
+            p = home.get("path")
+            if not p:
+                continue
+            base = os.path.join(glob.escape(p), "tasks", "*")
+            for f in sorted(glob.glob(os.path.join(base, "events.log")) + glob.glob(os.path.join(base, "meta.json"))):
+                try:
+                    st = os.stat(f)
+                except OSError:
+                    continue
+                h.update(("%s %d %d\n" % (f, st.st_mtime_ns, st.st_size)).encode("utf-8", "replace"))
+        if self.herdr:
+            try:
+                rc, out, _ = run_cli([self.herdr, "agent", "list"], 10)
+                agents = json.loads(out.decode("utf-8")).get("result", {}).get("agents", []) if rc == 0 else []
+                for a in sorted((str(a.get("pane_id")), str(a.get("agent_status"))) for a in agents):
+                    h.update(("%s %s\n" % a).encode())
+            except (OSError, ValueError, AttributeError, subprocess.TimeoutExpired):
+                pass
+        return h.hexdigest()
+
+    def due(self, src, now):
+        if not src.attempt_at:
+            return True
+        if src.spec.get("local"):
+            base, floor = self.settings["local_max"], self.settings["local_min"]
+        else:
+            base = floor = self.settings["remote"]
+        if src.fails:
+            return now - src.attempt_at >= min(base * (2 ** min(src.fails, 8)), RADAR_BACKOFF_MAX)
+        if now - src.attempt_at >= base:
+            return True
+        return bool(src.spec.get("local")) and now - src.attempt_at >= floor and self.fingerprint(src) != src.gate
+
+    def loop(self, src):
+        while not src.retired:
+            if not self.watched():
+                src.wake.wait(RADAR_WATCH_SECONDS)
+                src.wake.clear()
+                continue
+            if self.due(src, time.time()):
+                self.collect(src)
+                continue
+            src.wake.wait(RADAR_GATE_SECONDS)
+            src.wake.clear()
+
+    def collect(self, src):
+        spec = src.spec
+        args = ["radar", "--json"]
+        if not spec.get("local"):
+            args += ["--machine", spec["machine"], "--ssh", spec["target"], "--via", spec.get("via") or "config"]
+        else:
+            src.gate = self.fingerprint(src)  # taken first: a change during the run brings the next one
+        src.attempt_at = time.time()
+        try:
+            rc, out, err = run_cli(self.cli + args, RADAR_TIMEOUT)
+            if rc != 0:
+                raise RuntimeError(last_line(err) or "chartroom radar exited %d" % rc)
+            snap = json.loads(out.decode("utf-8"))
+            machine = snap["machine"]
+        except subprocess.TimeoutExpired:
+            return self.failed(src, "no answer within %ds" % RADAR_TIMEOUT)
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+            return self.failed(src, str(exc))
+        with self.lock:
+            src.latest = machine
+            if machine.get("contact") == "ok":
+                src.good, src.ok_at, src.fails = snap, src.attempt_at, 0
+            else:
+                src.fails += 1
+        return None
+
+    def failed(self, src, why):
+        with self.lock:
+            src.fails += 1
+            base = dict(src.latest or {k: src.spec.get(k) for k in ("machine", "local", "target", "via")})
+            src.latest = dict(base, contact="error", error=why, fetched_at=iso(time.time()))
+
+    # -- serving
+    def get(self):
+        now = time.time()
+        woke = not self.watched()
+        self.watched_at = now
+        if now - self.discovered_at > RADAR_MACHINES_SECONDS:
+            threading.Thread(target=self.discover, daemon=True).start()
+        machines, agents, flagships = [], [], []
+        with self.lock:
+            for src in self.sources.values():
+                if woke:
+                    src.wake.set()
+                stale = src.good is not None and (src.latest or {}).get("contact") != "ok"
+                m = dict(src.latest or {k: src.spec.get(k) for k in ("machine", "local", "target", "via")})
+                m.setdefault("contact", "sounding")
+                m.update(stale=stale, ok_at=iso(src.ok_at), attempt_at=iso(src.attempt_at))
+                machines.append(m)
+                if src.good:
+                    agents += [dict(a, stale=stale) for a in src.good.get("agents") or []]
+                    flagships += [dict(f, stale=stale) for f in src.good.get("flagships") or []]
+        return json.dumps({"generated_at": iso(now), "machines": machines, "agents": agents, "flagships": flagships,
+                           "error": self.discover_error}).encode("utf-8")
+
+    def find(self, machine, home, tid=None, pane=None):
+        """The agent (or flagship) the radar shows for these keys, and its machine; else (None, None)."""
+        with self.lock:
+            src = self.sources.get(machine)
+            if not src or not src.good:
+                return None, None
+            if pane:
+                return src, next((f for f in src.good.get("flagships") or [] if f.get("home") == home and f.get("pane") == pane), None)
+            return src, next((a for a in src.good.get("agents") or [] if a.get("home") == home and a.get("id") == tid), None)
+
+    def cached(self, key, fetch):
+        """fetch() at most once per RADAR_CACHE_SECONDS per key, one call at a time per key."""
+        hit = self.cache.get(key)
+        if hit and time.time() - hit[0] < RADAR_CACHE_SECONDS:
+            return hit[1]
+        with self.lock:
+            lock = self.flight.setdefault(key, threading.Lock())
+        with lock:
+            hit = self.cache.get(key)
+            if hit and time.time() - hit[0] < RADAR_CACHE_SECONDS:
+                return hit[1]
+            val = fetch()
+            now = time.time()
+            for k in [k for k, v in self.cache.items() if now - v[0] > 60]:
+                self.cache.pop(k, None)
+            self.cache[key] = (now, val)
+            return val
+
+    def peek(self, machine, home, tid, pane, n):
+        src, rec = self.find(machine, home, tid, pane)
+        if rec is None:
+            return 404, {"error": "no such agent on the radar"}
+
+        def fetch():
+            args = ["radar", "peek", "--machine", machine]
+            if not src.spec.get("local"):
+                args += ["--ssh", src.spec["target"]]
+            if pane:
+                args += ["--pane", pane]
+            else:
+                if rec.get("home_path"):
+                    args += ["--home", rec["home_path"]]
+                args += [tid, str(n)]
+            try:
+                rc, out, err = run_cli(self.cli + args, RADAR_PEEK_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                return {"machine": machine, "fetched_at": iso(time.time()), "text": "", "error": "no answer within %ds" % RADAR_PEEK_TIMEOUT}
+            except OSError as exc:
+                return {"machine": machine, "fetched_at": iso(time.time()), "text": "", "error": str(exc)}
+            return {"machine": machine, "fetched_at": iso(time.time()), "text": out.decode("utf-8", "replace"),
+                    "error": None if rc == 0 else (last_line(err) or "peek exited %d" % rc)}
+        return 200, self.cached(("peek", machine, home, tid or "", pane or "", n), fetch)
+
+    def file(self, machine, home, tid, name):
+        src, rec = self.find(machine, home, tid)
+        if rec is None or name not in TASK_FILES:
+            return 404, "not found\n"
+        if src.spec.get("local"):
+            try:
+                with open(os.path.join(rec["home_path"], "tasks", tid, name), "rb") as fh:
+                    return 200, fh.read()
+            except (OSError, TypeError):
+                return 404, "%s has no %s\n" % (tid, name)
+
+        def fetch():
+            args = ["radar", "file", "--machine", machine, "--ssh", src.spec["target"]]
+            if rec.get("home_path"):
+                args += ["--home", rec["home_path"]]
+            try:
+                rc, out, err = run_cli(self.cli + args + [tid, name], RADAR_PEEK_TIMEOUT)
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                return 504, "could not read %s from %s: %s\n" % (name, machine, exc)
+            return (200, out) if rc == 0 else (404, "could not read %s from %s: %s\n" % (name, machine, last_line(err)))
+        return self.cached(("file", machine, home, tid, name), fetch)
+
+
 class Page:
     """index.html as it is on disk now, read per request: an update (install.sh fast-forwards
     the checkout) shows on the next load, not only after the server restarts. A read that
@@ -287,6 +587,8 @@ def make_handler(board, port, page, viewer, host, use_token, home):
         names = ([host] if host != "0.0.0.0" else interface_addrs()) + [socket.gethostname()]
         names += [n + ".local" for n in names[-1:] if not n.endswith(".local")]
         allowed_hosts |= {"%s:%d" % (n, port) for n in names}
+    # the fleet radar's data and page (main sets them on the board)
+    radar, radar_page = getattr(board, "radar", None), getattr(board, "radar_page", None)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "chartroom-dashboard"
@@ -360,6 +662,10 @@ def make_handler(board, port, page, viewer, host, use_token, home):
                     return self.send(403, "forbidden host\n", "text/plain; charset=utf-8")
             if path in ("/", "/index.html"):
                 return self.send(200, page.get(), "text/html; charset=utf-8")
+            if path == "/radar" and radar_page:
+                return self.send(200, radar_page.get(), "text/html; charset=utf-8")
+            if path.startswith("/api/radar") and radar:
+                return self.radar_get(path, dict(parse_qsl(query)))
             if path == "/api/dashboard":
                 try:
                     return self.send(200, board.get(), "application/json")
@@ -407,6 +713,22 @@ def make_handler(board, port, page, viewer, host, use_token, home):
                         return self.send(200, fh.read(), "text/html; charset=utf-8", csp=PAGE_CSP, frame="SAMEORIGIN")
                 with open(f, "rb") as fh:
                     return self.send(200, fh.read(), "text/plain; charset=utf-8")
+            return self.send(404, "not found\n", "text/plain; charset=utf-8")
+
+        def radar_get(self, path, q):
+            if path == "/api/radar":
+                return self.send(200, radar.get(), "application/json")
+            m, h, tid, pane = q.get("m", ""), q.get("h", ""), q.get("id", ""), q.get("pane", "")
+            if not m or not h or bool(tid) == bool(pane) or (tid and not TASK_ID.match(tid)) or (pane and not PANE_ID.match(pane)):
+                return self.send(400, json.dumps({"error": "needs m, h and one of id or pane"}), "application/json")
+            if path == "/api/radar/peek":
+                n = q.get("n", "15")
+                n = int(n) if n.isdigit() and 0 < int(n) <= 200 else 15
+                code, payload = radar.peek(m, h, tid or None, pane or None, n)
+                return self.send(code, json.dumps(payload), "application/json")
+            if path == "/api/radar/file" and tid:
+                code, body = radar.file(m, h, tid, q.get("f", ""))
+                return self.send(code, body, "text/plain; charset=utf-8")
             return self.send(404, "not found\n", "text/plain; charset=utf-8")
 
         def do_POST(self):
@@ -463,6 +785,12 @@ def main():
     except (OSError, ValueError) as exc:
         sys.exit("chartroom dashboard: %s" % exc)
     board = Board(args.bin, home, not args.no_gh, args.bash)
+    board.radar = Radar(board.cli)  # the fleet radar's data and page ride on the board into the handler
+    try:
+        board.radar_page = Page(os.path.join(HERE, "radar.html"), args.theme)
+    except (OSError, ValueError) as exc:  # the board still serves; /radar is a 404
+        print("chartroom dashboard: no radar page: %s" % exc, flush=True)
+        board.radar_page = None
     try:
         httpd = Server((args.host, args.port), None)
     except OSError as exc:
