@@ -1,54 +1,78 @@
 // Pure helpers for chartroom-panel: no `$`, so the tests can call them directly.
 //
-// The heart of the mod is parseTasks: the filter that decides which rows the panel shows.
-// It is deliberately the Pi panel's (adapters/pi-panel/model.ts) filter, so the two siblings
-// hide and keep exactly the same rows.
+// The heart of the mod is parseBoard: the panel shows exactly what `chartroom board` and the
+// dashboard show, from the same source (`chartroom board --json`, built by lib/dashboard/lanes.jq):
+// the same five lanes, in the same order, under the same names, each card with the board's reason.
+// The panel decides nothing about which lane a task belongs in.
 
-import type { Snapshot, Task, Tone } from '../types'
+import type { Card, LaneKey, Snapshot, Tone } from '../types'
+
+/** The board's lanes, in its order and under its names (`chartroom board`, the dashboard page). */
+export const LANES: readonly { key: LaneKey; name: string }[] = [
+  { key: 'needs_you', name: 'Needs you' },
+  { key: 'in_progress', name: 'In progress' },
+  { key: 'on_hold', name: 'On hold' },
+  { key: 'ready', name: 'Ready for you' },
+  { key: 'recent', name: 'Recently finished' },
+]
 
 /**
- * Parses `chartroom status --json` and keeps only the unfinished rows.
+ * Parses `chartroom board --json` into its cards, flat, in board order (lane by lane, each lane in
+ * the board's own order), each carrying the lane it sits in. Cards are tasks and inbox items alike.
  *
- * Hide a task when `state ∈ {done, closed}` OR `closed` is non-null (`closed == null` keeps a
- * row whose `closed` is null or absent; any non-null value, a timestamp or even "", hides it).
- * The filter never looks at `live`: a `state: decision` row with `live: done` stays visible.
- * A worker's `done` report puts its task in `review` (awaiting the commander), which stays visible;
- * `done` is the commander's own accept, so only then does the row leave.
- *
- * Throws on anything that is not an array of rows each carrying a string `id` and `state`, so a
- * malformed payload surfaces as an error (stale rows kept) rather than an empty fleet.
+ * Throws on anything that is not a board (an object whose `lanes` holds an array per lane, each card
+ * an object with a string `id`), so a malformed payload surfaces as an error (stale cards kept)
+ * rather than an empty board.
  */
-export function parseTasks(text: string): Task[] {
-  const rows: unknown = JSON.parse(text)
-  if (
-    !Array.isArray(rows) ||
-    rows.some(row => !row || typeof (row as Task).id !== 'string' || typeof (row as Task).state !== 'string')
-  ) {
-    throw new Error('invalid status JSON')
+export function parseBoard(text: string): Card[] {
+  const board: unknown = JSON.parse(text)
+  const lanes = (board as { lanes?: unknown } | null)?.lanes as Record<string, unknown> | undefined
+  if (!lanes || typeof lanes !== 'object') throw new Error('invalid board JSON')
+  const out: Card[] = []
+  for (const { key } of LANES) {
+    const items = lanes[key] ?? []
+    if (!Array.isArray(items) || items.some(c => !c || typeof (c as Card).id !== 'string')) throw new Error('invalid board JSON')
+    for (const c of items as Card[]) out.push({ ...c, lane: key })
   }
-  return (rows as Task[]).filter(row => row.state !== 'done' && row.state !== 'closed' && row.closed == null)
+  return out
 }
 
-// ---------------------------------------------------------------- state → label and tone
+/** A card's key: its short id (what /continue and the ring take), else its id. */
+export function cardKey(card: Card): string {
+  return card.short_id ?? card.id
+}
 
-// "needing input" (decision/blocked/awaiting-input, the overdue-wait, and finished work awaiting review).
-const INPUT = new Set(['decision', 'blocked', 'awaiting-input', 'waiting-overdue', 'review'])
-// "being worked on".
-const WORKING = new Set(['working', 'running', 'drafting'])
-// Quiet/attention states that stay visible but recede.
-const QUIET = new Set(['stopped-silent', 'waiting', 'failed', 'lost'])
+/** How many cards sit in each lane. */
+export function laneCounts(cards: Card[]): Record<LaneKey, { count: number; held: number }> {
+  const out = Object.fromEntries(LANES.map(l => [l.key, { count: 0, held: 0 }])) as Record<LaneKey, { count: number; held: number }>
+  for (const c of cards) {
+    const n = out[c.lane]
+    if (!n) continue
+    n.count++
+    if (c.held) n.held++
+  }
+  return out
+}
 
-/** The tone for a state; an UNKNOWN unfinished state is `plain` — visible in the default colour, never dimmed away. */
-export function tone(state: string): Tone {
-  if (INPUT.has(state)) return 'input'
-  if (WORKING.has(state)) return 'working'
-  if (QUIET.has(state)) return 'quiet'
+/** A lane's header line, as `chartroom board` prints it: `Needs you (3, 1 held)`. */
+export function laneHeader(name: string, n: { count: number; held: number }): string {
+  return `${name} (${n.count}${n.held ? `, ${n.held} held` : ''})`
+}
+
+/** The card's second line: the board's reason (its bracket), held, and the project. */
+export function cardDetail(card: Card): string {
+  const reason = card.reason ?? card.state ?? ''
+  return `${reason}${card.held ? ' · held' : ''}${card.project ? ` · ${card.project}` : ''}`
+}
+
+// ---------------------------------------------------------------- lane → tone
+
+/** The colour band a lane draws in: needs-you yellow, in-progress green, on-hold and recent dim. */
+export function laneTone(lane: string): Tone {
+  if (lane === 'needs_you') return 'input'
+  if (lane === 'in_progress') return 'working'
+  if (lane === 'on_hold' || lane === 'recent') return 'quiet'
   return 'plain'
-}
-
-/** The human label for a state: `stopped-silent` reads `stopped silent`. */
-export function stateLabel(state: string): string {
-  return state.replaceAll('-', ' ')
 }
 
 // ---------------------------------------------------------------- width-safe text
@@ -103,28 +127,28 @@ export function truncate(text: string, width: number): string {
 /** The chrome rows the panel always draws: header, status, gap, two footer lines, the controls hint. */
 export const CHROME_ROWS = 6
 
-/** How many tasks fit given the body's rows: two lines each, after the chrome. At least one. */
+/** How many cards fit given the body's rows: two lines each, after the chrome and one header per lane. At least one. */
 export function capacityFor(bodyRows: number): number {
-  return Math.max(1, Math.floor((bodyRows - CHROME_ROWS) / 2))
+  return Math.max(1, Math.floor((bodyRows - CHROME_ROWS - LANES.length) / 2))
 }
 
 export type Page = {
-  /** Total visible tasks. */
+  /** Total cards. */
   total: number
   /** Number of pages (at least 1). */
   pages: number
   /** The resolved page index (0-based), the request wrapped into range. */
   page: number
-  /** 0-based index of the first task shown. */
+  /** 0-based index of the first card shown. */
   start: number
-  /** The tasks on this page. */
-  tasks: Task[]
+  /** The cards on this page. */
+  tasks: Card[]
   /** The footer's range line: `first–last of total · page p/pages`. */
   footer: string
 }
 
 /** The slice for `page` (wrapping out-of-range requests), with the footer range line. */
-export function paginate(tasks: Task[], capacity: number, page: number): Page {
+export function paginate(tasks: Card[], capacity: number, page: number): Page {
   const cap = Math.max(1, capacity)
   const total = tasks.length
   const pages = Math.max(1, Math.ceil(total / cap))
@@ -186,4 +210,4 @@ export function isUnderWorktrees(cwd: string): boolean {
   return cwd.split('/').includes('worktrees')
 }
 
-export type { Snapshot, Task, Tone }
+export type { Card, LaneKey, Snapshot, Tone }

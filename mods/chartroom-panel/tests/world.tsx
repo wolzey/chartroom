@@ -6,22 +6,31 @@ import type { Engine } from 'claude-code/testing'
 
 export const HOME = '/srv/xo'
 
-type Row = Record<string, unknown> & { id?: string; state: string }
+type Row = Record<string, unknown> & { id?: string; state: string; lane?: string }
 type Ran = { exitCode: number; stdout: string; stderr: string }
 
-/** `chartroom status --json` output for `rows`; each row gets an `id` and a `short_id` if absent. */
-export function statusJson(rows: Row[]): string {
-  return JSON.stringify(
-    rows.map((r, i) => ({
+const LANE_KEYS = ['needs_you', 'in_progress', 'on_hold', 'ready', 'recent']
+
+/**
+ * `chartroom board --json` output for `cards`: each goes in its `lane` (default needs_you), in the
+ * order given, with an `id`, a `short_id` (the id's last 4) and the board's `reason` (default: the state).
+ */
+export function boardJson(cards: Row[]): string {
+  const lanes: Record<string, unknown[]> = Object.fromEntries(LANE_KEYS.map(k => [k, []]))
+  cards.forEach((r, i) => {
+    const lane = r.lane ?? 'needs_you'
+    lanes[lane]?.push({
+      type: 'task',
       id: r.id ?? `${r.state}-${i}`,
       short_id: (r.id as string | undefined)?.slice(-4) ?? `t${i}`,
       title: 'A task',
       project: 'shop',
-      kind: 'ship',
-      live: 'running',
+      reason: r.state,
+      lane,
       ...r,
-    })),
-  )
+    })
+  })
+  return JSON.stringify({ lanes, counts: Object.fromEntries(LANE_KEYS.map(k => [k, lanes[k]?.length ?? 0])) })
 }
 
 export type World = {
@@ -31,10 +40,12 @@ export type World = {
   dirs: string[]
   /** What `chartroom doctor --json` reports as `.home`. */
   doctorHome: string
-  /** What `chartroom status --json` prints; a Ran, or 'missing' for a command-not-found. */
-  status: () => Ran | 'missing'
-  /** What `chartroom close <full_id>` does; default success drops the task from `status`. */
+  /** What `chartroom board --json` prints; a Ran, or 'missing' for a command-not-found. */
+  board: () => Ran | 'missing'
+  /** What `chartroom close <full_id>` does; default success moves the task to Recently finished. */
   close: (fullId: string) => Ran
+  /** What `chartroom accept <full_id>` does; default success moves a review task to Ready for you, done. */
+  accept: (fullId: string) => Ran
   /** The prompt box's draft. */
   draft: string
   /** Command names a person's own command/skill already holds: registering one is refused. */
@@ -44,18 +55,25 @@ export type World = {
 }
 
 export const XO_WORLD = (): World => {
-  // The default fleet, less any task `close` removed, so a successful close drops it from `status`.
+  // The default board; a successful close or accept moves the card the way lanes.jq would.
   const base: Row[] = [{ id: 'auth-108a', state: 'decision', live: 'done', title: 'Auth' }]
-  const closed: string[] = []
+  const move = (id: string, to: Partial<Row>) => {
+    const i = base.findIndex(t => t.id === id)
+    if (i >= 0) base[i] = { ...base[i], ...to } as Row
+  }
   const world: World = {
     env: { HOME },
     files: { [`${HOME}/commander.md`]: '# commander\n' },
     dirs: [HOME],
     doctorHome: HOME,
-    status: () => ({ exitCode: 0, stdout: statusJson(base.filter(t => !closed.includes(t.id ?? ''))), stderr: '' }),
+    board: () => ({ exitCode: 0, stdout: boardJson(base), stderr: '' }),
     close: fullId => {
-      closed.push(fullId)
+      move(fullId, { state: 'closed', lane: 'recent', reason: 'closed' })
       return { exitCode: 0, stdout: `closed ${fullId}`, stderr: '' }
+    },
+    accept: fullId => {
+      move(fullId, { state: 'done', lane: 'ready', reason: 'accepted' })
+      return { exitCode: 0, stdout: `accepted ${fullId}: done (chartroom close ${fullId} removes its worktree)`, stderr: '' }
     },
     draft: '',
     taken: [],
@@ -117,13 +135,16 @@ export function install(on: On, world: World) {
     if (argv[1] === 'doctor') {
       return { value: { exitCode: 0, stdout: JSON.stringify({ home: world.doctorHome }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
-    if (argv[1] === 'status') {
-      const out = world.status()
+    if (argv[1] === 'board') {
+      const out = world.board()
       if (out === 'missing') return { deny: 'spawn chartroom ENOENT' }
       return { value: { ...out, isStdoutTruncated: false, isStderrTruncated: false } }
     }
     if (argv[1] === 'close') {
       return { value: { ...world.close(argv[2] ?? ''), isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+    if (argv[1] === 'accept') {
+      return { value: { ...world.accept(argv[2] ?? ''), isStdoutTruncated: false, isStderrTruncated: false } }
     }
     return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })

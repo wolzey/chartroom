@@ -1,46 +1,72 @@
-// The pure logic — the filter, the tone map, width-safe text and paging. Called directly.
+// The pure logic — the board parse, the lane helpers, width-safe text and paging. Called directly.
 import { expect, test } from 'claude-code/testing'
 
-import { CHROME_ROWS, autoShowEnabled, capacityFor, clean, columns, configValue, paginate, parseTasks, setConfigLine, stateLabel, tone, truncate } from '../hooks/model'
+import {
+  CHROME_ROWS,
+  LANES,
+  autoShowEnabled,
+  capacityFor,
+  cardDetail,
+  cardKey,
+  clean,
+  columns,
+  configValue,
+  laneCounts,
+  laneHeader,
+  laneTone,
+  paginate,
+  parseBoard,
+  setConfigLine,
+  truncate,
+} from '../hooks/model'
+import type { Card } from '../hooks/model'
 
-const row = (state: string, extra: Record<string, unknown> = {}) => ({ id: state, state, title: 'A task', ...extra })
-
-test('filter: unfinished rows stay (incl. unknown states); done/closed and any closed value hide', () => {
-  // Every unfinished state — including a decision whose worker is live=done, and a state the mod
-  // has never heard of — must stay visible. done, closed, and any non-null `closed` must drop off.
-  const kept = ['drafting', 'working', 'running', 'waiting', 'decision', 'blocked', 'failed', 'lost', 'stopped-silent', 'awaiting-input', 'waiting-overdue', 'review', 'future-state']
-  const payload = JSON.stringify([
-    ...kept.map(state => row(state, { live: 'done' })), // live=done never hides a visible row
-    row('done'),
-    row('closed'),
-    row('working', { closed: '2026-10-27T00:00:00Z' }), // active state but closed timestamp → hidden
-    row('decision', { closed: '' }), // "" is non-null → hidden
-    row('working', { closed: null }), // explicit null → kept
-  ])
-  const got = parseTasks(payload)
-  expect(got.filter(t => t.closed == null).map(t => t.state)).toEqual([...kept, 'working'])
-  // The last kept row is the closed:null one; nothing with a done/closed state or a closed value remains.
-  expect(got.some(t => t.state === 'done' || t.state === 'closed')).toBe(false)
-  expect(got.every(t => t.closed == null)).toBe(true)
+test('lanes: the board\'s five, in its order, under its names', () => {
+  expect(LANES.map(l => l.key)).toEqual(['needs_you', 'in_progress', 'on_hold', 'ready', 'recent'])
+  expect(LANES.map(l => l.name)).toEqual(['Needs you', 'In progress', 'On hold', 'Ready for you', 'Recently finished'])
 })
 
-test('filter: malformed payloads throw (so the panel keeps stale rows, never an empty fleet)', () => {
-  for (const bad of ['{}', '[null]', '[{"id":"a"}]', '[{"state":"working"}]', 'not json']) {
-    expect(() => parseTasks(bad)).toThrow()
+test('parseBoard: cards flat in board order, each tagged with its lane; keys absent lanes as empty', () => {
+  const board = {
+    lanes: {
+      recent: [{ id: 'r-0001', state: 'closed' }],
+      needs_you: [{ id: 'd-0002', state: 'decision' }, { id: 'v-0003', state: 'review', reason: 'PR to review' }, { type: 'inbox', id: 'inbox-0', short_id: null, state: 'inbox' }],
+      in_progress: [{ id: 'w-0004', state: 'working' }],
+    },
+  }
+  const got = parseBoard(JSON.stringify(board))
+  expect(got.map(c => [c.id, c.lane])).toEqual([
+    ['d-0002', 'needs_you'],
+    ['v-0003', 'needs_you'],
+    ['inbox-0', 'needs_you'],
+    ['w-0004', 'in_progress'],
+    ['r-0001', 'recent'],
+  ])
+})
+
+test('parseBoard: malformed payloads throw (so the panel keeps stale cards, never an empty board)', () => {
+  for (const bad of ['[]', '{}', 'null', '{"lanes":{"needs_you":{}}}', '{"lanes":{"ready":[null]}}', '{"lanes":{"ready":[{"state":"done"}]}}', 'not json']) {
+    expect(() => parseBoard(bad)).toThrow()
   }
 })
 
-test('tone: input-needed vs working vs quiet vs unknown', () => {
-  for (const s of ['decision', 'blocked', 'awaiting-input', 'waiting-overdue', 'review']) expect(tone(s)).toBe('input')
-  for (const s of ['working', 'running', 'drafting']) expect(tone(s)).toBe('working')
-  for (const s of ['stopped-silent', 'waiting', 'failed', 'lost']) expect(tone(s)).toBe('quiet')
-  expect(tone('future-state')).toBe('plain')
+test('cards: key, counts with held, the header and the detail line read like the board', () => {
+  const cards: Card[] = [
+    { id: 'fix-21ba', short_id: '21ba', lane: 'needs_you', state: 'review', reason: 'PR to review', project: 'shop' },
+    { id: 'pay-7f3a', short_id: '7f3a', lane: 'needs_you', state: 'blocked', reason: 'blocked', held: true, project: 'billing' },
+    { id: 'inbox-1', short_id: null, lane: 'needs_you', type: 'inbox', reason: 'waiting on you (inbox)' },
+  ]
+  expect(cards.map(cardKey)).toEqual(['21ba', '7f3a', 'inbox-1'])
+  const n = laneCounts(cards)
+  expect(n.needs_you).toEqual({ count: 3, held: 1 })
+  expect(n.recent).toEqual({ count: 0, held: 0 })
+  expect(laneHeader('Needs you', n.needs_you)).toBe('Needs you (3, 1 held)')
+  expect(laneHeader('On hold', n.on_hold)).toBe('On hold (0)')
+  expect(cards.map(cardDetail)).toEqual(['PR to review · shop', 'blocked · held · billing', 'waiting on you (inbox)'])
 })
 
-test('stateLabel: hyphens read as spaces (stopped-silent → stopped silent)', () => {
-  expect(stateLabel('stopped-silent')).toBe('stopped silent')
-  expect(stateLabel('awaiting-input')).toBe('awaiting input')
-  expect(stateLabel('working')).toBe('working')
+test('laneTone: needs-you yellow, in-progress green, on-hold/recent dim, ready plain', () => {
+  expect(['needs_you', 'in_progress', 'on_hold', 'ready', 'recent'].map(laneTone)).toEqual(['input', 'working', 'quiet', 'plain', 'quiet'])
 })
 
 test('columns + truncate: control chars cleaned, emoji two wide, cuts marked with …', () => {
@@ -53,9 +79,9 @@ test('columns + truncate: control chars cleaned, emoji two wide, cuts marked wit
 })
 
 test('paginate: pages, footer range, wrapping and the empty fleet', () => {
-  const tasks = Array.from({ length: 23 }, (_, i) => ({ id: String(i), state: 'working' }))
-  const cap = capacityFor(30) // (30 - 5) / 2 = 12
-  expect(cap).toBe(12)
+  const tasks: Card[] = Array.from({ length: 23 }, (_, i) => ({ id: String(i), state: 'working', lane: 'in_progress' as const }))
+  const cap = 12
+  expect(capacityFor(30)).toBe(9) // (30 - 6 chrome - 5 lane headers) / 2
   const p0 = paginate(tasks, cap, 0)
   expect([p0.pages, p0.tasks.length, p0.footer]).toEqual([2, 12, '1–12 of 23 · page 1/2'])
   const p1 = paginate(tasks, cap, 1)
@@ -84,7 +110,7 @@ test('config: autoShowEnabled (default/on/off), configValue (last wins), setConf
   expect(setConfigLine('autoshow=off\nautoshow=off', 'autoshow', 'on')).toBe('autoshow=on\n') // collapses dupes
 })
 
-test('capacityFor: at least one task even on a tiny pane', () => {
+test('capacityFor: at least one card even on a tiny pane', () => {
   expect(capacityFor(CHROME_ROWS)).toBe(1)
   expect(capacityFor(0)).toBe(1)
   expect(capacityFor(100)).toBeGreaterThan(10)

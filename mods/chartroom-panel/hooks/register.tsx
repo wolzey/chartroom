@@ -1,10 +1,12 @@
-// chartroom-panel: the commander's live, read-only Chartroom tasks, in a pane beside the chat.
+// chartroom-panel: the commander's live Chartroom board, in a pane beside the chat.
 //
-// The sibling of the Pi panel (adapters/pi-panel). It shows the unfinished fleet from
-// `chartroom status --json` and nothing else: completed/closed rows drop off, everything still
-// open stays, with the ones needing the commander's input (yellow) and the ones being worked on
-// (green) set apart. It polls on a timer with no model call, keeps the last tasks visibly STALE
-// on a failure, and never touches a task record.
+// It mirrors `chartroom board` and the dashboard: it reads `chartroom board --json` (the board's
+// own lane logic, lib/dashboard/lanes.jq) and draws the same five lanes, in the same order, under
+// the same names, each card with the board's reason: Needs you (yellow; a worker's finished work
+// awaiting review is there), In progress (green), On hold, Ready for you, Recently finished. It
+// polls on a timer with no model call and keeps the last board visibly STALE on a failure. It
+// changes a task only on the commander's two-press keys, through the CLI the XO uses:
+// `a` complete (`chartroom accept`) and `c` close (`chartroom close`).
 //
 // Activation: installed at user scope it loads in every Claude Code session. It does nothing
 // (no command, no timer, no process, no pane) unless the session is interactive. When the cwd is
@@ -12,32 +14,37 @@
 // `/chartroom-panel` command turns it on anywhere. A crew worker's session — CHARTROOM_TASK set,
 // or a `worktrees` path segment — never auto-shows.
 //
-// Selection: `/chartroom-panel` focuses the pane; the arrows walk the task rows and Enter brings
-// the task into the chat as the next prompt's focus, pre-filling `/continue <short_id>` (the
-// existing chartroom continue skill) without submitting. Esc hands the keys back to the chat and
-// leaves the pane open. Nothing is auto-submitted and normal typing is never captured.
+// Selection: `/chartroom-panel` focuses the pane; the arrows walk the cards and Enter runs
+// `/continue <short_id>` (the chartroom continue skill) for the highlighted one. Esc hands the keys
+// back to the chat and leaves the pane open. Normal typing is never captured.
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderSurface, Timer } from 'claude-code'
 
-import type { Snapshot, Task, Tone } from '../types'
+import type { Card, Snapshot, Tone } from '../types'
 import {
   CONTROLS,
+  LANES,
   autoShowEnabled,
   capacityFor,
+  cardDetail,
+  cardKey,
   clean,
   columns,
   isUnderWorktrees,
+  laneCounts,
+  laneHeader,
+  laneTone,
   paginate,
-  parseTasks,
+  parseBoard,
   setConfigLine,
-  stateLabel,
-  tone,
   truncate,
 } from './model'
 
 const PANE = 'chartroom-panel'
 const POLL_MS = 5_000
-// How long a first `c` stays armed before the two-press close confirm resets.
+// `chartroom board` reads every task, the inbox and the artifacts: give it longer than a one-task action.
+const BOARD_TIMEOUT_MS = 20_000
+// How long a first `c`/`a` stays armed before the two-press confirm resets.
 const CONFIRM_MS = 5_000
 const EMPTY: Snapshot = { tasks: null, error: null, updated: null }
 const FOCUSED = 'Chartroom panel focused: ↑↓ to choose, Enter brings a task in, Esc back to chat.'
@@ -51,7 +58,7 @@ const snapshot = atom({ plugin: 'chartroom-panel', key: 'snapshot' } as const, E
 const page = atom({ plugin: 'chartroom-panel', key: 'page' } as const, 0)
 const selected = atom({ plugin: 'chartroom-panel', key: 'selected' } as const, null as string | null)
 const notice = atom({ plugin: 'chartroom-panel', key: 'notice' } as const, null as string | null)
-// The short_id a first `c` armed for close; a second `c` on the same row confirms. null = unarmed.
+// `<action>:<key>` a first `c` (close) or `a` (complete) armed; the same key again on that row confirms.
 const armed = atom({ plugin: 'chartroom-panel', key: 'armed' } as const, null as string | null)
 
 /** How each tone draws: input-needed yellow, working green, quiet dim, unknown plain (default colour). */
@@ -86,13 +93,13 @@ let armTimer: Timer | undefined
  * returns `error` (a one-line summary) and `detail` (the CLI's own stdout+stderr, verbatim and
  * trimmed) so a refusal can be surfaced word for word.
  */
-async function runCli($: EngineInterface, args: string[]): Promise<{ stdout: string } | { error: string; detail?: string }> {
+async function runCli($: EngineInterface, args: string[], timeoutMs = 8_000): Promise<{ stdout: string } | { error: string; detail?: string }> {
   const bin = await $.env.get('CHARTROOM_BIN')
   const userHome = (await $.env.get('HOME')) ?? ''
   const candidates = bin ? [bin] : ['chartroom', `${userHome}/.local/bin/chartroom`]
   for (const path of candidates) {
     try {
-      const ran = await $.process.run([path, ...args], { timeoutMs: 8_000, ...(home ? { env: { CHARTROOM_HOME: home } } : {}) })
+      const ran = await $.process.run([path, ...args], { timeoutMs, ...(home ? { env: { CHARTROOM_HOME: home } } : {}) })
       if (ran.exitCode === 0) return { stdout: ran.stdout }
       if (ran.exitCode === 127) continue // not this candidate; try the next
       const detail = `${ran.stderr}\n${ran.stdout}`.trim()
@@ -106,7 +113,7 @@ async function runCli($: EngineInterface, args: string[]): Promise<{ stdout: str
   return { error: 'chartroom not found' }
 }
 
-/** Reads `chartroom status --json` into the snapshot; never throws, never overlaps, drops late results. */
+/** Reads `chartroom board --json` into the snapshot; never throws, never overlaps, drops late results. */
 async function poll($: EngineInterface): Promise<void> {
   // `.catch` guards a read made while the module is being torn down (a reload, or a test env ending).
   if (!(await read($, active).catch(() => false))) return
@@ -117,17 +124,17 @@ async function poll($: EngineInterface): Promise<void> {
   polling = true
   const gen = pollGen
   try {
-    const ran = await runCli($, ['status', '--json'])
+    const ran = await runCli($, ['board', '--json'], BOARD_TIMEOUT_MS)
     if (gen !== pollGen || !(await read($, active))) return // turned off, or a newer run owns the state
     if ('error' in ran) {
       await update($, snapshot, s => ({ ...s, error: ran.error }))
     } else {
       try {
-        const tasks = parseTasks(ran.stdout)
+        const tasks = parseBoard(ran.stdout)
         const now = await $.clock.now()
         await update($, snapshot, () => ({ tasks, error: null, updated: now }))
       } catch {
-        await update($, snapshot, s => ({ ...s, error: 'malformed status JSON' }))
+        await update($, snapshot, s => ({ ...s, error: 'malformed board JSON' }))
       }
     }
   } catch (err) {
@@ -301,51 +308,65 @@ function continueSubmit($: EngineInterface, sid: string): string {
   return `running ${line}…`
 }
 
-/** Selects a task by its short id: records the ring and brings it into the chat (submitting /continue). */
-async function pick($: EngineInterface, sid: string) {
-  await update($, selected, () => sid)
-  await say($, continueSubmit($, sid))
+/** Selects a card by its key: records the ring and brings it into the chat (running /continue). */
+async function pick($: EngineInterface, key: string) {
+  await update($, selected, () => key)
+  const card = ((await read($, snapshot)).tasks ?? []).find(c => cardKey(c) === key)
+  // An inbox line with no tag has no id /continue could take (`chartroom inbox tag` gives it one).
+  if (card && !card.short_id && card.type === 'inbox') return say($, 'this inbox item has no id yet (chartroom inbox tag gives it one)')
+  await say($, continueSubmit($, key))
 }
 
-/** The highlighted task: the ring's row (tracked via ui.focus), else the first visible task. */
-async function currentTask($: EngineInterface): Promise<Task | null> {
-  const tasks = (await read($, snapshot)).tasks ?? []
-  if (!tasks.length) return null
+/** The highlighted card: the ring's row (tracked via ui.focus), else the first card. */
+async function currentCard($: EngineInterface): Promise<Card | null> {
+  const cards = (await read($, snapshot)).tasks ?? []
+  if (!cards.length) return null
   const sel = await read($, selected)
-  return tasks.find(t => (t.short_id ?? t.id) === sel) ?? tasks[0] ?? null
+  return cards.find(c => cardKey(c) === sel) ?? cards[0] ?? null
 }
 
-/** Clears an armed close (on timeout, re-arm, off): forgets the arm and its confirm notice. */
+/** Clears an armed action (on timeout, re-arm, off): forgets the arm and its confirm notice. */
 async function disarm($: EngineInterface) {
   armTimer?.cancel()
   armTimer = undefined
   if (!(await read($, armed).catch(() => null))) return
   await update($, armed, () => null).catch(() => {})
-  await update($, notice, n => (n && n.startsWith('Close ') ? null : n)).catch(() => {})
+  await update($, notice, n => (n && n.endsWith('again to confirm') ? null : n)).catch(() => {})
 }
 
+/** The two state-changing keys: each runs the CLI the XO and the dashboard's commander use. */
+const ACTIONS = {
+  close: { key: 'c', ask: (sid: string) => `Close ${sid}? press c again to confirm`, argv: (id: string) => ['close', id] },
+  complete: { key: 'a', ask: (sid: string) => `Complete ${sid} (accept it as done)? press a again to confirm`, argv: (id: string) => ['accept', id] },
+} as const
+
 /**
- * `c` on the highlighted task: complete → close, two presses. The first arms it (and shows an
- * inline confirm with a reset timeout); a second `c` on the same row runs `chartroom close <id>`
- * (keeping the branch, never `--discard`) against the resolved home. On refusal the CLI's exact
- * message is shown and nothing is claimed; on success the fleet re-polls and the task drops off.
+ * `c` (close) or `a` (complete) on the highlighted card, two presses. The first arms it (an inline
+ * confirm with a reset timeout); the same key again on the same row runs the CLI against the
+ * resolved home with the task's FULL id: `chartroom close <id>` (keeping the branch, never
+ * `--discard`) or `chartroom accept <id>` (a task in review becomes done; nothing is removed). A
+ * refusal is shown in the CLI's exact words and nothing is claimed; on success the board re-polls,
+ * so the card moves lane as the board says. Inbox items and closed tasks are refused here.
  */
-async function actClose($: EngineInterface) {
-  const task = await currentTask($)
-  if (!task) return say($, 'no task highlighted')
-  const sid = task.short_id ?? task.id // shown to the person and armed on the short id
-  if ((await read($, armed)) === sid) {
+async function act($: EngineInterface, action: keyof typeof ACTIONS) {
+  const card = await currentCard($)
+  if (!card) return say($, 'nothing highlighted')
+  const sid = cardKey(card)
+  if (card.type === 'inbox') return say($, `${sid} is an inbox item, not a task: Enter brings it in to answer`)
+  if (card.state === 'closed') return say($, `${sid} is already closed`)
+  const spec = ACTIONS[action]
+  if ((await read($, armed)) === `${action}:${sid}`) {
     armTimer?.cancel()
     armTimer = undefined
     await update($, armed, () => null)
-    const ran = await runCli($, ['close', task.id]) // chartroom close takes the FULL id, not the short id
+    const ran = await runCli($, [...spec.argv(card.id)]) // the CLI takes the FULL id
     if ('error' in ran) return say($, ran.detail || ran.error) // the CLI's exact refusal, never a fake success
-    await say($, ran.stdout.trim().split('\n')[0] || `closed ${sid}`)
-    await poll($) // so it drops off the list
+    await say($, ran.stdout.trim().split('\n')[0] || `${action === 'close' ? 'closed' : 'accepted'} ${sid}`)
+    await poll($) // so the card moves (or leaves) as the board now says
     return
   }
-  await update($, armed, () => sid)
-  await say($, `Close ${sid}? press c again to confirm`)
+  await update($, armed, () => `${action}:${sid}`)
+  await say($, spec.ask(sid))
   armTimer?.cancel()
   armTimer = $.clock.after(CONFIRM_MS, () => void disarm($))
 }
@@ -353,10 +374,10 @@ async function actClose($: EngineInterface) {
 /** `s` on the highlighted task: pre-fill a non-mutating recap request into the chat prompt. */
 async function actRecap($: EngineInterface, surface?: RenderSurface) {
   await disarm($) // any other action cancels a pending close
-  const task = await currentTask($)
-  if (!task) return say($, 'no task highlighted')
-  const sid = task.short_id ?? task.id
-  const text = `Recap ${sid} (${clean(task.title ?? sid)}): where it stands and what's pending`
+  const card = await currentCard($)
+  if (!card) return say($, 'nothing highlighted')
+  const sid = cardKey(card)
+  const text = `Recap ${sid} (${clean(card.title ?? sid)}): where it stands and what's pending`
   const r = await putInPrompt($, text, surface)
   if (r.via === 'fill') return say($, `recap request is in the prompt — edit or press Enter to send`)
   const why = r.draft ? 'the prompt holds a draft, kept' : 'the prompt cannot take it now'
@@ -373,7 +394,7 @@ export const register: Register = on => {
     await $.command
       .register({
         name: 'chartroom-panel',
-        description: 'Live, read-only Chartroom tasks: on|off|toggle|refresh|next|prev|focus|pick <id>|default on|off',
+        description: 'The live Chartroom board (complete/close from the pane): on|off|toggle|refresh|next|prev|focus|pick <id>|default on|off',
       })
       .catch(() => {})
 
@@ -429,14 +450,15 @@ export const register: Register = on => {
     return closed
   })
 
-  // The ring follows the person's arrows/Tab; tracking it as `selected` lets `c`/`s` and Enter act
-  // on the highlighted row. Moving to a different row cancels a pending two-press close.
+  // The ring follows the person's arrows/Tab; tracking it as `selected` lets `a`/`c`/`s` and Enter
+  // act on the highlighted row. Moving to a different row cancels a pending two-press action.
   on('ui.focus', async ($, e, next) => {
     const moved = await next(e)
     if (e.requestId === PANE && e.plugin === 'chartroom-panel' && e.element?.startsWith('row-') && !moved?.deny) {
       const sid = e.element.slice(4)
       await update($, selected, () => sid).catch(() => {})
-      if ((await read($, armed).catch(() => null)) && (await read($, armed)) !== sid) await disarm($)
+      const arm = await read($, armed).catch(() => null)
+      if (arm && arm.slice(arm.indexOf(':') + 1) !== sid) await disarm($)
     }
     return moved
   })
@@ -519,16 +541,12 @@ export const register: Register = on => {
     const tasks = snap.tasks ?? []
     const view = paginate(tasks, cap, pg)
 
-    const header =
-      snap.tasks === null ? (
-        <Text key="header" weight="bold" color="success" wrap="truncate">
-          Chartroom · task status
-        </Text>
-      ) : (
-        <Text key="header" weight="bold" color="success" wrap="truncate">
-          Chartroom · {tasks.length} unfinished
-        </Text>
-      )
+    const counts = laneCounts(tasks)
+    const header = (
+      <Text key="header" weight="bold" color="success" wrap="truncate">
+        {snap.tasks === null ? 'Chartroom · board' : `Chartroom · ${counts.needs_you.count} need you`}
+      </Text>
+    )
 
     const status = snap.error ? (
       <Text key="status" color="warning" wrap="truncate">
@@ -540,43 +558,43 @@ export const register: Register = on => {
       </Text>
     )
 
-    // The ring rests on the selected row when it is on this page, else the first row.
-    const onPage = view.tasks.map(t => t.short_id ?? t.id)
+    // The ring rests on the selected card when it is on this page, else the first card.
+    const onPage = view.tasks.map(cardKey)
     const ringId = (sel && onPage.includes(sel) ? sel : onPage[0]) ?? ''
 
-    const rows = view.tasks.map((t: Task) => {
-      const sid = clean(t.short_id ?? t.id)
-      const title = clean(t.title ?? t.id)
+    const cardRows = (c: Card) => {
+      const key = cardKey(c)
+      const sid = clean(c.short_id ?? '-')
+      const title = clean(c.title ?? c.id)
       const titleWidth = Math.max(0, width - columns(sid) - 1)
-      const key = `row-${t.short_id ?? t.id}`
-      const line2 = `  ${stateLabel(t.state)}${t.project ? ` · ${clean(t.project)}` : ''}`
       return (
-        <Box key={key} flexDirection="column">
-          <Button
-            key={key}
-            plain
-            {...((t.short_id ?? t.id) === ringId ? { autoFocus: true as const } : {})}
-            onPress={() => void pick($, t.short_id ?? t.id)}
-          >
+        <Box key={`row-${key}`} flexDirection="column">
+          <Button key={`row-${key}`} plain {...(key === ringId ? { autoFocus: true as const } : {})} onPress={() => void pick($, key)}>
             <Text color="subtle">{sid}</Text>
             {' '}
             {truncate(title, titleWidth)}
           </Button>
-          <Text wrap="truncate" {...TONE_PROPS[tone(t.state)]}>
-            {line2}
+          <Text wrap="truncate" {...TONE_PROPS[laneTone(c.lane)]}>
+            {`  ${clean(cardDetail(c))}`}
           </Text>
         </Box>
       )
-    })
+    }
 
+    // Every lane's header, in the board's order with its total count, then this page's cards in it.
     const body =
-      view.tasks.length === 0
+      snap.tasks === null
         ? [
             <Text key="empty" dimColor>
-              {snap.tasks === null ? 'Waiting for task status' : snap.error ? 'Last known: no unfinished tasks' : 'No unfinished tasks'}
+              Waiting for the board
             </Text>,
           ]
-        : rows
+        : LANES.flatMap(l => [
+            <Text key={`lane-${l.key}`} weight="bold" wrap="truncate" {...TONE_PROPS[laneTone(l.key)]}>
+              {laneHeader(l.name, counts[l.key])}
+            </Text>,
+            ...view.tasks.filter(c => c.lane === l.key).map(cardRows),
+          ])
 
     // flexGrow fills the pane's body height and backgroundColor transparent paints nothing, so the
     // area below the rows blends with the chat too — belt-and-suspenders with the open's backgroundColor.
@@ -594,11 +612,14 @@ export const register: Register = on => {
         </Text>
         {e.props.isFocused ? (
           // Focused: the action keys are real Buttons (their hotkeys fire only while the pane holds
-          // the keyboard), drawn as `c: close  s: recap`, then the rest of the legend. wrap=truncate
+          // the keyboard), drawn as `a: complete  c: close  s: recap`, then the legend. wrap=truncate
           // keeps it on one line on a narrow pane; the Buttons give way gracefully before the text.
           <Box key="foot-actions" flexDirection="row" flexWrap="wrap">
             <Box marginRight={1}>
-              <Button key="act-close" plain hotkey="c" label="close" onPress={() => void actClose($)} />
+              <Button key="act-complete" plain hotkey="a" label="complete" onPress={() => void act($, 'complete')} />
+            </Box>
+            <Box marginRight={1}>
+              <Button key="act-close" plain hotkey="c" label="close" onPress={() => void act($, 'close')} />
             </Box>
             <Box marginRight={1}>
               <Button key="act-recap" plain hotkey="s" label="recap" onPress={press => void actRecap($, press.surface)} />

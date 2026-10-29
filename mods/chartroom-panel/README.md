@@ -1,23 +1,28 @@
 # chartroom-panel
 
 A small Claude Code mod (function hooks; built and verified on Claude Code 2.1.312) that shows
-the commander's live Chartroom fleet in a **read-only pane beside the chat**, the sibling of the
-Pi panel (`adapters/pi-panel`). Completed work drops off; everything still open stays, with the
-tasks needing the commander's input set apart from the ones being worked on.
+the commander's live Chartroom board in a **pane beside the chat**. It mirrors `chartroom board`
+and the dashboard exactly: the same five lanes, in the same order, under the same names, each card
+with the board's own reason. From the focused pane the commander can **complete** (accept) or
+**close** a task, through the same CLI the XO uses.
 
 ```
 ┌ Chartroom ─────────────────────────────┐
-│ Chartroom · 5 unfinished                │
+│ Chartroom · 2 need you                  │
 │ Live · updated 9:41:12 AM               │
 │                                         │
-│ 108a Autoscale claims-svc workers…      │
-│   decision · monolog                    │   ← yellow: needs you
-│ 7c2f Passkey login flow                 │
-│   working · shop                        │   ← green: being worked on
-│ 05f6 Busy-season capacity readiness     │
-│   stopped silent · monolog              │   ← dim: quiet/attention
-│ …                                       │
-│ 1–5 of 5 · page 1/1                     │
+│ Needs you (2)                           │   ← yellow
+│ 3363 Pick a cache                       │
+│   decision · proj                       │
+│ f436 Fix login redirect                 │
+│   awaiting review · proj                │   ← a worker's done, waiting on you
+│ In progress (1)                         │   ← green
+│ f357 Add billing export                 │
+│   in-session · proj                     │
+│ On hold (0)                             │   ← dim
+│ Ready for you (0)                       │
+│ Recently finished (0)                   │   ← dim
+│ 1–3 of 3 · page 1/1                     │
 │ /chartroom-panel next|prev|off          │
 └─────────────────────────────────────────┘
 ```
@@ -32,33 +37,33 @@ own background in a dark or a light theme alike, with no hardcoded colour to bre
 
 ## What it shows
 
-The one source of truth is `chartroom status --json`. The panel reads it and nothing else; it
-never reads a task file, derives state of its own, or writes anything.
+The one source of truth is `chartroom board --json`, the board the dashboard and `chartroom board`
+draw (its lanes come from `lib/dashboard/lanes.jq`). The panel reads it and nothing else: it never
+reads a task file or decides a lane of its own, so it can never disagree with the dashboard.
 
-- **Header** (bold, accent): `Chartroom · N unfinished` — N is the count of visible tasks.
+- **Header** (bold, accent): `Chartroom · N need you` — N is the Needs you lane's count.
 - **Status** (dim): `Live · updated H:MM:SS AM`, the local time of the last successful read. On a
-  failure it reads `STALE: …` (the last tasks stay on screen) or, before the first read,
+  failure it reads `STALE: …` (the last board stays on screen) or, before the first read,
   `Unavailable: …`.
-- **Each task, two lines**: `{short_id} {title…}` (short id in a subtle colour, title truncated
-  to fit), then `{state} · {project}`, the state coloured by urgency:
+- **The lanes, every one, in the board's order**, each headed as `chartroom board` heads it, with
+  its total count (and how many focus mode holds): `Needs you (3, 1 held)`, `In progress (1)`,
+  `On hold (0)`, `Ready for you (0)`, `Recently finished (2)`. A lane's header shows even when it
+  is empty or its cards are on another page.
 
-  | states | colour | meaning |
+  | lane | colour | what the board puts there |
   | --- | --- | --- |
-  | `decision`, `blocked`, `awaiting-input`, `waiting-overdue`, `review` | yellow | needs you |
-  | `working`/`running`, `drafting` | green | being worked on |
-  | `stopped-silent` (shown `stopped silent`), `waiting`, `failed`, `lost` | dim | quiet / attention |
-  | any other unfinished state | plain | kept visible, never dimmed away |
+  | Needs you | yellow | decision, blocked, failed, awaiting-input, **review** (a worker's done, awaiting your look), inbox questions |
+  | In progress | green | working, drafting, waiting inside its window |
+  | On hold | dim | stopped silent, overdue, waiting on a person or a PR review |
+  | Ready for you | plain | done (accepted), not closed yet |
+  | Recently finished | dim | closed lately, or done with its PRs merged |
 
-- **Footer**: `{first}–{last} of {total} · page {p}/{pages}`, then `/chartroom-panel next|prev|off`.
-
-### Filtering (the heart of it)
-
-A row is **hidden** when its `state` is `done` or `closed`, **or** its `closed` field is non-null
-(a finished/closed row). A worker reporting done puts its task in `review`, which stays visible
-(yellow, with the input-needed rows) until the commander accepts (`chartroom accept`) or closes it. It is **kept** otherwise — including a `state: decision` row whose worker
-reports `live: done`, which is routine: the filter keys on `state`/`closed` and **never** on
-`live`. An unfinished state the mod has never seen stays visible. There is no completed/history
-section. (This is exactly the Pi panel's filter, so the two siblings hide and keep the same rows.)
+- **Each card, two lines**: `{short_id} {title…}` (short id in a subtle colour, title truncated
+  to fit), then the board's reason (`decision`, `PR to review`, `awaiting review`, `accepted`,
+  `closed`, …), `held` when focus mode holds it, and the project. Inbox questions are cards too,
+  as on the board.
+- **Footer**: `{first}–{last} of {total} · page {p}/{pages}` over the cards, then
+  `/chartroom-panel next|prev|off`.
 
 ## Activation & scope
 
@@ -71,7 +76,7 @@ project repos, so a cwd check would miss the real case. Three hooks catch the in
 once-only guard, because no single one is reliable: `skill.prompt`, the `prompt.submit` of the
 `/chartroom`/`/captain` command, and the `Skill` tool call. (A builtin plugin's `skill.prompt`
 handler can run first and send the event on past ours — `cc-plugin-sec-default` does — so the
-prompt-submit and tool-call triggers cover that case.) The home used to read `chartroom status` is
+prompt-submit and tool-call triggers cover that case.) The home used to read `chartroom board` is
 resolved separately, through `chartroom doctor --json`, so the panel still shows the right fleet
 wherever it is run.
 
@@ -112,8 +117,8 @@ is off, `/chartroom-panel on` still opens the panel for the current session, and
 /chartroom-panel toggle          same as the bare command
 /chartroom-panel focus           open the pane and take the keyboard (never closes)
 /chartroom-panel on | off        show / hide for the session (off also stops the refresh)
-/chartroom-panel refresh         read the fleet now
-/chartroom-panel next | prev     page through the tasks
+/chartroom-panel refresh         read the board now
+/chartroom-panel next | prev     page through the cards
 /chartroom-panel pick <short_id> bring that task into the chat (see below)
 /chartroom-panel default on|off  the durable, per-home auto-show default (see below)
 ```
@@ -126,8 +131,8 @@ hand (the frame's ✕ or **ctrl+x x**) turns the panel off for the session, exac
 
 ## Picking a task into the chat
 
-`/chartroom-panel` hands the keyboard to the pane: the arrows walk the task rows and **Enter**
-brings the highlighted task into the chat — it **runs** `/continue {short_id}` (the existing
+`/chartroom-panel` hands the keyboard to the pane: the arrows walk the cards and **Enter**
+brings the highlighted task (or inbox question) into the chat — it **runs** `/continue {short_id}` (the existing
 Chartroom continue skill) in one press and returns focus to the chat. It uses `$.command.run`, which
 dispatches the slash command *as if the commander typed it* — not `$.prompt.submit`, which only
 submits the text and does not re-parse it as a command (so the continue skill never actually ran).
@@ -142,13 +147,21 @@ While the pane holds the keyboard, single-letter keys act on the highlighted row
 while the pane is focused — never while you are typing in the chat — and the footer legend lists
 them:
 
+- **`a` — complete (two-press confirm).** The first `a` arms it and shows `Complete <id> (accept
+  it as done)? press a again to confirm` (it resets after a few seconds); a second `a` on the same
+  row runs `chartroom accept <id>`: a task in review (its worker reported done) becomes `done`, and
+  nothing is removed (its worktree and branch stay). On the next read the board moves it to Ready
+  for you. Any other state is refused by the CLI, and the panel shows its exact words.
 - **`c` — close (two-press confirm).** The first `c` arms it and shows `Close <id>? press c again
-  to confirm` (it resets after a few seconds); a second `c` on the same row runs
-  `chartroom close <id>` against the home, **keeping the branch — it never passes `--discard`**. It
-  relies on `chartroom close`'s own guard: if the close is refused (a dirty or unlanded worktree,
-  or any error) the panel shows the CLI's exact message and does **not** claim success. On success
-  the fleet re-polls and the task drops off. Closing is the **only** mutation the panel performs;
-  there is no discard/remove key and everything else stays read-only.
+  to confirm`; a second `c` on the same row runs `chartroom close <id>` against the home, **keeping
+  the branch — it never passes `--discard`**. It relies on `chartroom close`'s own guard: if the
+  close is refused (a dirty or unlanded worktree, or any error) the panel shows the CLI's exact
+  message and does **not** claim success. On success the board re-polls and the task moves to
+  Recently finished.
+- Complete and close are the **only** changes the panel makes, each through the CLI with the
+  task's full id. Arming one disarms the other (the confirm takes the same key on the same row),
+  moving to another row disarms it, and an inbox question or an already closed task is refused
+  without running anything. There is no discard/remove key.
 - **`s` — recap (non-mutating).** Pre-fills the chat prompt with
   `Recap <short_id> (<title>): where it stands and what's pending` (same `$.prompt.fill` as Enter,
   never submitted) for the commander to send; the XO answers. No jump, no mutation.
@@ -156,15 +169,17 @@ them:
 
 The footer makes the keys discoverable in both states: unfocused it shows `Ctrl+X Tab to select`
 beside `/chartroom-panel next|prev|off`; focused it shows the full legend
-`c: close  s: recap  ↑↓ move · Enter /continue · Esc chat`, truncated gracefully on a narrow pane.
+`a: complete  c: close  s: recap  ↑↓ move · Enter /continue · Esc chat`, truncated gracefully on a
+narrow pane.
 
 ## Refresh, safety, resilience
 
-The fleet refreshes every 5 seconds on a timer, with **no model call**, idle or streaming. Reads
-are bounded (an 8 s timeout) and never overlap; turning the panel off stops the refresh work. The
+The board refreshes every 5 seconds on a timer, with **no model call**, idle or streaming. Reads
+are bounded (a 20 s timeout for the board, which reads every task, the inbox and the artifacts;
+8 s for an action) and never overlap; turning the panel off stops the refresh work. The
 mod **never runs `chartroom watch`** — that stream belongs to the XO's supervision. A
 command-not-found, a timeout, a malformed payload or a transient failure all keep the last known
-tasks on screen, marked `STALE`; an error is never drawn as an empty fleet.
+board on screen, marked `STALE`; an error is never drawn as an empty board.
 
 ## Install
 
@@ -199,8 +214,8 @@ Claude Code writes `.claude-plugin/types/` (the API declarations, git-ignored) w
 mod from a folder it watches (`claude --plugin-dir`). Before that, copy the declarations the
 `plugin-authoring` skill names into `.claude-plugin/types/claude-code.d.ts`.
 
-`hooks/model.ts` holds the pure parts (the filter, the state→tone map, width-safe text and
-paging), tested directly in `tests/model.test.ts`; `hooks/register.tsx` the hooks (activation, the
+`hooks/model.ts` holds the pure parts (the board parse, the lanes and their tones, width-safe
+text and paging), tested directly in `tests/model.test.ts`; `hooks/register.tsx` the hooks (activation, the
 timer poll, the command, the pane), driven through the test kit in `tests/panel.test.ts`;
 `types/index.d.ts` the `$.state` contract.
 
@@ -208,6 +223,6 @@ timer poll, the command, the pane), driven through the test kit in `tests/panel.
 
 `crew-view` is the full XO cockpit — a band above the prompt, a `/crew` board browser and the
 todo list — and wakes on the `chartroom`/`captain` skill. `chartroom-panel` is deliberately
-narrower: one read-only status pane that matches the Pi panel, auto-shows at the home, and reads
-`chartroom status --json` rather than `board --json`. Install whichever fits; they share no
+narrower: one pane that mirrors the board (the same `chartroom board --json` crew-view's browser
+reads), with complete and close on the highlighted task. Install whichever fits; they share no
 command name, so both can load, each drawing its own pane.
