@@ -21,6 +21,7 @@
 #   blocked                 any                        blocked          blocked
 #   awaiting-input          blocked (at a prompt)      awaiting-input   blocked
 #   failed                  any                        failed           docked
+#   review                  any                        review           docked
 #   done                    any                        done             docked
 #   waiting                 stopped (inside window)    waiting          holding
 #   working + waiting_on    still live                 waiting          holding
@@ -51,7 +52,7 @@ def shape:
 
 def sector_of: {"decision": "decision", "blocked": "blocked", "awaiting-input": "blocked",
   "overdue": "adrift", "stopped-silent": "adrift", "lost": "adrift", "unknown": "adrift",
-  "working": "underway", "waiting": "holding", "done": "docked", "failed": "docked"}[.] // null;
+  "working": "underway", "waiting": "holding", "review": "docked", "done": "docked", "failed": "docked"}[.] // null;
 
 def live_now: IN("working", "running", "in-session", "listening");
 
@@ -62,7 +63,7 @@ def radar($home; $is_local):
   | ($t.state // "unknown") as $s
   | (($t.last // "") | startswith("waiting: ")) as $said_waiting
   | ($s == "working" and $t.waiting_on == null and ($said_waiting | not) and ($t.last | waits_on_person)) as $inferred
-  | (if $s == "decision" or $s == "blocked" or $s == "awaiting-input" or $s == "failed" or $s == "done" or $s == "waiting" then $s
+  | (if $s == "decision" or $s == "blocked" or $s == "awaiting-input" or $s == "failed" or $s == "review" or $s == "done" or $s == "waiting" then $s
      elif $s == "waiting-overdue" then "overdue"
      elif $s == "stopped-silent" then (if $live == "gone" then "lost" else "stopped-silent" end)
      elif $s == "working" then (if $t.waiting_on != null or $inferred then "waiting" else "working" end)
@@ -79,7 +80,8 @@ def radar($home; $is_local):
            elif $rs == "blocked" then "reported it cannot proceed"
            elif $rs == "awaiting-input" then "stopped at a permission or question prompt"
            elif $rs == "failed" then "reported failure"
-           elif $rs == "done" then "reported done" + (if $t.has_report then "; a report to read" else "" end)
+           elif $rs == "review" then "reported done, awaiting your review" + (if $t.has_report then "; a report to read" else "" end)
+           elif $rs == "done" then "accepted as done" + (if $t.has_report then "; a report to read" else "" end)
            elif $rs == "waiting" and $inferred then "looks like it is waiting, from its last message (not a waiting report)"
            elif $rs == "waiting" then "waiting on " + $t.waiting_on + (if $s == "working" and ($live | live_now) then "; its process is still live" else "" end)
            elif $rs == "overdue" then "waited past its window" + (if $t.waiting_on then " (on " + $t.waiting_on + ")" else "" end)

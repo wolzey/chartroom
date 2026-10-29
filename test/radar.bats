@@ -108,9 +108,10 @@ acme() { echo "[{\"home\": \"acme\", \"path\": \"/srv/acme\", \"current\": true,
   run cr radar --json
   [ "$status" -eq 0 ]
   local j="$output"
+  # a worker's done is review (awaiting the commander), docked like done
   [ "$(rows "$j")" = "t-blocked blocked blocked
 t-decision decision decision
-t-done done docked
+t-done review docked
 t-failed failed docked
 t-inferred waiting holding
 t-overdue overdue adrift
@@ -127,7 +128,7 @@ t-working working underway" ]
   [ "$(agent t-silent "$j" | jq -c '[.live, .why]')" = '["stopped","its process stopped without reporting"]' ]
   # a wait read from the text is marked as such: not the worker's `waiting` report
   [ "$(agent t-inferred "$j" | jq -c '[.inferred, .waiting.on, .status_state]')" = '[true,"waiting on the design team to confirm the copy","working"]' ]
-  [ "$(agent t-done "$j" | jq -c '[.has_report, .why]')" = '[true,"reported done; a report to read"]' ]
+  [ "$(agent t-done "$j" | jq -c '[.has_report, .why]')" = '[true,"reported done, awaiting your review; a report to read"]' ]
 }
 
 @test "remote: the state table, row by row, from another machine's status" {

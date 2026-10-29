@@ -483,8 +483,8 @@ are stable from 0.1.0.
   tasks not yet closed. `sweep` treats `review` as finished but never closes one: it closes only
   accepted (`done`) tasks, and lists a review task's open session as needing a human. Existing
   records are not rewritten: the state is derived from the log, so a task whose `done` event has
-  no accept after it reads as `review`. The `chartroom`, `continue`, `bearings` and `sweep`
-  skills say so.
+  no accept after it reads as `review`. The fleet radar docks a `review` task like a done one
+  (labelled review). The `chartroom`, `continue`, `bearings` and `sweep` skills say so.
 - `chartroom-panel` mirrors the board: it reads `chartroom board --json` (the dashboard's own lane
   logic) instead of filtering `status --json`, and draws the same five lanes in the same order under
   the same names (Needs you, In progress, On hold, Ready for you, Recently finished), each headed

@@ -363,7 +363,7 @@ chartroom radar machines             # the machines it reads, and how often
 | **Adrift** | `overdue`, `stopped-silent`, `lost` | waited past its window; stopped without reporting; its session is gone |
 | **Under way** | `working` | working; a hollow "?" hull when its backend could not be checked |
 | **Holding** | `waiting` | its own `waiting` report, inside its window (a ring counts down to the until-time); or, marked *inferred*, a last message that says it waits on someone |
-| **Docked** | `done`, `failed` | a report to read; a wreck for a failure |
+| **Docked** | `review`, `done`, `failed` | a report to read (`review`: a worker's done, awaiting your accept or close); a wreck for a failure |
 
 Telling *blocked* from *waiting* is the point. The view keeps itself honest in these ways:
 
