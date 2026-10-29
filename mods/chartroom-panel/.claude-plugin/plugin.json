@@ -1,7 +1,7 @@
 {
   "name": "chartroom-panel",
   "version": "0.1.0",
-  "description": "The commander's live Chartroom fleet in a read-only pane beside the chat: unfinished tasks only (completed drop off), input-needed set apart from being-worked-on, refreshed on a timer with no model call; the arrows pick a task and Enter brings it into the chat as /continue.",
+  "description": "The commander's live Chartroom board in a pane beside the chat, mirroring chartroom board and the dashboard (the same lanes, names, order and reasons), refreshed on a timer with no model call; the arrows pick a card, Enter brings it into the chat as /continue, and a (complete: chartroom accept) and c (close) act on it with a two-press confirm.",
   "author": { "name": "wolzey", "url": "https://github.com/wolzey" },
   "homepage": "https://github.com/wolzey/chartroom",
   "license": "MIT",

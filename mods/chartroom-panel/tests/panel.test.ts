@@ -4,12 +4,12 @@
 import { expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { HOME, PANE_PROPS, XO_WORLD, install, loadSkill, panelCommand, start, startXo, statusJson, submitPrompt } from './world'
+import { HOME, PANE_PROPS, XO_WORLD, boardJson, install, loadSkill, panelCommand, start, startXo, submitPrompt } from './world'
 
 const mountPane = ($: Engine, width = 90, over = {}) =>
   $.ui.mount({ plugin: 'chartroom-panel', surface: 'terminal', component: 'Pane', requestId: 'chartroom-panel', props: PANE_PROPS(width, over) })
 
-const polls = (runs: string[][]) => runs.filter(r => r[1] === 'status').length
+const polls = (runs: string[][]) => runs.filter(r => r[1] === 'board').length
 
 test('auto-shows when the XO skill loads — in any directory, not tied to the home', async ($, on) => {
   const w = install(on, XO_WORLD())
@@ -24,15 +24,18 @@ test('auto-shows when the XO skill loads — in any directory, not tied to the h
   expect(w.opens.map(o => o.id)).toEqual(['chartroom-panel'])
   expect(w.opens[0]?.focus).toBeUndefined() // auto-show never grabs the keyboard
   expect(w.opens[0]?.backgroundColor).toBe('transparent') // blends with the chat
-  // Status still reads the resolved home (via chartroom doctor), though the cwd was a project repo.
-  const statusHomes = w.runs.map((r, i) => (r[1] === 'status' ? w.homes[i] : null)).filter(h => h !== null)
+  // The board still reads the resolved home (via chartroom doctor), though the cwd was a project repo.
+  const statusHomes = w.runs.map((r, i) => (r[1] === 'board' ? w.homes[i] : null)).filter(h => h !== null)
   expect(statusHomes.length).toBeGreaterThan(0)
   expect(statusHomes.every(h => h === HOME)).toBe(true)
 
   const ui = await mountPane($)
-  expect(await ui.find({ type: 'Text', text: /^Chartroom · 1 unfinished/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Chartroom · 1 need you/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^Live · updated / })).toBeDefined()
-  // A state:decision, live:done row MUST be visible — the filter never looks at live.
+  // The board's five lanes, its names and order, every one with its count (empty ones too).
+  for (const lane of ['Needs you (1)', 'In progress (0)', 'On hold (0)', 'Ready for you (0)', 'Recently finished (0)']) {
+    expect(await ui.find({ type: 'Text', text: lane })).toBeDefined()
+  }
   expect(await ui.find({ type: 'Button', key: 'row-108a' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /decision · shop/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '/chartroom-panel next|prev|off' })).toBeDefined()
@@ -120,55 +123,81 @@ test('a non-interactive (-p) run registers no command, opens no pane and never p
   expect(polls(w.runs)).toBe(0)
 })
 
-test('a worker reporting done stays as review; only the accept (done) drops it', async ($, on) => {
+test('the board decides the lanes: working, then review in Needs you, then accepted in Ready for you', async ($, on) => {
   const world = XO_WORLD()
-  world.status = () => ({ exitCode: 0, stdout: statusJson([{ id: 'auth-108a', state: 'working', title: 'Auth' }]), stderr: '' })
+  const at = (card: { state: string; lane: string; reason: string }) => () => ({ exitCode: 0, stdout: boardJson([{ id: 'auth-108a', title: 'Auth', ...card }]), stderr: '' })
+  world.board = at({ state: 'working', lane: 'in_progress', reason: 'running' })
   const w = install(on, world)
   await startXo($)
   await w.clock.settle()
   let ui = await mountPane($)
-  expect(await ui.find({ type: 'Button', key: 'row-108a' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /1 unfinished/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'In progress (1)' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /running · shop/ })).toBeDefined()
   await ui.unmount()
 
-  // The worker reports done: the task waits on the commander's review, so it stays.
-  world.status = () => ({ exitCode: 0, stdout: statusJson([{ id: 'auth-108a', state: 'review', title: 'Auth' }]), stderr: '' })
+  // The worker reports done: the board has it in Needs you, awaiting the commander's review.
+  world.board = at({ state: 'review', lane: 'needs_you', reason: 'PR to review' })
   await w.clock.advance(5_000)
   ui = await mountPane($)
-  expect(await ui.find({ type: 'Button', key: 'row-108a' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /review/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /1 unfinished/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Needs you (1)' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /PR to review · shop/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /1 need you/ })).toBeDefined()
   await ui.unmount()
 
-  // The commander accepts it (state done): the next poll drops it, with no close event anywhere.
-  world.status = () => ({ exitCode: 0, stdout: statusJson([{ id: 'auth-108a', state: 'done', title: 'Auth' }]), stderr: '' })
+  // Accepted: the board moves it to Ready for you; the panel follows, with no rule of its own.
+  world.board = at({ state: 'done', lane: 'ready', reason: 'accepted' })
   await w.clock.advance(5_000)
   ui = await mountPane($)
-  expect(await ui.find({ type: 'Button', key: 'row-108a' })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: /0 unfinished/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /No unfinished tasks/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Ready for you (1)' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /accepted · shop/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /0 need you/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('inbox items and held cards show as the board shows them', async ($, on) => {
+  const world = XO_WORLD()
+  world.board = () => ({
+    exitCode: 0,
+    stdout: boardJson([
+      { id: 'inbox-0', type: 'inbox', short_id: 'i-7f3a', state: 'inbox', reason: 'waiting on you (inbox)', title: 'which region?', project: null },
+      { id: 'pay-21ba', state: 'blocked', held: true, project: 'billing' },
+    ]),
+    stderr: '',
+  })
+  const w = install(on, world)
+  await startXo($)
+  await w.clock.settle()
+  const ui = await mountPane($, 90, { isFocused: true })
+  expect(await ui.find({ type: 'Text', text: 'Needs you (2, 1 held)' })).toBeDefined()
+  expect(await ui.find({ type: 'Button', key: 'row-i-7f3a' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /waiting on you \(inbox\)/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /blocked · held · billing/ })).toBeDefined()
+  // an inbox item is not a task: close/complete refuse it and run nothing
+  await ui.press({ key: 'act-close' })
+  expect(await ui.find({ type: 'Text', text: /i-7f3a is an inbox item, not a task/ })).toBeDefined()
+  expect(w.runs.some(r => r[1] === 'close' || r[1] === 'accept')).toBe(false)
   await ui.unmount()
 })
 
 test('a refresh failure keeps the last known tasks, shown STALE — never an empty fleet', async ($, on) => {
   const world = XO_WORLD()
-  world.status = () => ({ exitCode: 0, stdout: statusJson([{ id: 'auth-108a', state: 'blocked', title: 'Auth' }]), stderr: '' })
+  world.board = () => ({ exitCode: 0, stdout: boardJson([{ id: 'auth-108a', state: 'blocked', title: 'Auth' }]), stderr: '' })
   const w = install(on, world)
   await startXo($)
   await w.clock.settle()
 
-  world.status = () => 'missing' // chartroom vanishes
+  world.board = () => 'missing' // chartroom vanishes
   await w.clock.advance(5_000)
   let ui = await mountPane($)
   expect(await ui.find({ type: 'Button', key: 'row-108a' })).toBeDefined() // stale row still shown
   expect(await ui.find({ type: 'Text', text: /^STALE:/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /1 unfinished/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /1 need you/ })).toBeDefined()
   await ui.unmount()
 
-  world.status = () => ({ exitCode: 0, stdout: '{ not json', stderr: '' }) // malformed
+  world.board = () => ({ exitCode: 0, stdout: '{ not json', stderr: '' }) // malformed
   await w.clock.advance(5_000)
   ui = await mountPane($)
-  expect(await ui.find({ type: 'Text', text: /STALE: malformed status JSON/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /STALE: malformed board JSON/ })).toBeDefined()
   expect(await ui.find({ type: 'Button', key: 'row-108a' })).toBeDefined()
   await ui.unmount()
 })
@@ -212,33 +241,34 @@ test('toggle: closes when shown, opens-and-asks-for-focus when hidden; focus re-
 
 test('paging: next and prev move the window; the footer reports the range', async ($, on) => {
   const world = XO_WORLD()
-  const rows = Array.from({ length: 15 }, (_, i) => ({ id: `task-${1000 + i}`, state: 'working', title: `Task ${i}` }))
-  world.status = () => ({ exitCode: 0, stdout: statusJson(rows), stderr: '' })
+  const rows = Array.from({ length: 15 }, (_, i) => ({ id: `task-${1000 + i}`, state: 'working', lane: 'in_progress', title: `Task ${i}` }))
+  world.board = () => ({ exitCode: 0, stdout: boardJson(rows), stderr: '' })
   const w = install(on, world)
   const panel = panelCommand($)
   await startXo($)
   await w.clock.settle()
-  let ui = await mountPane($) // bodyRows 30 → capacity 12 → 2 pages
-  expect(await ui.find({ type: 'Text', text: '1–12 of 15 · page 1/2' })).toBeDefined()
+  let ui = await mountPane($) // bodyRows 30 → capacity 9 (after the chrome and 5 lane headers) → 2 pages
+  expect(await ui.find({ type: 'Text', text: '1–9 of 15 · page 1/2' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'In progress (15)' })).toBeDefined() // the count is the lane's, not the page's
   await ui.unmount()
   await panel('next')
   ui = await mountPane($)
-  expect(await ui.find({ type: 'Text', text: '13–15 of 15 · page 2/2' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '10–15 of 15 · page 2/2' })).toBeDefined()
   await ui.unmount()
   await panel('prev')
   ui = await mountPane($)
-  expect(await ui.find({ type: 'Text', text: '1–12 of 15 · page 1/2' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '1–9 of 15 · page 1/2' })).toBeDefined()
   await ui.unmount()
 })
 
 test('renders width-safe at a narrow pane with a long Unicode title', async ($, on) => {
   const world = XO_WORLD()
-  world.status = () => ({ exitCode: 0, stdout: statusJson([{ id: 'u-9z9z', state: 'decision', title: '長い👩🏽‍💻タイトル'.repeat(8) }]), stderr: '' })
+  world.board = () => ({ exitCode: 0, stdout: boardJson([{ id: 'u-9z9z', state: 'decision', title: '長い👩🏽‍💻タイトル'.repeat(8) }]), stderr: '' })
   const w = install(on, world)
   await startXo($)
   await w.clock.settle()
   const ui = await mountPane($, 40)
-  expect(await ui.find({ type: 'Text', text: /Chartroom · 1 unfinished/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Chartroom · 1 need you/ })).toBeDefined()
   expect(await ui.find({ type: 'Button', key: 'row-9z9z' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '/chartroom-panel next|prev|off' })).toBeDefined()
   await ui.unmount()
@@ -288,7 +318,7 @@ test('pick <id> brings a task in via /continue (usage on a bare pick)', async ($
   expect((await panel('pick')).text).toMatch(/Usage/)
 })
 
-test('c: two-press confirm closes the highlighted task (one press only arms); it drops on re-poll', async ($, on) => {
+test('c: two-press confirm closes the highlighted task (one press only arms); it moves to Recently finished', async ($, on) => {
   const w = install(on, XO_WORLD())
   await startXo($)
   await w.clock.settle()
@@ -302,8 +332,58 @@ test('c: two-press confirm closes the highlighted task (one press only arms); it
   await ui.press({ key: 'act-close' })
   const closeRuns = w.runs.filter(r => r[1] === 'close')
   expect(closeRuns.map(r => r.slice(1))).toEqual([['close', 'auth-108a']])
-  expect(await ui.find({ type: 'Button', key: 'row-108a' })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: /0 unfinished/ })).toBeDefined()
+  // the re-poll shows it where the board now puts it
+  expect(await ui.find({ type: 'Text', text: 'Recently finished (1)' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /closed · shop/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /0 need you/ })).toBeDefined()
+  // a closed task cannot be closed again from the pane
+  await ui.press({ key: 'act-close' })
+  expect(await ui.find({ type: 'Text', text: /108a is already closed/ })).toBeDefined()
+  expect(w.runs.filter(r => r[1] === 'close').length).toBe(1)
+  await ui.unmount()
+})
+
+test('a: complete is a two-press chartroom accept; the task moves to Ready for you', async ($, on) => {
+  const world = XO_WORLD()
+  world.board = (() => {
+    let state = { state: 'review', lane: 'needs_you', reason: 'report to read' }
+    world.accept = id => {
+      state = { state: 'done', lane: 'ready', reason: 'accepted' }
+      return { exitCode: 0, stdout: `accepted ${id}: done (chartroom close ${id} removes its worktree)`, stderr: '' }
+    }
+    return () => ({ exitCode: 0, stdout: boardJson([{ id: 'auth-108a', title: 'Auth', ...state }]), stderr: '' })
+  })()
+  const w = install(on, world)
+  await startXo($)
+  await w.clock.settle()
+  const ui = await mountPane($, 120, { isFocused: true })
+  await ui.press({ key: 'act-complete' }) // arm
+  expect(await ui.find({ type: 'Text', text: /Complete 108a \(accept it as done\)\? press a again to confirm/ })).toBeDefined()
+  expect(w.runs.some(r => r[1] === 'accept')).toBe(false)
+  // c on the same row arms close instead: one arm at a time, the confirm needs the same key
+  await ui.press({ key: 'act-close' })
+  expect(await ui.find({ type: 'Text', text: /Close 108a\?/ })).toBeDefined()
+  await ui.press({ key: 'act-complete' }) // re-arm complete
+  await ui.press({ key: 'act-complete' }) // confirm
+  expect(w.runs.filter(r => r[1] === 'accept').map(r => r.slice(1))).toEqual([['accept', 'auth-108a']]) // the FULL id
+  expect(w.runs.some(r => r[1] === 'close')).toBe(false)
+  expect(await ui.find({ type: 'Text', text: /accepted auth-108a: done/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Ready for you (1)' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /accepted · shop/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a: a chartroom accept refusal (not in review) is surfaced verbatim', async ($, on) => {
+  const world = XO_WORLD()
+  world.accept = id => ({ exitCode: 1, stdout: '', stderr: `chartroom: ${id} is decision, not awaiting review: accept marks a worker's finished work done` })
+  const w = install(on, world)
+  await startXo($)
+  await w.clock.settle()
+  const ui = await mountPane($, 160, { isFocused: true })
+  await ui.press({ key: 'act-complete' })
+  await ui.press({ key: 'act-complete' })
+  expect(await ui.find({ type: 'Text', text: /auth-108a is decision, not awaiting review/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Needs you (1)' })).toBeDefined()
   await ui.unmount()
 })
 
@@ -338,6 +418,7 @@ test('action keys exist only when focused; the footer shows how to get in and ac
   await w.clock.settle()
   // Unfocused: no action Buttons (keys inert), and the footer says how to get in.
   let ui = await mountPane($, 90, { isFocused: false })
+  expect(await ui.find({ type: 'Button', key: 'act-complete' })).toBeUndefined()
   expect(await ui.find({ type: 'Button', key: 'act-close' })).toBeUndefined()
   expect(await ui.find({ type: 'Button', key: 'act-recap' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /Ctrl\+X Tab to select/ })).toBeDefined()
@@ -345,8 +426,10 @@ test('action keys exist only when focused; the footer shows how to get in and ac
   await ui.unmount()
   // Focused: the action Buttons carry their single-letter hotkeys, and the legend lists them.
   ui = await mountPane($, 90, { isFocused: true })
+  const a = await ui.find({ type: 'Button', key: 'act-complete' })
   const c = await ui.find({ type: 'Button', key: 'act-close' })
   const s = await ui.find({ type: 'Button', key: 'act-recap' })
+  expect([a?.props.hotkey, a?.props.label]).toEqual(['a', 'complete'])
   expect([c?.props.hotkey, c?.props.label]).toEqual(['c', 'close'])
   expect([s?.props.hotkey, s?.props.label]).toEqual(['s', 'recap'])
   expect(await ui.find({ type: 'Text', text: /↑↓ move · Enter \/continue · Esc chat/ })).toBeDefined()

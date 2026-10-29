@@ -481,6 +481,15 @@ are stable from 0.1.0.
   records are not rewritten: the state is derived from the log, so a task whose `done` event has
   no accept after it reads as `review`. The `chartroom`, `continue`, `bearings` and `sweep`
   skills say so.
+- `chartroom-panel` mirrors the board: it reads `chartroom board --json` (the dashboard's own lane
+  logic) instead of filtering `status --json`, and draws the same five lanes in the same order under
+  the same names (Needs you, In progress, On hold, Ready for you, Recently finished), each headed
+  with its count and held count as `chartroom board` heads it, each card with the board's reason
+  (a worker's finished work shows in Needs you as `awaiting review`, `PR to review` or `report to
+  read`), inbox questions included. The header counts what needs you. From the focused pane, `a`
+  completes the highlighted task (`chartroom accept`, two-press) beside the existing two-press `c`
+  close; both run the CLI with the full id, show its refusal verbatim, and re-poll so the card moves
+  as the board says. Enter (`/continue`) and `s` (recap) are unchanged.
 - README reads on its own: the comparison with another project is gone; the differences that
   matter are listed under Design.
 - Skills: the `chartroom` skill points at the dashboard and `board`; `continue` appends the
