@@ -281,6 +281,7 @@
   .att .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .att:hover, .att:focus-visible { border-color: var(--accent); outline: none; }
   .att.copied, .att.copied svg { color: var(--accent); border-color: var(--accent); }
+  a.att:hover { text-decoration: none; }
 
   /* signal glyphs, one per state */
   .sig { position: relative; flex: none; width: 12px; height: 12px; margin-top: 3px; color: var(--accent); }
@@ -568,6 +569,7 @@
     </span>
     <select class="theme" id="skin" aria-label="dashboard theme"></select>
     <button class="theme" id="mode" type="button">auto</button>
+    <a class="theme" href="/pages" title="reports from the crew, as pages to read and print">pages</a>
   </div>
   <nav class="counts" id="counts" aria-label="lane counts"></nav>
 </header>
@@ -784,6 +786,11 @@ function artLoad(a) {
   return entry.p;
 }
 function artifactChip(c, a) {
+  if (a.kind === "page") { // a page to read: its viewer (pages.html), nothing to copy
+    const href = "/pages/" + (a.owner_type === "task" ? "task" : "inbox") + "/" + encodeURIComponent(a.owner) + "/" + encodeURIComponent(a.slug);
+    return el("a", { class: "att", href, title: "read page " + a.ref, "aria-label": "read page " + a.ref + ": " + a.title },
+      icon("clip"), el("span", { class: "k", text: "page" }), el("span", { class: "t", text: a.title }));
+  }
   const what = "open and copy " + a.kind + " " + a.ref;
   const b = el("button", { type: "button", class: "att", title: what, "aria-label": what + ": " + a.title },
     icon("clip"), el("span", { class: "k", text: a.kind }), el("span", { class: "t", text: a.title }));

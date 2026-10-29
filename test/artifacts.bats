@@ -187,7 +187,7 @@ fake_clip() { # <name>: a clipboard tool that keeps its input in $CLIP and logs 
   c="$(cr artifact add "$tag" --kind message --title "Release note" "$MSG")"
   [ "$(cr status | tail -1)" = "artifacts: 3 open (2 messages, 1 runbook): chartroom artifact list" ]
   board="$(cr dashboard --json)"
-  [ "$(jq -c .artifacts <<<"$board")" = '{"open":3,"message":2,"runbook":1,"note":0}' ]
+  [ "$(jq -c .artifacts <<<"$board")" = '{"open":3,"message":2,"runbook":1,"note":0,"page":0}' ]
   [ "$(jq -c --arg id "$id" '.lanes[][] | select(.id == $id) | .artifacts | map([.ref, .kind, .title, .owner_type, .owner, .slug]) | sort' <<<"$board")" = \
     "$(jq -nc --arg id "$id" --arg a "$a" --arg b "$b" '[[$b, "runbook", "Deploy", "task", $id, "deploy"], [$a, "message", "Reply", "task", $id, "reply"]]')" ]
   [ "$(jq -c --arg t "$tag" '.lanes.needs_you[] | select(.short_id == $t) | .artifacts | map([.ref, .owner_type, .owner])' <<<"$board")" = "[[\"$c\",\"inbox\",\"$tag\"]]" ]
@@ -200,7 +200,7 @@ fake_clip() { # <name>: a clipboard tool that keeps its input in $CLIP and logs 
   # done ones leave the cards and the count
   cr artifact done "$a" >/dev/null; cr artifact done "$c" >/dev/null
   board="$(cr dashboard --json)"
-  [ "$(jq -c .artifacts <<<"$board")" = '{"open":1,"message":0,"runbook":1,"note":0}' ]
+  [ "$(jq -c .artifacts <<<"$board")" = '{"open":1,"message":0,"runbook":1,"note":0,"page":0}' ]
   [ "$(jq -c --arg id "$id" '.lanes[][] | select(.id == $id) | .artifacts | map(.ref)' <<<"$board")" = "[\"$b\"]" ]
   [ "$(cr status | tail -1)" = "artifacts: 1 open (1 runbook): chartroom artifact list" ]
   cr artifact done "$b" >/dev/null

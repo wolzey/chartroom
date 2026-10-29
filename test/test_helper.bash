@@ -25,6 +25,10 @@ common_setup() {
   unset CI TMUX TMUX_PANE HERDR_ENV HERDR_PANE_ID CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_SOCKET_PATH
   unset CLAUDECODE CLAUDE_PID CLAUDE_CODE_SESSION_ID CHARTROOM_TASK
   export XDG_STATE_HOME="$BATS_TEST_TMPDIR/state"
+  # Never a real browser: `artifact pdf` finds no Chrome unless a test puts the fake on
+  # (CHARTROOM_CHROME=chrome, test/fakes/chrome) or opts in to a real one (test/pages.bats).
+  export CHARTROOM_CHROME="$BATS_TEST_TMPDIR/no-chrome-in-tests"
+  unset CHARTROOM_PDF_PAPER CHARTROOM_PDF_TIMEOUT
   # Minimal PATH: bash>=4, jq, git and the base system. Fakes are added per test.
   BIN="$BATS_TEST_TMPDIR/bin"; mkdir -p "$BIN"
   link_tool "$real_bash" bash; link_tool "$real_jq" jq; link_tool "$real_git" git

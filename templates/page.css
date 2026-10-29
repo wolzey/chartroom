@@ -1,0 +1,89 @@
+/* chartroom page: the default stylesheet for an HTML page artifact (chartroom artifact add --kind
+   page). Inlined into the page when it is added, so the page stays one self-contained file. Light
+   by day, dark by night (the reader's setting), always light on paper. Everything is scoped to
+   .cr-page, so a page's own styles can sit beside it. */
+:root { color-scheme: light dark; }
+.cr-page {
+  --cr-bg: #fbf7ee; --cr-panel: #f4ecdc; --cr-ink: #14243a; --cr-muted: #5d6976; --cr-line: rgba(20,36,58,.16);
+  --cr-zebra: rgba(20,36,58,.035); --cr-code: rgba(20,36,58,.07); --cr-link: #0d5a8a;
+  --cr-ok: #2e7d4c; --cr-warn: #9c6c0c; --cr-bad: #c2412b; --cr-info: #0f7490;
+  --cr-display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --cr-body: "Avenir Next", Avenir, "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --cr-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  margin: 0; padding: 32px 20px 48px; background: var(--cr-bg); color: var(--cr-ink);
+  font: 15px/1.6 var(--cr-body); -webkit-font-smoothing: antialiased; overflow-wrap: break-word;
+}
+@media (prefers-color-scheme: dark) {
+  .cr-page {
+    --cr-bg: #0b1b2a; --cr-panel: #102538; --cr-ink: #e2ebf1; --cr-muted: #93a7b7; --cr-line: rgba(150,200,230,.18);
+    --cr-zebra: rgba(150,200,230,.045); --cr-code: rgba(150,200,230,.1); --cr-link: #7cc7ec;
+    --cr-ok: #5ed592; --cr-warn: #e9b956; --cr-bad: #ff7b5c; --cr-info: #41c9e2;
+  }
+}
+.cr-page > header, .cr-page > main, .cr-page > footer { max-width: 880px; margin: 0 auto; }
+.cr-page .cr-head { border-bottom: 2px solid var(--cr-ink); padding-bottom: 14px; margin-bottom: 26px; }
+.cr-page .cr-kicker { margin: 0 0 6px; font: 600 12px/1.4 var(--cr-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--cr-muted); }
+.cr-page .cr-kicker span + span::before { content: " · "; }
+.cr-page h1, .cr-page h2, .cr-page h3, .cr-page h4 { font-family: var(--cr-display); line-height: 1.2; break-after: avoid; }
+.cr-page h1 { font-size: 32px; margin: 0; letter-spacing: -.01em; }
+.cr-page .cr-desc { margin: 8px 0 0; font-size: 17px; color: var(--cr-muted); }
+.cr-page h2 { font-size: 23px; margin: 34px 0 10px; padding-bottom: 4px; border-bottom: 1px solid var(--cr-line); }
+.cr-page h3 { font-size: 18px; margin: 24px 0 8px; }
+.cr-page h4 { font-size: 15px; margin: 18px 0 6px; }
+.cr-page p, .cr-page ul, .cr-page ol, .cr-page dl, .cr-page blockquote { margin: 0 0 12px; }
+.cr-page ul, .cr-page ol { padding-left: 24px; }
+.cr-page li { margin: 3px 0; }
+.cr-page a { color: var(--cr-link); }
+.cr-page hr { border: 0; border-top: 1px solid var(--cr-line); margin: 26px 0; }
+.cr-page blockquote { border-left: 3px solid var(--cr-line); padding: 2px 0 2px 14px; color: var(--cr-muted); }
+.cr-page dt { font-weight: 600; } .cr-page dd { margin: 0 0 8px 18px; }
+.cr-page code, .cr-page kbd, .cr-page samp { font: .88em/1.4 var(--cr-mono); background: var(--cr-code); padding: .08em .35em; border-radius: 4px; overflow-wrap: anywhere; }
+.cr-page pre { font: 13px/1.5 var(--cr-mono); background: var(--cr-panel); border: 1px solid var(--cr-line); border-radius: 6px;
+               padding: 12px 14px; overflow-x: auto; margin: 0 0 14px; }
+.cr-page pre code { background: none; padding: 0; font-size: inherit; overflow-wrap: normal; }
+.cr-page img, .cr-page svg, .cr-page video { max-width: 100%; height: auto; }
+.cr-page figure { margin: 18px 0; break-inside: avoid; }
+.cr-page figcaption { font-size: 13px; color: var(--cr-muted); margin-top: 6px; }
+
+/* tables: full width, cells wrap rather than overflow, so nothing is clipped on screen or paper */
+.cr-page table { width: 100%; border-collapse: collapse; margin: 0 0 16px; font-size: 14px; font-variant-numeric: tabular-nums; }
+.cr-page th, .cr-page td { text-align: left; vertical-align: top; padding: 6px 10px; border-bottom: 1px solid var(--cr-line); overflow-wrap: anywhere; }
+.cr-page thead th { border-bottom: 2px solid var(--cr-ink); font-weight: 600; white-space: nowrap; }
+.cr-page tbody tr:nth-child(even) { background: var(--cr-zebra); }
+.cr-page td.num, .cr-page th.num { text-align: right; }
+
+/* components: a callout, a badge, a row of key numbers, a two-column grid */
+.cr-page .cr-callout { border: 1px solid var(--cr-line); border-left: 4px solid var(--cr-info); background: var(--cr-panel);
+                       border-radius: 6px; padding: 10px 14px; margin: 0 0 14px; break-inside: avoid; }
+.cr-page .cr-callout > :last-child { margin-bottom: 0; }
+.cr-page .cr-callout.ok { border-left-color: var(--cr-ok); }
+.cr-page .cr-callout.warn { border-left-color: var(--cr-warn); }
+.cr-page .cr-callout.bad { border-left-color: var(--cr-bad); }
+.cr-page .cr-badge { display: inline-block; font: 600 11.5px/1.6 var(--cr-mono); letter-spacing: .03em; padding: 0 7px;
+                     border-radius: 999px; border: 1px solid currentColor; color: var(--cr-info); white-space: nowrap; }
+.cr-page .cr-badge.ok { color: var(--cr-ok); } .cr-page .cr-badge.warn { color: var(--cr-warn); } .cr-page .cr-badge.bad { color: var(--cr-bad); }
+.cr-page .cr-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 0 0 18px; }
+.cr-page .cr-kpi { border: 1px solid var(--cr-line); border-radius: 6px; padding: 10px 12px; background: var(--cr-panel); break-inside: avoid; }
+.cr-page .cr-kpi b { display: block; font: 600 26px/1.1 var(--cr-display); }
+.cr-page .cr-kpi span { font-size: 12.5px; color: var(--cr-muted); }
+.cr-page .cr-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.cr-page .cr-muted { color: var(--cr-muted); }
+.cr-page .cr-foot { margin-top: 40px; padding-top: 10px; border-top: 1px solid var(--cr-line); font: 12px/1.5 var(--cr-mono); color: var(--cr-muted); }
+
+/* paper: light always, margins from @page, the paper size from `chartroom artifact pdf --paper`;
+   headers repeat on each page, rows and blocks never split, code wraps instead of being cut */
+@page { margin: 16mm 14mm; }
+@media print {
+  .cr-page {
+    --cr-bg: #fff; --cr-panel: #f6f3ec; --cr-ink: #111; --cr-muted: #555; --cr-line: rgba(0,0,0,.2);
+    --cr-zebra: rgba(0,0,0,.035); --cr-code: rgba(0,0,0,.06); --cr-link: #0d4f7a;
+    --cr-ok: #22663d; --cr-warn: #7d5608; --cr-bad: #a3301c; --cr-info: #0b5d73;
+    padding: 0; font-size: 11pt; background: #fff; print-color-adjust: exact; -webkit-print-color-adjust: exact;
+  }
+  .cr-page > header, .cr-page > main, .cr-page > footer { max-width: none; }
+  .cr-page pre { white-space: pre-wrap; overflow: visible; overflow-wrap: anywhere; }
+  .cr-page table { font-size: 9.5pt; }
+  .cr-page thead { display: table-header-group; }
+  .cr-page tr, .cr-page img, .cr-page pre, .cr-page blockquote { break-inside: avoid; }
+  .cr-page h2, .cr-page h3 { break-after: avoid; }
+}

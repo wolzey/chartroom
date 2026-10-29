@@ -10,6 +10,14 @@ first use): `?token=` once, then an HttpOnly cookie. --no-token turns that off. 
   /task/<id>/<file>     a task's brief/report/plan/final/events as plain text
   /task/<id>/artifacts/<slug>.md, /inbox/<i-xxxx>/artifacts/<slug>.md
                         an artifact's text (a draft for the commander), as plain text
+  /task/<id>/artifacts/<slug>.html (and /inbox/...)
+                        a page artifact's HTML: crew-written, so untrusted, served sandboxed
+                        under PAGE_CSP and only into a frame of this dashboard
+  /task/<id>/artifacts/<slug>.pdf (and /inbox/...)
+                        that page printed now by `chartroom artifact pdf`, as a download
+  /pages, /pages/<task|inbox>/<id>/<slug>
+                        the pages list and the viewer (pages.html, beside index.html)
+  /api/pages            `chartroom artifact list --all --json`, cached like the board
   /healthz              "ok"
 Lane logic lives in the CLI (lib/dashboard.sh + lanes.jq), never here. The optional gh
 enrichment only looks up the state of PR links already found in task files.
@@ -44,11 +52,21 @@ GH_REFRESH_SECONDS = 300
 TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 TASK_FILES = ("brief.md", "report.md", "plan.md", "final.md", "events.log")
 INBOX_TAG = re.compile(r"^i-[0-9a-f]{4,16}$")
-ARTIFACT_FILE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}\.md$")
+ARTIFACT_FILE = re.compile(r"^([a-z0-9][a-z0-9-]{0,63})\.(md|html|pdf)$")
 GITHUB_PR = re.compile(r"^https://github\.com/[^/]+/[^/]+/pull/[0-9]+$")
 HERE = os.path.dirname(os.path.abspath(__file__))
 THEMES = ("chartroom", "hud")  # the page's themes; lib/dashboard.sh validates against the same list
 THEME_SLOT = b'<html lang="en" data-theme="chartroom">'
+# The page and the viewer: inline script and style, fetches to this server only, and (the viewer)
+# frames of this server only.
+PAGE_SHELL_CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; "
+                  "img-src 'self' data:; base-uri 'none'; form-action 'none'")
+VIEWER_CSP = PAGE_SHELL_CSP + "; frame-src 'self'"
+# A page artifact (lib/pages.sh PAGE_CSP, plus sandbox): no scripts, nothing fetched, an opaque
+# origin even when opened by itself, and framed only by this dashboard.
+PAGE_CSP = ("sandbox allow-popups allow-popups-to-escape-sandbox; default-src 'none'; style-src 'unsafe-inline'; "
+            "img-src data:; font-src data:; media-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'")
+PDF_SECONDS = 120  # a print (the CLI's own timeout is CHARTROOM_PDF_TIMEOUT, 60s) and the wait for the one before it
 
 
 class Board:
@@ -69,6 +87,8 @@ class Board:
             self.gh_status["error"] = "disabled (--no-gh)"
         self.gh_wake = threading.Event()
         self.last_urls = []
+        self.arts, self.arts_at = None, 0.0
+        self.pdf_lock = threading.Lock()  # one print at a time: each runs a Chrome
 
     def get(self):
         with self.lock:
@@ -86,6 +106,43 @@ class Board:
             if any(GITHUB_PR.match(u) and u not in self.pr_states for u in self.last_urls):
                 self.gh_wake.set()  # a new PR link: look it up now rather than at the next round
             return body
+
+    def artifacts(self):
+        """Every artifact, done ones too (the pages list and the viewer), cached like the board."""
+        with self.lock:
+            if self.arts is not None and time.time() - self.arts_at < CACHE_SECONDS:
+                return self.arts
+        proc = subprocess.run(self.cli + ["artifact", "list", "--all", "--json"],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+        if proc.returncode != 0:
+            raise RuntimeError("chartroom artifact list failed: " + proc.stderr.decode("utf-8", "replace").strip())
+        body = json.dumps({"artifacts": json.loads(proc.stdout.decode("utf-8"))}).encode("utf-8")
+        with self.lock:
+            self.arts, self.arts_at = body, time.time()
+        return body
+
+    def pdf(self, ref):
+        """The page <ref> printed now, as bytes; RuntimeError says why not."""
+        if not self.pdf_lock.acquire(timeout=PDF_SECONDS):
+            raise RuntimeError("another PDF is still printing; try again in a moment")
+        fd, out = tempfile.mkstemp(prefix="chartroom-page-", suffix=".pdf")
+        os.close(fd)
+        try:
+            # (forward slashes: on Git Bash the CLI is bash, and C:/... is a path to it)
+            proc = subprocess.run(self.cli + ["artifact", "pdf", ref, "--out", out.replace("\\", "/")],
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=PDF_SECONDS)
+            if proc.returncode != 0:
+                raise RuntimeError(proc.stderr.decode("utf-8", "replace").strip().replace("chartroom: ", "") or "the print failed")
+            with open(out, "rb") as fh:
+                return fh.read()
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("the print took longer than %ds" % PDF_SECONDS)
+        finally:
+            self.pdf_lock.release()
+            try:
+                os.remove(out)
+            except OSError:
+                pass
 
     def gh_loop(self):
         """Looks up PR states with gh in the background; any failure only disables enrichment."""
@@ -206,7 +263,19 @@ def load_token(home, create=False):
     return token or None
 
 
-def make_handler(board, port, page, host, use_token, home):
+def page_sidecar(path):
+    """True when <slug>.html beside its <slug>.json is a page artifact `add` wrote, not a worker's
+    own file (the shape lib/artifacts.sh checks)."""
+    try:
+        with open(path[:-len(os.path.splitext(path)[1])] + ".json") as fh:
+            m = json.load(fh)
+    except (OSError, ValueError):
+        return False
+    return (isinstance(m, dict) and m.get("kind") == "page" and isinstance(m.get("title"), str)
+            and isinstance(m.get("schema"), (int, float)) and not isinstance(m.get("schema"), bool))
+
+
+def make_handler(board, port, page, viewer, host, use_token, home):
     # DNS-rebinding guard. With a token it is moot (a rebound page carries no cookie, and its
     # own origin never saw the token), so any name for this machine works; without one, only
     # its addresses and its host name do.
@@ -226,7 +295,7 @@ def make_handler(board, port, page, host, use_token, home):
         def log_message(self, fmt, *args):  # quiet: one line per request is noise
             pass
 
-        def send(self, code, body, ctype):
+        def send(self, code, body, ctype, csp=PAGE_SHELL_CSP, frame="DENY", extra=()):
             if isinstance(body, str):
                 body = body.encode("utf-8")
             self.send_response(code)
@@ -234,11 +303,11 @@ def make_handler(board, port, page, host, use_token, home):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("X-Frame-Options", frame)
             self.send_header("Referrer-Policy", "no-referrer")
-            self.send_header("Content-Security-Policy",
-                             "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
-                             "connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'")
+            self.send_header("Content-Security-Policy", csp)
+            for k, v in extra:
+                self.send_header(k, v)
             self.end_headers()
             if self.command != "HEAD":
                 self.wfile.write(body)
@@ -296,14 +365,41 @@ def make_handler(board, port, page, host, use_token, home):
                     return self.send(200, board.get(), "application/json")
                 except Exception as exc:  # surfaced on the page, not swallowed
                     return self.send(500, json.dumps({"error": str(exc)}), "application/json")
+            if path == "/api/pages":
+                try:
+                    return self.send(200, board.artifacts(), "application/json")
+                except Exception as exc:
+                    return self.send(500, json.dumps({"error": str(exc)}), "application/json")
             parts = path.split("/")
-            f = None
+            # the pages list and the viewer; the viewer finds its page in /api/pages
+            if path in ("/pages", "/pages/") or (len(parts) == 5 and parts[1] == "pages" and ARTIFACT_FILE.match(parts[4] + ".md")
+                                                 and ((parts[2] == "task" and TASK_ID.match(parts[3]))
+                                                      or (parts[2] == "inbox" and INBOX_TAG.match(parts[3])))):
+                return self.send(200, viewer.get(), "text/html; charset=utf-8", csp=VIEWER_CSP)
+            f, art = None, None
             if len(parts) == 4 and parts[1] == "task" and TASK_ID.match(parts[2]) and parts[3] in TASK_FILES:
                 f = os.path.join(board.home, "tasks", parts[2], parts[3])
             elif (len(parts) == 5 and parts[3] == "artifacts" and ARTIFACT_FILE.match(parts[4])
                   and ((parts[1] == "task" and TASK_ID.match(parts[2])) or (parts[1] == "inbox" and INBOX_TAG.match(parts[2])))):
+                art = ARTIFACT_FILE.match(parts[4])
                 f = os.path.join(board.home, "tasks" if parts[1] == "task" else "inbox", parts[2], "artifacts", parts[4])
+            if art and art.group(2) == "pdf":
+                # printed from the page beside it, never a .pdf file that happens to be there
+                src = f[:-4] + ".html"
+                if not (os.path.isfile(src) and page_sidecar(src)):
+                    return self.send(404, "not found\n", "text/plain; charset=utf-8")
+                try:
+                    pdf = board.pdf(parts[2] + "/" + art.group(1))
+                except RuntimeError as exc:
+                    return self.send(500, "could not print the PDF: %s\n" % exc, "text/plain; charset=utf-8")
+                return self.send(200, pdf, "application/pdf",
+                                 extra=[("Content-Disposition", 'attachment; filename="%s.pdf"' % art.group(1))])
             if f and os.path.isfile(f):
+                if art and art.group(2) == "html":
+                    if not page_sidecar(f):
+                        return self.send(404, "not found\n", "text/plain; charset=utf-8")
+                    with open(f, "rb") as fh:
+                        return self.send(200, fh.read(), "text/html; charset=utf-8", csp=PAGE_CSP, frame="SAMEORIGIN")
                 with open(f, "rb") as fh:
                     return self.send(200, fh.read(), "text/plain; charset=utf-8")
             return self.send(404, "not found\n", "text/plain; charset=utf-8")
@@ -358,6 +454,7 @@ def main():
         sys.exit("chartroom dashboard: cannot read or create the access token %s" % os.path.join(home, TOKEN_FILE))
     try:
         page = Page(os.path.join(HERE, "index.html"), args.theme)
+        viewer = Page(os.path.join(HERE, "pages.html"), args.theme)
     except (OSError, ValueError) as exc:
         sys.exit("chartroom dashboard: %s" % exc)
     board = Board(args.bin, home, not args.no_gh, args.bash)
@@ -367,7 +464,7 @@ def main():
         sys.exit("chartroom dashboard: cannot listen on %s:%d: %s" % (args.host, args.port, exc.strerror or exc))
     httpd.daemon_threads = True
     port = httpd.server_address[1]
-    httpd.RequestHandlerClass = make_handler(board, port, page, args.host, use_token, home)
+    httpd.RequestHandlerClass = make_handler(board, port, page, viewer, args.host, use_token, home)
 
     def cleanup(*_):
         if args.pidfile:

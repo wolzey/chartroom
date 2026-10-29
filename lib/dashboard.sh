@@ -17,12 +17,12 @@ dashboard_tokenfile() { printf '%s/.dashboard.token' "$CR_HOME"; }
 # The address this machine itself uses to reach a server bound to <host>.
 dashboard_local_host() { [[ "$1" == 0.0.0.0 ]] && echo 127.0.0.1 || echo "$1"; }
 
-# The URL to open for a server on <host> <port>: with ?token= when it is bound beyond loopback
-# and a token exists (a --no-token server ignores it).
-dashboard_url() { # <host> <port>
+# The URL to open for a server on <host> <port> (and a [path] on it): with ?token= when it is
+# bound beyond loopback and a token exists (a --no-token server ignores it).
+dashboard_url() { # <host> <port> [path]
   local t="" f; f="$(dashboard_tokenfile)"
   [[ "$1" != 127.* && -s "$f" ]] && t="?token=$(tr -d '[:space:]' <"$f")"
-  printf 'http://%s:%s/%s\n' "$(dashboard_local_host "$1")" "$2" "$t"
+  printf 'http://%s:%s/%s%s\n' "$(dashboard_local_host "$1")" "$2" "${3:-}" "$t"
 }
 
 # The dashboard's python as an argv prefix, in CR_PY (empty when there is none). Git Bash
@@ -172,7 +172,8 @@ PY
 }
 
 # `dashboard open`: reuse this home's dashboard when it answers, else start one as a daemon
-# (a stale pid file, or a server that stopped answering, is replaced), then open its URL
+# (a stale pid file, or a server that stopped answering, is replaced), then open its URL (at
+# CR_DASHBOARD_PATH, when set: `artifact open` opens the page viewer)
 # with CHARTROOM_OPENER, else `open` (macOS) or `xdg-open`, else on WSL `wslview` or
 # PowerShell's Start-Process and on Git Bash `start`; without any, print it. A lock
 # in the home keeps two concurrent calls from starting two servers.
@@ -206,7 +207,7 @@ dashboard_open() { # [daemon args...]
   fi
   for i in $(seq 1 50); do dashboard_healthy "$p" "$h" && break; sleep 0.1; done
   dashboard_healthy "$p" "$h" || die "dashboard (pid $pid) is not answering on port $p"
-  url="$(dashboard_url "$h" "$p")"
+  url="$(dashboard_url "$h" "$p" "${CR_DASHBOARD_PATH:-}")"
   opener="$(cfg OPENER '' '')"
   if [[ -z "$opener" ]]; then
     if [[ "$(uname -s)" == Darwin && -n "$(bin_of open)" ]]; then opener=open

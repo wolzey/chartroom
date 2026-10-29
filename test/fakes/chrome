@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# fake Chrome: `--print-to-pdf=<out> ... file://<page>` writes a "PDF" that is "%PDF-1.4" then the
+# page it was given, so a test can read what was printed. It prints nothing when $FAKE_CHROME_FAIL
+# is 1 or names a file that exists (a server started earlier sees the switch flip).
+echo "chrome $*" >>"${FAKE_LOG:-/dev/null}"
+out="" url=""
+for a in "$@"; do
+  case "$a" in
+    --print-to-pdf=*) out="${a#--print-to-pdf=}" ;;
+    file://*) url="${a#file://}" ;;
+  esac
+done
+url="${url//%20/ }"
+[[ "$url" =~ ^/[A-Za-z]: ]] && url="${url:1}" # file:///C:/... on Windows
+fail="${FAKE_CHROME_FAIL:-}"
+if [[ "$fail" == 1 || ( -n "$fail" && -e "$fail" ) || -z "$out" || -z "$url" ]]; then
+  echo "fake chrome: nothing printed" >&2; exit 1
+fi
+{ printf '%%PDF-1.4\n'; cat -- "$url"; } >"$out"

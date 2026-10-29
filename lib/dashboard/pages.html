@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en" data-theme="chartroom">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>chartroom · pages</title>
+<style>
+  /* The pages list (/pages) and the viewer (/pages/<task|inbox>/<id>/<slug>), beside the board
+     (index.html) and in its colors. A page is crew-written HTML: it is only ever shown inside a
+     sandboxed frame, served under its own strict policy (server.py PAGE_CSP); nothing of it is
+     put into this document. Light/dark follows the board's choice in this browser (or the
+     system), and the frame follows this document's color-scheme. */
+  :root {
+    --display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    --body: "Avenir Next", Avenir, "Segoe UI Variable Text", "Segoe UI", "Gill Sans", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --bg: #efe7d6; --panel: #fbf7ee; --panel2: #f4ecdc; --ink: #14243a; --muted: #5d6976; --faint: #8c9196;
+    --line: rgba(20,36,58,.15); --chip: rgba(20,36,58,.06); --link: #0d5a8a; --accent: #0f7490; --needs: #c2412b; --ready: #2e7d4c;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-mode=light]) {
+      --bg: #061420; --panel: #0d2133; --panel2: #0a1b2a; --ink: #e2ebf1; --muted: #8fa4b5; --faint: #5f7586;
+      --line: rgba(150,200,230,.15); --chip: rgba(150,200,230,.08); --link: #7cc7ec; --accent: #41c9e2; --needs: #ff7b5c; --ready: #5ed592;
+      color-scheme: dark;
+    }
+  }
+  :root[data-mode=dark] {
+    --bg: #061420; --panel: #0d2133; --panel2: #0a1b2a; --ink: #e2ebf1; --muted: #8fa4b5; --faint: #5f7586;
+    --line: rgba(150,200,230,.15); --chip: rgba(150,200,230,.08); --link: #7cc7ec; --accent: #41c9e2; --needs: #ff7b5c; --ready: #5ed592;
+    color-scheme: dark;
+  }
+  [data-theme=hud] { --display: var(--mono); }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 var(--body); -webkit-font-smoothing: antialiased; }
+  a { color: var(--link); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+  .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 12px 20px; border-bottom: 1px solid var(--line);
+         background: var(--panel); }
+  .bar h1 { margin: 0; font: 500 20px/1.2 var(--display); }
+  .bar h1 i { font-style: italic; }
+  .bar .sp { flex: 1; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 13px; color: var(--ink); background: var(--chip);
+         border: 1px solid var(--line); border-radius: 999px; padding: 3px 12px; cursor: pointer; text-decoration: none; white-space: nowrap; }
+  .btn:hover { border-color: var(--accent); text-decoration: none; }
+  .btn[disabled] { opacity: .6; cursor: progress; }
+  .btn.primary { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+  .msg { padding: 10px 20px; color: var(--muted); }
+  .msg.err { color: var(--needs); }
+
+  /* the list */
+  .list { max-width: 960px; margin: 0 auto; padding: 18px 20px 48px; }
+  .tools { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin-bottom: 14px; }
+  .tools input[type=search] { flex: 1 1 240px; min-width: 0; font: inherit; color: var(--ink); background: var(--panel);
+                              border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
+  .tools label { color: var(--muted); font-size: 13px; display: inline-flex; gap: 6px; align-items: center; }
+  .cards { display: grid; gap: 10px; }
+  .page { display: block; position: relative; padding: 12px 14px 12px 18px; background: var(--panel); border: 1px solid var(--line);
+          border-radius: 10px; color: var(--ink); }
+  .page::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 3px; background: var(--accent); }
+  .page.done::before { background: var(--faint); }
+  .page:hover { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); text-decoration: none; }
+  .page .t { font: 600 16px/1.3 var(--display); }
+  .page .d { color: var(--muted); margin-top: 2px; }
+  .page .m { display: flex; flex-wrap: wrap; gap: 2px 12px; margin-top: 6px; font: 12px/1.4 var(--mono); color: var(--muted); }
+  .page .m b { color: var(--ink); font-weight: 500; }
+  .empty { color: var(--muted); padding: 24px 4px; }
+  .empty code { font: 12.5px var(--mono); background: var(--chip); padding: 1px 5px; border-radius: 4px; }
+
+  /* the viewer: a bar, then the page in its frame, filling the rest */
+  body.viewing { display: grid; grid-template-rows: auto auto minmax(0, 1fr); }
+  body.viewing #bar { grid-row: 1; } body.viewing #msg { grid-row: 2; } body.viewing main { grid-row: 3; min-height: 0; }
+  .vt { min-width: 0; }
+  .vt b { display: block; font: 600 17px/1.25 var(--display); overflow-wrap: anywhere; }
+  .vt span { display: block; font: 12px/1.4 var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+  iframe { width: 100%; height: 100%; min-height: 60vh; border: 0; background: var(--panel); display: block; }
+  pre.text { margin: 0; padding: 20px; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 var(--mono); }
+  @media (max-width: 760px) {
+    .bar, .list { padding-left: 16px; padding-right: 16px; }
+  }
+  @media (max-width: 760px), (pointer: coarse) {
+    .btn { min-height: 44px; padding: 0 14px; }
+    .page .m { font-size: 12px; }
+  }
+</style>
+</head>
+<body>
+<div class="bar" id="bar"><a class="btn" href="/" id="back">← board</a><h1><i>Chart</i>room · pages</h1><span class="sp"></span></div>
+<div class="msg" id="msg" hidden></div>
+<main id="main"></main>
+<script>
+"use strict";
+// (the board's light/dark choice in this browser, read only)
+try { const m = localStorage.getItem("chartroom-mode"); if (m === "light" || m === "dark") document.documentElement.dataset.mode = m; } catch (e) { /* the system's */ }
+try { const t = localStorage.getItem("chartroom-theme-name"); if (t === "chartroom" || t === "hud") document.documentElement.dataset.theme = t; } catch (e) { /* the server's */ }
+
+function el(tag, attrs, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === "text") n.textContent = v; else n.setAttribute(k, v === true ? "" : v);
+  }
+  for (const k of kids) if (k != null) n.append(k);
+  return n;
+}
+function say(text, err) { const m = document.getElementById("msg"); m.textContent = text || ""; m.hidden = !text; m.classList.toggle("err", !!err); }
+function ago(iso) {
+  const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+  if (!isFinite(s)) return "";
+  if (s < 90) return "just now";
+  if (s < 5400) return Math.round(s / 60) + " min ago";
+  if (s < 129600) return Math.round(s / 3600) + " h ago";
+  return Math.round(s / 86400) + " d ago";
+}
+const base = (a) => "/" + (a.owner_type === "task" ? "task" : "inbox") + "/" + encodeURIComponent(a.owner) + "/artifacts/" + encodeURIComponent(a.slug);
+const viewHref = (a) => "/pages/" + (a.owner_type === "task" ? "task" : "inbox") + "/" + encodeURIComponent(a.owner) + "/" + encodeURIComponent(a.slug);
+
+async function artifacts() {
+  const r = await fetch("/api/pages", { cache: "no-store" });
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || r.statusText);
+  return d.artifacts || [];
+}
+
+// ---------------------------------------------------------------- the list
+
+function showList(all) {
+  const main = document.getElementById("main");
+  const q = el("input", { type: "search", placeholder: "filter by title, project or id", "aria-label": "filter pages" });
+  const done = el("input", { type: "checkbox" });
+  const cards = el("div", { class: "cards" });
+  main.replaceChildren(el("div", { class: "list" }, el("div", { class: "tools" }, q, el("label", {}, done, "show read (done) pages")), cards));
+  const pages = all.filter((a) => a.kind === "page");
+  function draw() {
+    const needle = q.value.trim().toLowerCase();
+    const rows = pages.filter((a) => (done.checked || !a.done)
+      && (!needle || [a.title, a.description, a.project, a.ref].some((v) => (v || "").toLowerCase().includes(needle))));
+    if (!rows.length) {
+      cards.replaceChildren(el("div", { class: "empty" }, pages.length ? "No page matches." :
+        "No pages yet. A worker or the XO adds one with ", el("code", { text: "chartroom artifact add <id> --kind page --title \"...\" page.html" }), "."));
+      return;
+    }
+    cards.replaceChildren(...rows.map((a) => el("a", { class: "page" + (a.done ? " done" : ""), href: viewHref(a) },
+      el("div", { class: "t", text: a.title }),
+      a.description ? el("div", { class: "d", text: a.description }) : null,
+      el("div", { class: "m" }, a.project ? el("b", { text: a.project }) : null, el("span", { text: a.ref }),
+        el("span", { text: "updated " + ago(a.updated), title: a.updated }), a.done ? el("span", { text: "read " + a.done.slice(0, 10) }) : null))));
+  }
+  q.addEventListener("input", draw);
+  done.addEventListener("change", draw);
+  draw();
+  document.title = "chartroom · pages (" + pages.filter((a) => !a.done).length + ")";
+}
+
+// ---------------------------------------------------------------- the viewer
+
+async function pdf(a, b) {
+  b.disabled = true; b.textContent = "printing…"; say("");
+  try {
+    const r = await fetch(base(a) + ".pdf", { cache: "no-store" });
+    if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
+    const url = URL.createObjectURL(await r.blob());
+    const link = el("a", { href: url, download: a.slug + ".pdf" });
+    document.body.append(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (e) { say(e.message, true); }
+  finally { b.disabled = false; b.textContent = "Download PDF"; }
+}
+
+async function showPage(all, type, owner, slug) {
+  document.body.classList.add("viewing");
+  const a = all.find((x) => x.owner_type === type && x.owner === owner && x.slug === slug);
+  const bar = document.getElementById("bar"), main = document.getElementById("main");
+  bar.replaceChildren(el("a", { class: "btn", href: "/pages" }, "← pages"));
+  if (!a) { say("No artifact " + owner + "/" + slug + " here (it may have been removed).", true); return; }
+  document.title = a.title + " · chartroom";
+  bar.append(el("div", { class: "vt" }, el("b", { text: a.title }),
+    el("span", { text: [a.project, a.ref, a.kind === "page" ? null : a.kind, "updated " + ago(a.updated), a.done ? "read" : null].filter(Boolean).join(" · "), title: a.updated })),
+    el("span", { class: "sp" }));
+  if (a.kind === "page") {
+    const b = el("button", { class: "btn primary", type: "button", text: "Download PDF" });
+    b.addEventListener("click", () => pdf(a, b));
+    bar.append(b, el("a", { class: "btn", href: base(a) + ".html", target: "_blank", rel: "noopener noreferrer", text: "open alone" }));
+    // sandboxed: no scripts, no same origin; a link with target=_blank opens in a new tab
+    main.replaceChildren(el("iframe", { src: base(a) + ".html", title: a.title, sandbox: "allow-popups allow-popups-to-escape-sandbox",
+      referrerpolicy: "no-referrer", loading: "eager" }));
+  } else {
+    const pre = el("pre", { class: "text", text: "loading…" });
+    main.replaceChildren(pre);
+    const r = await fetch(base(a) + ".md", { cache: "no-store" });
+    pre.textContent = r.ok ? await r.text() : "could not load " + a.ref + " (" + r.status + ")";
+  }
+}
+
+(async () => {
+  const m = location.pathname.match(/^\/pages\/(task|inbox)\/([^/]+)\/([^/]+)$/);
+  try {
+    const all = await artifacts();
+    if (m) await showPage(all, m[1], decodeURIComponent(m[2]), decodeURIComponent(m[3]));
+    else showList(all);
+  } catch (e) { say("Could not load the pages: " + e.message, true); }
+})();
+</script>
+</body>
+</html>

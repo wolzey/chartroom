@@ -718,7 +718,7 @@ EOF2
     '[["t-report/reply-to-the-reviewer","task","t-report","reply-to-the-reviewer","message","Reply to the reviewer"]]' ]
   [ "$(card t-plain | jq -c .artifacts)" = '[]' ]
   [ "$(card inbox-0 | jq -c '.artifacts | map([.ref, .owner_type, .owner, .slug])')" = '[["i-7f3a/publish","inbox","i-7f3a","publish"]]' ]
-  [ "$(jq -c .artifacts <<<"$BOARD")" = '{"open":2,"message":1,"runbook":1,"note":0}' ]
+  [ "$(jq -c .artifacts <<<"$BOARD")" = '{"open":2,"message":1,"runbook":1,"note":0,"page":0}' ]
   start_daemon --no-gh
   [ "$(get "$URL/task/t-report/artifacts/reply-to-the-reviewer.md")" = "$(cat "$BATS_TEST_TMPDIR/note.md")" ]
   [ "$(get "$URL/inbox/i-7f3a/artifacts/publish.md")" = "make publish" ]

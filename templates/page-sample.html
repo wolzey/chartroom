@@ -1,0 +1,34 @@
+<!-- A page's body: what `chartroom artifact add <id> --kind page` takes and wraps in the default
+     page (title, description, project and date on top). Plain HTML and these classes; no
+     scripts, no links to stylesheets, fonts or images elsewhere (they never load). -->
+<div class="cr-kpis">
+  <div class="cr-kpi"><b>12</b><span>cases checked</span></div>
+  <div class="cr-kpi"><b>3</b><span>found broken</span></div>
+  <div class="cr-kpi"><b>0</b><span>left open</span></div>
+</div>
+
+<div class="cr-callout ok">
+  <p><strong>Outcome:</strong> what happened, in one or two sentences, before any detail.</p>
+</div>
+
+<h2>What changed</h2>
+<ul>
+  <li><code>lib/example.sh</code>: what it does now, and why.</li>
+  <li>A <a href="https://example.com/pull/1">pull request</a> link opens in a new tab.</li>
+</ul>
+
+<h2>Validation</h2>
+<table>
+  <thead><tr><th>Check</th><th>Result</th><th class="num">Time</th></tr></thead>
+  <tbody>
+    <tr><td><code>make test</code></td><td><span class="cr-badge ok">pass</span></td><td class="num">41 s</td></tr>
+    <tr><td>Manual check in the browser</td><td><span class="cr-badge warn">partial</span></td><td class="num">-</td></tr>
+  </tbody>
+</table>
+
+<h2>Risks and open questions</h2>
+<div class="cr-callout warn">
+  <p>What could still go wrong, and what the reader should decide.</p>
+</div>
+<pre><code>$ the command, exactly as it was run
+and its output</code></pre>

@@ -11,7 +11,7 @@
 #   tasks/<id>/brief.md     the worker's contract (intent, spec, authority, protocol)
 #   tasks/<id>/events.log   append-only "<ts> <kind>: <text>" lines from workers + chartroom
 #   tasks/<id>/report.md    the worker's final report
-#   tasks/<id>/artifacts/   drafts for the commander to send or run (lib/artifacts.sh)
+#   tasks/<id>/artifacts/   drafts for the commander to send or run, pages to read (lib/artifacts.sh, lib/pages.sh)
 #   rulings.log             append-only commander rulings, latest wins per topic (lib/rulings.sh)
 #   focus.json              the project(s) in focus while focus mode is on (lib/focus.sh)
 #   config                  this home's own settings, over the config file (lib/core.sh)
@@ -75,6 +75,8 @@ source "$CR_ROOT/lib/rulings.sh"
 source "$CR_ROOT/lib/sweep.sh"
 # shellcheck source=../lib/artifacts.sh
 source "$CR_ROOT/lib/artifacts.sh"
+# shellcheck source=../lib/pages.sh
+source "$CR_ROOT/lib/pages.sh"
 # shellcheck source=../lib/todo.sh
 source "$CR_ROOT/lib/todo.sh"
 # shellcheck source=../lib/focus.sh
@@ -329,6 +331,14 @@ brief_report_steps() { # <id>
 3. Before \`done\` or \`failed\`, write $d/report.md containing: outcome; what changed
    (files, commits) or what you found; validation you actually ran with real results (never claim
    a check you did not run); risks and open questions.
+   report.md stays the record the XO reads. When the commander will read the result themselves
+   (findings, a review, an audit, a comparison), also make it a page they read in the dashboard
+   and can print: the same content as an HTML body (headings, lists, tables, and the classes
+   \`$CR_BIN artifact template --body\` shows; no scripts, nothing loaded from elsewhere; images
+   as files beside it), then
+     CHARTROOM_HOME=$CR_HOME $CR_BIN artifact add $id --kind page --title "<one line>" --description "<one line>" <file>
+   and name the ref it prints in your \`done\` event (\`... (page <ref>)\`). Never put a secret in a
+   page: say where one is kept instead.
 EOF
 }
 
@@ -1123,13 +1133,13 @@ cmd_doctor() {
   if [[ $json -eq 1 ]]; then
     printf '%s\n' "${rows[@]}" | jq -s --arg v "$CR_VERSION" --arg h "$CR_HOME" --arg hs "$CR_HOME_SOURCE" --arg o "$CR_BACKEND_ORDER" --arg auto "$first_ok" --arg harness "$CR_HARNESS" \
       --arg bv "$BASH_VERSION" --arg bp "$BASH" --arg bf "$CR_BASH_FROM" --arg added "$added" \
-      --argjson dash "$(dashboard_doctor_json)" --arg hname "$hname" --arg hcfg "$hcfg" --arg ws "$CR_WORKSPACE" \
+      --argjson dash "$(dashboard_doctor_json)" --argjson pdf "$(page_doctor_json)" --arg hname "$hname" --arg hcfg "$hcfg" --arg ws "$CR_WORKSPACE" \
       --arg platform "$CR_PLATFORM" --argjson notes "$(printf '%s\n' "${notes[@]+"${notes[@]}"}" | jq -R -s -c 'split("\n") | map(select(length > 0))')" \
       '{version:$v,home:$h,home_source:$hs,home_name:(if $hname=="" then null else $hname end),
         home_config:(if $hcfg=="" then null else $hcfg end),workspace:$ws,harness:$harness,
         bash:{version:$bv,path:$bp,rerun_from:(if $bf=="" then null else $bf end)},
         path:{thin:($added!=""),added:($added|split(" ")|map(select(.!="")))},
-        order:($o|split(" ")),auto:(if $auto=="" then null else $auto end),dashboard:$dash,backends:.}
+        order:($o|split(" ")),auto:(if $auto=="" then null else $auto end),dashboard:$dash,pdf:$pdf,backends:.}
        + (if $platform == "posix" then {} else {platform:$platform,notes:$notes} end)'
   else
     echo "chartroom $CR_VERSION"
@@ -1153,6 +1163,7 @@ cmd_doctor() {
     echo "order:    $CR_BACKEND_ORDER"
     echo "auto:     ${first_ok:-none available}"
     dashboard_doctor_json | jq -r '"dashboard: port \(.port), bind \(.bind)\(if .bind | startswith("127.") then "" else " (on the network)" end), access token \(if .token_set then "set" else "not set" end), \(if .running then "running on " + .running else "not running" end)"'
+    page_doctor_json | jq -r 'if .chrome then "pdf:      \(.chrome) (chartroom artifact pdf)" else "pdf:      - \(.why)" end'
     echo
     printf '%s\n' "${rows[@]}" | jq -r '[.backend, (if .available then "ok" else "-" end), .steering, .reason] | @tsv' |
       { printf 'BACKEND\tOK\tSTEERING\tWHY NOT\n'; cat; } | table
@@ -1333,19 +1344,39 @@ chartroom - run a crew of coding agents from one agent session (the XO)
   chartroom relay ack <rl-id>...          mark relays received here as handled
   chartroom relay list [--all] [--json]   the open relays received here (--all: acked and sent
                                           ones too)
-  chartroom artifact add <id> --kind message|runbook|note --title T [--slug S] <file|->
+  chartroom artifact add <id> --kind message|runbook|note|page --title T [--description D]
+                         [--slug S] [--no-secret-check] <file|->
                                           keep text drafted for the commander (a message to
-                                          send, commands to run, a note) with a task or an
-                                          inbox item (<id> as the dashboard shows it); prints
-                                          its ref, <id>/<slug>. The same slug again overwrites
-                                          the text (the slug is the title's unless --slug)
+                                          send, commands to run, a note) or a page for them to
+                                          read (HTML) with a task or an inbox item (<id> as the
+                                          dashboard shows it); prints its ref, <id>/<slug>. The
+                                          same slug again overwrites it (the slug is the
+                                          title's unless --slug). A page is kept as one
+                                          self-contained file: a fragment is wrapped in the
+                                          default page, images beside the source are inlined,
+                                          text that looks like a secret is refused
   chartroom artifact list [<id>] [--all] [--json]
                                           open artifacts, newest first (--all: done ones too)
   chartroom artifact show <ref> [--path]  print the text (or its file). A ref is <id>/<slug>,
                                           or <id> alone when it has one open artifact
   chartroom artifact copy <ref>           put the text on the clipboard (CHARTROOM_CLIPBOARD,
                                           else pbcopy, wl-copy, xclip, xsel), else print it
-  chartroom artifact done <ref>           sent or run: it stops showing as open
+  chartroom artifact done <ref>           sent, run or read: it stops showing as open
+  chartroom artifact open <ref>           show it in the dashboard's viewer (starting the
+                                          dashboard if it is not up), in the browser
+  chartroom artifact export <ref> [--out FILE|DIR]
+                                          write its file (a page's .html, else .md) there
+                                          (default: <slug>.<ext> in the current directory)
+  chartroom artifact pdf <ref> [--out FILE|DIR] [--paper letter|a4|...] [--landscape]
+                                          print a page to PDF with headless Chrome or Chromium
+                                          (CHARTROOM_CHROME; doctor says which), scripts off
+                                          (default: <slug>.pdf here; CHARTROOM_PDF_PAPER, letter)
+  chartroom artifact publish <ref> --to <provider>
+                                          host a page and print its link: not built yet, so it
+                                          refuses and uploads nothing
+  chartroom artifact template [--title T] [--description D] [--body]
+                                          the default page around a sample body (--body: the
+                                          sample body alone, what add --kind page wraps)
   chartroom todo [--all] [--json]         the commander's next steps: open inbox items, open
                                           artifacts to send or run, tasks waiting on their word
                                           (decision, blocked, ready); breaking first, then by
