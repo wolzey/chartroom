@@ -19,7 +19,10 @@
 # non-interactive ssh shell lacks them), and how often the dashboard re-reads while the radar is
 # open: this machine when its task files or herdr's agent states change but at most every
 # CHARTROOM_RADAR_LOCAL_MIN_SECONDS (15) and at least every CHARTROOM_RADAR_LOCAL_MAX_SECONDS (60),
-# another machine every CHARTROOM_RADAR_REMOTE_SECONDS (60).
+# another machine every CHARTROOM_RADAR_REMOTE_SECONDS (60). The page's "active only" view (its
+# default) leaves out a docked task (review, done, failed) quiet for CHARTROOM_RADAR_DONE_HOURS (24)
+# and folds a task whose session is gone and that has been quiet for CHARTROOM_RADAR_STALE_DAYS (3)
+# into each machine's archive; a breaking report is never archived.
 
 CR_RADAR_REMOTE_PATH_DEFAULT='$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin'
 CR_RADAR_FILES='brief.md report.md plan.md final.md events.log' # = CR_DASHBOARD_FILES (lib/dashboard.sh)
@@ -212,16 +215,18 @@ radar_file() { # --machine L --ssh T [--home P] <id> <file>
   fi
 }
 
-# `radar machines`: the machines and the dashboard's re-read intervals, as JSON.
+# `radar machines`: the machines, the dashboard's re-read intervals and the archive's cutoffs, as JSON.
 radar_listing_json() {
-  local k v settings=()
-  for k in LOCAL_MIN:15 LOCAL_MAX:60 REMOTE:60; do
-    v="$(cfg "RADAR_${k%%:*}_SECONDS" '' "${k#*:}")"
-    [[ "$v" =~ ^[0-9]+$ ]] && (( v > 0 )) || die "CHARTROOM_RADAR_${k%%:*}_SECONDS must be a whole number of seconds"
+  local k v name unit settings=()
+  for k in LOCAL_MIN_SECONDS:15 LOCAL_MAX_SECONDS:60 REMOTE_SECONDS:60 DONE_HOURS:24 STALE_DAYS:3; do
+    v="$(cfg "RADAR_${k%%:*}" '' "${k#*:}")"
+    name="${k%%:*}"; unit="${name##*_}"; name="${name%_*}"
+    [[ "$v" =~ ^[0-9]+$ ]] && (( v > 0 )) || die "CHARTROOM_RADAR_${k%%:*} must be a whole number of $(tr '[:upper:]' '[:lower:]' <<<"$unit"), above 0 (got '$v')"
     settings+=(--argjson "$(tr '[:upper:]' '[:lower:]' <<<"${k%%:*}")" "$v")
   done
   jq -n --argjson machines "$(radar_machines_json)" "${settings[@]}" \
-    '{machines: $machines, settings: {local_min: $local_min, local_max: $local_max, remote: $remote}}'
+    '{machines: $machines, settings: {local_min: $local_min_seconds, local_max: $local_max_seconds, remote: $remote_seconds,
+      done_hours: $done_hours, stale_days: $stale_days}}'
 }
 
 cmd_radar() {

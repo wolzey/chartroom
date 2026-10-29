@@ -235,7 +235,7 @@ r-old-2 working underway" ]
   run cr radar machines --json
   [ "$status" -eq 0 ]
   [ "$(jq -c '.machines' <<<"$output")" = '[{"machine":"Test Mac","local":true,"target":null,"via":"this machine"}]' ]
-  [ "$(jq -c '.settings' <<<"$output")" = '{"local_min":15,"local_max":60,"remote":60}' ]
+  [ "$(jq -c '.settings' <<<"$output")" = '{"local_min":15,"local_max":60,"remote":60,"done_hours":24,"stale_days":3}' ]
   # herdr's enabled saved machines (a herdr that is not running is the same as none)
   use_fake herdr
   [ "$(cr radar machines --json | jq '.machines | length')" = 1 ]
@@ -250,6 +250,34 @@ r-old-2 working underway" ]
   run env CHARTROOM_RADAR_REMOTE_SECONDS=soon "$CHARTROOM" radar machines --json
   [ "$status" -ne 0 ]; [[ "$output" == *"CHARTROOM_RADAR_REMOTE_SECONDS must be a whole number"* ]]
   [ "$(CHARTROOM_RADAR_LOCAL_MAX_SECONDS=120 cr radar machines --json | jq .settings.local_max)" = 120 ]
+}
+
+@test "machines: the archive's cutoffs are CHARTROOM_RADAR_DONE_HOURS and CHARTROOM_RADAR_STALE_DAYS, whole and above 0" {
+  [ "$(CHARTROOM_RADAR_DONE_HOURS=6 CHARTROOM_RADAR_STALE_DAYS=10 cr radar machines --json | jq -c '[.settings.done_hours, .settings.stale_days]')" = '[6,10]' ]
+  # from the home's config too, like every radar setting
+  echo "CHARTROOM_RADAR_STALE_DAYS=7" >>"$CHARTROOM_HOME/config"
+  [ "$(cr radar machines --json | jq .settings.stale_days)" = 7 ]
+  local bad
+  for bad in DONE_HOURS=0 DONE_HOURS=1.5 STALE_DAYS=soon STALE_DAYS=-1; do
+    run env "CHARTROOM_RADAR_$bad" "$CHARTROOM" radar machines --json
+    [ "$status" -ne 0 ]; [[ "$output" == *"CHARTROOM_RADAR_${bad%%=*} must be a whole number of "*", above 0"* ]]
+  done
+}
+
+@test "local: a record carries its branch, base and the open tasks its brief or events name, for the radar's stacks" {
+  fixture first-pr-aa01 subagent <<<"300 progress: opened PR 1"
+  fixture second-pr-aa02 subagent <<<"200 progress: building on first-pr-aa01's branch"
+  fixture handoff-aa03 subagent <<<"100 progress: started"
+  fixture closed-one-aa04 subagent closed=60 <<<"100 done: shipped"
+  local d="$CHARTROOM_HOME/tasks"
+  jq '.base = "chartroom/first-pr-aa01"' "$d/second-pr-aa02/meta.json" >"$d/x" && mv "$d/x" "$d/second-pr-aa02/meta.json"
+  printf '# T\n\n## Spec\n\nFollow-up to second-pr-aa02 (see also closed-one-aa04, and second-pr-aa02 again).\n' >"$d/handoff-aa03/brief.md"
+  run cr radar --json
+  [ "$status" -eq 0 ]
+  [ "$(jq -c '[.agents[] | [.id, .branch, .base, .mentions]] | sort' <<<"$output")" = \
+    '[["first-pr-aa01","chartroom/first-pr-aa01",null,[]],["handoff-aa03","chartroom/handoff-aa03",null,["second-pr-aa02"]],["second-pr-aa02","chartroom/second-pr-aa02","chartroom/first-pr-aa01",["first-pr-aa01"]]]' ]
+  # status --json carries them too (another machine's radar reads that)
+  [ "$(cr status --json | jq -c '[.[] | select(.id == "handoff-aa03") | .mentions]')" = '[["second-pr-aa02"]]' ]
 }
 
 @test "machines: this machine's label is CHARTROOM_MACHINE_NAME (env, the home's config, the config file), else its host name" {
@@ -382,6 +410,8 @@ radar_until() {
   [ "$(code "$URL/api/radar/peek?m=box&h=acme&pane=w1:p1;x")" = 400 ]
   [ "$(code -X POST "$URL/api/radar")" = 405 ]
   [ "$(wc -l <"$SSHD/calls.log")" -eq "$n" ]
+  # the page carries the archive's cutoffs
+  [ "$(get "$URL/api/radar" | jq -c .settings)" = '{"done_hours":24,"stale_days":3}' ]
   # the other machine stops answering: its agents stay, marked stale, and the machine says why
   rm "$SSHD/box/status.json"; echo 255 >"$SSHD/box/exit"; echo "ssh: connect to host box port 22: Operation timed out" >"$SSHD/box/stderr"
   radar_until "$URL/api/radar" '.machines[] | select(.machine == "box") | .contact == "unreachable"'
@@ -391,6 +421,62 @@ radar_until() {
   # back again: fresh
   rm "$SSHD/box/exit"; acme "$(row r-1 blocked stopped)" >"$SSHD/box/status.json"
   radar_until "$URL/api/radar" '[.agents[] | select(.machine == "box")][0] | .state == "blocked" and .stale == false'
+}
+
+@test "server: /task/<home>/<id> is a task's page, self-contained, its shared scripts spliced in; a malformed one is a 404" {
+  need_python
+  export CHARTROOM_RADAR_MACHINES=none
+  fixture t-blocked subagent <<<"600 blocked: need staging credentials"
+  echo "# Report" >"$CHARTROOM_HOME/tasks/t-blocked/report.md"
+  run cr dashboard --daemon --port 0 --no-gh --theme hud
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  read -r _ PORT <"$CHARTROOM_HOME/.dashboard.pid"
+  URL="http://127.0.0.1:$PORT"
+  local page; page="$(get "$URL/task/acme/t-blocked")"
+  [[ "$page" == *"<title>task · chartroom</title>"* && "$page" == *'<html lang="en" data-theme="hud">'* ]]
+  [[ "$page" == *"var EventFmt = "* && "$page" == *"var Markdown = "* && "$page" == *".evx {"* ]]
+  [[ "$page" != *"<!--@include"* ]]
+  [ -z "$(grep -Ei '(src|href)=["'"'"']?(https?:)?//|@import|url\(https?:|<script[^>]* src=' <<<"$page" || true)" ]
+  [[ "$(curl -sI "$URL/task/acme/t-blocked" | tr -d '\r')" == *"Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'"* ]]
+  # the radar has them spliced in too, and a stack's script
+  local radar; radar="$(get "$URL/radar")"
+  [[ "$radar" == *"var EventFmt = "* && "$radar" == *"var Stacks = "* && "$radar" != *"<!--@include"* ]]
+  # any well-formed home and id is the page (it asks the radar or the board for the task); an
+  # unregistered home is "(this home)"; anything else is a 404
+  [ "$(code "$URL/task/%28this%20home%29/t-blocked")" = 200 ]
+  [ "$(code "$URL/task/acme/t-blocked?m=Test%20Mac")" = 200 ]
+  [ "$(code "$URL/task/Acme/t-blocked")" = 404 ]
+  [ "$(code "$URL/task/acme/..%2Ft-blocked")" = 404 ]
+  [ "$(code --path-as-is "$URL/task/acme/../t-blocked")" = 404 ]
+  [ "$(code "$URL/task/acme/t-blocked/extra")" = 404 ]
+  [ "$(code "$URL/task/acme%3Bx/t-blocked")" = 404 ]
+  [ "$(code -X POST "$URL/task/acme/t-blocked")" = 405 ]
+  # a task file's own route still wins: /task/<id>/<file>
+  [ "$(get "$URL/task/t-blocked/report.md")" = "# Report" ]
+  [ "$(code "$URL/task/acme/report.md")" = 404 ]
+}
+
+@test "server: a shared script that is missing, or would end its <script> early, keeps the last good page" {
+  need_python
+  export CHARTROOM_RADAR_MACHINES=none
+  local root="$BATS_TEST_TMPDIR/install"
+  mkdir -p "$root"
+  cp -R "$REPO_ROOT/bin" "$REPO_ROOT/lib" "$REPO_ROOT/templates" "$REPO_ROOT/VERSION" "$root/"
+  CHARTROOM="$root/bin/chartroom"
+  run cr dashboard --daemon --port 0 --no-gh
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  read -r _ PORT <"$CHARTROOM_HOME/.dashboard.pid"
+  URL="http://127.0.0.1:$PORT"
+  [[ "$(get "$URL/task/acme/t-x")" == *"var EventFmt = "* ]]
+  # an update writes a newer page; then a script that holds "<!--" or "</script>"; then none
+  sed 's|<title>task · chartroom</title>|<title>task · updated</title>|' "$REPO_ROOT/lib/dashboard/task.html" >"$root/lib/dashboard/task.html"
+  [[ "$(get "$URL/task/acme/t-x")" == *"<title>task · updated</title>"* ]]
+  printf '// </script><script>alert(1)\n' >>"$root/lib/dashboard/eventfmt.js"
+  local p; p="$(get "$URL/task/acme/t-x")"
+  [[ "$p" == *"<title>task · updated</title>"* && "$p" != *"alert(1)"* ]]
+  rm "$root/lib/dashboard/markdown.js"
+  [ "$(code "$URL/task/acme/t-x")" = 200 ]
+  [[ "$(get "$URL/task/acme/t-x")" != *"alert(1)"* ]]
 }
 
 @test "server: an exposed dashboard puts the radar behind the same token" {
@@ -405,6 +491,13 @@ radar_until() {
   [ "$(code "$URL/api/radar")" = 401 ]
   [ "$(code "$URL/api/radar/peek?m=x&h=y&id=z")" = 401 ]
   [ "$(code "$URL/api/radar/file?m=x&h=y&id=z&f=report.md")" = 401 ]
+  [ "$(code "$URL/task/acme/t-1")" = 401 ]
+  [ "$(code "$URL/task/acme/t-1?m=studio")" = 401 ]
+  [ "$(code -b "chartroom_dashboard_$PORT=wrong" "$URL/task/acme/t-1")" = 401 ]
   [ "$(code -b "chartroom_dashboard_$PORT=$t" "$URL/radar")" = 200 ]
+  [ "$(code -b "chartroom_dashboard_$PORT=$t" "$URL/task/acme/t-1")" = 200 ]
+  [ "$(code -b "chartroom_dashboard_$PORT=$t" "$URL/task/BAD/t-1")" = 404 ]
+  # ?token= on a task's page: the cookie, then the same page (its machine kept)
+  [[ "$(curl -s -D - -o /dev/null "$URL/task/acme/t-1?m=studio&token=$t" | tr -d '\r')" == *$'\nLocation: /task/acme/t-1?m=studio\n'* ]]
   radar_until -b "chartroom_dashboard_$PORT=$t" "$URL/api/radar" '.machines | length == 1 and .[0].contact == "ok"'
 }

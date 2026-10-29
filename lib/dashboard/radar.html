@@ -6,23 +6,27 @@
 <title>radar · chartroom</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2302080e'/%3E%3Ccircle cx='16' cy='16' r='11' fill='none' stroke='%2341c9e2' stroke-width='1.5' opacity='.5'/%3E%3Cpath d='M16 7 22 24 16 20 10 24Z' fill='none' stroke='%2341c9e2' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E">
 <style>
-  /* The fleet radar: every crew agent on every machine, as vector ships on a dark scope, in
-     sectors by state. The data is lib/radar.sh + radar.jq's, served by /api/radar.
+  /* The fleet radar: every crew agent on every machine, as small vector robots on a dark scope,
+     in sectors by state; related tasks stand in one stack (lib/dashboard/stacks.js). The data is lib/radar.sh + radar.jq's, served by /api/radar.
      Honesty rules (the point of this view is telling blocked from waiting, so nothing may
      suggest work that is not happening):
-       1. a ship moves only when its sector changes (its state did), flying old slot -> new slot;
+       1. a robot moves only when its sector changes (its state did), flying old slot -> new slot;
        2. a sonar ping only when its last event's time changes (a real event);
-       3. nothing drifts, bobs or orbits: the countdown ring on a waiting ship is real time to a
-          real deadline, and the needs-you beacons blink because the state needs you, not because
-          anything is happening;
-       4. a machine that cannot be read dims its ships, says since when, and they never move;
-       5. a ship keeps its slot while it stays in its sector, so neighbours never shuffle;
-       6. reduced motion: ships are placed at once, no flights or pings; the comms log still
-          records every change.
-     The ships are real buttons over a canvas background, so focus, keyboard and screen readers
-     work; the table is the same data. */
+       3. nothing drifts, bobs or orbits: the countdown ring on a waiting robot is real time to a
+          real deadline, the needs-you signs blink because the state needs you, and a working
+          robot's antenna blinks because it is working, not because anything else is happening;
+       4. a machine that cannot be read dims its robots, says since when, and they never move;
+       5. a robot keeps its slot while it stays in its sector, so neighbours never shuffle (a
+          stack fans out over the map, not into it);
+       6. reduced motion: robots are placed at once, no flights, pings or blinks; the comms log
+          still records every change.
+     The robots are real buttons over a canvas background, so focus, keyboard and screen readers
+     work; the table is the same data. The default view is "active only": a docked task quiet for
+     a day and a task whose session is gone and has been quiet for days fold into each machine's
+     archive (the cutoffs are `chartroom radar machines`' settings). */
   :root {
     --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --prose: "Avenir Next", Avenir, "Segoe UI Variable Text", "Segoe UI", "Helvetica Neue", system-ui, sans-serif;
     --bg: #02080e; --bg2: #06131d; --panel: #051420; --ink: #d4ecf5; --muted: #84a3b6; --faint: #4f6b7e;
     --line: rgba(120,200,235,.2); --line2: rgba(120,200,235,.08); --glow: #41c9e2;
     --decision: #ff9d4d; --blocked: #ff4f6d; --adrift: #8d9cab; --underway: #41c9e2; --holding: #f0c14b;
@@ -115,6 +119,25 @@
           will-change: transform; border-radius: 4px; }
   .ship svg { width: 42px; height: 42px; overflow: visible; flex: none; filter: drop-shadow(0 0 4px color-mix(in srgb, var(--c) 70%, transparent)); }
   .ship .hull { fill: color-mix(in srgb, var(--mc) 22%, transparent); stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
+  .ship .hull.dash { stroke-dasharray: 3 2.4; }
+  .ship .hull.broken { stroke-dasharray: 8 3 2 4; }
+  .ship .limb { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .ship .eye { fill: none; stroke: currentColor; stroke-width: 1.3; }
+  .ship .eye.lit { fill: currentColor; stroke: none; filter: drop-shadow(0 0 2px currentColor); }
+  .ship .ant { fill: var(--bg); stroke: currentColor; stroke-width: 1.3; }
+  .ship .ant.lit { fill: currentColor; }
+  .ship .blink { animation: blink 1.2s steps(2, jump-none) infinite; }
+  .ship .glass { fill: color-mix(in srgb, currentColor 30%, transparent); stroke: currentColor; stroke-width: 1.2; stroke-linejoin: round; }
+  .ship .cap { fill: color-mix(in srgb, currentColor 35%, var(--bg)); stroke: currentColor; stroke-width: 1.4; stroke-linejoin: round; }
+  .ship .dock { fill: none; stroke: currentColor; stroke-width: 1.4; stroke-opacity: .7; stroke-linecap: round; }
+  .ship .zz { fill: currentColor; font: 700 7.5px var(--mono); }
+  .ship .sleepy { opacity: .55; }
+  .ship .behind { opacity: .34; }
+  .ship .behind .hull { fill: color-mix(in srgb, var(--mc) 12%, var(--bg)); }
+  .ship .count rect { fill: var(--bg); stroke: currentColor; stroke-width: 1.3; }
+  .ship .count text { fill: currentColor; font: 700 9px var(--mono); text-anchor: middle; dominant-baseline: central; }
+  .ship.stack[aria-expanded=true] .count rect { fill: currentColor; }
+  .ship.stack[aria-expanded=true] .count text { fill: var(--bg); }
   .ship .lbl { margin-top: 1px; width: 100%; font-size: 10.5px; line-height: 1.15; text-align: center; white-space: nowrap; overflow: hidden; }
   .ship .lbl b { color: var(--c); font-weight: 700; }
   .ship .lbl i { display: block; font-style: normal; color: var(--mc); font-size: 9.5px; overflow: hidden; text-overflow: ellipsis; padding: 0 2px; }
@@ -128,6 +151,15 @@
   .ship.stale { opacity: .38; filter: grayscale(.8); }
   .ship.dim { opacity: .1; pointer-events: none; }
   .ship .ring-track { fill: none; stroke: currentColor; stroke-opacity: .2; stroke-width: 2; }
+  /* a stack fanned out: its members in a row over the map, real buttons, the map beneath unmoved */
+  .fan { position: absolute; z-index: 6; display: flex; flex-wrap: wrap; gap: 2px; padding: 22px 6px 4px; max-width: calc(100% - 8px);
+         border: 1px solid var(--c); border-radius: 4px; background: color-mix(in srgb, var(--panel) 95%, transparent);
+         box-shadow: 0 18px 40px -16px rgba(0,0,0,.9), 0 0 0 1px color-mix(in srgb, var(--c) 25%, transparent) inset; }
+  .fan h3 { position: absolute; left: 8px; right: 30px; top: 4px; margin: 0; font-size: 10px; letter-spacing: .16em; color: var(--c);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 700; }
+  .fan .fold { position: absolute; right: 3px; top: 2px; min-width: 22px; min-height: 18px; padding: 0 4px; border: 1px solid var(--line);
+               background: var(--bg); color: var(--muted); cursor: pointer; border-radius: 2px; font-size: 11px; }
+  .fan .ship { position: relative; transform: none; z-index: auto; }
   .ship .ring { fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; transform: rotate(-90deg); transform-origin: 0 0; }
   .ship .ring.open { stroke-dasharray: 3 4; stroke-opacity: .7; transform: none; }
   .ship .flame { fill: var(--c); fill-opacity: .75; stroke: none; }
@@ -136,6 +168,8 @@
   .ship .nosig { fill: none; stroke: currentColor; stroke-width: 1.2; stroke-dasharray: 1.5 3.5; }
   .ship .shield { fill: none; stroke: currentColor; stroke-width: 1.4; stroke-dasharray: 4 3; }
   .ship.xo { height: calc(var(--ch) + 10px); }
+  .mchip + .archive { margin-left: -2px; }
+  .archive b { color: var(--ink); font-variant-numeric: tabular-nums; }
   .ship.xo svg { width: 48px; height: 48px; }
   @keyframes blink { 0% { opacity: 1; } 100% { opacity: .25; } }
   .ping { position: absolute; left: 0; top: 0; width: 44px; height: 44px; margin: -22px 0 0 -22px; border-radius: 50%;
@@ -153,7 +187,7 @@
   td .stale { color: var(--blocked); }
 
   /* the side panel: a drawer on the right, a bottom sheet on a phone */
-  .panel { position: fixed; z-index: 30; right: 0; top: 0; bottom: 0; width: min(460px, 100vw); display: flex; flex-direction: column;
+  .panel { position: fixed; z-index: 30; right: 0; top: 0; bottom: 0; width: min(580px, 100vw); display: flex; flex-direction: column;
            background: color-mix(in srgb, var(--panel) 96%, transparent); border-left: 1px solid var(--line);
            box-shadow: -20px 0 50px -20px rgba(0,0,0,.8); }
   .panel[hidden] { display: none; }
@@ -172,8 +206,9 @@
   .p-body dd { margin: 0; overflow-wrap: anywhere; }
   .p-body .wait { margin: 0 0 12px; padding: 8px 10px; border-left: 3px solid var(--holding); background: color-mix(in srgb, var(--holding) 7%, transparent); overflow-wrap: anywhere; }
   .p-body .wait.over { border-color: var(--blocked); background: color-mix(in srgb, var(--blocked) 7%, transparent); }
-  .p-body .ev { margin: 0 0 12px; padding: 8px 10px; border: 1px solid var(--line2); overflow-wrap: anywhere; white-space: pre-wrap; }
-  .p-body .ev .kind { color: var(--c2, var(--muted)); font-weight: 700; }
+  .p-body .lastev { margin: 0 0 12px; padding: 12px 14px; border: 1px solid var(--line2); border-left: 3px solid var(--c2, var(--line));
+                    background: color-mix(in srgb, var(--panel) 70%, transparent); overflow-wrap: anywhere; }
+  .p-body .stackof { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: -4px 0 12px; color: var(--faint); font-size: 12px; }
   .p-body .links { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
   .p-body h4 { margin: 14px 0 6px; font-size: 11px; letter-spacing: .2em; color: var(--muted); display: flex; gap: 8px; align-items: center; }
   .p-body h4 .src { letter-spacing: normal; color: var(--faint); font-weight: 400; }
@@ -189,6 +224,7 @@
   dialog .bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); }
   dialog .bar b { flex: 1; overflow-wrap: anywhere; }
   dialog pre { margin: 0; padding: 14px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 var(--mono); }
+  dialog .md { padding: 6px 20px 18px; }
   footer { margin: 0 16px 24px; color: var(--faint); font-size: 11px; }
   kbd { padding: 0 4px; border: 1px solid var(--line); border-radius: 2px; font: inherit; color: var(--muted); }
 
@@ -205,6 +241,7 @@
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
   }
+<!--@include:eventfmt.css-->
 </style>
 </head>
 <body>
@@ -220,6 +257,7 @@
   <div class="machines" id="machines" aria-label="machines (click to show or hide one)"></div>
   <div class="controls">
     <input id="filter" type="search" placeholder="filter: id, title, project, home, machine  ( / )" aria-label="filter the agents">
+    <button class="chip" id="activeBtn" type="button" aria-pressed="true" title="hide docked tasks quiet for a day and gone sessions quiet for days (a)">active only</button>
     <button class="chip" id="split" type="button" aria-pressed="false" title="one map per machine (m)">split by machine</button>
     <button class="chip" id="tableBtn" type="button" aria-pressed="false" title="the same data as a table (t)">table</button>
   </div>
@@ -240,16 +278,21 @@
     <tbody id="tbody"></tbody>
   </table>
 </div>
-<footer>keys: <kbd>←</kbd><kbd>↑</kbd><kbd>→</kbd><kbd>↓</kbd> move between ships · <kbd>Enter</kbd> open · <kbd>Esc</kbd> close · <kbd>t</kbd> table · <kbd>m</kbd> split by machine · <kbd>/</kbd> filter.
-  Ships move only when their state changes; a ping is a new event. Read-only: nothing here acts on an agent.</footer>
+<footer>keys: <kbd>←</kbd><kbd>↑</kbd><kbd>→</kbd><kbd>↓</kbd> move between agents · <kbd>Enter</kbd> open, or fan out a stack · <kbd>Esc</kbd> close · <kbd>t</kbd> table · <kbd>m</kbd> split by machine · <kbd>a</kbd> active only · <kbd>/</kbd> filter.
+  A robot moves only when its state changes; a ping is a new event; a stack (×N) is related tasks, led by the one that needs you most. Read-only: nothing here acts on an agent.</footer>
 <aside class="panel" id="panel" hidden aria-labelledby="p-title">
   <div class="p-head"><span class="k" id="p-k"></span><h2 id="p-title" tabindex="-1"></h2><button id="p-close" type="button" aria-label="close the panel">✕</button></div>
   <div class="p-body"><div id="p-facts"></div><div id="p-peek"></div></div>
 </aside>
 <dialog id="viewer" aria-labelledby="viewer-title">
   <div class="bar"><b id="viewer-title"></b><button class="chip" id="viewer-close" type="button">close</button></div>
-  <pre id="viewer-body"></pre>
+  <div id="viewer-body"></div>
 </dialog>
+<script>
+<!--@include:eventfmt.js-->
+<!--@include:markdown.js-->
+<!--@include:stacks.js-->
+</script>
 <script>
 "use strict";
 const POLL_MS = 5000, PEEK_MS = 10000;
@@ -330,12 +373,17 @@ function cssVar(name) { return getComputedStyle(document.documentElement).getPro
 let data = null, lastOk = 0, first = true;
 let split = stored("chartroom-radar-split") === "1";
 let tableOn = stored("chartroom-radar-table") === "1";
+let showArchive = stored("chartroom-radar-archive") === "1"; // the default view is "active only"
 let filterText = "";
+const fanned = new Set();     // stack keys fanned out (this page only)
+let archivedOf = new Map();   // key -> why the active-only view leaves it out ("docked" | "stale"), this render's
+let unitsBy = new Map();      // record key -> the stack drawn for it, this render's
 const hiddenMachines = new Set();
 const machineColor = new Map();
 const slots = new Map();      // key -> {group, idx}: a ship's place in its sector, kept while it stays there
 const ships = new Map();      // key -> button
 const prev = new Map();       // key -> {state, sector, at, short, machine}: what the data said last time
+const prevDrawn = new Map();  // drawn key (an agent's or a stack's) -> {sector, at}: what was drawn last time
 let reported = new Set();     // machines that had reported by the last render
 let selected = null, selectedFrom = null;
 const comms = [];
@@ -345,6 +393,7 @@ function colorOf(machine) {
   return machineColor.get(machine);
 }
 function matches(r) {
+  if (r.stack) return r.stack.members.some(matches);
   if (hiddenMachines.has(r.machine)) return false;
   if (!filterText) return true;
   const hay = [r.short_id, r.id, r.title, r.project, r.home, r.machine, r.state].join(" ").toLowerCase();
@@ -352,47 +401,98 @@ function matches(r) {
 }
 function aria(r) {
   if (r.kind === "xo") return "XO of home " + r.home + " on " + r.machine + ": herdr says " + r.status + ". Untracked: no events.";
+  if (r.stack) return "a stack of " + r.stack.members.length + " related tasks (" + r.stack.reasons.join(", ") + "), led by " + aria(r.stack.lead) +
+    " " + (fanned.has(r.key) ? "Fanned out; press to fold." : "Press to fan out.");
   return r.short_id + " on " + r.machine + " (" + r.home + "): " + (STATE_LABEL[r.state] || r.state) + ", " + r.why + ". " + r.title +
     (r.stale ? ". Stale: its machine cannot be read now." : "");
 }
+function settingsOf(d) { return Object.assign({ done_hours: 24, stale_days: 3 }, (d && d.settings) || {}); }
+// The agents this view draws: every one, or (active only) those the archive leaves in.
+function shownAgents(d) { return showArchive ? d.agents : d.agents.filter((r) => !archivedOf.get(r.key)); }
 
-// ---------------------------------------------------------------- ship glyphs (one per state)
+// ---------------------------------------------------------------- robot glyphs (one per state)
 
-const HULL = "M0,-13 L9,11 L0,6 L-9,11 Z";
+// A small robot, drawn in the scope's vector line; its state reads from the robot itself:
+//   working   eyes lit, antenna blinking            waiting    an hourglass in hand, the countdown ring
+//   blocked   red, holding up a "!" sign            at a prompt the sign says "›"
+//   decision  a "?" in a speech bubble              silent     dimmed, dashed, asleep ("zz")
+//   overdue   asleep, with a clock                  lost       a broken outline, no signal
+//   review    docked, a check in a dashed ring      done       docked, a check
+//   failed    tipped over, eyes crossed out         XO         bigger, with a captain's cap
+// A stack: its lead robot, the others standing in a row behind it, and the count.
+const R_HEAD = '<rect class="hull" x="-9" y="-13" width="18" height="13" rx="3.5"/>';
+const R_BODY = '<rect class="hull" x="-6.5" y="2" width="13" height="10" rx="2.2"/>';
+const R_LEGS = '<path class="limb" d="M-3.5,12 V17.5 M3.5,12 V17.5"/>';
+const R_ARMS = '<path class="limb" d="M-6.5,5 L-11,10 M6.5,5 L11,10"/>';
+const R_MOUTH = '<path class="limb" d="M-3,-3.4 H3" stroke-width="1.2"/>';
+const R_EYES = {
+  lit: '<circle class="eye lit" cx="-4" cy="-7.5" r="2.2"/><circle class="eye lit" cx="4" cy="-7.5" r="2.2"/>',
+  open: '<circle class="eye" cx="-4" cy="-7.5" r="2"/><circle class="eye" cx="4" cy="-7.5" r="2"/>',
+  shut: '<path class="limb" d="M-6,-7.2 Q-4,-5.6 -2,-7.2 M2,-7.2 Q4,-5.6 6,-7.2" stroke-width="1.3"/>',
+  x: '<path class="limb" d="M-5.6,-9.1 L-2.4,-5.9 M-2.4,-9.1 L-5.6,-5.9 M2.4,-9.1 L5.6,-5.9 M5.6,-9.1 L2.4,-5.9" stroke-width="1.3"/>',
+};
+function antenna(lit, blink) {
+  return '<path class="limb" d="M0,-13 V-17"/><circle class="ant' + (lit ? " lit" : "") + (blink ? " blink" : "") + '" cx="0" cy="-18.6" r="1.9"/>';
+}
+function robot(o) { // {eyes, hull, arms, ant, extra}: one robot's body, standing at 0,0
+  const hull = o.hull ? (x) => x.replace('class="hull"', 'class="hull ' + o.hull + '"') : (x) => x;
+  return (o.ant == null ? antenna(false, false) : o.ant) + hull(R_HEAD) + R_EYES[o.eyes || "open"] + R_MOUTH + hull(R_BODY) +
+    (o.arms || R_ARMS) + R_LEGS + (o.extra || "");
+}
+const SIGN = (ch) => '<path class="limb" d="M6.5,5 L12,-1"/><g class="beacon"><rect x="10" y="-12" width="11" height="10" rx="1.5" fill="var(--bg)" stroke="currentColor" stroke-width="1.4"/>' +
+  '<text class="mark" x="15.5" y="-7" font-size="9">' + ch + '</text></g>';
+const ARM_LEFT = '<path class="limb" d="M-6.5,5 L-11,10"/>';
 function glyph(r) {
   const s = r.kind === "xo" ? "xo" : r.state;
-  let extra = "", hull = '<path class="hull" d="' + HULL + '"/>', rot = 0;
+  let body, extra = "", rot = 0;
   if (s === "working") {
-    extra = r.live_uncertain ? '<text class="mark" x="0" y="0" font-size="10">?</text>' : '<path class="flame" d="M-4,8.5 L0,17 L4,8.5 Z"/>';
-    if (r.live_uncertain) hull = '<path class="hull" d="' + HULL + '" stroke-dasharray="3 2.5"/>';
+    body = r.live_uncertain ? robot({ eyes: "open", hull: "dash", ant: antenna(false, false) }) : robot({ eyes: "lit", ant: antenna(true, true) });
+    if (r.live_uncertain) extra = '<text class="mark" x="15" y="-15" font-size="10">?</text>';
   } else if (s === "waiting") {
-    extra = '<circle class="ring-track" r="18"/>' + (r.waiting && r.waiting.until && !r.inferred
-      ? '<circle class="ring" r="18" pathLength="100" stroke-dasharray="100 100" data-since="' + (ms(r.waiting.since) || ms(r.last_activity_at) || 0) + '" data-until="' + ms(r.waiting.until) + '"/>'
-      : '<circle class="ring open" r="18"/>');
+    body = robot({ eyes: "open", arms: ARM_LEFT + '<path class="limb" d="M6.5,5 L10.5,8"/>' +
+      '<path class="glass" d="M10,6.5 H17 L13.5,11 L17,15.5 H10 L13.5,11 Z"/>' });
+    extra = '<circle class="ring-track" r="21.5"/>' + (r.waiting && r.waiting.until && !r.inferred
+      ? '<circle class="ring" r="21.5" pathLength="100" stroke-dasharray="100 100" data-since="' + (ms(r.waiting.since) || ms(r.last_activity_at) || 0) + '" data-until="' + ms(r.waiting.until) + '"/>'
+      : '<circle class="ring open" r="21.5"/>');
   } else if (s === "blocked" || s === "awaiting-input") {
-    extra = '<path class="shield" d="M0,-19 16.5,-9.5 16.5,9.5 0,19 -16.5,9.5 -16.5,-9.5Z"/>' +
-      '<g class="beacon"><circle cx="15" cy="-15" r="6" fill="var(--bg)" stroke="currentColor" stroke-width="1.4"/><text class="mark" x="15" y="-15" font-size="9">' + (s === "blocked" ? "!" : "›") + '</text></g>';
+    body = robot({ eyes: "open", arms: ARM_LEFT + SIGN(s === "blocked" ? "!" : "›") });
   } else if (s === "decision") {
-    extra = '<g class="beacon"><path d="M15,-22 L21,-15 L15,-8 L9,-15 Z" fill="var(--bg)" stroke="currentColor" stroke-width="1.4"/><text class="mark" x="15" y="-15" font-size="9">?</text></g>';
-  } else if (s === "overdue") {
-    extra = '<circle class="nosig" r="18"/><circle cx="14" cy="-14" r="5" fill="var(--bg)" stroke="currentColor" stroke-width="1.3"/><path d="M14,-17 V-14 H16.5" fill="none" stroke="currentColor" stroke-width="1.3"/>';
-  } else if (s === "stopped-silent" || s === "unknown") {
-    extra = '<circle class="nosig" r="18"/>';
+    body = robot({ eyes: "open" });
+    extra = '<g class="beacon"><path d="M9,-23 H21 Q23,-23 23,-21 V-14 Q23,-12 21,-12 H14 L10.5,-8.5 L11,-12 H9 Q7,-12 7,-14 V-21 Q7,-23 9,-23 Z" fill="var(--bg)" stroke="currentColor" stroke-width="1.4"/>' +
+      '<text class="mark" x="15" y="-17.4" font-size="9">?</text></g>';
+  } else if (s === "stopped-silent" || s === "unknown" || s === "overdue") {
+    body = '<g class="sleepy">' + robot({ eyes: "shut", hull: "dash" }) + "</g>";
+    extra = '<text class="zz" x="10" y="-15">z</text><text class="zz" x="14" y="-19" font-size="9.5">z</text>' +
+      (s === "overdue" ? '<circle cx="-15" cy="-15" r="5" fill="var(--bg)" stroke="currentColor" stroke-width="1.3"/><path d="M-15,-18 V-15 H-12.5" fill="none" stroke="currentColor" stroke-width="1.3"/>' : "");
   } else if (s === "lost") {
-    hull = '<path class="hull" d="M-1,-13 L3,-2 L-4,1 Z"/><path class="hull" d="M5,2 L10,12 L1,7 Z"/><path class="hull" d="M-5,4 L-1,7 L-10,12 Z"/>';
-    extra = '<circle class="nosig" r="18"/>';
+    body = '<g class="sleepy">' + robot({ eyes: "x", hull: "broken", ant: '<path class="limb" d="M0,-13 L1.5,-16"/>' }) +
+      '<path class="limb" d="M-2,-13 L0.5,-9 L-1.5,-6 L1,-2" stroke-width="1.1"/></g>';
+    extra = '<circle class="nosig" r="21.5"/>';
   } else if (s === "done" || s === "review") {
-    rot = 90;
-    extra = '<text class="mark" x="14" y="-14" font-size="11">✓</text>';
+    body = robot({ eyes: "open" }) + '<path class="dock" d="M-14,18.5 H14 M-11,18.5 V21.5 M11,18.5 V21.5"/>';
+    extra = (s === "review" ? '<circle cx="15" cy="-15" r="6" fill="var(--bg)" stroke="currentColor" stroke-width="1.2" stroke-dasharray="2 2"/>' : "") +
+      '<text class="mark" x="15" y="-15" font-size="10">✓</text>';
   } else if (s === "failed") {
-    hull = '<path class="hull" d="M-1,-13 L4,0 L-5,2 Z"/><path class="hull" d="M6,3 L11,12 L2,7 Z"/><path class="hull" d="M-6,5 L-2,8 L-11,12 Z"/>';
-    extra = '<text class="mark" x="14" y="-14" font-size="11">✕</text>';
+    body = robot({ eyes: "x", ant: antenna(false, false) });
+    rot = 90;
+    extra = '<text class="mark" x="15" y="-15" font-size="11">✕</text>';
   } else if (s === "xo") {
-    hull = '<path class="hull" d="M0,-15 L11,13 L0,7 L-11,13 Z"/><path d="M0,-15 V-26 L9,-22.5 L0,-19" fill="currentColor" fill-opacity=".8" stroke="currentColor" stroke-width="1.2"/>';
-    extra = r.status === "working" ? '<path class="flame" d="M-4.5,10 L0,19 L4.5,10 Z"/>' : r.status === "blocked" ? '<g class="beacon"><circle cx="15" cy="-15" r="6" fill="var(--bg)" stroke="currentColor" stroke-width="1.4"/><text class="mark" x="15" y="-15" font-size="9">›</text></g>' : "";
+    const working = r.status === "working";
+    body = robot({ eyes: working ? "lit" : "open", ant: "" }) +
+      '<path class="cap" d="M-9.5,-13 L-7.5,-19.5 Q0,-22.5 7.5,-19.5 L9.5,-13 Z"/><path class="limb" d="M-12,-13 H12"/><circle cx="0" cy="-17" r="1.6" fill="currentColor"/>';
+    if (r.status === "blocked") extra = '<g class="beacon"><circle cx="15" cy="-15" r="6" fill="var(--bg)" stroke="currentColor" stroke-width="1.4"/><text class="mark" x="15" y="-15" font-size="9">›</text></g>';
+  } else {
+    body = '<g class="sleepy">' + robot({ eyes: "open", hull: "dash" }) + "</g>";
   }
-  const rest = rot + ((hash(r.key) % 31) - 15); // a resting heading of its own: still, never turning
-  return '<svg viewBox="-24 -24 48 48" aria-hidden="true"><g class="body" style="transform:rotate(' + rest + 'deg)" data-rest="' + rest + '">' + hull + "</g>" + extra + "</svg>";
+  let behind = "", count = "";
+  if (r.stack) {
+    // the others, in a row behind the lead, fainter the further back
+    const n = r.stack.members.length;
+    for (let k = Math.min(n - 1, 2); k >= 1; k--) behind += '<g class="behind" transform="translate(' + (k * 7) + "," + (-k * 3.5) + ') scale(.9)">' + robot({ eyes: "open", ant: antenna(false, false) }) + "</g>";
+    count = '<g class="count"><rect x="-23" y="12" width="15" height="11" rx="5.5"/><text x="-15.5" y="17.6">' + (n > 99 ? "99+" : n) + "</text></g>";
+  }
+  const turn = rot ? "transform:translate(0px,4px) rotate(" + rot + "deg)" : "";
+  return '<svg viewBox="-24 -24 48 48" aria-hidden="true">' + behind + '<g class="body" style="' + turn + '" data-rest="' + rot + '">' + body + "</g>" + extra + count + "</svg>";
 }
 function stateColor(r) {
   if (r.kind === "xo") return r.status === "working" ? "var(--underway)" : r.status === "blocked" ? "var(--blocked)" : "var(--adrift)";
@@ -400,13 +500,16 @@ function stateColor(r) {
 }
 
 function shipNode(r) {
-  const b = el("button", { type: "button", class: "ship" + (r.kind === "xo" ? " xo" : ""), "data-key": r.key });
-  b.addEventListener("click", () => openPanel(r.key, b));
+  const b = el("button", { type: "button", class: "ship" + (r.kind === "xo" ? " xo" : "") + (r.stack ? " stack" : ""), "data-key": r.key });
+  b.addEventListener("click", () => { if (b._r && b._r.stack) toggleFan(b._r.key); else openPanel(r.key, b); });
   b.addEventListener("keydown", arrowKeys);
   return b;
 }
 function paintShip(b, r) {
-  const sig = [r.kind, r.state, r.status, r.live_uncertain, r.inferred, r.waiting && r.waiting.until, r.stale, r.machine].join("|");
+  b._r = r;
+  if (r.stack) { b.setAttribute("aria-expanded", String(fanned.has(r.key))); b.setAttribute("aria-controls", "fan-" + hash(r.key)); }
+  const sig = [r.kind, r.state, r.status, r.live_uncertain, r.inferred, r.waiting && r.waiting.until, r.stale, r.machine,
+    r.stack && r.stack.members.map((m) => m.key + ":" + m.state).join(",")].join("|");
   b.style.setProperty("--c", stateColor(r));
   b.style.setProperty("--mc", colorOf(r.machine));
   b.setAttribute("aria-label", aria(r));
@@ -414,8 +517,9 @@ function paintShip(b, r) {
   b.classList.toggle("stale", !!r.stale);
   if (b._sig === sig) return;
   b._sig = sig;
+  const name = r.kind === "xo" ? "XO " + r.home : r.stack ? (r.stack.reasons.find((x) => /-\d/.test(x)) || r.short_id) + " ×" + r.stack.members.length : r.short_id;
   b.replaceChildren(svg(glyph(r)), el("span", { class: "lbl" },
-    el("b", { text: r.kind === "xo" ? "XO " + r.home : r.short_id }), el("i", { text: r.kind === "xo" ? r.machine : r.machine + (r.stale ? " · stale" : "") })));
+    el("b", { text: name }), el("i", { text: r.kind === "xo" ? r.machine : r.machine + (r.stale ? " · stale" : "") })));
 }
 
 // ---------------------------------------------------------------- layout: zones, sectors, slots
@@ -432,8 +536,17 @@ function groupsOf(d) {
     bridges.set(z, []);
     for (const s of SECTORS) { groups.set(z + "|" + s.k, []); overflow.set(z + "|" + s.k, 0); }
   }
-  for (const r of d.agents) {
-    const g = (split ? r.machine : "fleet") + "|" + r.sector;
+  // related tasks stand in one stack per zone (lib/dashboard/stacks.js); a stack is drawn as its
+  // lead, in the lead's sector, carrying the others
+  unitsBy = new Map();
+  const counts = new Map(); // zone|sector -> agents whose own sector it is, stacked or not (as the tally counts)
+  const byZone = new Map();
+  for (const r of shownAgents(d)) { const z = split ? r.machine : "fleet"; if (!byZone.has(z)) byZone.set(z, []); byZone.get(z).push(r); }
+  for (const [z, recs] of byZone) for (const r of recs) counts.set(z + "|" + r.sector, (counts.get(z + "|" + r.sector) || 0) + 1);
+  for (const [z, recs] of byZone) for (const u of Stacks.group(recs)) {
+    const r = u.kind === "stack" ? Object.assign({}, u.lead, { key: u.key, stack: u, breaking: u.breaking, last_activity_at: u.last_activity_at, stale: u.stale }) : u.rec;
+    if (u.kind === "stack") for (const m of u.members) unitsBy.set(m.key, r);
+    const g = z + "|" + r.sector;
     if (groups.has(g)) groups.get(g).push(r);
   }
   for (const f of d.flagships) { const z = split ? f.machine : "fleet"; if (bridges.has(z)) bridges.get(z).push(f); }
@@ -443,7 +556,7 @@ function groupsOf(d) {
     const cap = caps[g.split("|")[1]];
     if (cap && items.length > cap) { overflow.set(g, items.length - cap); items.length = cap; }
   }
-  return { zones, groups, overflow, bridges };
+  return { zones, groups, overflow, bridges, counts };
 }
 
 // Stable slots: a ship keeps its index while it stays in its group; a newcomer takes the
@@ -532,7 +645,7 @@ function drawSky() {
 let frameKey = "";
 function drawFrames(d, G) {
   const key = JSON.stringify([geo.W, geo.H, split, [...geo.rects.entries()], [...geo.bridges.entries()], [...G.overflow.entries()],
-    [...G.groups.entries()].map(([g, a]) => [g, a.length]), d.machines.map((m) => m.machine)]);
+    [...G.groups.entries()].map(([g, a]) => [g, a.length, G.counts.get(g)]), d.machines.map((m) => m.machine)]);
   if (key === frameKey) return;
   frameKey = key;
   map.querySelectorAll(".frame,.zone,.bridge").forEach((n) => n.remove());
@@ -548,7 +661,7 @@ function drawFrames(d, G) {
       el("h3", { text: "BRIDGE · each home's XO (from herdr; untracked: no events)" })));
   }
   for (const [g, rect] of geo.rects) {
-    const k = g.split("|")[1], s = SECTORS[SECTOR_RANK[k]], n = G.groups.get(g).length, more = G.overflow.get(g);
+    const k = g.split("|")[1], s = SECTORS[SECTOR_RANK[k]], n = G.counts.get(g) || 0, more = G.overflow.get(g);
     const f = el("div", { class: "frame", style: "left:" + rect.x + "px;top:" + rect.y + "px;width:" + rect.w + "px;height:" + rect.h + "px;--c:var(--" + k + ")" },
       el("h3", {}, el("span", { text: s.name }), el("span", { class: "n", text: String(n + more) })), el("p", { text: s.sub }),
       n ? null : el("div", { class: "clear", text: "— clear —" }));
@@ -579,10 +692,11 @@ function fly(b, from, to, key) {
   for (let i = 0; i <= 10; i++) frames.push({ transform: off(bez(from, c, to, i / 10)) });
   const D = 1300;
   b.animate(frames, { duration: D, easing: "cubic-bezier(.45,.05,.35,1)" });
+  // a robot leans into its flight (a tipped-over one stays down)
   const body = b.querySelector(".body"), rest = body ? +body.dataset.rest : 0;
-  const heading = Math.atan2(dy, dx) * 180 / Math.PI + 90;
-  if (body) body.animate([{ transform: "rotate(" + rest + "deg)" }, { transform: "rotate(" + heading + "deg)", offset: 0.15 },
-    { transform: "rotate(" + heading + "deg)", offset: 0.85 }, { transform: "rotate(" + rest + "deg)" }], { duration: D, easing: "ease-in-out" });
+  const lean = rest ? rest : (dx >= 0 ? 14 : -14);
+  if (body && !rest) body.animate([{ transform: "rotate(0deg)" }, { transform: "rotate(" + lean + "deg)", offset: 0.15 },
+    { transform: "rotate(" + lean + "deg)", offset: 0.85 }, { transform: "rotate(0deg)" }], { duration: D, easing: "ease-in-out" });
   trails.push({ a: from, c, b: to, t0: performance.now(), D, color: getComputedStyle(b).color });
   if (!fxRunning) { fxRunning = true; requestAnimationFrame(drawFx); }
 }
@@ -639,13 +753,26 @@ function renderMachines(d) {
       style: "--mc:" + colorOf(m.machine), title: (off ? "show " : "hide ") + m.machine + "'s agents" + (m.note ? "\n" + m.note : "") + (m.error ? "\n" + m.error : "") },
       el("span", { class: "dot", "aria-hidden": "true" }), el("span", { class: "lbl", text: m.machine }), el("span", { class: "st", text: machineState(m) }));
     b.addEventListener("click", () => { if (off) hiddenMachines.delete(m.machine); else hiddenMachines.add(m.machine); render(true); });
-    return b;
+    // its archive: what the active-only view folds away, one click from view
+    const n = d.agents.filter((r) => r.machine === m.machine && archivedOf.get(r.key)).length;
+    if (!n) return [b];
+    const a = el("button", { class: "chip archive", type: "button", "aria-pressed": String(showArchive),
+      title: (showArchive ? "fold the archive away again" : "show the archive") + ": " + n + " of " + m.machine + "'s tasks are docked for over " +
+        settingsOf(d).done_hours + "h, or their session is gone and quiet for over " + settingsOf(d).stale_days + "d" },
+      el("span", {}, "archive (", el("b", { text: String(n) }), ")" + (showArchive ? " shown" : "")));
+    a.addEventListener("click", () => setArchive(!showArchive));
+    return [b, a];
   });
-  box.replaceChildren(...want);
+  box.replaceChildren(...want.flat());
+}
+function setArchive(on) {
+  showArchive = on; store("chartroom-radar-archive", on ? "1" : null);
+  $("activeBtn").setAttribute("aria-pressed", String(!on));
+  if (data) render(true);
 }
 
 function renderTally(d) {
-  const shown = d.agents.filter(matches);
+  const shown = shownAgents(d).filter(matches);
   const by = {}; for (const r of shown) by[r.sector] = (by[r.sector] || 0) + 1;
   $("tally").replaceChildren(...SECTORS.map((s) => el("span", { "data-s": s.k, style: "--c:var(--" + s.k + ")" }, el("b", { text: String(by[s.k] || 0) }), " " + s.name.toLowerCase())),
     el("span", {}, el("b", { text: String(d.flagships.length) }), " XO" + (d.flagships.length === 1 ? "" : "s")));
@@ -659,9 +786,13 @@ function render(quiet) {
   const calm = first || quiet;
   if (!d) return;
   for (const m of d.machines) colorOf(m.machine);
+  const clock = Date.now(), st = settingsOf(d);
+  archivedOf = new Map(d.agents.map((r) => [r.key, Stacks.archived(r, clock, st)]));
+  const nArch = [...archivedOf.values()].filter(Boolean).length;
   renderMachines(d);
   renderTally(d);
-  const metaBits = [d.agents.length + " agents", d.machines.length + " machine" + (d.machines.length === 1 ? "" : "s"), "updated " + hhmm(d.generated_at)];
+  const metaBits = [(d.agents.length - nArch) + " active · " + nArch + " archived" + (showArchive && nArch ? " (shown)" : ""),
+    d.machines.length + " machine" + (d.machines.length === 1 ? "" : "s"), "updated " + hhmm(d.generated_at)];
   $("meta").textContent = metaBits.join(" · ");
   banner(d.error || "");
   const G = groupsOf(d);
@@ -693,7 +824,7 @@ function render(quiet) {
   for (const items of G.groups.values()) for (const r of items) all.push(r);
   all.forEach((r, i) => {
     let b = ships.get(r.key);
-    const fresh = !b, p = slotXY(r), was = prev.get(r.key);
+    const fresh = !b, p = slotXY(r), was = prevDrawn.get(r.key);
     if (!p) return;
     seen.add(r.key);
     if (fresh) { b = shipNode(r); ships.set(r.key, b); map.append(b); }
@@ -709,6 +840,8 @@ function render(quiet) {
   reported = known;
   prev.clear();
   for (const r of d.agents) prev.set(r.key, { state: r.state, sector: r.sector, at: r.last_activity_at, short: r.short_id, machine: r.machine });
+  prevDrawn.clear();
+  for (const r of all) prevDrawn.set(r.key, { sector: r.sector, at: r.last_activity_at });
   // the XOs, on their bridge
   for (const [z, fl] of G.bridges) fl.forEach((f, i) => {
     const p = bridgeXY(f, i, z);
@@ -734,20 +867,65 @@ function render(quiet) {
     for (const b of ordered) map.append(b);
     if (active && active.classList && active.classList.contains("ship") && active.isConnected) active.focus({ preventScroll: true });
   }
+  renderFans(all);
   if (first) log(["contact: " + d.agents.length + " agents and " + d.flagships.length + " XOs on " + d.machines.length + " machine" + (d.machines.length === 1 ? "" : "s")], null);
   first = false;
   if (tableOn) renderTable(d);
   if (selected) renderFacts();
 }
 
+// ---------------------------------------------------------------- stacks, fanned out
+
+function toggleFan(key) {
+  if (fanned.has(key)) fanned.delete(key); else fanned.add(key);
+  render(true);
+  const fan = document.getElementById("fan-" + hash(key));
+  const first = fan && fan.querySelector(".ship");
+  if (first) first.focus(); else { const b = ships.get(key); if (b) b.focus(); }
+}
+// Each fanned-out stack: its members in a row over the map at the stack's place, each a robot
+// that opens its own panel. Rebuilt per render; the map's slots never move for it.
+function renderFans(drawn) {
+  map.querySelectorAll(".fan").forEach((n) => n.remove());
+  const live = new Set(drawn.filter((r) => r.stack).map((r) => r.key));
+  for (const k of [...fanned]) if (!live.has(k)) fanned.delete(k);
+  for (const r of drawn) {
+    if (!r.stack || !fanned.has(r.key)) continue;
+    const b = ships.get(r.key);
+    if (!b || !b._p) continue;
+    const fold = el("button", { class: "fold", type: "button", "aria-label": "fold this stack", text: "✕" });
+    fold.addEventListener("click", () => toggleFan(r.key));
+    const fan = el("div", { class: "fan", id: "fan-" + hash(r.key), role: "group", style: "--c:" + stateColor(r),
+      "aria-label": r.stack.members.length + " related tasks: " + r.stack.reasons.join(", ") },
+      el("h3", { text: "STACK · " + r.stack.reasons.join(" · ").toUpperCase() }), fold);
+    for (const m of r.stack.members) {
+      const mb = el("button", { type: "button", class: "ship", "data-key": m.key });
+      paintShip(mb, m);
+      mb.classList.toggle("dim", !matches(m));
+      mb.classList.toggle("sel", selected === m.key);
+      mb.addEventListener("click", () => openPanel(m.key, mb));
+      mb.addEventListener("keydown", (e) => {
+        const sib = e.key === "ArrowRight" ? mb.nextElementSibling : e.key === "ArrowLeft" ? mb.previousElementSibling : null;
+        if (sib && sib.classList.contains("ship")) { e.preventDefault(); sib.focus(); }
+      });
+      fan.append(mb);
+    }
+    map.append(fan);
+    const w = Math.min(map.clientWidth - 8, 12 + r.stack.members.length * (geo.cellW + 2));
+    const x = Math.max(4, Math.min(b._p.x - geo.cellW / 2 - 6, map.clientWidth - w - 4));
+    fan.style.left = x + "px"; fan.style.top = (b._p.y + geo.cellH / 2 - 4) + "px";
+  }
+}
+
 // ---------------------------------------------------------------- table
 
 function renderTable(d) {
-  const rows = [...d.agents].filter(matches).sort((a, b) => (SECTOR_RANK[a.sector] - SECTOR_RANK[b.sector]) || (ms(b.last_activity_at) || 0) - (ms(a.last_activity_at) || 0));
+  const rows = [...shownAgents(d)].filter(matches).sort((a, b) => (SECTOR_RANK[a.sector] - SECTOR_RANK[b.sector]) || (ms(b.last_activity_at) || 0) - (ms(a.last_activity_at) || 0));
   const out = rows.map((r) => {
     const w = r.waiting ? (r.waiting.on || "") + (r.waiting.until ? " · until " + r.waiting.until : "") : "";
     const tr = el("tr", { tabindex: "0", "data-key": r.key, style: "--c:" + stateColor(r) + ";--mc:" + colorOf(r.machine), "aria-label": aria(r) },
-      el("td", { class: "m", text: r.machine }), el("td", { text: r.home }), el("td", { text: r.short_id }), el("td", { text: r.title }),
+      el("td", { class: "m", text: r.machine }), el("td", { text: r.home }), el("td", { text: r.short_id }),
+      el("td", {}, r.title, unitsBy.get(r.key) ? el("span", { class: "stale", style: "color:var(--muted)", text: " · stack of " + unitsBy.get(r.key).stack.members.length }) : null),
       el("td", { text: r.project || "" }), el("td", { class: "st", text: STATE_LABEL[r.state] || r.state }),
       el("td", {}, r.why + (w && !r.why.includes(w) ? " — " + w : ""), r.stale ? el("span", { class: "stale", text: " (stale)" }) : null),
       el("td", { text: r.last_event ? (r.last_event.kind ? r.last_event.kind + ": " : "") + r.last_event.text.slice(0, 140) : "" }),
@@ -777,13 +955,14 @@ function setTable(on) {
 // ---------------------------------------------------------------- the side panel
 
 function recOf(key) { return data && (data.agents.find((r) => r.key === key) || data.flagships.find((f) => f.key === key)); }
-let peekTimer = null, peekAbort = null, peekKey = null;
+let peekTimer = null, peekAbort = null, peekKey = null, peekSig = "";
 function openPanel(key, from) {
   selected = key; selectedFrom = from || null;
-  for (const b of ships.values()) b.classList.toggle("sel", b.dataset.key === key);
+  for (const b of ships.values()) b.classList.toggle("sel", b.dataset.key === key || (unitsBy.get(key) || {}).key === b.dataset.key);
+  for (const b of map.querySelectorAll(".fan .ship")) b.classList.toggle("sel", b.dataset.key === key);
   $("panel").hidden = false;
   $("p-peek").replaceChildren();
-  peekKey = null;
+  peekKey = null; peekSig = "";
   renderFacts();
   $("p-title").focus();
   loadPeek();
@@ -795,7 +974,7 @@ function closePanel() {
   clearInterval(peekTimer);
   if (peekAbort) peekAbort.abort();
   $("panel").hidden = true;
-  for (const b of ships.values()) b.classList.remove("sel");
+  for (const b of map.querySelectorAll(".ship")) b.classList.remove("sel");
   if (selectedFrom && selectedFrom.isConnected) selectedFrom.focus();
 }
 function q(r, extra) {
@@ -804,6 +983,20 @@ function q(r, extra) {
   for (const [k, v] of Object.entries(extra || {})) p.set(k, v);
   return p.toString();
 }
+// The task page of a radar record: /task/<home>/<id>, with its machine.
+function pageHref(r, hash) { return "/task/" + encodeURIComponent(r.home) + "/" + encodeURIComponent(r.id) + "?" + new URLSearchParams({ m: r.machine }) + (hash || ""); }
+// Where a path in an event leads: a task file of this task or of another task in its home opens
+// that task's page at the file; anything else stays text.
+function linkFor(r) {
+  const anchor = { "report.md": "#report", "brief.md": "#brief", "plan.md": "#plan", "final.md": "#final", "events.log": "#events" };
+  return (tok) => {
+    if (!tok.file || !anchor[tok.file]) return null;
+    if (!tok.task) return pageHref(r, anchor[tok.file]);
+    const inHome = !tok.v.startsWith("/") && !tok.v.startsWith("~") ? true : !!(r.home_path && tok.v.startsWith(r.home_path.replace(/\/$/, "") + "/tasks/"));
+    return inHome ? pageHref(Object.assign({}, r, { id: tok.task }), anchor[tok.file]) : null;
+  };
+}
+const feedOpen = new Map(), feedHidden = new Map(); // agent key -> the panel feed's opened items and hidden kinds
 function prLinks(text) {
   return [...new Set((text || "").match(/https?:\/\/[^\s<>()"'`\]\[]+\/(?:pull|pulls|merge_requests|pullrequest)\/\d+/g) || [])];
 }
@@ -828,7 +1021,7 @@ function renderFacts() {
     const cmd = "/continue " + r.short_id;
     const c = el("button", { class: "chip", type: "button", title: "copy " + cmd + " (for the XO of home " + r.home + " on " + r.machine + ")", text: cmd });
     c.addEventListener("click", () => copyText(cmd).then(() => { c.textContent = "copied"; }, () => { c.textContent = "copy failed"; }).finally(() => setTimeout(() => { c.textContent = cmd; }, 1400)));
-    chips.append(c);
+    chips.append(c, el("a", { class: "chip", href: pageHref(r), title: "this task on a page of its own: intent, events, report, pane", text: "open full page ↗" }));
   }
   // a waiting agent's "on what" is in its own block just below
   const why = r.state === "waiting" && !r.inferred ? "waiting" + (/still live$/.test(r.why) ? "; its process is still live" : "") : r.why;
@@ -857,9 +1050,21 @@ function renderFacts() {
     add("backend", r.backend); add("kind", r.kind); add("task", r.id);
     add("home path", r.home_path || "(its default home; an older chartroom reports no path)");
     out.push(dl);
+    const st = unitsBy.get(r.key);
+    if (st) {
+      const mates = st.stack.members.filter((m) => m.key !== r.key);
+      const row = el("div", { class: "stackof" }, "in a stack (" + st.stack.reasons.join(", ") + ") with");
+      for (const m of mates) {
+        const b = el("button", { class: "chip", type: "button", style: "--c:" + stateColor(m), title: m.title, text: m.short_id + " · " + (STATE_LABEL[m.state] || m.state) });
+        b.addEventListener("click", () => openPanel(m.key, b));
+        row.append(b);
+      }
+      out.push(row);
+    }
     if (r.last_event) {
-      const ev = el("div", { class: "ev", style: "--c2:var(--" + (STATE_COLOR[r.last_event.kind] || "adrift") + ")" }, r.last_event.kind ? el("span", { class: "kind", text: r.last_event.kind + ": " }) : null, r.last_event.text);
-      out.push(el("h4", { text: "LAST EVENT" }), ev);
+      const ev = el("div", { class: "lastev", style: "--c2:var(--" + (STATE_COLOR[r.last_event.kind] || "adrift") + ")" },
+        EventFmt.renderEvent({ kind: r.last_event.kind, text: r.last_event.text, at: r.last_event.at }, { link: linkFor(r), task: r.id }));
+      out.push(el("h4", {}, "LAST EVENT", el("a", { class: "chip", href: pageHref(r, "#events"), title: "every event, on the task's page", text: "all events ↗" })), ev);
     }
     const links = el("div", { class: "links" });
     for (const f of ["report.md", "plan.md", "brief.md", "events.log"]) {
@@ -887,7 +1092,7 @@ async function loadPeek() {
   peekAbort = new AbortController();
   let p;
   try {
-    const res = await fetch("/api/radar/peek?" + q(r, { n: 15 }), { cache: "no-store", signal: peekAbort.signal });
+    const res = await fetch("/api/radar/peek?" + q(r, { n: 40 }), { cache: "no-store", signal: peekAbort.signal });
     p = await res.json();
     if (!res.ok) throw new Error(p.error || res.statusText);
   } catch (e) {
@@ -895,10 +1100,14 @@ async function loadPeek() {
     p = { error: e.message, text: "", fetched_at: null };
   }
   if (selected !== key) return;
+  const unchanged = peekSig === key + "\u0000" + (p.text || "") + "\u0000" + (p.error || "");
+  peekSig = key + "\u0000" + (p.text || "") + "\u0000" + (p.error || "");
   const refresh = el("button", { class: "chip", type: "button", text: "↻ refresh" });
   refresh.addEventListener("click", loadPeek);
   const head = el("h4", {}, "LIVE", el("span", { class: "src" }, "from " + r.machine + (p.fetched_at ? " · read " : ""), p.fetched_at ? ticker("since", p.fetched_at, " ago") : null,
     " · read-only, every " + PEEK_MS / 1000 + "s"), refresh);
+  // nothing new: only the "read … ago" line changes, so what the reader opened stays open and in place
+  if (unchanged && box.firstChild) { box.firstChild.replaceWith(head); return; }
   const parts = [head];
   if (p.error) parts.push(el("p", { class: "err", text: "could not read it: " + p.error }));
   // `chartroom peek` prints "== <section>" headings: events, the pane or screen, the report's path
@@ -912,13 +1121,20 @@ async function loadPeek() {
   // The worker's own newest report, from those events: often the reason itself (the status row's
   // last line may be an agent hook such as "awaiting-input").
   const evs = parts.find((x) => !(x instanceof Node) && x.name === "events");
-  const rep = evs && [...evs.lines].reverse().map((l) => /^(\S+) (progress|waiting|decision|blocked|done|failed): ([\s\S]*)$/.exec(l)).find(Boolean);
-  const same = rep && r.last_event && r.last_event.kind === rep[2] && r.last_event.text === rep[3]; // already shown above
-  if (rep && !same) parts.splice(p.error ? 2 : 1, 0, el("h4", {}, "LAST REPORT", el("span", { class: "src" }, rep[2] + " · ", ticker("since", rep[1], " ago"))),
-    el("div", { class: "ev", style: "--c2:var(--" + (STATE_COLOR[rep[2]] || "underway") + ")" }, el("span", { class: "kind", text: rep[2] + ": " }), rep[3]));
+  const parsed = evs ? EventFmt.parseLog(evs.lines.join("\n")) : [];
+  const rep = [...parsed].reverse().find((e) => EventFmt.role(e) === "worker");
+  const same = rep && r.last_event && r.last_event.kind === rep.kind && r.last_event.text.replace(/^\[breaking\] /, "") === rep.text; // already shown above
+  if (rep && !same) parts.splice(p.error ? 2 : 1, 0, el("h4", {}, "LAST REPORT", el("span", { class: "src" }, rep.kind + " · ", ticker("since", rep.at, " ago"))),
+    el("div", { class: "lastev", style: "--c2:var(--" + (STATE_COLOR[rep.kind] || "underway") + ")" }, EventFmt.renderEvent(rep, { link: linkFor(r), task: r.id })));
+  if (!feedOpen.has(key)) { feedOpen.set(key, new Set()); feedHidden.set(key, new Set()); }
   box.replaceChildren(...parts.map((x) => {
     if (x instanceof Node) return x;
     if (/^report: /.test(x.name)) return el("p", { class: "note", text: x.name });
+    if (x.name === "events") {
+      return el("div", {}, el("h4", {}, "EVENTS", el("span", { class: "src", text: "newest first · the last " + parsed.length }),
+        el("a", { class: "chip", href: pageHref(r, "#events"), text: "all ↗" })),
+        EventFmt.renderFeed(parsed, { open: feedOpen.get(key), filters: feedHidden.get(key), compact: true, link: linkFor(r), task: r.id }));
+    }
     const pre = el("pre", { tabindex: "0", "aria-label": x.name, text: x.lines.join("\n").replace(/\s+$/, "") || "(nothing)" });
     return el("div", {}, el("h4", { text: x.name.toUpperCase() }), pre);
   }));
@@ -929,12 +1145,18 @@ async function viewFile(r, f, href) {
   const dlg = $("viewer");
   $("viewer-title").textContent = r.short_id + " · " + r.machine + " — " + f;
   const body = $("viewer-body");
-  body.textContent = "loading…";
+  const pre = (t) => body.replaceChildren(el("pre", { text: t }));
+  pre("loading…");
   if (!dlg.open) dlg.showModal();
   try {
     const res = await fetch(href, { cache: "no-store" });
-    body.textContent = res.ok ? await res.text() : "could not load " + f + " (" + res.status + "): " + await res.text();
-  } catch (e) { body.textContent = "could not load " + f + ": " + e.message; }
+    const text = await res.text();
+    if (!res.ok) return pre("could not load " + f + " (" + res.status + "): " + text);
+    // Markdown reads as a document; the events log as its timeline
+    if (/\.md$/.test(f)) body.replaceChildren(el("div", { class: "md" }, Markdown.render(Markdown.parse(text), { shift: 1, text: (t) => EventFmt.inline(t, { link: linkFor(r), task: r.id }) })));
+    else if (f === "events.log") body.replaceChildren(el("div", { class: "md" }, EventFmt.renderFeed(EventFmt.parseLog(text), { open: new Set(), link: linkFor(r), task: r.id })));
+    else pre(text);
+  } catch (e) { pre("could not load " + f + ": " + e.message); }
 }
 $("viewer-close").addEventListener("click", () => $("viewer").close());
 $("p-close").addEventListener("click", closePanel);
@@ -962,12 +1184,16 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     if ($("viewer").open) return;
     if (typing) { e.target.blur(); return; }
-    if (selected) { e.preventDefault(); closePanel(); }
+    if (selected) { e.preventDefault(); closePanel(); return; }
+    const fan = document.activeElement && document.activeElement.closest && document.activeElement.closest(".fan");
+    const key = fan ? [...fanned].find((k) => "fan-" + hash(k) === fan.id) : [...fanned].pop();
+    if (key) { e.preventDefault(); toggleFan(key); const b = ships.get(key); if (b) b.focus(); }
     return;
   }
   if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.key === "t") { e.preventDefault(); setTable(!tableOn); }
   else if (e.key === "m") { e.preventDefault(); $("split").click(); }
+  else if (e.key === "a") { e.preventDefault(); setArchive(!showArchive); }
   else if (e.key === "/") { e.preventDefault(); $("filter").focus(); }
   // a bottom sheet on a phone holds focus while it is open
   else if (e.key === "Tab" && selected && window.innerWidth <= 760 && $("panel").contains(document.activeElement)) {
@@ -989,6 +1215,8 @@ $("split").addEventListener("click", () => {
   render(true);
 });
 $("tableBtn").addEventListener("click", () => setTable(!tableOn));
+$("activeBtn").setAttribute("aria-pressed", String(!showArchive));
+$("activeBtn").addEventListener("click", () => setArchive(!showArchive));
 
 function banner(msg) { const b = $("banner"); b.textContent = msg || ""; b.style.display = msg ? "block" : "none"; }
 
@@ -1005,6 +1233,7 @@ async function refresh() {
 }
 function tick() {
   const now = Date.now();
+  EventFmt.refreshTimes(document);
   for (const n of document.querySelectorAll("[data-since]:not(circle),[data-until]:not(circle)")) paint(n, now);
   // a waiting ship's ring: the share of its window still to run (real time, real deadline)
   for (const c of document.querySelectorAll("circle.ring[data-until]")) {

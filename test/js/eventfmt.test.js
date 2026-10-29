@@ -63,8 +63,9 @@ test("DOL decision: the report path is a task file; the SHAs and tickets are cod
   assert.deepStrictEqual([...new Set(t.filter((x) => x.t === "ticket").map((x) => x.v))], ["GH-8414", "GH-9391"]);
   // prose with slashes stays prose
   for (const prose of ["flag/config", "89/103", "a/b/c", "RC/promote/swap", "V5/V6", "getpagedDetail/export"]) {
-    assert.ok(!t.some((x) => x.t === "path" && x.v.includes(prose)), prose + " read as a path");
+    assert.ok(!t.some((x) => x.t === "path" && (x.v.includes(prose) || prose.endsWith(x.v))), prose + " read as a path");
   }
+  assert.deepStrictEqual(t.filter((x) => x.t === "path").map((x) => x.v), ["~/.chartroom/tasks/customers-can-t-upload-d-3da1/report.md"]);
 });
 test("short events: the whole text is the headline", () => {
   assert.deepStrictEqual([parsed(CASES.short).headline, parsed(CASES.short).blocks.length], ["Started", 0]);
@@ -114,6 +115,7 @@ test("inline tokens: URLs lose trailing punctuation, commands and files are code
   assert.strictEqual(t.find((x) => x.t === "path").file, "report.md");
   assert.deepStrictEqual(E.tokens("javascript:alert(1) and data:text/html,x").filter((x) => x.t === "url"), []);
   assert.strictEqual(E.tokens("task customers-can-t-upload-d-3da1 is open").find((x) => x.t === "id").v, "customers-can-t-upload-d-3da1");
+  assert.deepStrictEqual(E.tokens("GET /api/company/{id}/log/getpagedDetail returns 400").filter((x) => x.t === "path").map((x) => x.v), ["/api/company/{id}/log/getpagedDetail"]);
 });
 test("no word is ever lost: plain() gives every word back, in order", () => {
   for (const line of [DOL, ...Object.values(CASES)]) {
@@ -163,6 +165,12 @@ test("feed: a decision, its waiting, the XO's steer and the next report form one
   assert.deepStrictEqual(th.map((t) => t.events.map((e) => e.kind)), [["decision", "steered"], ["decision", "waiting", "steered", "progress"]]);
   assert.strictEqual(th[1].breaking, true);
 });
+test("feed: a decision right after a steer opens its own thread, which its own steer answers", () => {
+  const log = ["2026-10-20T10:00:00Z decision: A or B?", "2026-10-20T10:05:00Z steered: Captain chose (A)",
+    "2026-10-20T10:06:00Z decision: next question: C or D?", "2026-10-20T10:09:00Z steered: D"].join("\n");
+  const th = E.feed(E.parseLog(log));
+  assert.deepStrictEqual(th.map((t) => [t.type, t.events.map((e) => e.kind).join(",")]), [["thread", "decision,steered"], ["thread", "decision,steered"]]);
+});
 test("feed: progress runs collapse; noise folds into system-event items, merged across a thread; newest first", () => {
   const items = E.feed(E.parseLog(LOG));
   assert.deepStrictEqual(items.map((it) => it.type + ":" + it.events.length),
@@ -180,8 +188,18 @@ test("feed: keys hold while the log grows, so an opened thread stays open", () =
 
 // ---------------------------------------------------------------- render
 
-// the text a reader sees: every text node, with a break between nodes
-function texts(n) { const out = []; const walk = (x) => { if (x.nodeType === 3) out.push(x.data); else x.childNodes.forEach(walk); }; walk(n); return out.join(" "); }
+// the text a reader sees: every text node, with a break between nodes; a shortened path (a linked
+// task file shows its name) counts as the full path its title holds
+function texts(n) {
+  const out = [];
+  const walk = (x) => {
+    if (x.nodeType === 3) out.push(x.data);
+    else if (x.tagName === "CODE" && x.getAttribute("title")) out.push(x.getAttribute("title"));
+    else x.childNodes.forEach(walk);
+  };
+  walk(n);
+  return out.join(" ");
+}
 function inOrder(hay, needle) {
   const h = words(hay).split(" "), w = words(needle).split(" ").filter(Boolean);
   let i = 0; for (const x of h) if (x === w[i]) i++;
@@ -207,6 +225,24 @@ test("render: the DOL options are a list with the recommended one marked", () =>
   assert.strictEqual(lis.length, 2);
   assert.ok(lis[0].classList.contains("rec") && !lis[1].classList.contains("rec"));
   assert.ok(node.all().some((n) => n.className === "evx-tag evx-brk"));
+});
+test("render: compact shows the headline and puts the rest behind a details button; a linked task file reads as its name", () => {
+  const node = E.renderEvent(E.parseLine(DOL), { compact: true, task: "customers-can-t-upload-d-3da1", link: (t) => t.file ? "/task/acme/x#report" : null });
+  const btn = node.all().find((n) => n.className.includes("evx-details"));
+  assert.strictEqual(btn.getAttribute("aria-expanded"), "false");
+  const more = node.all().find((n) => n.getAttribute("id") === btn.getAttribute("aria-controls"));
+  assert.strictEqual(more.hidden, true);
+  btn.click();
+  assert.strictEqual(more.hidden, false);
+  // with opts.open, an opened one stays open when the panel draws it again
+  const open = new Set();
+  const once = E.renderEvent(E.parseLine(DOL), { compact: true, open });
+  once.all().find((n) => n.className.includes("evx-details")).click();
+  const again = E.renderEvent(E.parseLine(DOL), { compact: true, open });
+  assert.strictEqual(again.all().find((n) => n.className.includes("evx-details")).getAttribute("aria-expanded"), "true");
+  const link = node.all().find((n) => n.tagName === "A" && n.className === "evx-path");
+  assert.strictEqual(link.children[0].textContent, "report.md");
+  assert.match(link.children[0].getAttribute("title"), /tasks\/customers-can-t-upload-d-3da1\/report\.md$/);
 });
 test("render: the feed's toggles are buttons with aria-expanded, and remember what was opened", () => {
   const open = new Set();

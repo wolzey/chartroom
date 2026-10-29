@@ -96,6 +96,9 @@ def radar($home; $is_local):
                   since: (if $inferred then $t.last_at else $t.waiting_since end), until: $t.waiting_until}
                else null end),
      last_event: $ev, last_activity_at: $t.last_at,
+     # what the page's stacks relate tasks by (lib/dashboard/stacks.js); an older chartroom sends
+     # no base or mentions, and then only titles, ids and branches relate its tasks
+     branch: ($t.branch // null), base: ($t.base // null), mentions: ($t.mentions // []),
      created: $t.created, dispatched: $t.dispatched,
      has_report: ($t.has_report // false), breaking: ($t.breaking // false), stale: false};
 

@@ -21,3 +21,4 @@ js() { # <suite>
 
 @test "eventfmt: the parser, inline tokens, threads and runs, and the render" { js eventfmt; }
 @test "markdown: report.md blocks, tables, nested lists, sanitized render" { js markdown; }
+@test "stacks: related tasks stack deterministically; the archive cutoffs" { js stacks; }

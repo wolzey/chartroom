@@ -20,6 +20,9 @@ first use): `?token=` once, then an HttpOnly cookie. --no-token turns that off. 
   /api/pages            `chartroom artifact list --all --json`, cached like the board
   /healthz              "ok"
   /radar                the fleet radar (radar.html next to this file): every agent on every machine
+  /task/<home>/<id>     one task as a page (task.html; ?m=<machine> for another machine's): a thin
+                        client of /api/radar, its files and its peek, or of the board for a task
+                        the radar does not show (closed, drafting)
   /api/radar            its data: `chartroom radar --json` per machine, collected off the request path
   /api/radar/peek, /api/radar/file
                         one radar agent's recent events and pane, or one of its task files (read-only)
@@ -48,7 +51,7 @@ import threading
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qsl, urlencode
+from urllib.parse import parse_qsl, unquote, urlencode
 
 LOOPBACK = "127.0.0.1"
 TOKEN_FILE = ".dashboard.token"
@@ -57,6 +60,9 @@ TOKEN_MAX_AGE = 30 * 24 * 3600
 CACHE_SECONDS = 3
 GH_REFRESH_SECONDS = 300
 TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+# A home as the radar labels it: a registered name (lib/homes.sh CR_HOME_NAME_RE), "default" (an
+# older chartroom's one home), or "(this home)" (an unregistered one).
+HOME_LABEL = re.compile(r"^(?:[a-z][a-z0-9-]{0,31}|\(this home\))$")
 TASK_FILES = ("brief.md", "report.md", "plan.md", "final.md", "events.log")
 INBOX_TAG = re.compile(r"^i-[0-9a-f]{4,16}$")
 ARTIFACT_FILE = re.compile(r"^([a-z0-9][a-z0-9-]{0,63})\.(md|html|pdf)$")
@@ -64,6 +70,10 @@ GITHUB_PR = re.compile(r"^https://github\.com/[^/]+/[^/]+/pull/[0-9]+$")
 HERE = os.path.dirname(os.path.abspath(__file__))
 THEMES = ("chartroom", "hud")  # the page's themes; lib/dashboard.sh validates against the same list
 THEME_SLOT = b'<html lang="en" data-theme="chartroom">'
+# The pages' shared scripts and styles (eventfmt.js, markdown.js, stacks.js, eventfmt.css), spliced
+# in where a page says <!--@include:name--> so every page stays one self-contained document under
+# its CSP (inline script and style only).
+INCLUDE = re.compile(rb"<!--@include:([a-z0-9-]+\.(js|css))-->")
 # The page and the viewer: inline script and style, fetches to this server only, and (the viewer)
 # frames of this server only.
 PAGE_SHELL_CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; "
@@ -255,7 +265,8 @@ class Radar:
         self.cli = cli
         self.lock = threading.Lock()
         self.sources = {}
-        self.settings = {"local_min": 15, "local_max": 60, "remote": 60}
+        # how often to collect, and the radar's archive cutoffs (`chartroom radar machines` sets them all)
+        self.settings = {"local_min": 15, "local_max": 60, "remote": 60, "done_hours": 24, "stale_days": 3}
         self.watched_at = 0.0
         self.discovered_at = 0.0
         self.discover_lock = threading.Lock()
@@ -402,6 +413,7 @@ class Radar:
                     agents += [dict(a, stale=stale) for a in src.good.get("agents") or []]
                     flagships += [dict(f, stale=stale) for f in src.good.get("flagships") or []]
         return json.dumps({"generated_at": iso(now), "machines": machines, "agents": agents, "flagships": flagships,
+                           "settings": {k: self.settings[k] for k in ("done_hours", "stale_days")},
                            "error": self.discover_error}).encode("utf-8")
 
     def find(self, machine, home, tid=None, pane=None):
@@ -498,7 +510,21 @@ class Page:
             raise ValueError("index.html has no single theme slot %r" % THEME_SLOT.decode())
         if not page.rstrip().endswith(b"</html>"):
             raise ValueError("index.html is incomplete (no closing </html>)")
+        page = INCLUDE.sub(self.include, page)
         return page.replace(THEME_SLOT, THEME_SLOT.replace(b'"chartroom"', b'"%s"' % self.theme.encode()))
+
+    def include(self, m):
+        """One shared file, read now like the page; one that is missing, empty, or could end its
+        <script> or <style> early keeps the last good page."""
+        name, ext = m.group(1).decode(), m.group(2)
+        with open(os.path.join(os.path.dirname(self.path), name), "rb") as fh:
+            body = fh.read()
+        # what would end the element early, or (in a script) make the HTML parser misread the rest
+        bad = (b"</script", b"<script", b"<!--") if ext == b"js" else (b"</style", b"<!--")
+        hit = next((b for b in bad if b in body.lower()), None)
+        if not body.strip() or hit:
+            raise ValueError("%s cannot be included (%s)" % (name, "it holds " + hit.decode() if hit else "empty"))
+        return b"/* " + name.encode() + b" */\n" + body
 
     def get(self):
         try:
@@ -587,8 +613,9 @@ def make_handler(board, port, page, viewer, host, use_token, home):
         names = ([host] if host != "0.0.0.0" else interface_addrs()) + [socket.gethostname()]
         names += [n + ".local" for n in names[-1:] if not n.endswith(".local")]
         allowed_hosts |= {"%s:%d" % (n, port) for n in names}
-    # the fleet radar's data and page (main sets them on the board)
+    # the fleet radar's data and page, and the task page (main sets them on the board)
     radar, radar_page = getattr(board, "radar", None), getattr(board, "radar_page", None)
+    task_page = getattr(board, "task_page", None)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "chartroom-dashboard"
@@ -682,6 +709,10 @@ def make_handler(board, port, page, viewer, host, use_token, home):
                                                  and ((parts[2] == "task" and TASK_ID.match(parts[3]))
                                                       or (parts[2] == "inbox" and INBOX_TAG.match(parts[3])))):
                 return self.send(200, viewer.get(), "text/html; charset=utf-8", csp=VIEWER_CSP)
+            # a task's page: /task/<home>/<id> (a task file's own route, /task/<id>/<file>, wins)
+            if (len(parts) == 4 and parts[1] == "task" and parts[3] not in TASK_FILES and TASK_ID.match(parts[3])
+                    and HOME_LABEL.match(unquote(parts[2])) and task_page):
+                return self.send(200, task_page.get(), "text/html; charset=utf-8")
             f, art = None, None
             if len(parts) == 4 and parts[1] == "task" and TASK_ID.match(parts[2]) and parts[3] in TASK_FILES:
                 f = os.path.join(board.home, "tasks", parts[2], parts[3])
@@ -791,6 +822,11 @@ def main():
     except (OSError, ValueError) as exc:  # the board still serves; /radar is a 404
         print("chartroom dashboard: no radar page: %s" % exc, flush=True)
         board.radar_page = None
+    try:
+        board.task_page = Page(os.path.join(HERE, "task.html"), args.theme)
+    except (OSError, ValueError) as exc:  # likewise: /task/<home>/<id> is a 404
+        print("chartroom dashboard: no task page: %s" % exc, flush=True)
+        board.task_page = None
     try:
         httpd = Server((args.host, args.port), None)
     except OSError as exc:

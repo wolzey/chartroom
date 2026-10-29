@@ -849,6 +849,10 @@ function card(c, lane) {
       links.append(el("span", { class: "badge", text: st }));
     }
   }
+  if (c.type === "task") {
+    // the task on a page of its own: intent, every event, the report rendered, the live pane
+    links.append(el("a", { class: "page", href: "/task/" + encodeURIComponent(boardHome) + "/" + encodeURIComponent(c.id), title: "open " + c.id + " on a page of its own", text: "full page ↗" }));
+  }
   for (const f of c.files || []) {
     const href = "/task/" + encodeURIComponent(c.id) + "/" + encodeURIComponent(f);
     const a = el("a", { href, text: f.replace(/\.(md|log)$/, "") });
@@ -966,7 +970,10 @@ function renderFocus(d) {
   focusBar.hidden = false;
 }
 
+// This board's home as the radar labels it, for a task's page (/task/<home>/<id>).
+let boardHome = "(this home)";
 function render(d) {
+  boardHome = d.home_name || "(this home)";
   document.getElementById("meta").textContent =
     (d.home_name ? d.home_name + " · " : "") + d.home + " · updated " + new Date(d.generated_at).toLocaleTimeString() +
     (d.pr_enrichment && d.pr_enrichment.enabled ? " · PR states via gh" : "");

@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="en" data-theme="chartroom">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>task · chartroom</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2302080e'/%3E%3Ccircle cx='16' cy='16' r='11' fill='none' stroke='%2341c9e2' stroke-width='1.5' opacity='.5'/%3E%3Cpath d='M16 7 22 24 16 20 10 24Z' fill='none' stroke='%2341c9e2' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+  /* One task on a page of its own (/task/<home>/<id>, ?m=<machine> for another machine's): its
+     header, the latest decision or blocker, the commander's intent, every event as a timeline,
+     report.md, its artifacts and pages, and its live pane. A thin client: the radar's record,
+     files and peek (/api/radar...), or, for a task the radar does not show (closed, drafting) in
+     this dashboard's own home, the board's card and its /task/<id>/<file> routes. Read-only, in
+     the radar's CRT palette and themes; printable and phone-sized. */
+  :root {
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --prose: "Avenir Next", Avenir, "Segoe UI Variable Text", "Segoe UI", "Helvetica Neue", system-ui, sans-serif;
+    --bg: #02080e; --bg2: #06131d; --panel: #051420; --ink: #d4ecf5; --muted: #84a3b6; --faint: #4f6b7e;
+    --line: rgba(120,200,235,.2); --line2: rgba(120,200,235,.08); --glow: #41c9e2;
+    --decision: #ff9d4d; --blocked: #ff4f6d; --adrift: #8d9cab; --underway: #41c9e2; --holding: #f0c14b;
+    --docked: #5ed592; --failed: #ff4f6d; --scan: rgba(0,0,0,.22);
+    color-scheme: dark;
+  }
+  :root[data-theme=hud] {
+    --bg: #090202; --bg2: #170505; --panel: #120404; --ink: #f6e2dc; --muted: #d09a90; --faint: #7f4c44;
+    --line: rgba(255,72,52,.26); --line2: rgba(255,72,52,.1); --glow: #ffb01f;
+    --decision: #ff8a3d; --blocked: #ff4637; --adrift: #a98a83; --underway: #ffb01f; --holding: #ffe08a;
+    --docked: #fff1e8; --failed: #ff4637; --scan: rgba(0,0,0,.3);
+  }
+  * { box-sizing: border-box; }
+  html { background: radial-gradient(1200px 800px at 70% -20%, var(--bg2), transparent 70%), var(--bg); background-attachment: fixed; }
+  body { margin: 0; min-height: 100vh; color: var(--ink); font: 14px/1.5 var(--prose); -webkit-font-smoothing: antialiased; overflow-x: hidden; overflow-x: clip; }
+  a { color: var(--glow); }
+  button { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--glow); outline-offset: 2px; }
+  body::after { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 50;
+                background: repeating-linear-gradient(0deg, var(--scan) 0 1px, transparent 1px 3px); opacity: .3; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 2px 10px; border-radius: 3px;
+          border: 1px solid var(--line); background: var(--line2); color: var(--muted); cursor: pointer;
+          text-decoration: none; white-space: nowrap; font: 12px/1.3 var(--mono); }
+  .chip:hover, .chip[aria-pressed=true] { color: var(--ink); border-color: color-mix(in srgb, var(--glow) 60%, transparent); }
+
+  .bar { position: sticky; top: 0; z-index: 20; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 16px;
+         border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 86%, transparent);
+         -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); font-family: var(--mono); }
+  .bar .brand { font: 700 13px/1 var(--mono); letter-spacing: .28em; color: var(--glow); text-decoration: none; }
+  .bar nav { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+  main { max-width: 1040px; margin: 0 auto; padding: 18px 16px 48px; }
+  .banner { display: none; margin: 0 0 14px; padding: 8px 12px; border: 1px solid var(--blocked); color: var(--blocked);
+            background: color-mix(in srgb, var(--blocked) 8%, transparent); overflow-wrap: anywhere; font-family: var(--mono); font-size: 13px; }
+  .note { color: var(--faint); font: 12.5px/1.5 var(--mono); }
+
+  .hero { margin: 4px 0 18px; }
+  .hero .row1 { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; font-family: var(--mono); }
+  .badge { padding: 2px 8px; border: 1px solid var(--c); color: var(--c); font: 700 11.5px/1.5 var(--mono); letter-spacing: .14em; text-transform: uppercase; border-radius: 2px; }
+  .badge.solid { background: var(--c); color: var(--bg); }
+  .hero h1 { margin: 0 0 10px; font: 650 26px/1.25 var(--prose); letter-spacing: -.005em; text-wrap: balance; overflow-wrap: anywhere; }
+  .facts { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0; color: var(--muted); font: 12.5px/1.6 var(--mono); }
+  .facts div { display: flex; gap: 6px; min-width: 0; }
+  .facts dt { color: var(--faint); }
+  .facts dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+  .facts .mc { color: var(--mc, var(--ink)); }
+  .why { margin: 10px 0 0; color: var(--c); font: 15px/1.5 var(--prose); }
+  .wait { margin: 12px 0 0; padding: 8px 12px; border-left: 3px solid var(--holding); background: color-mix(in srgb, var(--holding) 7%, transparent); overflow-wrap: anywhere; }
+  .wait.over { border-color: var(--blocked); background: color-mix(in srgb, var(--blocked) 7%, transparent); }
+
+  section.card { margin: 0 0 18px; padding: 14px 18px 16px; border: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 82%, transparent);
+                 border-radius: 4px; }
+  section.card > h2 { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 12px; font: 700 12px/1.4 var(--mono);
+                      letter-spacing: .22em; color: var(--muted); text-transform: uppercase; }
+  section.card > h2 .src { letter-spacing: normal; text-transform: none; color: var(--faint); font-weight: 400; }
+  section.card > h2 .chip { margin-left: auto; }
+  section.ask { border-color: color-mix(in srgb, var(--c) 55%, transparent); border-left: 4px solid var(--c);
+                background: color-mix(in srgb, var(--c) 6%, var(--panel)); }
+  section.ask > h2 { color: var(--c); }
+  section.ask .evx-head { font-size: 21px; }
+  .intent { font: 16px/1.6 var(--prose); max-width: 70ch; }
+  .arts { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+  .arts li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; }
+  .arts .k { font: 700 10.5px/1.6 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--line); padding: 0 6px; border-radius: 2px; }
+  .arts .d { color: var(--faint); font-size: 13px; }
+  pre.pane { margin: 0 0 8px; padding: 10px 12px; background: rgba(0,0,0,.4); border: 1px solid var(--line2); white-space: pre-wrap;
+             overflow-wrap: anywhere; font: 11.5px/1.45 var(--mono); max-height: 60vh; overflow: auto; color: color-mix(in srgb, var(--ink) 88%, var(--muted)); }
+  details.raw > summary { cursor: pointer; color: var(--muted); font: 12px var(--mono); }
+  details.raw pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 var(--mono); color: var(--muted); }
+  footer { max-width: 1040px; margin: 0 auto; padding: 0 16px 32px; color: var(--faint); font: 11px/1.5 var(--mono); }
+
+  @media (max-width: 640px) {
+    .bar { position: static; }
+    .bar nav { margin-left: 0; }
+    .hero h1 { font-size: 21px; }
+    section.card { padding: 12px 12px 14px; }
+    .chip { min-height: 40px; }
+    .evx, .md { font-size: 15.5px; }
+  }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+  @media print {
+    :root, :root[data-theme=hud] { --ink: #111; --muted: #444; --faint: #666; --line: #ccc; --line2: #e4e4e4; --glow: #0b4f7a; --panel: #fff; --bg: #fff;
+      --decision: #a14a00; --blocked: #b3261e; --holding: #7a5a00; --docked: #1d7a45; --underway: #0b5f7a; --adrift: #555; color-scheme: light; }
+    html { background: #fff; }
+    body { color: #111; font-size: 11pt; }
+    body::after, .bar nav, .noprint, #pane { display: none !important; }
+    .bar { position: static; border: 0; padding: 0 0 8px; background: none; }
+    main { max-width: none; padding: 0; }
+    section.card { break-inside: auto; border-color: #ccc; background: none; }
+    section.ask { background: none; }
+    a { color: #0b4f7a; }
+  }
+<!--@include:eventfmt.css-->
+</style>
+</head>
+<body>
+<div class="bar">
+  <a class="brand" href="/radar" title="the fleet radar">◁ RADAR</a>
+  <span class="note" id="where">sounding…</span>
+  <nav aria-label="views and actions">
+    <a class="chip" href="/">board</a>
+    <a class="chip" href="/radar">radar</a>
+    <button class="chip" type="button" id="copy" hidden></button>
+    <button class="chip" type="button" id="print" title="print, or save as PDF">print</button>
+  </nav>
+</div>
+<main id="main">
+  <div class="banner" id="banner" role="alert"></div>
+  <header class="hero" id="hero"><h1 id="title" tabindex="-1">…</h1></header>
+  <section class="card ask" id="ask" hidden aria-labelledby="ask-h"><h2 id="ask-h">Needs your call</h2><div id="ask-body"></div></section>
+  <section class="card" id="intent-sec" hidden aria-labelledby="intent-h"><h2 id="intent-h">Commander's intent</h2><div class="md intent" id="intent"></div></section>
+  <section class="card" id="events" aria-labelledby="events-h"><h2 id="events-h">Events <span class="src" id="events-src"></span></h2><div id="feed"><p class="note">loading…</p></div></section>
+  <section class="card" id="report" hidden aria-labelledby="report-h"><h2 id="report-h">Report <span class="src">report.md</span></h2><div class="md" id="report-body"></div></section>
+  <section class="card" id="plan" hidden aria-labelledby="plan-h"><h2 id="plan-h">Plan <span class="src">plan.md</span></h2><div class="md" id="plan-body"></div></section>
+  <section class="card" id="final" hidden aria-labelledby="final-h"><h2 id="final-h">Final <span class="src">final.md</span></h2><div class="md" id="final-body"></div></section>
+  <section class="card" id="arts" hidden aria-labelledby="arts-h"><h2 id="arts-h">Artifacts and pages</h2><ul class="arts" id="arts-list"></ul></section>
+  <section class="card" id="pane" aria-labelledby="pane-h"><h2 id="pane-h">Live pane <span class="src" id="pane-src">read-only</span></h2><div id="pane-body"><p class="note">asking…</p></div></section>
+  <section class="card" id="brief" hidden aria-labelledby="brief-h"><h2 id="brief-h">Brief <span class="src">brief.md</span></h2>
+    <details class="raw"><summary>the whole brief</summary><div class="md" id="brief-body"></div></details></section>
+</main>
+<footer>Read-only: nothing here acts on the task. <span id="foot"></span></footer>
+<script>
+<!--@include:eventfmt.js-->
+<!--@include:markdown.js-->
+</script>
+<script>
+"use strict";
+const POLL_MS = 10000, PANE_MS = 10000;
+const STATE_COLOR = { decision: "decision", blocked: "blocked", "awaiting-input": "blocked", failed: "failed", review: "docked", done: "docked",
+  waiting: "holding", overdue: "adrift", "stopped-silent": "adrift", lost: "adrift", unknown: "adrift", working: "underway",
+  "waiting-overdue": "adrift", drafting: "adrift", closed: "docked" };
+const STATE_LABEL = { "awaiting-input": "at a prompt", "stopped-silent": "silent", "waiting-overdue": "overdue" };
+const ANCHOR = { "report.md": "#report", "brief.md": "#brief", "plan.md": "#plan", "final.md": "#final", "events.log": "#events" };
+
+const $ = (id) => document.getElementById(id);
+function el(tag, attrs, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") n.className = v; else if (k === "text") n.textContent = v; else n.setAttribute(k, v === true ? "" : v);
+  }
+  for (const k of kids) if (k != null) n.append(k);
+  return n;
+}
+function stored(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
+const chosen = stored("chartroom-theme-name");
+if (chosen === "hud" || chosen === "chartroom") document.documentElement.dataset.theme = chosen;
+function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+  const t = el("textarea", { readonly: "", style: "position:fixed;opacity:0" });
+  t.value = text; document.body.append(t); t.select();
+  try { return document.execCommand("copy") ? Promise.resolve() : Promise.reject(new Error("copy refused")); } finally { t.remove(); }
+}
+function stripAnsi(s) { return s.replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, "").replace(/\x1b\][^\x07]*\x07/g, ""); }
+function banner(msg) { const b = $("banner"); b.textContent = msg || ""; b.style.display = msg ? "block" : "none"; }
+
+// ---------------------------------------------------------------- where: /task/<home>/<id>?m=<machine>
+
+const parts = location.pathname.split("/").map(decodeURIComponent);
+const HOME = parts[2] || "", ID = parts[3] || "";
+const WANT_M = new URLSearchParams(location.search).get("m") || "";
+let rec = null, src = null, machine = WANT_M, lastPane = "";
+const files = {};            // name -> text (null: not there)
+const feedOpen = new Set(), feedHidden = new Set();
+
+function fileHref(f) {
+  if (src === "radar") return "/api/radar/file?" + new URLSearchParams({ m: rec.machine, h: rec.home, id: rec.id, f });
+  return "/task/" + encodeURIComponent(ID) + "/" + encodeURIComponent(f);
+}
+function pageOf(home, id, hash) { return "/task/" + encodeURIComponent(home) + "/" + encodeURIComponent(id) + (machine ? "?" + new URLSearchParams({ m: machine }) : "") + (hash || ""); }
+function link(tok) {
+  if (!tok.file || !ANCHOR[tok.file]) return null;
+  if (!tok.task || tok.task === ID) return ANCHOR[tok.file];
+  const inHome = !/^[\/~]/.test(tok.v) || !!(rec && rec.home_path && tok.v.startsWith(rec.home_path.replace(/\/$/, "") + "/tasks/"));
+  return inHome ? pageOf(HOME, tok.task, ANCHOR[tok.file]) : null;
+}
+const fmt = { link, task: ID };
+
+// The task's record: the radar's (any machine), else the board's card for this dashboard's own home.
+async function findRecord() {
+  const res = await fetch("/api/radar", { cache: "no-store" });
+  const d = await res.json();
+  if (!res.ok) throw new Error(d.error || res.statusText);
+  const local = d.machines.find((x) => x.local);
+  if (!machine && local) machine = local.machine;
+  const m = d.machines.find((x) => x.machine === machine);
+  const hit = d.agents.find((a) => a.machine === machine && a.home === HOME && a.id === ID);
+  if (hit) return { rec: hit, src: "radar", m };
+  if (!m) return { wait: d.machines.length ? "no machine " + machine + " on the radar" : "sounding…", final: !!d.machines.length && !!local };
+  if (!m.ok_at) return { wait: m.contact === "sounding" ? "asking " + machine + "…" : machine + ": " + (m.error || m.contact) };
+  if (m.local) {
+    // not on the radar (closed, drafting): the board knows this dashboard's own home's tasks
+    const r2 = await fetch("/api/dashboard", { cache: "no-store" });
+    const b = await r2.json();
+    const name = b.home_name || "(this home)";
+    if (r2.ok && name === HOME) {
+      for (const lane of Object.values(b.lanes || {})) {
+        const c = lane.find((x) => x.type === "task" && x.id === ID);
+        if (c) return { rec: Object.assign({ machine, home: HOME, home_path: b.home, local: true }, c, { last_activity_at: c.last_at,
+          waiting: c.waiting_on ? { on: c.waiting_on, until: c.waiting_until, since: c.waiting_since } : null, why: c.reason || "" }), src: "board", m };
+      }
+    }
+  }
+  return { missing: true, m };
+}
+
+// ---------------------------------------------------------------- render
+
+// "in 3h 20m" to a deadline, or how long past it
+function left(iso) {
+  const d = Date.parse(iso) - Date.now(), a = Math.abs(d), m = Math.round(a / 60000);
+  const t = m < 60 ? m + "m" : m < 2880 ? Math.floor(m / 60) + "h " + (m % 60) + "m" : Math.floor(m / 1440) + "d " + Math.floor((m % 1440) / 60) + "h";
+  return d >= 0 ? "in " + t : t + " past it";
+}
+function ticker(iso, suffix) { return el("time", { datetime: iso, title: EventFmt.absolute(iso), "data-ago": iso, text: EventFmt.ago(iso) + (suffix || "") }); }
+function renderHero() {
+  const r = rec, k = STATE_COLOR[r.state] || "adrift", label = (STATE_LABEL[r.state] || r.state || "unknown");
+  document.documentElement.style.setProperty("--c", "var(--" + k + ")");
+  $("hero").style.setProperty("--c", "var(--" + k + ")");
+  $("ask").style.setProperty("--c", "var(--" + (r.state === "blocked" || r.state === "awaiting-input" ? "blocked" : "decision") + ")");
+  const facts = el("dl", { class: "facts" });
+  const add = (k2, v, cls) => { if (v != null && v !== "") facts.append(el("div", {}, el("dt", { text: k2 }), el("dd", { class: cls || null }, v))); };
+  add("project", r.project); add("home", r.home); add("machine", r.machine + (r.local ? " (this one)" : ""), "mc");
+  add("last activity", r.last_activity_at ? ticker(r.last_activity_at) : "none yet");
+  add("process", r.live); add("task", r.id); add("backend", r.backend); add("kind", r.kind);
+  const row1 = el("div", { class: "row1" }, el("span", { class: "badge solid", text: label }),
+    r.breaking ? el("span", { class: "badge", style: "--c:var(--blocked)", text: "breaking" }) : null,
+    r.stale ? el("span", { class: "badge", style: "--c:var(--blocked)", text: "stale: " + r.machine + " cannot be read now" }) : null,
+    src === "board" ? el("span", { class: "note", text: "not on the radar (" + r.state + "): the board's record" }) : null);
+  const out = [row1, el("h1", { id: "title", tabindex: "-1", text: r.title || r.id }), facts];
+  if (r.why) out.push(el("p", { class: "why", text: r.why }));
+  if (r.waiting && (r.waiting.on || r.waiting.until)) {
+    const w = el("div", { class: "wait" + (r.state === "overdue" || r.state === "waiting-overdue" ? " over" : "") }, el("div", {}, "waiting on: " + (r.waiting.on || "?")));
+    const t = el("div", { class: "note" });
+    if (r.waiting.until) t.append("until ", el("time", { datetime: r.waiting.until, title: EventFmt.absolute(r.waiting.until), text: r.waiting.until }), " · " + left(r.waiting.until));
+    else t.append("no deadline given");
+    if (r.waiting.since) t.append(" · since ", ticker(r.waiting.since));
+    w.append(t);
+    out.push(w);
+  }
+  $("hero").replaceChildren(...out);
+  document.title = label + " · " + (r.short_id || r.id) + " · " + (r.title || r.id);
+  $("where").textContent = r.machine + " · " + r.home + " · " + (r.short_id || r.id);
+  const cmd = "/continue " + (r.short_id || r.id), c = $("copy");
+  c.hidden = false; c.textContent = cmd; c.title = "copy " + cmd + " (for the XO of home " + r.home + " on " + r.machine + ")";
+  c.onclick = () => copyText(cmd).then(() => { c.textContent = "copied"; }, () => { c.textContent = "copy failed"; }).finally(() => setTimeout(() => { c.textContent = cmd; }, 1400));
+}
+
+function renderFiles() {
+  let evs = EventFmt.parseLog(files["events.log"] || "");
+  // an older chartroom on another machine reports no home path, so its events.log cannot be
+  // read: the radar's own last event stands in
+  const noLog = files["events.log"] == null && src === "radar" && !rec.home_path;
+  if (noLog && rec.last_event) evs = [{ i: 0, at: rec.last_event.at, kind: rec.last_event.kind, text: rec.last_event.text.replace(/^\[breaking\]\s*/, ""), breaking: /^\[breaking\]/.test(rec.last_event.text) }];
+  // the latest decision or blocker, when the task stands at one
+  const ask = EventFmt.latestAsk(evs), standing = ["decision", "blocked", "awaiting-input"].includes(rec.state);
+  $("ask").hidden = !(ask && standing);
+  if (ask && standing) {
+    $("ask-h").textContent = ask.kind === "blocked" ? "Blocked: what it needs" : "Needs your call";
+    $("ask-body").replaceChildren(EventFmt.renderEvent(ask, fmt));
+  }
+  const intent = Markdown.section(files["brief.md"] || "", "(?:Commander|Captain)'s intent");
+  $("intent-sec").hidden = !intent;
+  if (intent) $("intent").replaceChildren(Markdown.render(Markdown.parse(intent), { shift: 2, text: (t) => EventFmt.inline(t, fmt) }));
+  $("events-src").textContent = noLog ? "its last event only: " + rec.machine + " runs an older chartroom, which reports no home path, so only report.md can be read"
+    : evs.length ? evs.length + " events · newest first" : "";
+  $("feed").replaceChildren(evs.length ? EventFmt.renderFeed(evs, { open: feedOpen, filters: feedHidden, link, task: ID, compactIf: (e) => !$("ask").hidden && e === ask }) : el("p", { class: "note", text: files["events.log"] == null ? "no events.log" : "no events yet" }));
+  for (const [f, sec] of [["report.md", "report"], ["plan.md", "plan"], ["final.md", "final"], ["brief.md", "brief"]]) {
+    const t = files[f];
+    $(sec).hidden = !t;
+    if (t) $(sec + "-body").replaceChildren(Markdown.render(Markdown.parse(t), { shift: 1, text: (x) => EventFmt.inline(x, fmt) }));
+  }
+}
+
+let rendered = false, rounds = 0;
+async function loadFiles() {
+  let changed = !rendered; // the first load renders, even when nothing could be read
+  // the events and the report each round; the brief, plan and final (rarely changed, and for
+  // another machine each one an ssh read) every sixth
+  const names = rounds++ % 6 === 0 ? ["events.log", "brief.md", "report.md", "plan.md", "final.md"] : ["events.log", "report.md"];
+  await Promise.all(names.map(async (f) => {
+    if (src === "radar" && !rec.home_path && f !== "report.md") { files[f] = files[f] || null; return; }
+    if (f === "report.md" && src === "radar" && !rec.has_report && files[f] == null) { files[f] = null; return; }
+    let t = null;
+    try {
+      const res = await fetch(fileHref(f), { cache: "no-store" });
+      if (res.ok) t = await res.text();
+    } catch (e) { t = files[f] != null ? files[f] : null; }
+    if (t !== files[f]) { files[f] = t; changed = true; }
+  }));
+  if (changed) {
+    rendered = true;
+    const y = window.scrollY;
+    renderFiles();
+    window.scrollTo(0, y);
+    jump();
+  }
+}
+
+async function loadArtifacts() {
+  if (!rec.local) { $("arts").hidden = false; $("arts-list").replaceChildren(el("li", { class: "note", text: "artifacts are listed for this machine's tasks only" })); return; }
+  try {
+    const res = await fetch("/api/pages", { cache: "no-store" });
+    const d = await res.json();
+    const mine = (d.artifacts || []).filter((a) => a.owner_type === "task" && a.owner === ID && (!rec.home_path || !a.path || a.path.startsWith(rec.home_path)));
+    $("arts").hidden = !mine.length;
+    $("arts-list").replaceChildren(...mine.map((a) => {
+      const href = a.kind === "page" ? "/pages/task/" + encodeURIComponent(a.owner) + "/" + encodeURIComponent(a.slug)
+        : "/task/" + encodeURIComponent(a.owner) + "/artifacts/" + encodeURIComponent(a.slug) + ".md";
+      return el("li", {}, el("span", { class: "k", text: a.kind + (a.done ? " · done" : "") }), el("a", { href, text: a.title || a.slug }),
+        a.description ? el("span", { class: "d", text: a.description }) : null);
+    }));
+  } catch (e) { /* a dashboard of another home has no artifacts of this one */ }
+}
+
+async function loadPane() {
+  if (src !== "radar") { $("pane-body").replaceChildren(el("p", { class: "note", text: "no live pane: the task is not on the radar (" + rec.state + ")" })); return; }
+  let p;
+  try {
+    const res = await fetch("/api/radar/peek?" + new URLSearchParams({ m: rec.machine, h: rec.home, id: rec.id, n: 1 }), { cache: "no-store" });
+    p = await res.json();
+    if (!res.ok) throw new Error(p.error || res.statusText);
+  } catch (e) { p = { error: e.message, text: "" }; }
+  $("pane-src").textContent = "read-only · from " + rec.machine + (p.fetched_at ? " · read " + EventFmt.ago(p.fetched_at) : "") + " · every " + PANE_MS / 1000 + "s";
+  const sig = (p.text || "") + "|" + (p.error || "");
+  if (sig === lastPane) return;
+  lastPane = sig;
+  const out = [];
+  if (p.error) out.push(el("p", { class: "note", style: "color:var(--blocked)", text: "could not read it: " + p.error }));
+  let cur = null;
+  const secs = [];
+  for (const line of stripAnsi(p.text || "").split("\n")) {
+    const m = /^== (.+)$/.exec(line);
+    if (m) { cur = { name: m[1], lines: [] }; secs.push(cur); continue; }
+    if (cur) cur.lines.push(line);
+  }
+  for (const s of secs) {
+    if (s.name === "events" || /^report: /.test(s.name)) continue; // the events are above; the report too
+    out.push(el("h3", { class: "note", text: s.name }), el("pre", { class: "pane", tabindex: "0", "aria-label": s.name, text: s.lines.join("\n").replace(/\s+$/, "") || "(nothing)" }));
+  }
+  if (!secs.some((s) => s.name !== "events" && !/^report: /.test(s.name))) out.push(el("p", { class: "note", text: "no pane to show (its backend has none, or it is not running)" }));
+  $("pane-body").replaceChildren(...out);
+  for (const pre of $("pane-body").querySelectorAll("pre")) pre.scrollTop = pre.scrollHeight;
+}
+
+let jumped = false;
+function jump() { // a link to #report (or #events...) lands there once its section has content
+  if (jumped || !location.hash) return;
+  const t = document.getElementById(location.hash.slice(1));
+  if (t && !t.hidden) { jumped = true; t.scrollIntoView(); }
+}
+
+// ---------------------------------------------------------------- the loop
+
+async function refresh() {
+  try {
+    const f = await findRecord();
+    if (f.rec) {
+      const was = rec && JSON.stringify(rec);
+      rec = f.rec; src = f.src;
+      if (JSON.stringify(rec) !== was) renderHero();
+      banner(f.m && f.m.contact !== "ok" && f.m.ok_at ? machine + " cannot be read now (" + (f.m.error || f.m.contact) + "); showing what it said last." : "");
+      await loadFiles();
+      return true;
+    }
+    if (f.missing) {
+      banner("No task " + ID + " in home " + HOME + " on " + machine + " (closed tasks show here only from their own home's dashboard).");
+      $("title").textContent = "not found: " + ID;
+      $("feed").replaceChildren(el("p", { class: "note", text: "nothing to show" }));
+      $("pane-body").replaceChildren();
+      return false;
+    }
+    $("where").textContent = f.wait;
+    return null;
+  } catch (e) {
+    banner("Could not refresh: " + e.message + (rec ? " (showing the last good view)" : ""));
+    return null;
+  }
+}
+
+$("print").addEventListener("click", () => window.print());
+// printing shows every thread and run opened, and the report in full
+window.addEventListener("beforeprint", () => { for (const b of document.querySelectorAll("[aria-expanded=false]")) { b.dataset.printOpened = "1"; b.click(); } });
+window.addEventListener("afterprint", () => { for (const b of document.querySelectorAll("[data-print-opened]")) { delete b.dataset.printOpened; if (b.getAttribute("aria-expanded") === "true") b.click(); } });
+
+let started = false;
+async function tickData() {
+  const ok = await refresh();
+  if (ok && !started) {
+    started = true;
+    $("foot").textContent = (src === "radar" ? "From the radar's collector for " + rec.machine : "From this dashboard's board") + "; it refreshes while this page is open.";
+    loadArtifacts(); loadPane();
+    setInterval(() => { if (!document.hidden && rec) loadPane(); }, PANE_MS);
+  }
+  if (ok !== false) setTimeout(tickData, ok ? POLL_MS : 2500);
+}
+setInterval(() => { if (!document.hidden) EventFmt.refreshTimes(document); }, 15000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden && rec) refresh(); });
+tickData();
+</script>
+</body>
+</html>

@@ -1,0 +1,135 @@
+/* eventfmt.css - a formatted event, the events timeline and a rendered report (eventfmt.js,
+   markdown.js), in the radar's CRT palette: the page defines --ink, --muted, --faint, --line,
+   --line2, --glow, --panel, --bg and the state colours (--decision, --blocked, --underway,
+   --holding, --docked, --adrift). Prose is set in a proportional face at a reading measure;
+   monospace is kept for ids, SHAs, paths and commands. Spliced into a page's <style>. */
+.evx, .md, .tl-latest { font-family: var(--prose); font-size: 15px; line-height: 1.6; letter-spacing: .005em; color: var(--ink);
+  -webkit-font-smoothing: antialiased; }
+.evx { max-width: 70ch; margin: 0; }
+.evx p, .md p { margin: 0 0 .6em; }
+.evx-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-bottom: 4px; font: 11px/1.4 var(--mono); letter-spacing: .06em; }
+.evx-kind, .evx-who { padding: 1px 7px; border: 1px solid var(--k, var(--muted)); color: var(--k, var(--muted)); border-radius: 2px;
+  text-transform: uppercase; font-weight: 700; letter-spacing: .12em; }
+.evx-who { --k: var(--glow); }
+.evx-tag { padding: 1px 7px; border-radius: 2px; background: color-mix(in srgb, var(--holding) 16%, transparent); color: var(--holding);
+  text-transform: uppercase; letter-spacing: .1em; font-weight: 700; }
+.evx-tag.evx-brk { background: var(--blocked); color: var(--bg); }
+.evx-time { color: var(--faint); margin-left: auto; white-space: nowrap; }
+.evx-head { font-size: 17px; line-height: 1.4; font-weight: 650; margin: 0 0 .45em !important; color: var(--ink); text-wrap: balance; }
+.evx.compact .evx-head { font-size: 15px; font-weight: 600; }
+.evx-lead { color: color-mix(in srgb, var(--ink) 90%, var(--muted)); }
+.evx-sec { margin: .55em 0 0; padding: .1em 0 .1em 12px; border-left: 2px solid var(--line); }
+.evx-sec h5 { margin: 0 0 .2em; font: 700 11px/1.5 var(--mono); letter-spacing: .18em; text-transform: uppercase; color: var(--muted); }
+.evx-sec[data-label=need] , .evx-sec[data-label=ask], .evx-sec[data-label=needed] { border-left-color: var(--decision); }
+.evx-sec[data-label=need] h5, .evx-sec[data-label=ask] h5, .evx-sec[data-label=needed] h5 { color: var(--decision); }
+.evx-sec[data-label=cause] h5, .evx-sec[data-label="root cause"] h5 { color: var(--blocked); }
+.evx-sec[data-label=report] h5, .evx-sec[data-label=details] h5 { color: var(--glow); }
+.evx-note { font-weight: 400; letter-spacing: .04em; text-transform: none; color: var(--faint); }
+.evx-facts { margin: .2em 0 .6em; padding-left: 1.1em; }
+.evx-facts li { margin: .15em 0; }
+.evx-facts li::marker { color: var(--faint); }
+.evx-opts { list-style: none; margin: .3em 0 .6em; padding: 0; display: grid; gap: 6px; }
+.evx-opts li { display: grid; grid-template-columns: 1.9em 1fr; gap: 8px; align-items: start; padding: 7px 10px 7px 7px;
+  border: 1px solid var(--line2); border-radius: 3px; background: color-mix(in srgb, var(--panel) 60%, transparent); }
+.evx-opts li.rec { border-color: color-mix(in srgb, var(--docked) 70%, transparent); background: color-mix(in srgb, var(--docked) 9%, transparent); }
+.evx-mk { display: grid; place-items: center; width: 1.7em; height: 1.7em; border-radius: 50%; border: 1px solid var(--muted);
+  font: 700 12px/1 var(--mono); color: var(--muted); }
+.evx-opts li.rec .evx-mk { border-color: var(--docked); background: var(--docked); color: var(--bg); }
+.evx-badge { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 2px; background: var(--docked); color: var(--bg);
+  font: 700 10.5px/1.6 var(--mono); letter-spacing: .12em; text-transform: uppercase; vertical-align: 1px; }
+.evx-otitle { font-weight: 650; }
+.evx-otitle::after { content: ":"; }
+.evx-join { color: var(--faint); font-style: italic; }
+mark.evx-rec { background: none; color: var(--docked); font-weight: 700; }
+.evx-c, .md code { font: .86em/1.3 var(--mono); padding: .05em .22em; border-radius: 2px; background: color-mix(in srgb, var(--ink) 8%, transparent);
+  color: color-mix(in srgb, var(--ink) 92%, var(--glow)); overflow-wrap: anywhere; }
+.evx-c.evx-ticket { background: none; padding: 0; color: var(--glow); font-size: .9em; }
+.evx-details { margin-top: 2px; }
+.evx-more { margin-top: 6px; }
+.evx-more[hidden] { display: none; }
+.evx-sha, .evx-id { color: var(--muted); }
+.evx a, .md a { color: var(--glow); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--glow) 45%, transparent);
+  text-underline-offset: 2px; overflow-wrap: anywhere; }
+.evx a.evx-path .evx-c { color: var(--glow); }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* the timeline */
+.feed .tl-filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+.feed .tl-f { font: 11px/1 var(--mono); min-height: 26px; }
+.feed .tl-f[aria-pressed=false] { opacity: .45; text-decoration: line-through; }
+.tl { list-style: none; margin: 0; padding: 0 0 0 16px; position: relative; }
+.tl::before { content: ""; position: absolute; left: 5px; top: 6px; bottom: 6px; width: 1px; background: var(--line); }
+.tl-i { position: relative; margin: 0 0 12px; }
+.tl-i::before { content: ""; position: absolute; left: -15px; top: 7px; width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--k, var(--muted));
+  background: var(--bg); }
+.tl-i[data-kind=decision] { --k: var(--decision); }
+.tl-i[data-kind=blocked], .tl-i[data-kind=failed] { --k: var(--blocked); }
+.tl-i[data-kind=waiting] { --k: var(--holding); }
+.tl-i[data-kind=done] { --k: var(--docked); }
+.tl-i[data-kind=progress] { --k: var(--underway); }
+.tl-i[data-kind=steered] { --k: var(--glow); }
+.tl-noise::before, .tl-system::before { width: 5px; height: 5px; left: -13px; top: 9px; border-width: 1px; }
+.tl-i.brk::before { background: var(--blocked); }
+.evx[data-kind=decision] .evx-kind { --k: var(--decision); }
+.evx[data-kind=blocked] .evx-kind, .evx[data-kind=failed] .evx-kind { --k: var(--blocked); }
+.evx[data-kind=waiting] .evx-kind { --k: var(--holding); }
+.evx[data-kind=done] .evx-kind { --k: var(--docked); }
+.evx[data-kind=progress] .evx-kind { --k: var(--underway); }
+/* the XO's word to the worker: set apart from the worker's own reports */
+.tl-steer > .evx, .tl-thread-list > .tl-steer > .evx { margin-left: 18px; padding: 6px 10px; border-radius: 3px;
+  background: color-mix(in srgb, var(--glow) 8%, transparent); border: 1px dashed color-mix(in srgb, var(--glow) 45%, transparent); }
+.tl-steer .evx-head { font-size: 15px; font-weight: 600; }
+.tl-toggle { display: inline-flex; align-items: center; gap: 6px; margin: 2px 0; padding: 2px 8px; min-height: 26px; border: 1px solid var(--line);
+  border-radius: 3px; background: var(--line2); color: var(--muted); cursor: pointer; font: 11.5px/1.4 var(--mono); }
+.tl-toggle::before { content: "▸"; transition: transform .15s; }
+.tl-toggle[aria-expanded=true]::before { transform: rotate(90deg); }
+.tl-more { margin: 6px 0 0; display: grid; gap: 8px; }
+.tl-more[hidden], .tl-thread-list[hidden], .tl-latest[hidden] { display: none; }
+.tl-more > .evx { opacity: .88; }
+.evx-sys { font: 11.5px/1.5 var(--mono); color: var(--faint); overflow-wrap: anywhere; }
+.evx-sys .evx-time { margin: 0 8px 0 0; }
+.evx-syskind { color: var(--muted); }
+.tl-head { display: block; width: 100%; text-align: left; padding: 7px 10px; border: 1px solid var(--line); border-radius: 3px; cursor: pointer;
+  background: color-mix(in srgb, var(--k, var(--muted)) 6%, transparent); color: inherit; font: inherit; }
+.tl-head:hover { border-color: color-mix(in srgb, var(--k, var(--glow)) 60%, transparent); }
+.tl-path { display: block; font: 700 10.5px/1.5 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--k, var(--muted)); }
+.tl-path::before { content: "▸ "; }
+.tl-head[aria-expanded=true] .tl-path::before { content: "▾ "; }
+.tl-latest { display: block; margin-top: 2px; font-size: 14.5px; }
+.tl-latest .evx-kind { font: 700 10px/1.4 var(--mono); }
+.tl-thread-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 10px; }
+.tl-empty { color: var(--faint); font: 12px var(--mono); }
+
+/* a rendered report.md */
+.md { max-width: 76ch; }
+.md .md-h { font-family: var(--prose); line-height: 1.3; margin: 1.1em 0 .4em; color: var(--ink); }
+.md h2.md-h { font-size: 20px; } .md h3.md-h { font-size: 17px; } .md h4.md-h, .md h5.md-h, .md h6.md-h { font-size: 15px; }
+.md ul, .md ol { margin: 0 0 .7em; padding-left: 1.3em; }
+.md li { margin: .2em 0; }
+.md li.md-task { list-style: none; margin-left: -1.2em; }
+.md blockquote { margin: 0 0 .7em; padding: .2em 0 .2em 12px; border-left: 3px solid var(--line); color: var(--muted); }
+.md hr { border: 0; border-top: 1px solid var(--line); margin: 1.2em 0; }
+.md pre.md-code { margin: 0 0 .8em; padding: 10px 12px; background: rgba(0,0,0,.32); border: 1px solid var(--line2); border-radius: 3px;
+  overflow: auto; font: 12.5px/1.5 var(--mono); }
+.md pre.md-code code { background: none; padding: 0; font-size: inherit; }
+.md .md-table { overflow-x: auto; margin: 0 0 .9em; border: 1px solid var(--line); border-radius: 3px; }
+.md table { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 1.45; }
+.md th, .md td { padding: 6px 10px; border-bottom: 1px solid var(--line2); text-align: left; vertical-align: top; }
+.md th { background: color-mix(in srgb, var(--panel) 80%, transparent); color: var(--muted); font: 700 11.5px/1.4 var(--mono); letter-spacing: .06em; }
+.md tr:last-child td { border-bottom: 0; }
+.md .al-right { text-align: right; } .md .al-center { text-align: center; }
+.md .md-img, .md .md-link { color: var(--muted); }
+
+@media print {
+  .evx, .md, .tl-latest { color: #111; font-size: 11pt; }
+  .tl-more[hidden], .tl-thread-list[hidden], .evx-more[hidden] { display: grid !important; }
+  .tl-latest[hidden] { display: none !important; }
+  .tl-toggle, .feed .tl-filters, .evx-details { display: none !important; }
+  .evx-c, .md code { background: #eee; color: #111; }
+  .evx a, .md a { color: #0b4f7a; }
+  .evx-opts li, .tl-head { break-inside: avoid; background: none; border-color: #bbb; }
+  .evx-opts li.rec { border-color: #1d7a45; }
+  .evx-tag.evx-brk { background: #b3261e; color: #fff; }
+  .md pre.md-code { background: #f4f4f4; color: #111; white-space: pre-wrap; }
+  .md th { background: #f0f0f0; color: #333; }
+}
