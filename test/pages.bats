@@ -57,6 +57,10 @@ EOF
   grep -qF "chartroom page $ref · updated " "$f"
   grep -qF '<style data-chartroom="page">' "$f"
   grep -qF '@media print' "$f"; grep -qF 'prefers-color-scheme: dark' "$f"; grep -qF 'display: table-header-group' "$f"
+  # table cells: prose wraps between words, code anywhere (so words are not cut, and a table still fits)
+  grep -qE '^\.cr-page th, \.cr-page td \{[^}]*overflow-wrap: break-word;' "$f"
+  grep -qF '.cr-page th code, .cr-page td code { overflow-wrap: anywhere; }' "$f"
+  [ -z "$(grep -E '^\.cr-page (th, \.cr-page td|thead th) \{[^}]*(overflow-wrap: anywhere|white-space: nowrap)' "$f" || true)" ]
   grep -qF '<body class="cr-page">' "$f"
   # the body as given: nothing in it is taken for a slot of the template
   grep -qF '<p>Three <b>things</b> & one more; {{title}} and {{body}} stay as written.</p>' "$f"

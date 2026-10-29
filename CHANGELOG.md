@@ -13,7 +13,8 @@ are stable from 0.1.0.
   `inbox/<i-xxxx>/artifacts/`), beside the usual sidecar, which now also holds `description` and
   `task`. A fragment is wrapped in the default page (`templates/page.html`, `templates/page.css`:
   the title, description, project and date on top; light and dark from the reader's setting; print
-  styles with page margins, repeated table headers, unsplit rows and wrapped code; callouts,
+  styles with page margins, repeated table headers, unsplit rows, table cells that wrap between words
+  (code anywhere) and wrapped code; callouts,
   badges, key-number tiles); a whole document is kept as written. Either way the page policy goes
   first in it (no scripts, nothing fetched; inline styles and `data:` images only), images given as
   files beside the source are inlined as `data:` URIs, and scripts or references to other sites are

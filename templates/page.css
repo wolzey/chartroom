@@ -45,10 +45,13 @@
 .cr-page figure { margin: 18px 0; break-inside: avoid; }
 .cr-page figcaption { font-size: 13px; color: var(--cr-muted); margin-top: 6px; }
 
-/* tables: full width, cells wrap rather than overflow, so nothing is clipped on screen or paper */
+/* tables: full width. Prose in a cell wraps between words (a word breaks only when it alone is
+   wider than the cell), code anywhere: paths and identifiers, the long runs, give way first, so a
+   table fits the page without cutting words in half */
 .cr-page table { width: 100%; border-collapse: collapse; margin: 0 0 16px; font-size: 14px; font-variant-numeric: tabular-nums; }
-.cr-page th, .cr-page td { text-align: left; vertical-align: top; padding: 6px 10px; border-bottom: 1px solid var(--cr-line); overflow-wrap: anywhere; }
-.cr-page thead th { border-bottom: 2px solid var(--cr-ink); font-weight: 600; white-space: nowrap; }
+.cr-page th, .cr-page td { text-align: left; vertical-align: top; padding: 6px 10px; border-bottom: 1px solid var(--cr-line); overflow-wrap: break-word; }
+.cr-page th code, .cr-page td code { overflow-wrap: anywhere; }
+.cr-page thead th { border-bottom: 2px solid var(--cr-ink); font-weight: 600; }
 .cr-page tbody tr:nth-child(even) { background: var(--cr-zebra); }
 .cr-page td.num, .cr-page th.num { text-align: right; }
 

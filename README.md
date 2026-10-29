@@ -533,8 +533,8 @@ chartroom artifact template --body              # the sample body: the classes t
   usual sidecar (which also holds the description and the task). A fragment (no `<html>` or
   doctype) is wrapped in the default page (`templates/page.html` and `templates/page.css`): your
   title, description, project and date on top; light and dark, following the reader's setting;
-  print styles with page margins, table headers repeated on each page, rows never split and code
-  wrapped rather than cut; components such as callouts, badges and a row of key numbers. A whole
+  print styles with page margins, table headers repeated on each page, rows never split, table cells
+  wrapping between words (code, the long runs, anywhere) and code wrapped rather than cut; components such as callouts, badges and a row of key numbers. A whole
   document is kept as written. Either way the page policy goes first in it: no scripts, nothing
   fetched, inline styles and `data:` images only. Images given as files beside the source
   (`<img src="chart.png">`) are inlined as `data:` URIs; `add` says what it could not inline,
