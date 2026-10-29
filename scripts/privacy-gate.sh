@@ -5,11 +5,17 @@
 #   2. committed symlinks: their targets are scanned, and any target that is absolute or
 #      climbs out of the repo fails outright (a link into a local temp dir leaks paths)
 #   3. commit metadata reachable from HEAD: author/committer names and emails, messages
+#   4. commit identities reachable from HEAD: every author and committer email must be
+#      owner_email, and every email in a trailer (Co-Authored-By and the like) one of
+#      trailer_ok. GitHub's web merges stamp the merging account's own email, which the
+#      pattern alone can miss.
 # The only allowed mention is the public owner handle (wolzey/chartroom).
 # Usage: scripts/privacy-gate.sh [repo-dir]   (default: this checkout)
 set -euo pipefail
 cd "${1:-$(dirname "$0")/..}"
 pattern='ethan|wolz[^e]|/Users/|/home/[a-z]|fluid|guardhouse|zenshift|azure.*create-pr|core:|migration:|gh-axi|launchdarkly|work/github\.com|\.captain/tasks|/private/tmp/|claude-501'
+owner_email='11860354+wolzey@users.noreply.github.com'
+trailer_ok=("$owner_email" 'noreply@anthropic.com')
 fail=0
 report() { printf 'privacy gate: %s\n' "$1"; fail=1; }
 
@@ -36,6 +42,19 @@ done < <(git ls-files -s)
 if git rev-parse --verify --quiet HEAD >/dev/null; then
   meta="$(git log --format='%h %an <%ae> | %cn <%ce>%n%B' HEAD | grep -nEi "$pattern" || true)"
   [[ -z "$meta" ]] || report "personal data in commit metadata:"$'\n'"$meta"
+
+  # 4. commit identities (%ae/%ce, not %aE/%cE: a .mailmap must not hide an address)
+  ids="$(git log --format='%h author <%ae>%n%h committer <%ce>' HEAD | grep -viF "<$owner_email>" || true)"
+  [[ -z "$ids" ]] || report "commit identity other than $owner_email:"$'\n'"$ids"
+  trailers="$(git log --format='@%h%n%(trailers:only,unfold)' HEAD | awk -v ok="${trailer_ok[*]}" '
+    BEGIN { n = split(tolower(ok), a, " "); for (i = 1; i <= n; i++) allowed[a[i]] = 1 }
+    /^@/ { h = substr($0, 2); next }
+    { s = $0
+      while (match(s, /[^ \t<>]+@[^ \t<>]+/)) {
+        if (!(tolower(substr(s, RSTART, RLENGTH)) in allowed)) { print h " " $0; break }
+        s = substr(s, RSTART + RLENGTH)
+      } }')"
+  [[ -z "$trailers" ]] || report "trailer email not in trailer_ok:"$'\n'"$trailers"
 fi
 
 if [[ $fail -ne 0 ]]; then echo "privacy gate: FAIL"; exit 1; fi

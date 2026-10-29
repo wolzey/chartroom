@@ -8,6 +8,8 @@ setup() {
   R="$BATS_TEST_TMPDIR/r"
   git init -q "$R"; mkdir -p "$R/scripts"
   cp "$REPO_ROOT/scripts/privacy-gate.sh" "$R/scripts/"
+  OWNER="11860354+wolzey@users.noreply.github.com"
+  git -C "$R" config user.name wolzey; git -C "$R" config user.email "$OWNER"
   echo ok >"$R/a.txt"; git -C "$R" add -A; git -C "$R" commit -qm "feat: start"
   GATE="$R/scripts/privacy-gate.sh"
 }
@@ -49,7 +51,7 @@ setup() {
 @test "personal data in commit author or message fails" {
   n="Eth""an"
   echo x >>"$R/a.txt"; git -C "$R" add -A
-  git -C "$R" -c user.name="$n" -c user.email="me@example.invalid" commit -qm "fix: thing"
+  git -C "$R" -c user.name="$n" commit -qm "fix: thing"
   run "$GATE"
   [ "$status" -eq 1 ]
   [[ "$output" == *"personal data in commit metadata"* ]]
@@ -60,4 +62,38 @@ setup() {
   run "$GATE"
   [ "$status" -eq 1 ]
   [[ "$output" == *"notes.md:1"* ]]
+}
+
+@test "an author email other than the owner's noreply fails, even one the pattern misses" {
+  e="someone@order""protection.com"
+  echo x >>"$R/a.txt"; git -C "$R" add -A
+  git -C "$R" -c user.name=someone -c user.email="$e" commit -qm "fix: thing"
+  run "$GATE"
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"personal data in commit metadata"* ]]
+  [[ "$output" == *"commit identity other than $OWNER"* ]]
+  [[ "$output" == *"author <$e>"* && "$output" == *"committer <$e>"* ]]
+}
+
+@test "a committer email alone fails, as a web rebase-merge stamps it" {
+  e="someone@order""protection.com"
+  echo x >>"$R/a.txt"; git -C "$R" add -A
+  GIT_COMMITTER_NAME=someone GIT_COMMITTER_EMAIL="$e" git -C "$R" commit -qm "fix: merged on the web"
+  run "$GATE"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"committer <$e>"* ]]
+  [[ "$output" != *"author <"* ]]
+}
+
+@test "a Co-Authored-By trailer passes for noreply@anthropic.com and fails for anyone else" {
+  echo x >>"$R/a.txt"; git -C "$R" add -A
+  git -C "$R" commit -qm "feat: pair" -m "Co-Authored-By: Claude <noreply@anthropic.com>"
+  run "$GATE"
+  [ "$status" -eq 0 ]
+  e="someone@order""protection.com"
+  echo y >>"$R/a.txt"; git -C "$R" add -A
+  git -C "$R" commit -qm "feat: pair again" -m "Co-Authored-By: Someone <$e>"
+  run "$GATE"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"trailer email not in trailer_ok"* && "$output" == *"Co-Authored-By: Someone <$e>"* ]]
 }
