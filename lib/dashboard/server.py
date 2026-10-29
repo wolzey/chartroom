@@ -509,10 +509,11 @@ class Page:
             page = fh.read()
         # The default theme is written into the page, so it renders without a flash; a
         # browser's own choice from the page's switcher still wins.
+        name = os.path.basename(self.path)
         if page.count(THEME_SLOT) != 1:
-            raise ValueError("index.html has no single theme slot %r" % THEME_SLOT.decode())
+            raise ValueError("%s has no single theme slot %r" % (name, THEME_SLOT.decode()))
         if not page.rstrip().endswith(b"</html>"):
-            raise ValueError("index.html is incomplete (no closing </html>)")
+            raise ValueError("%s is incomplete (no closing </html>)" % name)
         page = INCLUDE.sub(self.include, page)
         return page.replace(THEME_SLOT, THEME_SLOT.replace(b'"chartroom"', b'"%s"' % self.theme.encode()))
 

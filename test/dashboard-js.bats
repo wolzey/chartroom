@@ -9,6 +9,8 @@ load test_helper
 setup() {
   # the real binary, before common_setup narrows PATH and HOME (a version manager's shim needs both)
   NODE="$(node -p process.execPath 2>/dev/null || true)"
+  # Git Bash: node reports a Windows path (C:\...\node.exe); run it by its POSIX one
+  case "${OSTYPE:-}" in msys*|cygwin*) [[ -z "$NODE" ]] || NODE="$(cygpath -u "$NODE" 2>/dev/null || echo "$NODE")" ;; esac
   common_setup
 }
 
