@@ -87,12 +87,13 @@ get() { curl -s --max-time 10 "$@"; }
   [ "$(jq -r .home <<<"$output")" = /d/fleet ]
 }
 
-@test "msys: herdr is off unless opted in; headless:claude steers between runs" {
+@test "msys: herdr and hc are off unless opted in; headless:claude steers between runs" {
   msys
   use_fake herdr claude
   run cr doctor --json
   [ "$(jq -r '.platform' <<<"$output")" = msys ]
   [ "$(jq -r '.backends[]|select(.backend=="herdr:claude").reason' <<<"$output")" = "herdr on Windows is unverified (CHARTROOM_HERDR_ANY_OS=1 to try it)" ]
+  [ "$(jq -r '.backends[]|select(.backend=="hc:claude").reason' <<<"$output")" = "hc on Windows is unverified (CHARTROOM_HC_ANY_OS=1 to try it)" ]
   [ "$(jq -r '.backends[]|select(.backend=="headless:claude").steering' <<<"$output")" = between-runs ]
   [[ "$(jq -r '.notes[0]' <<<"$output")" == "Git Bash: hc, herdr, cmux and tmux sessions are unavailable"* ]]
   CHARTROOM_HERDR_ANY_OS=1 run cr doctor --json
