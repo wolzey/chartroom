@@ -9,14 +9,16 @@
 
 # Launcher script: runs the agent in the worktree with chartroom's env, and records
 # the session ending as an `exited` event so a vanished agent is never silent.
-write_launcher() { # <id> <wt> <argv...>
-  local id="$1" wt="$2"; shift 2
+# --forward: the launcher's own arguments follow the agent's (hc passes the brief's prompt so).
+write_launcher() { # <id> <wt> [--forward] <argv...>
+  local id="$1" wt="$2" fwd=""; shift 2
+  [[ "${1:-}" == --forward ]] && { fwd=1; shift; }
   local d f; d="$(tdir "$id")"; f="$d/launch.sh"
   {
     printf '#!/usr/bin/env bash\n'
     printf 'cd %q || exit 1\n' "$wt"
     printf 'export CHARTROOM_HOME=%q CHARTROOM_TASK=%q PATH=%q\n' "$CR_HOME" "$id" "$PATH"
-    printf '%q ' "$@"; printf '\n'
+    printf '%q ' "$@"; [[ -z "$fwd" ]] || printf '"$@"'; printf '\n'
     printf 'rc=$?\n'
     printf 'printf "%%s exited: agent session ended (exit %%s)\\n" "$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)" "$rc" >>%q\n' "$d/events.log"
   } >"$f"

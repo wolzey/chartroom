@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# fake hc (herdr-core): enough of the CLI for chartroom's hc runner. State in $FAKE_HC_DIR:
+#   terms/<address>.json  each terminal, as `hc get --json` prints it
+#   screen                what every terminal shows (default: a prompt box). A trust dialog there
+#                         holds the run's first prompt until `keys enter` answers it, as Claude does.
+#   calls.log             every call
+# `run` and `send` simulate the agent taking a prompt: Claude's UserPromptSubmit hook for the
+# terminal's chartroom.task label (a run's last argument is its first prompt), then a turn.
+#   FAKE_HC_STATUS      the status the agent reports after a prompt (default done)
+#   FAKE_HC_NO_HOOK=1   no prompt hook (codex)
+#   FAKE_HC_NO_STATUS=1 the agent reports no state to hc (no status, no turns)
+#   FAKE_HC_DROP=N      cut N leading characters from the next FAKE_HC_DROP_TIMES (default 1)
+#                       prompts, like a truncated paste
+# `send` from a caller with $HC_TERMINAL_ID tags the text <hc from="...">...</hc>, as hc does
+# (FAKE_HC_WRAP=1: always).
+S="${FAKE_HC_DIR:?}"; mkdir -p "$S/terms"
+printf '%s\n' "$*" >>"$S/calls.log"
+err() { jq -cn --arg k "$1" --arg m "$2" '{error: {kind: $k, message: $m}}' >&2; exit "$3"; }
+tf() { printf '%s/terms/%s.json' "$S" "$1"; }
+resolve() { # <address or name> -> the address (for a name, a live terminal first)
+  [[ -f "$(tf "$1")" ]] && { printf '%s' "$1"; return; }
+  local f a=""
+  for f in "$S"/terms/*.json; do
+    [[ -f "$f" && "$(jq -r '.name // ""' "$f")" == "$1" ]] || continue
+    a="$(jq -r .address "$f")"; [[ "$(jq -r .state "$f")" == live ]] && break
+  done
+  printf '%s' "$a"
+}
+upd() { local f; f="$(tf "$1")"; shift; jq "$@" "$f" >"$f.tmp" && mv "$f.tmp" "$f"; }
+trust_up() { grep -qiE 'trust this folder|do you trust' "$S/screen" 2>/dev/null; }
+take() { # <address> <prompt>
+  local t="$1" p="$2" task n
+  task="$(jq -r '.labels["chartroom.task"] // empty' "$(tf "$t")")"
+  n="$(cat "$S/drops" 2>/dev/null || echo 0)"
+  if [[ -n "${FAKE_HC_DROP:-}" && $n -lt ${FAKE_HC_DROP_TIMES:-1} ]]; then p="${p:$FAKE_HC_DROP}"; echo $((n + 1)) >"$S/drops"; fi
+  if [[ -n "$task" && -z "${FAKE_HC_NO_HOOK:-}" ]]; then jq -cn --arg p "$p" '{prompt:$p}' | "${CHARTROOM_BIN:?}" hook "$task" prompt-submit; fi
+  [[ -n "${FAKE_HC_NO_STATUS:-}" ]] || upd "$t" --arg s "${FAKE_HC_STATUS:-done}" '.turn += 1 | .status = {app: "claude-code", state: $s}'
+}
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  server) [[ "${1:-}" == status ]] && echo '{"version":"0.1.14-fake","live":0}' ;;
+  run)
+    name="" cwd="" labels='{}'
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --name) name="$2"; shift 2 ;;
+        --cwd) cwd="$2"; shift 2 ;;
+        --label) labels="$(jq -c --arg k "${2%%=*}" --arg v "${2#*=}" '.[$k] = $v' <<<"$labels")"; shift 2 ;;
+        --) shift; break ;;
+        --*) shift ;;
+        *) break ;;
+      esac
+    done
+    if [[ -n "$name" ]]; then
+      a="$(resolve "$name")"
+      [[ -n "$a" && "$(jq -r .state "$(tf "$a")")" == live ]] && err invalid "the name $name is taken by live terminal $a" 1
+    fi
+    n=$(( $(cat "$S/n" 2>/dev/null || echo 0) + 1 )); echo "$n" >"$S/n"; t="t$n"
+    jq -n --arg a "$t" --arg n "$name" --arg c "$cwd" --argjson l "$labels" '{address: $a, name: (if $n == "" then null else $n end),
+      cwd: $c, argv: $ARGS.positional, labels: $l, state: "live", status: null, turn: 0, parent: null, notify: false}' --args "$@" >"$(tf "$t")"
+    if trust_up; then printf '%s' "${*: -1}" >"$S/queued.$t"; else take "$t" "${*: -1}"; fi
+    jq -c '{address, agent: "bash", cwd, name, state, turn: 0}' "$(tf "$t")" ;;
+  get)
+    t="$(resolve "${1:-}")"; [[ -n "$t" ]] || err not_found "no terminal \"${1:-}\"" 3
+    cat "$(tf "$t")" ;;
+  ls)
+    all=0; lab=()
+    while [[ $# -gt 0 ]]; do
+      case "$1" in --all) all=1; shift ;; --label) lab+=("$2"); shift 2 ;; *) shift ;; esac
+    done
+    for f in "$S"/terms/*.json; do [[ -f "$f" ]] && cat "$f"; done | jq -s -c --argjson all "$all" '
+      ($ARGS.positional | map(split("=") | {key: .[0], value: (.[1:] | join("="))}) | from_entries) as $want
+      | {terminals: [.[] | select($all == 1 or .state == "live")
+          | select(. as $t | all($want | to_entries[]; $t.labels[.key] == .value))
+          | {address, name, state, cwd, turn, status: .status.state}]}' --args "${lab[@]}" ;;
+  read)
+    t="$(resolve "${1:-}")"; [[ -n "$t" ]] || err not_found "no terminal \"${1:-}\"" 3
+    cat "$S/screen" 2>/dev/null || printf '❯ \n' ;;
+  keys)
+    t="$(resolve "${1:-}")"; [[ -n "$t" ]] || err not_found "no terminal \"${1:-}\"" 3; shift
+    for k in "$@"; do
+      if [[ "$k" == enter ]] && trust_up; then
+        rm -f "$S/screen"
+        if [[ -f "$S/queued.$t" ]]; then take "$t" "$(cat "$S/queued.$t")"; rm -f "$S/queued.$t"; fi
+      fi
+    done
+    jq -c '{status: .status.state, turn}' "$(tf "$t")" ;;
+  send)
+    t="" text=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --json|--force|--wait) shift ;;
+        --if|--timeout) shift 2 ;;
+        *) if [[ -z "$t" ]]; then t="$1"; else text="$1"; fi; shift ;;
+      esac
+    done
+    a="$(resolve "$t")"; [[ -n "$a" ]] || err not_found "no terminal \"$t\"" 3
+    [[ "$(jq -r .state "$(tf "$a")")" == live ]] || err finished "$a has finished" 11
+    [[ "$(jq -r '.status.state // ""' "$(tf "$a")")" == blocked ]] && err blocked "$a is blocked" 9
+    if [[ -n "${HC_TERMINAL_ID:-}" || -n "${FAKE_HC_WRAP:-}" ]]; then text="<hc from=\"${HC_TERMINAL_ID:-t0}\">$text</hc>"; fi
+    take "$a" "$text"
+    jq -c '{started: true, status: .status.state, turn}' "$(tf "$a")" ;;
+  interrupt) echo '{"key":"esc","outcome":"stopped"}' ;;
+  kill)
+    a="$(resolve "${1:-}")"; [[ -n "$a" ]] || err not_found "no terminal \"${1:-}\"" 3
+    upd "$a" '.state = "finished" | .reason = "killed" | .status = null'; jq -c . "$(tf "$a")" ;;
+  rm)
+    a="$(resolve "${1:-}")"; [[ -n "$a" ]] || err not_found "no terminal \"${1:-}\"" 3
+    [[ "$(jq -r .state "$(tf "$a")")" == finished ]] || err live "$a is still running" 1
+    rm -f "$(tf "$a")"; jq -cn --arg a "$a" '{removed: $a}' ;;
+  attach) : ;;
+  *) err unknown "unknown command $cmd" 2 ;;
+esac
+exit 0

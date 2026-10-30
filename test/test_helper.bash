@@ -21,8 +21,10 @@ common_setup() {
   export CHARTROOM_WATCH_INTERVAL=1
   export CHARTROOM_DELIVER_WAIT=2
   unset CAP_HOME CAP_PROJECT_ROOTS CAP_CREW_WORKSPACE CAP_WATCH_INTERVAL CHARTROOM_HARNESS CHARTROOM_BACKEND_ORDER CHARTROOM_COMMAND
-  unset CHARTROOM_PLATFORM CHARTROOM_HERDR_ANY_OS CHARTROOM_OPENER WSL_DISTRO_NAME
+  unset CHARTROOM_PLATFORM CHARTROOM_HERDR_ANY_OS CHARTROOM_HC_ANY_OS CHARTROOM_OPENER WSL_DISTRO_NAME
   unset CI TMUX TMUX_PANE HERDR_ENV HERDR_PANE_ID CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_SOCKET_PATH
+  # An XO running inside Herdr passes its herdr-core terminal's address and socket down.
+  unset HC_TERMINAL_ID HC_TERMINAL_SOCKET HC_SCOPE HC_SOCKET HC_SESSION HERDR_APP_HOME
   unset CLAUDECODE CLAUDE_PID CLAUDE_CODE_SESSION_ID CHARTROOM_TASK
   export XDG_STATE_HOME="$BATS_TEST_TMPDIR/state"
   # Never a real browser: `artifact pdf` finds no Chrome unless a test puts the fake on
@@ -40,7 +42,8 @@ common_setup() {
   export PATH="$BIN:/usr/bin:/bin:/usr/sbin:/sbin"
   # Git Bash: chartroom's Windows paths need cmd, taskkill, tasklist and powershell.exe, and
   # git its own helpers (git-upload-pack for a local clone). herdr's code paths run against
-  # the fake herdr here too; its default-off guard is asserted in backends.bats.
+  # the fake herdr here too; its default-off guard is asserted in backends.bats (hc's, which
+  # stays off here, in windows.bats).
   case "${OSTYPE:-}" in msys*|cygwin*)
     local w; w="$(cygpath -u "${SYSTEMROOT:-C:\Windows}")"
     PATH="$PATH:$w/System32:$w/System32/WindowsPowerShell/v1.0:$(dirname "$real_git"):$(cygpath -u "$("$real_git" --exec-path)")"

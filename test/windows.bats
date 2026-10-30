@@ -94,7 +94,7 @@ get() { curl -s --max-time 10 "$@"; }
   [ "$(jq -r '.platform' <<<"$output")" = msys ]
   [ "$(jq -r '.backends[]|select(.backend=="herdr:claude").reason' <<<"$output")" = "herdr on Windows is unverified (CHARTROOM_HERDR_ANY_OS=1 to try it)" ]
   [ "$(jq -r '.backends[]|select(.backend=="headless:claude").steering' <<<"$output")" = between-runs ]
-  [[ "$(jq -r '.notes[0]' <<<"$output")" == "Git Bash: herdr, cmux and tmux sessions are unavailable"* ]]
+  [[ "$(jq -r '.notes[0]' <<<"$output")" == "Git Bash: hc, herdr, cmux and tmux sessions are unavailable"* ]]
   CHARTROOM_HERDR_ANY_OS=1 run cr doctor --json
   [[ "$(jq -r '.backends[]|select(.backend=="herdr:claude").reason' <<<"$output")" == "herdr server not reachable"* ]]
   CHARTROOM_PLATFORM=posix run cr doctor --json

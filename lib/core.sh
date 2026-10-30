@@ -163,7 +163,7 @@ load_config() {
   CR_PROJECT_ROOTS="${CR_PROJECT_ROOTS//\~/$HOME}"
   CR_WORKSPACE="$(cfg WORKSPACE CAP_CREW_WORKSPACE chartroom-crew)"
   CR_WATCH_INTERVAL="$(cfg WATCH_INTERVAL CAP_WATCH_INTERVAL 3)"
-  CR_BACKEND_ORDER="$(cfg BACKEND_ORDER '' 'herdr:claude cmux:claude tmux:claude headless:codex headless:claude command')"
+  CR_BACKEND_ORDER="$(cfg BACKEND_ORDER '' 'hc:claude herdr:claude cmux:claude tmux:claude headless:codex headless:claude command')"
   CR_BACKEND_ORDER="${CR_BACKEND_ORDER//,/ }"
   CR_HARNESS="$(cfg HARNESS '' generic)"
   CR_BRANCH_PREFIX="$(cfg BRANCH_PREFIX '' chartroom/)"

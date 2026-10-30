@@ -378,9 +378,9 @@ herdr_trust_screen() {
   [ "$(jq -r '.backends[]|select(.backend=="cmux:claude").available' <<<"$output")" = true ]
 }
 
-@test "default order is herdr, cmux, tmux, headless, command" {
+@test "default order is hc, herdr, cmux, tmux, headless, command" {
   run cr doctor --json
-  [ "$(jq -r '.order|join(" ")' <<<"$output")" = "herdr:claude cmux:claude tmux:claude headless:codex headless:claude command" ]
+  [ "$(jq -r '.order|join(" ")' <<<"$output")" = "hc:claude herdr:claude cmux:claude tmux:claude headless:codex headless:claude command" ]
 }
 
 @test "legacy backend names still work on old records" {

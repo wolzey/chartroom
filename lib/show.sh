@@ -40,6 +40,7 @@ show_where() { # <id>
   local id="$1" r s
   if [[ -n "$(meta "$id" closed)" ]]; then printf 'closed\t0'; return; fi
   if [[ -z "$(meta "$id" dispatched)" ]] && ! is_joined "$id"; then printf 'not dispatched yet\t0'; return; fi
+  if [[ -n "$(meta "$id" hc_terminal)" ]]; then printf 'hc terminal %s (Herdr)\t1' "$(meta "$id" hc_terminal)"; return; fi
   if [[ -n "$(meta "$id" herdr_tab)" ]]; then printf 'herdr tab %s\t1' "$(meta "$id" herdr_tab)"; return; fi
   if [[ -n "$(meta "$id" tmux_pane)" ]]; then
     s="$(meta "$id" tmux_session)"; printf 'tmux %s%s\t1' "${s:+$s:}" "$(meta "$id" tmux_pane)"; return

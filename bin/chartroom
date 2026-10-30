@@ -94,8 +94,8 @@ done
 CR_VERSION="$(cat "$CR_ROOT/VERSION" 2>/dev/null || echo 0.0.0)"
 load_config
 
-RUNNERS='herdr|cmux|tmux|headless|command|subagent'
-SESSION_RUNNERS='herdr|cmux|tmux'
+RUNNERS='hc|herdr|cmux|tmux|headless|command|subagent'
+SESSION_RUNNERS='hc|herdr|cmux|tmux'
 
 # ---------------------------------------------------------------- backends
 
@@ -1119,7 +1119,12 @@ cmd_watch() {
     id="$(basename "$d")"; f="$d/events.log"
     # Streaming without a cursor starts at EOF (status covers anything older).
     [[ $fresh -eq 1 && -f "$f" && -z "${OFF[$id]+x}" ]] && OFF[$id]=$(($(wc -c <"$f")))
-    [[ -f "$d/meta.json" && "$(backend_runner "$id" 2>/dev/null)" == herdr ]] && HST[$id]="$(herdr_status "$id" 2>/dev/null || true)"
+    if [[ -f "$d/meta.json" ]]; then
+      case "$(backend_runner "$id" 2>/dev/null)" in
+        herdr) HST[$id]="$(herdr_status "$id" 2>/dev/null || true)" ;;
+        hc) [[ -n "$(meta "$id" dispatched)" && -z "$(meta "$id" closed)" ]] && hc_watch_seed "$id" ;;
+      esac
+    fi
   done
   f="$(relay_dir)/inbox.ndjson"
   if [[ $fresh -eq 1 && -f "$f" && -z "${OFF[@relays]+x}" ]]; then OFF[@relays]=$(($(wc -c <"$f"))); fi
@@ -1158,7 +1163,7 @@ cmd_doctor() {
   jqv="$(command -v jq >/dev/null && jq --version 2>/dev/null || echo missing)"
   gitv="$(command -v git >/dev/null && git --version 2>/dev/null | awk '{print $3}' || echo missing)"
   [[ "$jqv" == missing || "$gitv" == missing ]] && ok=0
-  local all="herdr:claude herdr:codex cmux:claude cmux:codex tmux:claude tmux:codex headless:claude headless:codex command subagent"
+  local all="hc:claude hc:codex herdr:claude herdr:codex cmux:claude cmux:codex tmux:claude tmux:codex headless:claude headless:codex command subagent"
   for b in $all; do
     if why="$(probe_backend "$b")"; then avail=yes; why=""; else avail=no; fi
     [[ -z "$first_ok" && "$avail" == yes && " $CR_BACKEND_ORDER " == *" $b "* ]] && first_ok="$b"
@@ -1221,7 +1226,7 @@ cmd_doctor() {
 platform_notes() {
   case "$CR_PLATFORM" in
     msys)
-      echo "Git Bash: herdr, cmux and tmux sessions are unavailable; use headless, command or subagent (herdr's Windows preview: CHARTROOM_HERDR_ANY_OS=1)"
+      echo "Git Bash: hc, herdr, cmux and tmux sessions are unavailable; use headless, command or subagent (to try hc or herdr's Windows builds: CHARTROOM_HC_ANY_OS=1, CHARTROOM_HERDR_ANY_OS=1)"
       echo "headless:claude takes steering between runs here (no live stdin to a native claude.exe)"
       echo "chartroom join (joined:claude, joined:codex) is unavailable here; join a session from WSL2"
       echo "install-skills links with directory junctions (no Developer Mode needed)"
@@ -1329,7 +1334,7 @@ chartroom - run a crew of coding agents from one agent session (the XO)
   chartroom new --project P --title T [--backend B] [--kind ship|scout] [--base REF] [--plan-gate]
                 [--command TEMPLATE] [--permission MODE] [--model M]
                                           create a task record + brief scaffold. B is
-                                          <runner>:<agent> (runners: herdr cmux tmux headless;
+                                          <runner>:<agent> (runners: hc herdr cmux tmux headless;
                                           agents: claude codex), command, subagent, or auto
                                           (omit --backend: pick per CHARTROOM_BACKEND_ORDER)
   chartroom join [--title T] [--kind ship|scout] [--agent A]
@@ -1346,7 +1351,7 @@ chartroom - run a crew of coding agents from one agent session (the XO)
   chartroom steer <id> [--inbox] <msg>    deliver an answer or follow-up to the worker (joined:
                                           to its mailbox; "delivered" only once it is read)
   chartroom stop <id>                     interrupt a worker
-  chartroom attach <id>                   open a session worker's terminal (herdr/cmux/tmux)
+  chartroom attach <id>                   open a session worker's terminal (hc/herdr/cmux/tmux)
   chartroom event <id> <kind> [--breaking] [--detail <details>] <text>
                                           append a status event (workers use this; kinds: progress,
                                           waiting, decision, blocked, done, failed). --breaking
