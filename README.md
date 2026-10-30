@@ -35,7 +35,8 @@ dashboard can show the fleet in a browser).
   skills stay as they are.
 - **No multiplexer required.** Headless workers (`claude -p` with live steering over a stream,
   `codex exec` with resume) are first-class backends. So are plain commands: any CLI can be a
-  worker through a template. It degrades from herdr to cmux to tmux to headless to a command,
+  worker through a template. It degrades from the Herdr app (hc) to herdr to cmux to tmux to
+  headless to a command,
   writes down every fallback, and never fails just because herdr isn't there.
 - **Agent-native signals instead of screen scraping.** Turn ends, approval prompts and prompt
   receipt come from Claude Code hooks and Codex `notify`, not from pattern-matching the TUI.
@@ -47,7 +48,7 @@ dashboard can show the fleet in a browser).
 ## Install
 
 Requirements: bash ≥ 4 (macOS: `brew install bash`), `jq`, `git`. Optional, per backend:
-herdr, cmux (macOS), tmux ≥ 3.0, the `claude` and/or `codex` CLIs. On Windows, see
+the Herdr app (herdr-core, `hc`), herdr, cmux (macOS), tmux ≥ 3.0, the `claude` and/or `codex` CLIs. On Windows, see
 [Windows](#windows).
 
 ```bash
@@ -131,7 +132,7 @@ PowerShell or cmd.
 - **Git Bash (Git for Windows): the core, `headless:claude`, `headless:codex`, `command`,
   `subagent` and the dashboard.** There are no session runners: Git for Windows has no tmux,
   cmux is macOS-only, and herdr's Windows build is a preview that chartroom leaves off unless
-  `CHARTROOM_HERDR_ANY_OS=1`. Install jq and Python (`winget install jqlang.jq Python.Python.3.12`),
+  `CHARTROOM_HERDR_ANY_OS=1` (hc likewise, `CHARTROOM_HC_ANY_OS=1`). Install jq and Python (`winget install jqlang.jq Python.Python.3.12`),
   run the installer from Git Bash, and add `~/.local/bin` to your PATH in `~/.bashrc`. Some
   things differ from macOS and Linux:
   - The checkout is LF whatever `core.autocrlf` says (`.gitattributes`).
@@ -944,6 +945,7 @@ A backend is `<runner>:<agent>`, where the agent is `claude` or `codex`.
 
 | Backend | Runs in | Watch | Steering | Needs | Status |
 |---|---|---|---|---|---|
+| `hc:<agent>` | an herdr-core terminal, in its own tab of the Herdr app's `$CHARTROOM_WORKSPACE` space | yes (`chartroom attach`, or the app) | live | herdr-core running (the Herdr app, or `hc server start`); the window may be closed | `hc:claude` verified (hc 0.1.14, herdr-app 0.1.9, Claude Code 2.1.314); `hc:codex` implemented, not yet run against a real codex |
 | `herdr:<agent>` | a herdr tab (first class) | yes | live | herdr running | verified (herdr 0.9.1) |
 | `cmux:<agent>` | a cmux tab (macOS) | yes | live | cmux app, automation socket mode if the XO runs outside cmux | **implemented, unverified on real cmux** |
 | `tmux:<agent>` | a tmux window | yes (`chartroom attach`) | live | tmux ≥ 3.0 | verified (tmux 3.x) |
@@ -953,7 +955,7 @@ A backend is `<runner>:<agent>`, where the agent is `claude` or `codex`.
 | `subagent` | the host harness's subagent | no | host | Claude Code only | carried over, not re-verified |
 | `joined:<agent>` | a session you started yourself, that ran `chartroom join` | `peek`; `attach` if it is in tmux/herdr/cmux | mailbox | the `join` skill in that session | verified (Claude Code 2.1.293 in tmux) |
 
-Default automatic order: `herdr:claude cmux:claude tmux:claude headless:codex headless:claude command`
+Default automatic order: `hc:claude herdr:claude cmux:claude tmux:claude headless:codex headless:claude command`
 (`CHARTROOM_BACKEND_ORDER`). When a backend is chosen automatically and the first choice isn't
 available, chartroom uses the next one and records `note: backend fallback: herdr:claude
 unavailable (herdr not on PATH); using tmux:claude (steering: live)`. When you name a backend
@@ -1067,7 +1069,7 @@ to the config file.
 |---|---|---|
 | `CHARTROOM_HOME` | `~/.chartroom` | read in this order: the environment, legacy `CAP_HOME`, the registered home the current directory is (or lies in), the config file, then an existing `~/.captain` |
 | `CHARTROOM_PROJECT_ROOTS` | *(empty)* | colon-separated dirs searched by `chartroom project <name>` |
-| `CHARTROOM_WORKSPACE` | `chartroom-crew` | herdr workspace / cmux workspace / tmux session name |
+| `CHARTROOM_WORKSPACE` | `chartroom-crew` | Herdr app space / herdr workspace / cmux workspace / tmux session name |
 | `CHARTROOM_BACKEND_ORDER` | see above | space- or comma-separated |
 | `CHARTROOM_HARNESS` | `generic` | `claude` enables the `subagent` backend |
 | `CHARTROOM_BRANCH_PREFIX` | `chartroom/` | |
@@ -1095,6 +1097,7 @@ to the config file.
 | `CHARTROOM_PDF_TIMEOUT` | `60` | seconds `artifact pdf` waits for Chrome before giving up |
 | `CHARTROOM_PLATFORM` | *(detected)* | `posix`, `wsl` or `msys` (Git Bash); override only if detection is wrong |
 | `CHARTROOM_HERDR_ANY_OS` | *(unset)* | `1` offers herdr on Git Bash, where its Windows preview is unverified |
+| `CHARTROOM_HC_ANY_OS` | *(unset)* | `1` offers hc (herdr-core) on Git Bash, where chartroom has not verified it |
 | `CHARTROOM_WAITING_GRACE_MINUTES` | `15` | a `waiting` worker turns `waiting-overdue` this long after its until-time |
 | `CHARTROOM_WAITING_MAX_MINUTES` | `120` | ... or this long after the event, when it names no until-time |
 | `CHARTROOM_SWEEP_IDLE_HOURS` | `24` | `sweep` raises a finished-but-open task's leftovers (and its own long-running processes) only after this long idle (`--idle-hours` overrides) |
@@ -1117,7 +1120,9 @@ subagent workers, and the dashboard). See [Windows](#windows).
 'your-agent --prompt {prompt} --cwd {worktree}'`. The worker reports by appending event lines
 (the brief tells it how).
 
-**Where do I watch a worker?** `chartroom attach <id>` (tmux, herdr or cmux), or `chartroom peek <id>`.
+**Where do I watch a worker?** `chartroom attach <id>` (the Herdr app, tmux, herdr or cmux), or `chartroom peek <id>`.
+An `hc:*` worker also simply appears in the Herdr app, in the `$CHARTROOM_WORKSPACE` space,
+one tab per task. (Workers on `herdr:*` run in the separate `herdr` server and never show there.)
 
 **Can an agent I already started be supervised?** Yes: tell it "join chartroom" (the `join`
 skill, installed by `install-skills`). See "Joining a running session" under Backends.
@@ -1129,7 +1134,7 @@ through your forge's CLI.
 
 ```bash
 shellcheck -x -S warning bin/chartroom lib/*.sh lib/backends/*.sh install.sh scripts/*.sh test/stub-agent test/windows-smoke.sh test/fakes/*
-bats test/                 # no herdr/tmux/cmux/claude/codex needed: fakes and a stub agent
+bats test/                 # no hc/herdr/tmux/cmux/claude/codex needed: fakes and a stub agent
 CHARTROOM_TEST_REAL_CHROME=1 bats test/pages.bats   # also print one page with a real Chrome (opt-in: the rest use a fake)
 scripts/privacy-gate.sh    # no personal data in tracked files or commits; only the owner's (or a listed collaborator's) noreply email in history
 claude plugin test mods/crew-view   # the Claude Code mod's tests (verified on Claude Code 2.1.302 and 2.1.303)

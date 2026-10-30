@@ -7,6 +7,26 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- The `hc:<agent>` session runner (`hc:claude`, `hc:codex`): workers in herdr-core terminals,
+  which the Herdr app shows. Workers on `herdr:*` live in the separate `herdr` server, which the
+  app never shows. One terminal per task, named after it, started with `hc run --bg --no-parent
+  --no-notify` in the worktree, so it outlives the XO's session and hc types nothing into the
+  XO. The terminal runs chartroom's launcher (hc gives it the core's environment, not the
+  caller's), with the brief's line as `run`'s task argument, so nothing is typed into a booting
+  agent. Labels place it in the app: `herdr.space` of the space named `$CHARTROOM_WORKSPACE` and
+  a `herdr.tab` of its own; the app adopts it without moving the person's focus, and chartroom
+  names the space and the tab (`<short id> · <title>`). It never uses `space.new`, which focuses
+  the new space. Dispatch works with the window closed: the labels are on the hc side, and the
+  names follow at the next dispatch or `attach`. `steer` = `hc send`, confirmed by the prompt
+  hook's signature (and never typed into a blocked agent); `peek` = `hc read`; `stop` =
+  `hc interrupt`; `attach` = `herdr-app do agent.focus`; `close` ends and removes the terminal,
+  and the app drops its tab. `watch` wakes from hc's own agent state: blocked, error, a turn
+  ending without a report (hc's turn count catches one `watch` never saw working), and a lost
+  terminal, including one whose agent hc's keep replaced with a shell; a Codex worker keeps its notify hook for turn ends (`hc:codex` is not yet run against
+  a real codex). `doctor` rows `hc:claude` / `hc:codex` are available only when the core answers
+  on its socket, which is checked before any `hc` command runs (every `hc` command starts a core
+  when none answers).
+
 - Readable events. The radar's side panel and the new task page set a worker's event as a note:
   the kind as a badge and `[breaking]` as a red tag, a headline (the first sentence or clause),
   labelled parts (`Cause:`, `Options:`, `Need:`, `Report:` ...) as headed blocks, numbered options
@@ -86,6 +106,11 @@ are stable from 0.1.0.
   The chartroom skill says the same for the XO, and `bearings` and `continue` name a task's page.
 
 ### Changed
+- The default `CHARTROOM_BACKEND_ORDER` starts with `hc:claude`, before `herdr:claude`:
+  `hc:claude herdr:claude cmux:claude tmux:claude headless:codex headless:claude command`.
+  `herdr:*` is unchanged and still the next choice where herdr-core is not running.
+- `write_launcher` (`lib/session.sh`) can hand the launcher's own arguments to the agent
+  (`--forward`), which the hc runner uses for the brief's line.
 - The privacy gate fails on any author or committer email other than the owner's GitHub noreply
   address or a listed collaborator's (`collaborators`), and on an email in a trailer
   (Co-Authored-By and the like) outside its allowlist (`trailer_ok`: those addresses and

@@ -1,26 +1,28 @@
 # Backends
 
 A backend is `<runner>:<agent>`: **where** the worker runs × **which** agent runs. Runners are
-`herdr`, `cmux`, `tmux` (session runners: a terminal you can watch), `headless` (no terminal),
+`hc`, `herdr`, `cmux`, `tmux` (session runners: a terminal you can watch), `headless` (no terminal),
 `command` (any CLI) and `subagent` (the host harness), plus `joined`, which is never
 dispatched: a running session joins itself (see the last section). Agents are `claude` and `codex`. Old
 names still work: `codex` = `headless:codex`, `herdr-claude` = `herdr:claude`,
 `herdr-codex` = `herdr:codex`.
 
 `chartroom doctor` shows every backend, whether it can run here, why not, and how it steers.
-Last verified against: claude 2.1.289 (joined: 2.1.293), codex-cli 0.158.0, herdr 0.9.1, tmux 3.x (October 2026).
+Last verified against: claude 2.1.289 (joined: 2.1.293; hc: 2.1.314), codex-cli 0.158.0, herdr 0.9.1,
+hc (herdr-core) 0.1.14 with herdr-app 0.1.9, tmux 3.x (October 2026).
 cmux is implemented against its documented CLI but **unverified on a real cmux install**.
 
 ## Selection and fallback
 
 - `chartroom new` without `--backend` (or `--backend auto`) picks at dispatch time: the first
   available entry in `CHARTROOM_BACKEND_ORDER` (default
-  `herdr:claude cmux:claude tmux:claude headless:codex headless:claude command`). Skipping
+  `hc:claude herdr:claude cmux:claude tmux:claude headless:codex headless:claude command`). Skipping
   the first entry writes a `note: backend fallback: ...` event and prints it, because falling
   from a session runner to headless changes what the commander can watch and steer.
 - An explicit `--backend` never downgrades. If it is unavailable, dispatch exits non-zero with
   the reason and the next viable backend.
-- `CI=true` disables session runners. herdr needs its server reachable; cmux needs macOS and a
+- `CI=true` disables session runners. hc needs a running herdr-core (a live socket, checked
+  without starting one); herdr needs its server reachable; cmux needs macOS and a
   running app that accepts our socket connection; tmux needs tmux ≥ 3.0; `subagent` needs
   `CHARTROOM_HARNESS=claude`; `command` needs a template.
 
@@ -42,7 +44,7 @@ cmux is implemented against its documented CLI but **unverified on a real cmux i
 
 | Mode | Backends | What `steer` does |
 |---|---|---|
-| live | herdr, cmux, tmux, headless:claude (not on Git Bash) | Delivers now and confirms it was taken: Claude in tmux/cmux by the prompt hook's signature of the submitted text, headless:claude by the replayed message, herdr by its agent state or the text on screen; Codex sessions report `submitted, not verified` |
+| live | hc, herdr, cmux, tmux, headless:claude (not on Git Bash) | Delivers now and confirms it was taken: Claude in hc/herdr/tmux/cmux by the prompt hook's signature of the submitted text, headless:claude by the replayed message, herdr without the hook by its agent state or the text on screen; Codex sessions report `submitted, not verified` |
 | between-runs | headless:codex, command, headless:claude on Git Bash | Refuses while running; afterwards resumes (`codex exec resume`) or re-runs the template with the message. `command` also has `steer --inbox` (best effort) |
 | host | subagent | Records it; you deliver it with your harness's message tool |
 | mailbox | joined:<agent> | Writes to the joined session's mailbox; "delivered" only once its listener (or `listen --check`) read it, else "queued, not yet read" |
@@ -58,6 +60,76 @@ alone and raised as `agent: awaiting-input`. chartroom never edits `~/.claude.js
 `~/.codex/config.toml` to pre-trust a path. (Verified on codex 0.158: a per-run
 `-c projects."<path>".trust_level="trusted"` override does **not** suppress the dialog.)
 Headless runs (`claude -p`, `codex exec`) show no dialog.
+
+## hc:<agent> (the Herdr app; first in the default order)
+
+The Herdr desktop app (`herdr-app`) shows only terminals run by herdr-core (`hc`), a different
+program from the `herdr` CLI/server below; workers on `herdr:*` never appear in it.
+
+- One hc terminal per task, named after the task id, started with `hc run --bg --no-parent
+  --no-notify --cwd <worktree>`. `--no-parent`: the worker outlives the XO's session (a child
+  ends with its parent unless `--outlive-parent`), and never hangs off whatever terminal
+  `HC_TERMINAL_ID` names: that variable leaks into processes started from an hc terminal, and
+  into herdr panes, so it can name another home's XO. With no parent hc types no notes into
+  the XO's input; chartroom's own wake stream reports the same things (`--no-notify` says so too).
+- hc gives a terminal the core's environment, not the caller's (verified: no
+  `/opt/homebrew/bin` on its PATH), so the terminal runs `tasks/<id>/launch.sh` as tmux does
+  (chartroom's PATH, `CHARTROOM_HOME`, `CHARTROOM_TASK`; `exited` when the agent ends). The
+  brief's one line is `hc run`'s task argument, which the launcher hands to the agent as its
+  first prompt: nothing is typed into a booting agent. For a program that is not an hc
+  template, hc's task argument is just that: the program's last argument (verified).
+- **Visible in the app through labels**: each terminal carries `herdr.space=<id>` of the space
+  named `$CHARTROOM_WORKSPACE`, `herdr.tab=<a fresh id>` of its own, and `chartroom.workspace`
+  / `chartroom.task`. The space id comes from a live worker's labels (hc's own record, so it
+  holds with the window closed), else from `herdr-app ls` by name, else a new `sp<32 hex>`.
+  The app adopts a labelled terminal at once: an id it does not know becomes a new space or
+  tab with that very id (unnamed: the space is called after the folder, the tab by its number),
+  and the person's focus does not move (verified). chartroom then names them with
+  `herdr-app do space.rename` and `tab.rename` (tab: `<short id> · <title>`). It never uses
+  `space.new`, which shows the new space and focuses its pane at once (verified).
+- **Window closed** (`herdr-app ls` answers "no Herdr window"): dispatch still works on labels
+  alone and notes it; the worker appears when the app opens, under the app's default names
+  until the next dispatch or `chartroom attach` names them.
+- The brief's delivery is confirmed by Claude's `UserPromptSubmit` hook, which fires for a first
+  prompt given as an argument too (verified), so claude gets only that hook (`prompt` mode, as on
+  herdr). Codex gets `--no-daemon` (hc's manual: otherwise its commands run outside hc) and keeps
+  its `notify` hook for turn ends, because whether hc sees Codex's turns is unverified (hc has no
+  Codex integration of its own; a program reports its state itself). Its brief counts as taken
+  once hc reports it working or a turn, an agent event arrives, or its screen shows it working.
+  **hc:codex is implemented against fakes only; not yet run against a real codex under hc.**
+- Trust dialog: the same policy as every session runner (screen from `hc read`, keys from
+  `hc keys`). hc reports no status while the dialog is up. A dialog chartroom will not answer
+  leaves the worker waiting with its brief queued as its first prompt (Claude runs it once the
+  dialog is answered, verified): dispatch says so and exits 0, and the `awaiting-input` event wakes
+  the XO.
+- `steer` = `hc send` (paste, Enter once nobody is typing), confirmed by the prompt hook's
+  signature as for tmux; without the hook, hc's `started` flag or a `working` status. A blocked
+  agent (a permission or question dialog) is never typed into: hc refuses without `--force`,
+  and chartroom never passes it.
+- `peek` = `hc read`; `stop` = `hc interrupt` (Esc, and hc reports what happened); `attach` =
+  `herdr-app do agent.focus --terminal <t>` (with no window: `hc attach <t>` in a terminal);
+  `close` saves the screen to `pane.log`, then `hc kill` and `hc rm`. The app drops a pane whose
+  terminal ends and a tab whose last pane goes, window open or not (verified); a space goes with
+  its last tab, and the next dispatch makes it again.
+- Wakes come from hc's own agent state (`hc get`, polled with `watch`): `blocked`, `error`, a turn
+  ending (`idle`/`done`) without a report, whether or not `watch` saw it `working` (hc counts
+  turns), and the terminal gone (`lost`; an agent that exited on its own wakes through the
+  launcher's `exited` instead). hc's states come from the agent itself (OSC 7501); Claude Code
+  2.1.314 reports them unprompted (verified). A Codex turn end wakes through its notify event
+  instead, so it never wakes twice.
+- A lost agent is not a working one: the app turns on hc's keep for every terminal it adopts,
+  and keep puts the user's shell in place of a program that dies by a signal or with the core,
+  under the same address and name, still live, with no status (verified). chartroom checks that
+  the terminal still runs this task's launcher; one that does not is `gone` in `status`, wakes
+  `lost: ... hc put a shell in its place`, refuses `steer`, and is ended by `close` or a
+  re-dispatch.
+- `doctor`: hc on PATH (or `~/.local/bin/hc`), and a core that answers on its socket
+  (`$HC_SOCKET`, else the path in `$XDG_STATE_HOME/herdr-core/<session>/core.lock`). The socket
+  is checked by connecting to it before any `hc` command runs, because every `hc` command, even
+  `hc ls` or `hc server status`, starts a core when none answers (verified, also over a stale
+  socket a killed core left behind).
+- Untested here: Windows (off unless `CHARTROOM_HC_ANY_OS=1`), other machines (`hc run --on`).
+  `sweep` and the radar still read herdr only.
 
 ## herdr:<agent> (first class)
 

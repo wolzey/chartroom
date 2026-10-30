@@ -110,7 +110,7 @@ or choose by this rubric, checking `chartroom doctor` for what is available:
 
 | Backend | Use for | Watchable | Steering | Survives your restart |
 |---|---|---|---|---|
-| `herdr:<agent>` / `cmux:<agent>` / `tmux:<agent>` | Long or ambiguous work, back-and-forth, browser or MCP tooling, work the commander may want to watch or jump into | Yes (tab/window) | live | Yes |
+| `hc:<agent>` / `herdr:<agent>` / `cmux:<agent>` / `tmux:<agent>` | Long or ambiguous work, back-and-forth, browser or MCP tooling, work the commander may want to watch or jump into | Yes (tab/window) | live | Yes |
 | `headless:claude` | Well-specified work with no need to watch; live steering still works | Via `peek` | live | Yes |
 | `headless:codex` | Well-specified ship work, bulk or mechanical changes, second opinions | Via `peek` | between runs | Yes |
 | `command` | Any other agent CLI, from a template (`--command 'aider --message-file {brief}'`) | Via `peek` | between runs | Yes |
