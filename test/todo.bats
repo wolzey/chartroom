@@ -21,7 +21,9 @@ task() {
 }
 
 @test "todo: what the commander owes, breaking first, then dates in the text, then oldest" {
-  task t-decision 600 "decision: pick A or B before 2026-11-02 (recommend A)"
+  # a date 30 days ahead (`ago` of a negative age), so it is a due date on any day
+  local due; due="$(ago -2592000)"; due="${due:0:10}"
+  task t-decision 600 "decision: pick A or B before $due (recommend A)"
   task t-blocked 6000 "blocked: [breaking] prod is down, need the DB password"
   task t-ready 400 "done: PR https://github.com/acme/shop/pull/7 ready"
   task t-failed 300 "failed: tests do not build"
@@ -50,9 +52,9 @@ EOF
     "i-0a02 t-blocked i-0a03 t-decision i-0a01 i-0a01/merge-steps i-0a04 t-ready t-ready/reply-to-the-review" ]
   [ "$(jq -c '[.count, .held, .focus]' <<<"$output")" = '[9,0,null]' ]
   [ "$(jq -c '[.items[] | [.kind, .label]][0:4]' <<<"$output")" = \
-    '[["inbox","renew the cert asap"],["blocked","blocked: prod is down, need the DB password"],["inbox","sign the NDA, not before 2026-10-22 09:00Z"],["decision","decide: pick A or B before 2026-11-02 (recommend A)"]]' ]
+    '[["inbox","renew the cert asap"],["blocked","blocked: prod is down, need the DB password"],["inbox","sign the NDA, not before 2026-10-22 09:00Z"],["decision","decide: pick A or B before '"$due"' (recommend A)"]]' ]
   [ "$(jq -c '[.items[] | select(.due) | [.ref, .due]]' <<<"$output")" = \
-    '[["i-0a03","2026-10-22T09:00:00Z"],["t-decision","2026-11-02T00:00:00Z"]]' ]
+    '[["i-0a03","2026-10-22T09:00:00Z"],["t-decision","'"$due"'T00:00:00Z"]]' ]
   [ "$(jq -c '[.items[] | select(.breaking) | .ref]' <<<"$output")" = '["i-0a02","t-blocked"]' ]
   [ "$(jq -c '[.items[] | select(.type != "inbox") | [.ref, .owner, .tickable]]' <<<"$output")" = \
     '[["t-blocked","t-blocked",false],["t-decision","t-decision",false],["i-0a01/merge-steps","i-0a01",true],["t-ready","t-ready",false],["t-ready/reply-to-the-review","t-ready",true]]' ]
