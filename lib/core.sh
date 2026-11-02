@@ -270,17 +270,131 @@ kill_tree() { # <pid>
 
 tdir() { printf '%s/tasks/%s' "$CR_HOME" "$1"; }
 need_task() { [[ -f "$(tdir "$1")/meta.json" ]] || die "no such task: $1"; }
-meta() { jq -r --arg k "$2" '.[$k] // empty | tostring' "$(tdir "$1")/meta.json"; }
+# The watch's full round reads every task's meta.json with one jq (meta_cache_load) instead of
+# several per task. While MC holds a task ("<id>/" is open; a closed one keeps only that mark,
+# "closed"), meta answers from it; meta_set drops the task. MC is empty outside a round.
+declare -A MC=()
+meta() {
+  if [[ "${MC["$1/"]:-}" == open ]]; then [[ -z "${MC["$1/$2"]+x}" ]] || printf '%s\n' "${MC["$1/$2"]}"; return 0; fi
+  meta_file "$@"
+}
+meta_file() { jq -r --arg k "$2" '.[$k] // empty | tostring' "$(tdir "$1")/meta.json"; } # never cached
+meta_cache_load() {
+  MC=()
+  local metas=("$CR_HOME"/tasks/*/meta.json) line id rest k v
+  [[ -e "${metas[0]-}" ]] || return 0
+  # (A malformed file ends jq there: the tasks after it are left out and read one by one.)
+  while IFS= read -r line; do
+    id="${line%%$'\t'*}"; rest="${line#*$'\t'}"; k="${rest%%$'\t'*}"; v="${rest#*$'\t'}"
+    [[ "$v" == *\\* ]] && printf -v v '%b' "$v" # @tsv's \t \n \r \\
+    MC["$id/$k"]="$v"
+  done < <(jq -r '(input_filename | split("/") | .[-2]) as $id | select(type == "object")
+    | if (.closed // "" | tostring) != "" then [$id, "", "closed"]
+      else (to_entries[] | select(.value != null and .value != false) | [$id, .key, (.value | tostring)]), [$id, "", "open"] end
+    | @tsv' "${metas[@]}" 2>/dev/null || true)
+}
 # The task's project as the commander knows it: the repo's directory name (status rows use
 # the same rule), or empty when the task has none.
 project_label() { local p; p="$(meta "$1" project 2>/dev/null || true)"; p="${p%/}"; printf '%s' "${p##*/}"; }
 meta_set() { # meta_set <id> <key> <string-value>
   local f; f="$(tdir "$1")/meta.json"
+  unset "MC[$1/]"
   jq --arg k "$2" --arg v "$3" '.[$k]=$v | .updated=(now|todate)' "$f" >"$f.tmp" && mv "$f.tmp" "$f"
 }
-# One line per event, always: newlines in the text become spaces.
-log_event() { printf '%s %s: %s\n' "$(now)" "$2" "${3//$'\n'/ }" >>"$(tdir "$1")/events.log"; }
+# One line per event, always: newlines in the text become spaces. Rings the home's watches.
+log_event() { printf '%s %s: %s\n' "$(now)" "$2" "${3//$'\n'/ }" >>"$(tdir "$1")/events.log"; bell_ring "" watch; }
 pid_alive() { [[ -n "${1:-}" ]] && kill -0 "$1" 2>/dev/null; }
+
+# ---------------------------------------------------------------- doorbell
+# A listener (watch, listen) waits on its own FIFO instead of sleeping, and whatever writes a
+# record rings the listeners that read it, once the record is on disk: log_event rings the
+# home's watches, mail_post the task's listen, relay the target home's watches. A ring carries
+# no data (the records stay the only truth); a lost one costs a fallback round. It is coalesced:
+# the ringer opens the FIFO read-write, which never blocks, and writes one byte only when none
+# is pending, so not even a stopped listener can fill it and block a ringer.
+# FIFOs stay out of the records (a grep -r or a backup could hang on one), at a fixed place like
+# tmux's sockets, so a ringer and a listener meet whatever environment each was started in (hc
+# and tmux run workers in their server's, not the XO's, so $TMPDIR may differ):
+#   ${CHARTROOM_RUNTIME_DIR:-/tmp}/chartroom-<uid>/bells/<home's dir name>-<cksum of its physical path>/
+#     <name>-<pid>.fifo     one per listener: watch-<pid>, listen-<task id>-<pid>
+#     <name>-<pid>.mark0|1  the watch's scan markers (bell_mark)
+# A FIFO whose listener is gone is removed only by a ringer of its own home; a ring into another
+# home skips it. Git Bash, a runtime dir not ours, or a filesystem where mkfifo fails: no FIFO,
+# and the listener polls as before.
+declare -A BELL_DIRS=()
+BELL_AT="" BELL_NAME="" BELL_FILE="" BELL_FD="" BELL_PREV="" BELL_MARK=0
+bell_root() { local r="${CHARTROOM_RUNTIME_DIR:-/tmp}"; printf '%s/chartroom-%s' "${r%/}" "$EUID"; }
+bell_root_ok() { [[ -d "$1" && ! -L "$1" && -O "$1" ]]; } # <root>: ours, and not a link
+# Sets BELL_AT to a home's bell directory (not created); 1 when there is none.
+bell_dir_of() { # <home>
+  BELL_AT=""
+  [[ "${CR_PLATFORM:-}" != msys ]] || return 1
+  local h="${1%/}" p s=""; h="${h:-/}"
+  if [[ -z "${BELL_DIRS[$h]+x}" ]]; then
+    p="$(cd -P -- "$h" 2>/dev/null && pwd)" && s="$(cksum <<<"$p")" || p=""
+    BELL_DIRS[$h]="${p:+$(bell_root)/bells/${p##*/}-${s%% *}}"
+  fi
+  BELL_AT="${BELL_DIRS[$h]}"
+  [[ -n "$BELL_AT" ]]
+}
+# Gone for sure: kill -0 fails, and not because a sandbox may not signal it (ps still sees it).
+bell_gone() { ! kill -0 "$1" 2>/dev/null && ! ps -p "$1" >/dev/null 2>&1; } # <pid>
+bell_ring() { # <home, or "" for this one> <name>: ring every live listener <name>-<pid> there
+  bell_dir_of "${1:-$CR_HOME}" || return 0
+  bell_root_ok "${BELL_AT%/bells/*}" || return 0
+  local f p fd
+  for f in "$BELL_AT/$2"-*.fifo; do
+    p="${f%.fifo}"; p="${p##*-}"
+    [[ "$f" == "$BELL_AT/$2-$p.fifo" && "$p" =~ ^[0-9]+$ && -p "$f" ]] || continue
+    if bell_gone "$p"; then
+      [[ -n "$1" ]] || rm -f "$f" "${f%.fifo}.mark0" "${f%.fifo}.mark1"
+      continue
+    fi
+    { exec {fd}<>"$f" && { read -r -t 0 -u "$fd" || printf . >&"$fd"; }; exec {fd}>&-; } 2>/dev/null || true
+  done
+  return 0
+}
+# This process's FIFO, <name>-<pid>, which bell_wait waits on; BELL_FILE stays empty (and
+# bell_wait sleeps) when there can be none here.
+bell_open() { # <name>
+  bell_close; BELL_NAME="$1"
+  bell_dir_of "$CR_HOME" || return 0
+  local root="${BELL_AT%/bells/*}"
+  [[ -d "$root" ]] || { mkdir -p "${root%/*}" && mkdir -m 700 "$root"; } 2>/dev/null || true
+  bell_root_ok "$root" && mkdir -p "$BELL_AT" 2>/dev/null || return 0
+  BELL_FILE="$BELL_AT/$1-$$.fifo"; rm -f "$BELL_FILE"
+  if ! { mkfifo -m 600 "$BELL_FILE" && exec {BELL_FD}<>"$BELL_FILE"; } 2>/dev/null; then
+    rm -f "$BELL_FILE"; BELL_FILE=""; BELL_FD=""
+  fi
+  return 0
+}
+# A FIFO removed under a live listener (a tmp cleaner) is made again, so rings find it.
+bell_check() { [[ -z "$BELL_NAME" || -p "$BELL_FILE" ]] || bell_open "$BELL_NAME"; }
+bell_close() {
+  if [[ -n "$BELL_FD" ]]; then exec {BELL_FD}>&-; fi
+  [[ -z "$BELL_FILE" ]] || rm -f "$BELL_FILE" "${BELL_FILE%.fifo}.mark0" "${BELL_FILE%.fifo}.mark1"
+  BELL_FILE=""; BELL_FD=""; BELL_NAME=""
+}
+# Wait for a ring, at most <seconds>: 0 when rung (every pending ring is taken), 1 when not.
+bell_wait() { # <seconds>
+  if [[ -z "$BELL_FD" ]]; then sleep "$1"; return 1; fi
+  local c rc=0
+  read -r -N 1 -t "$1" -u "$BELL_FD" c || rc=$?
+  if [[ $rc -eq 0 ]]; then
+    while read -r -t 0 -u "$BELL_FD"; do read -r -N 1 -u "$BELL_FD" c || break; done
+    return 0
+  fi
+  [[ $rc -gt 128 ]] && return 1
+  bell_close; sleep "$1"; return 1 # the FIFO failed: poll from here on
+}
+# Before a scan: touch the next marker; BELL_PREV is the one touched when the previous scan
+# started, so a log not older than it may have grown since (bash's -ot, no fork).
+bell_mark() {
+  BELL_PREV=""
+  [[ -n "$BELL_FILE" ]] || return 0
+  BELL_PREV="${BELL_FILE%.fifo}.mark$BELL_MARK"; BELL_MARK=$((1 - BELL_MARK))
+  { printf . >"${BELL_FILE%.fifo}.mark$BELL_MARK"; } 2>/dev/null || true
+}
 
 slugify() {
   local s

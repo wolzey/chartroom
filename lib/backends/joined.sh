@@ -32,6 +32,7 @@ mail_post() { # <id> <msg> -> prints the message number
   local d n; d="$(mail_dir "$1")"; mkdir -p "$d"
   n=$(( $(mail_count "$1") + 1 ))
   printf '%s\n' "$2" >"$d/.$n.tmp" && mv "$d/.$n.tmp" "$d/$n.txt"
+  bell_ring "" "listen-$1"
   echo "$n"
 }
 

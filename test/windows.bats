@@ -176,6 +176,18 @@ get() { curl -s --max-time 10 "$@"; }
   [[ "$output" == *"exists and is not a symlink; not replacing it"* ]]
 }
 
+@test "msys: no doorbell FIFO; watch polls its rounds as before" {
+  msys
+  id="$(new_task --backend command --command "$STUB {id}")"
+  "$CHARTROOM" watch --once --timeout 10 >"$BATS_TEST_TMPDIR/w" 2>&1 3>&- &
+  w=$!
+  sleep 1.5
+  cr event "$id" decision "seen by a round"
+  wait "$w"
+  grep -q "decision: seen by a round$" "$BATS_TEST_TMPDIR/w"
+  [ ! -e "$CHARTROOM_RUNTIME_DIR" ]
+}
+
 @test "msys: headless:claude reads a pipe, not a FIFO, and takes steering between runs" {
   msys
   use_fake claude

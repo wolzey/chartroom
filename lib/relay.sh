@@ -164,6 +164,7 @@ relay_send() {
   # The relay itself, the one write in the target home; then this home's own copy.
   mkdir -p "$theirs"
   printf '%s\n' "$rec" >>"$theirs/inbox.ndjson"
+  bell_ring "$path" watch # its watches wake now (a dead one's FIFO is that home's to remove)
   if ! { mkdir -p "$mine" && printf '%s\n' "$rec" >>"$mine/outbox.ndjson"; }; then
     warn "relayed $id to $to, but could not keep a copy in $mine/outbox.ndjson"
   fi

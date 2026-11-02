@@ -194,6 +194,7 @@ pid_watch() { # <id>
   if [[ -n "$pid" ]] && ! pid_alive "$pid" && ! tail -n 3 "$f" | grep -q ' exited: ' && ! grep -qF " note: $msg (pid $pid)" "$f"; then
     sleep 1 # the wrapper writes `exited` right after the process ends
     tail -n 3 "$f" | grep -q ' exited: ' && return 0
+    [[ "$(meta_file "$id" pid)" == "$pid" ]] || return 0 # a new run (a steer) started meanwhile
     log_event "$id" note "$msg (pid $pid)"
     wake "$id" "$msg"
   fi

@@ -540,13 +540,15 @@ cmd_listen() { # <id> [--check] [--timeout S]
   if [[ $check -eq 1 ]]; then mail_take "$id" || echo "no new messages"; return 0; fi
   pf="$(mail_dir "$id")/listener.pid"; mkdir -p "$(mail_dir "$id")"
   echo $$ >"$pf"
-  trap '[[ "$(cat "'"$pf"'" 2>/dev/null)" == '"$$"' ]] && rm -f "'"$pf"'"' EXIT
+  # mail_post rings it (lib/core.sh, doorbell); the 1 s fallback also sees the task close.
+  bell_open "listen-$id"
+  trap '[[ "$(cat "'"$pf"'" 2>/dev/null)" == '"$$"' ]] && rm -f "'"$pf"'"; bell_close' EXIT
   start="$(date +%s)"
   while true; do
     [[ -n "$(meta "$id" closed)" ]] && { echo "task $id is closed; stop listening"; return 0; }
     mail_take "$id" && return 0
     if (( timeout > 0 && $(date +%s) - start >= timeout )); then echo "no messages after ${timeout}s; re-arm: chartroom listen $id"; exit 124; fi
-    sleep 1
+    bell_check; bell_wait 1 || true
   done
 }
 
@@ -1118,6 +1120,13 @@ watch_baseline() { # <id> <hc|herdr> <unseen 0|1>
   return 0
 }
 
+# Is the task closed? From the round's meta cache when it holds the task, else its meta.json.
+is_closed() { case "${MC["$1/"]:-}" in closed) return 0 ;; open) return 1 ;; esac; [[ -n "$(meta "$1" closed)" ]]; }
+clock_ms() { # sets NOW_MS: the time in milliseconds (bash 4: whole seconds)
+  if [[ -n "${EPOCHREALTIME:-}" ]]; then NOW_MS="${EPOCHREALTIME//[!0-9]/}"; NOW_MS=$((10#${NOW_MS:0:${#NOW_MS}-3}))
+  else printf -v NOW_MS '%(%s)T' -1; NOW_MS=$((NOW_MS * 1000)); fi
+}
+
 cmd_watch() {
   local once=0 timeout=0 cursor="" a
   while [[ $# -gt 0 ]]; do
@@ -1128,8 +1137,13 @@ cmd_watch() {
       *) die "watch: unknown arg $1" ;;
     esac
   done
+  [[ "$timeout" =~ ^[0-9]+$ ]] || die "watch: --timeout takes whole seconds (got $timeout)"
+  # The full round's interval (the fallback for whatever does not ring), in milliseconds.
+  local ivl
+  [[ "$CR_WATCH_INTERVAL" =~ ^([0-9]+)(\.([0-9]+))?$ ]] || die "CHARTROOM_WATCH_INTERVAL must be seconds, such as 3 or 0.5 (got $CR_WATCH_INTERVAL)"
+  ivl="${BASH_REMATCH[3]}000"; ivl=$((10#${BASH_REMATCH[1]} * 1000 + 10#${ivl:0:3}))
   shopt -s nullglob
-  local d id f size start fresh=1 unseen b; start="$(date +%s)"
+  local d id f size start fresh=1 unseen b; clock_ms; start=$NOW_MS
   mkdir -p "$CR_HOME/tasks"
   if [[ $once -eq 1 && -z "$cursor" ]]; then cursor="$CURSOR_FILE"; ensure_cursor; fi
   if [[ -n "$cursor" && -f "$cursor" ]]; then
@@ -1142,35 +1156,61 @@ cmd_watch() {
       esac
     done <"$cursor"
   fi
+  meta_cache_load
   for d in "$CR_HOME"/tasks/*/; do
-    id="$(basename "$d")"; f="$d/events.log"
+    id="${d%/}"; id="${id##*/}"; f="$d/events.log"
     unseen=0; [[ $fresh -eq 0 && -z "${OFF[$id]+x}" ]] && unseen=1
     # Streaming without a cursor starts at EOF (status covers anything older).
     [[ $fresh -eq 1 && -f "$f" && -z "${OFF[$id]+x}" ]] && OFF[$id]=$(($(wc -c <"$f")))
-    if [[ -f "$d/meta.json" ]]; then
+    if [[ -f "$d/meta.json" ]] && ! is_closed "$id"; then
       case "$(backend_runner "$id" 2>/dev/null)" in
-        herdr) [[ -z "$(meta "$id" closed)" ]] && watch_baseline "$id" herdr "$unseen" ;;
-        hc) [[ -n "$(meta "$id" dispatched)" && -z "$(meta "$id" closed)" ]] && watch_baseline "$id" hc "$unseen" ;;
+        herdr) watch_baseline "$id" herdr "$unseen" ;;
+        hc) [[ -n "$(meta "$id" dispatched)" ]] && watch_baseline "$id" hc "$unseen" ;;
       esac
     fi
   done
+  MC=()
   f="$(relay_dir)/inbox.ndjson"
   if [[ $fresh -eq 1 && -f "$f" && -z "${OFF[@relays]+x}" ]]; then OFF[@relays]=$(($(wc -c <"$f"))); fi
+  # Between scans the watch waits on its doorbell (lib/core.sh). A ring scans only the logs that
+  # changed since the last scan started, and the relay mailbox; the full round (every task, the
+  # backend probes, overdue checks) runs every CHARTROOM_WATCH_INTERVAL, for what does not ring.
+  bell_open watch
+  trap bell_close EXIT
+  local full=1 next=0 wait r
   while true; do
     WATCH_FOCUS="$(focus_json)"
-    for d in "$CR_HOME"/tasks/*/; do
-      id="$(basename "$d")"; f="$d/events.log"
-      [[ -f "$d/meta.json" && -f "$f" ]] || continue
-      [[ -n "$(meta "$id" closed)" ]] && continue
-      size=$(($(wc -c <"$f")))
-      if (( size > ${OFF[$id]:-0} )); then
-        watch_scan_lines "$id" "${OFF[$id]:-0}" "$size"
-        OFF[$id]=$size
-      fi
-      local r; r="$(backend_runner "$id")"
-      if [[ -n "$r" && -n "$(meta "$id" dispatched)" ]]; then "${r}_watch" "$id"; watch_overdue "$id"; fi
-    done
-    watch_relays
+    [[ $full -eq 0 ]] || bell_check
+    bell_mark
+    if [[ $full -eq 1 ]]; then
+      meta_cache_load
+      for d in "$CR_HOME"/tasks/*/; do
+        id="${d%/}"; id="${id##*/}"; f="$d/events.log"
+        [[ -f "$d/meta.json" && -f "$f" ]] || continue
+        is_closed "$id" && continue
+        size=$(($(wc -c <"$f")))
+        if (( size > ${OFF[$id]:-0} )); then
+          watch_scan_lines "$id" "${OFF[$id]:-0}" "$size"
+          OFF[$id]=$size
+        fi
+        r="$(backend_runner "$id")"
+        if [[ -n "$r" && -n "$(meta "$id" dispatched)" ]]; then "${r}_watch" "$id"; watch_overdue "$id"; fi
+      done
+      MC=()
+      watch_relays
+      clock_ms; next=$((NOW_MS + ivl))
+    else
+      for f in "$CR_HOME"/tasks/*/events.log; do
+        [[ "$f" -ot "$BELL_PREV" ]] && continue
+        d="${f%/events.log}"; id="${d##*/}"
+        [[ -f "$d/meta.json" ]] || continue
+        is_closed "$id" && continue
+        size=$(($(wc -c <"$f")))
+        if (( size > ${OFF[$id]:-0} )); then watch_scan_lines "$id" "${OFF[$id]:-0}" "$size"; OFF[$id]=$size; fi
+      done
+      f="$(relay_dir)/inbox.ndjson"
+      [[ "$f" -ot "$BELL_PREV" ]] || watch_relays
+    fi
     if [[ -n "$cursor" ]]; then
       {
         for id in "${!OFF[@]}"; do printf '%s\t%s\n' "$id" "${OFF[$id]}"; done
@@ -1180,11 +1220,19 @@ cmd_watch() {
         done
       } >"$cursor.tmp" && mv "$cursor.tmp" "$cursor"
     fi
+    clock_ms
     if [[ $once -eq 1 ]]; then
       [[ $WOKE -eq 1 ]] && exit 0
-      if (( timeout > 0 && $(date +%s) - start >= timeout )); then echo "chartroom: watch timed out after ${timeout}s with no wakes" >&2; exit 124; fi
+      if (( timeout > 0 && NOW_MS - start >= timeout * 1000 )); then echo "chartroom: watch timed out after ${timeout}s with no wakes" >&2; exit 124; fi
     fi
-    sleep "$CR_WATCH_INTERVAL"
+    # Wait for a ring until the next full round is due, or --timeout runs out.
+    wait=$((next - NOW_MS))
+    if [[ $once -eq 1 ]] && (( timeout > 0 && start + timeout * 1000 - NOW_MS < wait )); then wait=$((start + timeout * 1000 - NOW_MS)); fi
+    full=1
+    if (( wait > 0 )); then
+      printf -v a '%d.%03d' $((wait / 1000)) $((wait % 1000))
+      if bell_wait "$a"; then clock_ms; (( NOW_MS >= next )) || full=0; fi
+    fi
   done
 }
 
