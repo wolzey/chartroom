@@ -46,7 +46,7 @@ jobs:
   # run WSL2 reliably.)
   windows:
     runs-on: windows-latest
-    timeout-minutes: 50
+    timeout-minutes: 60
     defaults:
       run:
         shell: bash
@@ -67,8 +67,10 @@ jobs:
       - name: no personal data
         run: scripts/privacy-gate.sh
       - name: bats
-        # a hung test fails after BATS_TEST_TIMEOUT; anything hung around the suite, by the step
-        timeout-minutes: 30
+        # a hung test fails after BATS_TEST_TIMEOUT; anything hung around the suite, by the step.
+        # Git Bash runs the suite at ~10x Linux (every process is slow to start), and the same
+        # tests take up to ~1.6x as long on one hosted runner as on another.
+        timeout-minutes: 45
         env:
           BATS_TEST_TIMEOUT: 300
         run: '"$(cygpath -u "$RUNNER_TEMP")/bats/bin/bats" --print-output-on-failure test/'
