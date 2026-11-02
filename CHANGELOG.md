@@ -211,6 +211,10 @@ are stable from 0.1.0.
     An unreachable machine keeps its last ships, marked stale.
   - **Cost.** The server collects off the request path, only while a radar page is open, with a
     change gate for this machine and process-group timeouts.
+  - **Windows.** On Git Bash the server, a native python, opens this machine's task files (the
+    panel's file links, the change gate) by their Windows paths, converted once each with Git
+    Bash's `cygpath`; it had opened the radar's `/c/...` and `/tmp/...` paths as given, so a file
+    link was a 404 and the gate never saw a task change.
   - **Machine label.** `CHARTROOM_MACHINE_NAME` labels this machine (default: the host name).
 - Relays between homes: XO-to-XO messages on one machine, with no daemon. `chartroom relay
   <home> [--re <id>] [--project P] [--from <this home>] <message|->` appends one record to the

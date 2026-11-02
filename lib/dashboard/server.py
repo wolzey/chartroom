@@ -276,6 +276,22 @@ class Radar:
         self.discover_error = None
         self.cache, self.flight = {}, {}
         self.herdr = shutil.which("herdr")
+        # Windows: the CLI runs under Git Bash and reports this machine's homes as MSYS paths
+        # (/c/..., /tmp/...), which this native python cannot open; Git Bash's cygpath converts them
+        self.cygpath = shutil.which("cygpath") if os.name == "nt" else None
+        self.native_paths = {}
+
+    def native(self, p):
+        """A home path from this machine's snapshot, as this python opens it (converted once)."""
+        if not self.cygpath or not isinstance(p, str) or not p.startswith("/"):
+            return p
+        if p not in self.native_paths:
+            try:
+                out = subprocess.run([self.cygpath, "-m", p], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10).stdout
+                self.native_paths[p] = out.decode("utf-8", "replace").strip() or p
+            except (OSError, subprocess.TimeoutExpired):
+                self.native_paths[p] = p
+        return self.native_paths[p]
 
     def watched(self):
         return time.time() - self.watched_at < RADAR_WATCH_SECONDS
@@ -318,7 +334,7 @@ class Radar:
         """This machine's change gate: every home's task files (mtime, size) and herdr's agent states."""
         h = hashlib.sha1()
         for home in ((src.good or {}).get("machine") or {}).get("homes") or []:
-            p = home.get("path")
+            p = self.native(home.get("path"))
             if not p:
                 continue
             base = os.path.join(glob.escape(p), "tasks", "*")
@@ -478,7 +494,7 @@ class Radar:
             return 404, "not found\n"
         if src.spec.get("local"):
             try:
-                with open(os.path.join(rec["home_path"], "tasks", tid, name), "rb") as fh:
+                with open(os.path.join(self.native(rec["home_path"]), "tasks", tid, name), "rb") as fh:
                     return 200, fh.read()
             except (OSError, TypeError):
                 return 404, "%s has no %s\n" % (tid, name)
