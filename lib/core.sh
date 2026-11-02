@@ -75,7 +75,7 @@ CR_CONFIG_FILE="${CHARTROOM_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/chartroom/
 # The homes on this machine (lib/homes.sh): `name=path` lines, next to the config file.
 CR_HOMES_FILE="${CR_CONFIG_FILE%/*}/homes"
 CR_HOME_CONFIG=""
-declare -A CR_HOME_CFG=()
+declare -A CR_HOME_CFG=() CR_FILE_CFG=()
 
 # A trailing CR (a file saved by a Windows editor) is not part of the value.
 cfg_value_in() { # <file> <KEY>
@@ -83,28 +83,47 @@ cfg_value_in() { # <file> <KEY>
   local cr=$'\r'
   sed -nE "s/^[[:space:]]*$2[[:space:]]*=[[:space:]]*//p" "$1" | tail -1 | sed -E "s/$cr\$//; "'s/^"(.*)"$/\1/; s/^'"'"'(.*)'"'"'$/\1/'
 }
-cfg_file_value() { cfg_value_in "$CR_CONFIG_FILE" "$1"; } # <KEY>
 
-# The home's own config, read once into CR_HOME_CFG (the same rules as cfg_value_in).
+# A config file's settings as "<KEY><TAB><value>" lines, by cfg_value_in's rules (the last
+# line for a key wins when read in order).
+cfg_pairs() { # <file>
+  local cr=$'\r'
+  sed -nE $'s/^[[:space:]]*(CHARTROOM_[A-Z0-9_]+)[[:space:]]*=[[:space:]]*/\\1\t/p' "$1" |
+    sed -E "s/$cr\$//; "$'s/\t"(.*)"$/\t\\1/; s/\t\'(.*)\'$/\t\\1/'
+}
+
+# The config file and the home's own config are each read once, into CR_FILE_CFG and
+# CR_HOME_CFG, and load_config sets its twenty-odd settings with cfg_set: every run starts
+# there, and forks are slow on Git Bash (a lookup per setting through $(...) was some forty
+# forks a run, more than a hundred processes with a config file).
+load_file_config() {
+  CR_FILE_CFG=()
+  [[ -f "$CR_CONFIG_FILE" ]] || return 0
+  local k v
+  while IFS=$'\t' read -r k v; do CR_FILE_CFG[$k]="$v"; done < <(cfg_pairs "$CR_CONFIG_FILE")
+}
+cfg_file_value() { printf '%s' "${CR_FILE_CFG[$1]:-}"; } # <KEY>
+
 load_home_config() {
   CR_HOME_CFG=(); CR_HOME_CONFIG="$CR_HOME/config"
   [[ -f "$CR_HOME_CONFIG" ]] || return 0
-  local k v cr=$'\r'
+  local k v
   while IFS=$'\t' read -r k v; do
     [[ "$k" == CHARTROOM_HOME || "$k" == CHARTROOM_PLATFORM ]] && continue
     CR_HOME_CFG[$k]="$v"
-  done < <(sed -nE $'s/^[[:space:]]*(CHARTROOM_[A-Z0-9_]+)[[:space:]]*=[[:space:]]*/\\1\t/p' "$CR_HOME_CONFIG" |
-    sed -E "s/$cr\$//; "$'s/\t"(.*)"$/\t\\1/; s/\t\'(.*)\'$/\t\\1/')
+  done < <(cfg_pairs "$CR_HOME_CONFIG")
 }
 
-cfg() { # <SUFFIX> <legacy CAP_ name or ""> <default>
-  local name="CHARTROOM_$1" legacy="$2" def="$3" v
-  v="${!name:-}"
-  [[ -z "$v" && -n "$legacy" ]] && v="${!legacy:-}"
-  [[ -z "$v" ]] && v="${CR_HOME_CFG[$name]:-}"
-  [[ -z "$v" ]] && v="$(cfg_file_value "$name")"
-  printf '%s' "${v:-$def}"
+# A setting into the variable <VAR>, without a fork.
+cfg_set() { # <VAR> <SUFFIX> <legacy CAP_ name or ""> <default>
+  local _n="CHARTROOM_$2" _v
+  _v="${!_n:-}"
+  [[ -z "$_v" && -n "$3" ]] && _v="${!3:-}"
+  [[ -z "$_v" ]] && _v="${CR_HOME_CFG[$_n]:-}"
+  [[ -z "$_v" ]] && _v="${CR_FILE_CFG[$_n]:-}"
+  printf -v "$1" '%s' "${_v:-$4}"
 }
+cfg() { local value; cfg_set value "$@"; printf '%s' "$value"; } # <SUFFIX> <legacy CAP_ name or ""> <default>
 
 # The registered homes, one "<name><TAB><path>" line each (~ expanded, no trailing slash; the
 # last line for a name wins). Prints nothing without a homes file.
@@ -145,7 +164,7 @@ resolve_home() {
   if [[ -f "$CR_HOMES_FILE" ]] && f="$(home_of_dir "$PWD")" && [[ -n "$f" ]]; then
     n="${f%%$'\t'*}"; CR_HOME="${f#*$'\t'}"; CR_HOME_SOURCE="registered home $n, from the current directory"; return
   fi
-  f="$(cfg_file_value CHARTROOM_HOME)"
+  f="${CR_FILE_CFG[CHARTROOM_HOME]:-}"
   if [[ -n "$f" ]]; then CR_HOME="${f/#\~/$HOME}"; CR_HOME_SOURCE=config; return; fi
   if [[ -d "$HOME/.chartroom" || ! -d "$HOME/.captain" ]]; then CR_HOME="$HOME/.chartroom"; CR_HOME_SOURCE=default
   else CR_HOME="$HOME/.captain"; CR_HOME_SOURCE="legacy ~/.captain"; fi
@@ -153,31 +172,32 @@ resolve_home() {
 
 load_config() {
   CR_HOME_CFG=(); CR_HOME_CONFIG=""
+  load_file_config
   detect_platform
   resolve_home
   # Git Bash: a Windows-form home (C:\chartroom\home, as a Windows tool would pass it)
   # becomes /c/chartroom/home, so globs and path joins keep working.
   if [[ "$CR_PLATFORM" == msys && "$CR_HOME" =~ ^[A-Za-z]:[\\/] ]]; then CR_HOME="$(cygpath -u "$CR_HOME")"; fi
   load_home_config
-  CR_PROJECT_ROOTS="$(cfg PROJECT_ROOTS CAP_PROJECT_ROOTS '')"
+  cfg_set CR_PROJECT_ROOTS PROJECT_ROOTS CAP_PROJECT_ROOTS ''
   CR_PROJECT_ROOTS="${CR_PROJECT_ROOTS//\~/$HOME}"
-  CR_WORKSPACE="$(cfg WORKSPACE CAP_CREW_WORKSPACE chartroom-crew)"
-  CR_WATCH_INTERVAL="$(cfg WATCH_INTERVAL CAP_WATCH_INTERVAL 3)"
-  CR_BACKEND_ORDER="$(cfg BACKEND_ORDER '' 'hc:claude herdr:claude cmux:claude tmux:claude headless:codex headless:claude command')"
+  cfg_set CR_WORKSPACE WORKSPACE CAP_CREW_WORKSPACE chartroom-crew
+  cfg_set CR_WATCH_INTERVAL WATCH_INTERVAL CAP_WATCH_INTERVAL 3
+  cfg_set CR_BACKEND_ORDER BACKEND_ORDER '' 'hc:claude herdr:claude cmux:claude tmux:claude headless:codex headless:claude command'
   CR_BACKEND_ORDER="${CR_BACKEND_ORDER//,/ }"
-  CR_HARNESS="$(cfg HARNESS '' generic)"
-  CR_BRANCH_PREFIX="$(cfg BRANCH_PREFIX '' chartroom/)"
-  CR_CODEX_SHIP_SANDBOX="$(cfg CODEX_SHIP_SANDBOX '' danger-full-access)"
-  CR_CODEX_SCOUT_SANDBOX="$(cfg CODEX_SCOUT_SANDBOX '' workspace-write)"
-  CR_CLAUDE_PERMISSION="$(cfg CLAUDE_PERMISSION '' '')"
-  CR_CLAUDE_HEADLESS_PERMISSION="$(cfg CLAUDE_HEADLESS_PERMISSION '' acceptEdits)"
-  CR_CLAUDE_ALLOWED_TOOLS="$(cfg CLAUDE_ALLOWED_TOOLS '' 'Bash Read Edit Write Glob Grep WebFetch WebSearch')"
-  CR_COMMAND="$(cfg COMMAND '' '')"
-  CR_DELIVER_WAIT="$(cfg DELIVER_WAIT '' 8)"
-  CR_JOIN_ACK_WAIT="$(cfg JOIN_ACK_WAIT '' 20)"
-  CR_STEER_INLINE_MAX="$(cfg STEER_INLINE_MAX '' 300)"
-  CR_WAITING_GRACE="$(cfg WAITING_GRACE_MINUTES '' 15)"
-  CR_WAITING_MAX="$(cfg WAITING_MAX_MINUTES '' 120)"
+  cfg_set CR_HARNESS HARNESS '' generic
+  cfg_set CR_BRANCH_PREFIX BRANCH_PREFIX '' chartroom/
+  cfg_set CR_CODEX_SHIP_SANDBOX CODEX_SHIP_SANDBOX '' danger-full-access
+  cfg_set CR_CODEX_SCOUT_SANDBOX CODEX_SCOUT_SANDBOX '' workspace-write
+  cfg_set CR_CLAUDE_PERMISSION CLAUDE_PERMISSION '' ''
+  cfg_set CR_CLAUDE_HEADLESS_PERMISSION CLAUDE_HEADLESS_PERMISSION '' acceptEdits
+  cfg_set CR_CLAUDE_ALLOWED_TOOLS CLAUDE_ALLOWED_TOOLS '' 'Bash Read Edit Write Glob Grep WebFetch WebSearch'
+  cfg_set CR_COMMAND COMMAND '' ''
+  cfg_set CR_DELIVER_WAIT DELIVER_WAIT '' 8
+  cfg_set CR_JOIN_ACK_WAIT JOIN_ACK_WAIT '' 20
+  cfg_set CR_STEER_INLINE_MAX STEER_INLINE_MAX '' 300
+  cfg_set CR_WAITING_GRACE WAITING_GRACE_MINUTES '' 15
+  cfg_set CR_WAITING_MAX WAITING_MAX_MINUTES '' 120
   [[ "$CR_WAITING_GRACE$CR_WAITING_MAX" =~ ^[0-9]+$ ]] || die "CHARTROOM_WAITING_GRACE_MINUTES and CHARTROOM_WAITING_MAX_MINUTES must be whole minutes"
 }
 
@@ -186,7 +206,7 @@ load_config() {
 # Bash, MSYS2, Cygwin). Windows-only behaviour hangs off this, so macOS and Linux keep their
 # code paths. CHARTROOM_PLATFORM overrides the detection.
 detect_platform() {
-  CR_PLATFORM="$(cfg PLATFORM '' '')"
+  cfg_set CR_PLATFORM PLATFORM '' ''
   if [[ -z "$CR_PLATFORM" ]]; then
     case "${OSTYPE:-}" in
       msys*|cygwin*) CR_PLATFORM=msys ;;

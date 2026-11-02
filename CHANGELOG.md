@@ -518,6 +518,11 @@ are stable from 0.1.0.
   the XO skill keeps it current, and `bearings` folds its waiting items into "Needs you".
 
 ### Fixed
+- Every chartroom command starts with far fewer processes, which Git Bash makes slow: the config
+  file and the home's own config are read once, and the twenty-odd settings each run reads are
+  set without a `$(...)`. Each setting forked twice, and ran a three-process `sed` pipeline when a
+  config file exists: `chartroom version` forked 44 times (98 forks and 61 programs with a
+  three-line config file), now 8 (11 and 9). Lookups, precedence and parsing are unchanged.
 - A loop of `watch --once` calls no longer repeats a lost worker or misses an agent's state
   change between calls. A headless or command worker that vanished without an exit record woke
   every `--once` call, so with no `--timeout` the XO was woken again at once, until it closed or
