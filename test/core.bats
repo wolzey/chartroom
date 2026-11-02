@@ -165,6 +165,34 @@ EOF
   [ "$(cr status --json | jq -r '.[0].state')" = stopped-silent ]
 }
 
+@test "a worker gone without an exit record wakes once: recorded, so the next --once or a stream does not repeat it" {
+  # Its wrapper, which records `exited`, is killed hard; the stub sleeps on a little, then ends
+  # without a word.
+  id="$(new_task --backend command --command "STUB_MODE=silent STUB_SLEEP=5 $STUB {id}")"
+  cr dispatch "$id" >/dev/null
+  kill -KILL "$(meta_of "$id" pid)"
+  run cr watch --once --timeout 10
+  [ "$status" -eq 0 ]
+  [ "$output" = "[$id] [proj] lost: worker process vanished without an exit record" ]
+  run cr watch --once --timeout 3
+  [ "$status" -eq 124 ]
+  [[ "$output" != *"lost:"* ]]
+  events "$id" | grep -q " note: lost: worker process vanished without an exit record (pid $(meta_of "$id" pid))$"
+  # a stream reports a lost run once, and a new run (a steer re-runs the command) can be lost too
+  "$CHARTROOM" watch >"$BATS_TEST_TMPDIR/stream" 2>&1 3>&- &
+  w=$!
+  sleep 2
+  cr steer "$id" "try again" >/dev/null
+  kill -KILL "$(meta_of "$id" pid)"
+  for _ in $(seq 1 40); do grep -q 'lost:' "$BATS_TEST_TMPDIR/stream" && break; sleep 0.25; done
+  sleep 3
+  kill "$w"; wait "$w" 2>/dev/null || true
+  [ "$(grep -c "^\[$id\] \[proj\] lost: worker process vanished without an exit record$" "$BATS_TEST_TMPDIR/stream")" -eq 1 ]
+  [ "$(events "$id" | grep -c ' note: lost: ')" -eq 2 ]
+  run cr watch --once --timeout 3
+  [[ "$output" != *"lost:"* ]]
+}
+
 @test "waiting: an exit right after waiting is not a wake; the status is waiting with its window" {
   id="$(new_task --backend command --command "STUB_MODE=waiting STUB_WAITING='CI on PR 12 until 2099-01-01T10:30Z' $STUB {id}")"
   cr dispatch "$id" >/dev/null

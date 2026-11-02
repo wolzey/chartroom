@@ -1024,16 +1024,19 @@ cmd_accept() {
 #   chartroom watch                      run forever, streaming
 #   chartroom watch --once [--timeout S] block until the first wake(s), print them, exit 0;
 #                                        exit 124 on timeout. Remembers its place in
-#                                        $CHARTROOM_HOME/.watch-cursor, so a loop of --once
-#                                        calls never misses a wake between calls. (Claude
-#                                        Code: a background Bash command, no --timeout,
-#                                        started again after each batch.)
-declare -A OFF=() HST=() LOST=()
+#                                        $CHARTROOM_HOME/.watch-cursor (each log's offset,
+#                                        each hc/herdr agent's last state), so a loop of
+#                                        --once calls misses no wake a stream would print,
+#                                        except an agent state that came and went between
+#                                        two calls. (Claude Code: a background Bash command,
+#                                        no --timeout, started again after each batch.)
+declare -A OFF=() HST=() SEEN_ST=() SEEN_TURN=()
 CURSOR_FILE="$CR_HOME/.watch-cursor"
 
 # The --once cursor is created once, at the current end of every log, so history is
 # never replayed; tasks created after that are absent from it and are read from byte 0.
-# The relay mailbox (lib/relay.sh) is kept under @relays, which no task id can be.
+# The relay mailbox (lib/relay.sh) is kept under @relays, which no task id can be, and each
+# hc/herdr agent's last state under @state:<id> (watch_baseline).
 ensure_cursor() {
   [[ -f "$CURSOR_FILE" ]] && return 0
   local d r
@@ -1099,6 +1102,22 @@ watch_overdue() { # <id>
   wake "$id" "$msg"
 }
 
+# The hc/herdr agent state a watch compares against (HST, and hc's HC_TURNS). --once picks up
+# where the last call left off (the cursor's @state:<id> lines), so a change between two calls
+# wakes the next one. A task the cursor has never seen starts from no state, as its log starts
+# from byte 0 and as a task dispatched mid-stream does: a prompt it is blocked on wakes.
+# Otherwise, and in a streaming watch, it starts from the state now.
+watch_baseline() { # <id> <hc|herdr> <unseen 0|1>
+  local id="$1"
+  if [[ -n "${SEEN_ST[$id]:-}" ]]; then
+    HST[$id]="${SEEN_ST[$id]}"
+    [[ ! "${SEEN_TURN[$id]:-}" =~ ^[0-9]+$ ]] || HC_TURNS[$id]="${SEEN_TURN[$id]}"
+  elif [[ $3 -eq 1 ]]; then :
+  elif [[ "$2" == hc ]]; then hc_watch_seed "$id"
+  else HST[$id]="$(herdr_status "$id" 2>/dev/null || true)"; fi
+  return 0
+}
+
 cmd_watch() {
   local once=0 timeout=0 cursor="" a
   while [[ $# -gt 0 ]]; do
@@ -1110,21 +1129,28 @@ cmd_watch() {
     esac
   done
   shopt -s nullglob
-  local d id f size start fresh=1; start="$(date +%s)"
+  local d id f size start fresh=1 unseen b; start="$(date +%s)"
   mkdir -p "$CR_HOME/tasks"
   if [[ $once -eq 1 && -z "$cursor" ]]; then cursor="$CURSOR_FILE"; ensure_cursor; fi
   if [[ -n "$cursor" && -f "$cursor" ]]; then
     fresh=0
-    while IFS=$'\t' read -r id a; do [[ -n "$id" ]] && OFF[$id]="$a"; done <"$cursor"
+    while IFS=$'\t' read -r id a b; do
+      case "$id" in
+        "") ;;
+        @state:*) SEEN_ST[${id#@state:}]="$a"; SEEN_TURN[${id#@state:}]="$b" ;;
+        *) OFF[$id]="$a" ;;
+      esac
+    done <"$cursor"
   fi
   for d in "$CR_HOME"/tasks/*/; do
     id="$(basename "$d")"; f="$d/events.log"
+    unseen=0; [[ $fresh -eq 0 && -z "${OFF[$id]+x}" ]] && unseen=1
     # Streaming without a cursor starts at EOF (status covers anything older).
     [[ $fresh -eq 1 && -f "$f" && -z "${OFF[$id]+x}" ]] && OFF[$id]=$(($(wc -c <"$f")))
     if [[ -f "$d/meta.json" ]]; then
       case "$(backend_runner "$id" 2>/dev/null)" in
-        herdr) HST[$id]="$(herdr_status "$id" 2>/dev/null || true)" ;;
-        hc) [[ -n "$(meta "$id" dispatched)" && -z "$(meta "$id" closed)" ]] && hc_watch_seed "$id" ;;
+        herdr) [[ -z "$(meta "$id" closed)" ]] && watch_baseline "$id" herdr "$unseen" ;;
+        hc) [[ -n "$(meta "$id" dispatched)" && -z "$(meta "$id" closed)" ]] && watch_baseline "$id" hc "$unseen" ;;
       esac
     fi
   done
@@ -1146,7 +1172,13 @@ cmd_watch() {
     done
     watch_relays
     if [[ -n "$cursor" ]]; then
-      for id in "${!OFF[@]}"; do printf '%s\t%s\n' "$id" "${OFF[$id]}"; done >"$cursor.tmp" && mv "$cursor.tmp" "$cursor"
+      {
+        for id in "${!OFF[@]}"; do printf '%s\t%s\n' "$id" "${OFF[$id]}"; done
+        for id in "${!HST[@]}"; do
+          [[ -n "${HST[$id]}" ]] || continue
+          printf '@state:%s\t%s\t%s\n' "$id" "${HST[$id]}" "${HC_TURNS[$id]:-}"
+        done
+      } >"$cursor.tmp" && mv "$cursor.tmp" "$cursor"
     fi
     if [[ $once -eq 1 ]]; then
       [[ $WOKE -eq 1 ]] && exit 0

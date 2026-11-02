@@ -501,6 +501,17 @@ are stable from 0.1.0.
   the XO skill keeps it current, and `bearings` folds its waiting items into "Needs you".
 
 ### Fixed
+- A loop of `watch --once` calls no longer repeats a lost worker or misses an agent's state
+  change between calls. A headless or command worker that vanished without an exit record woke
+  every `--once` call, so with no `--timeout` the XO was woken again at once, until it closed or
+  re-ran the task. The wake is now recorded as `note: lost: ... (pid N)`, like `waiting
+  overdue`, so it fires once per process; a later run can still be lost. hc and herdr wakes
+  (a blocked prompt, a turn ended without a report, a lost terminal) compared against a fresh
+  look at the start of every call, so a change while the XO was handling the last batch became
+  the baseline and never woke. The cursor now also keeps each hc/herdr agent's last state (and
+  hc's turn count) as `@state:<id>` lines, and the next call wakes on what changed since; a task
+  the cursor has never seen starts from no state, as its log is read from the start. A
+  streaming `watch` behaves as before.
 - herdr dispatch no longer dies on Claude's "trust this folder" dialog. `herdr agent start`
   answers `agent_not_ready` while it is up; chartroom now answers it (only for a worktree it
   created, as before) and delivers the brief. A folder it did not create stops dispatch with a

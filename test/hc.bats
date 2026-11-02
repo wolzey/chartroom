@@ -302,6 +302,51 @@ watch_after() { # <change...>
   [ "$(cr status --json | jq -r '.[0].live')" = gone ]
 }
 
+@test "hc watch --once: what changed while nobody watched wakes the next call, once" {
+  core_up
+  id="$(new_task --backend hc:claude)"
+  cr dispatch "$id" >/dev/null
+  # The cursor has never seen the task (new writes it first): it starts from no state, as a task
+  # dispatched mid-stream does, so a prompt it is already blocked on wakes, once.
+  set_term t1 '.status.state = "blocked"'
+  run cr watch --once --timeout 5
+  [ "$status" -eq 0 ]
+  [ "$output" = "[$id] [proj] hc: agent is waiting on an approval or question prompt" ]
+  run cr watch --once --timeout 2
+  [ "$status" -eq 124 ]
+  grep -qx "@state:$id"$'\t'"blocked"$'\t'"1" "$CHARTROOM_HOME/.watch-cursor"
+  # each change lands between two calls
+  set_term t1 '.status.state = "working"'
+  run cr watch --once --timeout 2
+  [ "$status" -eq 124 ]
+  set_term t1 '.status.state = "idle"'
+  run cr watch --once --timeout 5
+  [ "$status" -eq 0 ]
+  [ "$output" = "[$id] [proj] hc: agent stopped its turn without reporting" ]
+  run cr watch --once --timeout 2
+  [ "$status" -eq 124 ]
+  # a whole turn (idle before and after, the turn count moved)
+  set_term t1 '.turn += 1'
+  run cr watch --once --timeout 5
+  [ "$output" = "[$id] [proj] hc: agent stopped its turn without reporting" ]
+  set_term t1 '.status.state = "blocked"'
+  run cr watch --once --timeout 5
+  [ "$output" = "[$id] [proj] hc: agent is waiting on an approval or question prompt" ]
+  run cr watch --once --timeout 2
+  [ "$status" -eq 124 ]
+  # a cursor from before it kept agent state (no @state lines) starts from the state now: a
+  # turn that ended before this call is not replayed
+  grep -v '^@state:' "$CHARTROOM_HOME/.watch-cursor" >"$BATS_TEST_TMPDIR/c" && mv "$BATS_TEST_TMPDIR/c" "$CHARTROOM_HOME/.watch-cursor"
+  set_term t1 '.status.state = "idle" | .turn += 1'
+  run cr watch --once --timeout 2
+  [ "$status" -eq 124 ]
+  rm -f "$FAKE_HC_DIR/terms/t1.json"
+  run cr watch --once --timeout 5
+  [ "$output" = "[$id] [proj] lost: hc terminal t1 is no longer running" ]
+  run cr watch --once --timeout 2
+  [ "$status" -eq 124 ]
+}
+
 @test "hc watch: an agent that exited on its own wakes once, from the launcher's exited event" {
   core_up
   id="$(new_task --backend hc:claude)"

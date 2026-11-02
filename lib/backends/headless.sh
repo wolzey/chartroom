@@ -185,13 +185,17 @@ headless_close() { pid_alive "$(meta "$1" pid)" && die "worker still running; 'c
 headless_attach() { die "headless workers have no terminal; use 'chartroom peek $1'"; }
 headless_watch() { pid_watch "$1"; }
 
-# A pid-based worker that died without its wrapper writing `exited` was killed hard.
+# A pid-based worker that died without its wrapper writing `exited` was killed hard. It wakes
+# once per process: the wake is recorded as "note: lost: ... (pid N)", so a restarted or
+# --once watch does not repeat it, and a later run (a steer, a dispatch) can still be lost.
 pid_watch() { # <id>
-  local id="$1" pid; pid="$(meta "$id" pid)"
-  if [[ -n "$pid" ]] && ! pid_alive "$pid" && [[ -z "${LOST[$id]:-}" ]] && ! tail -n 3 "$(tdir "$id")/events.log" | grep -q ' exited: '; then
+  local id="$1" pid f msg="lost: worker process vanished without an exit record"
+  pid="$(meta "$id" pid)"; f="$(tdir "$id")/events.log"
+  if [[ -n "$pid" ]] && ! pid_alive "$pid" && ! tail -n 3 "$f" | grep -q ' exited: ' && ! grep -qF " note: $msg (pid $pid)" "$f"; then
     sleep 1 # the wrapper writes `exited` right after the process ends
-    tail -n 3 "$(tdir "$id")/events.log" | grep -q ' exited: ' && return 0
-    wake "$id" "lost: worker process vanished without an exit record"; LOST[$id]=1
+    tail -n 3 "$f" | grep -q ' exited: ' && return 0
+    log_event "$id" note "$msg (pid $pid)"
+    wake "$id" "$msg"
   fi
   return 0
 }

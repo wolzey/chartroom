@@ -240,6 +240,24 @@ lines"
   events "$id2" | grep -q "agent: awaiting-input: trust dialog for a folder chartroom did not create"
 }
 
+@test "herdr watch --once: a turn that ended while nobody watched wakes the next call, once" {
+  use_fake herdr claude
+  export FAKE_HERDR_DIR="$BATS_TEST_TMPDIR/herdr"; mkdir -p "$FAKE_HERDR_DIR"
+  id="$(new_task --backend herdr:claude)"
+  export FAKE_HERDR_TASK="$id"
+  cr dispatch "$id" >/dev/null
+  agent_status() { local p t s; read -r p t s <"$FAKE_HERDR_DIR/agents/$id"; echo "$p $t $1" >"$FAKE_HERDR_DIR/agents/$id"; }
+  agent_status working
+  run cr watch --once --timeout 2
+  [ "$status" -eq 124 ]
+  agent_status idle
+  run cr watch --once --timeout 5
+  [ "$status" -eq 0 ]
+  [ "$output" = "[$id] [proj] herdr: agent stopped its turn without reporting" ]
+  run cr watch --once --timeout 2
+  [ "$status" -eq 124 ]
+}
+
 herdr_trust_screen() {
   printf ' Quick safety check: Is this a project you created or one you trust?\n ❯ No, exit\n   Yes, I trust this folder\n' >"$FAKE_HERDR_DIR/screen"
 }

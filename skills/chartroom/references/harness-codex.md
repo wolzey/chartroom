@@ -15,8 +15,10 @@ chartroom watch --once --timeout 1500
 - Exit 124: nothing happened in that window. Wait again (or report to the commander if they
   asked to be told when you are idle).
 
-`--once` remembers its place in `$CHARTROOM_HOME/.watch-cursor`, so nothing is missed between
-calls. Keep each wait shorter than your shell tool's timeout.
+`--once` remembers its place in `$CHARTROOM_HOME/.watch-cursor` (each log's offset and each
+agent's last state), so nothing is missed between calls except an agent state that came and went
+before the next one (a prompt answered in its terminal meanwhile). Keep each wait shorter than
+your shell tool's timeout.
 
 ## Invocation
 
