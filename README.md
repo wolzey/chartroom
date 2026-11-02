@@ -150,6 +150,9 @@ PowerShell or cmd.
     under `%USERPROFILE%` only you, SYSTEM and Administrators can read.
   - `chartroom join` is unavailable: it finds the session by its process tree, and a native
     Windows agent is outside Git Bash's. Join a running session from WSL2.
+  - `watch` and `listen` have no doorbell (MSYS FIFOs and native Windows processes don't mix):
+    `watch` wakes at its next round, every `CHARTROOM_WATCH_INTERVAL` seconds, and `listen`
+    checks every second.
   - Workers that chartroom launches inherit its `jq`: an exported bash function that runs
     `jq.exe` with `--binary` and passes its arguments unconverted (file operands become Windows
     paths). It is harmless for ordinary use; `command jq` runs `jq.exe` itself.
@@ -818,9 +821,9 @@ chartroom relay globex --project shop "heads up: the shared bucket moves on Frid
 ```
 
 It appends one record to the other home's mailbox, `relays/inbox.ndjson`, and writes nothing else
-there; this home keeps a copy in its own `relays/outbox.ndjson`. The other home's `chartroom
-watch` reads its mailbox every round, so its XO session gets a wake within seconds, the same way
-it hears from its workers:
+there; this home keeps a copy in its own `relays/outbox.ndjson`. The relay rings the other home's
+`chartroom watch` (its doorbell, under [the contract](#state-format-and-event-protocol-the-contract)),
+so its XO session gets a wake at once, the same way it hears from its workers:
 
 ```
 [relay rl-3f2a] [from acme] [shop] heads up: the shared bucket moves on Friday; does anything of yours still read it?
@@ -1027,6 +1030,16 @@ write them:
 | `exited` | process wrappers (`... (exit N)`) | yes, unless the worker reported first |
 | `agent` | hooks: `turn-ended`, `awaiting-input: <why>`, `prompt-received` | `turn-ended` without a report, and `awaiting-input` |
 
+`watch` waits on a doorbell: whatever chartroom records (`chartroom event`, a hook's line, a
+relay) rings it once the line is on disk, and it wakes within a fraction of a second, reading
+only the logs that changed. Every `CHARTROOM_WATCH_INTERVAL` seconds (default 3) it also makes a
+full round: every task, the backends' own state (hc, herdr, a worker's pid), overdue waits. That
+round is how it sees what rings nothing yet: a line appended with `printf >>`, a launcher's or
+wrapper's `exited`, an agent state change. `listen` waits on its own, which `steer` rings. A
+ring carries no data, so the files stay the only truth. The doorbell is a FIFO per listener
+outside the home, in `/tmp/chartroom-<uid>/bells/` (`CHARTROOM_RUNTIME_DIR` moves it); on Git
+Bash, or where no FIFO can be made, `watch` and `listen` poll as before.
+
 `chartroom event <id> decision|blocked|failed --breaking <text>` writes the text as
 `[breaking] <text>` (the line format is unchanged): focus mode never holds such a report.
 
@@ -1079,7 +1092,7 @@ to the config file.
 | `CHARTROOM_CLAUDE_PERMISSION` | *(agent default)* | interactive Claude `--permission-mode` |
 | `CHARTROOM_CLAUDE_HEADLESS_PERMISSION` | `acceptEdits` | |
 | `CHARTROOM_CLAUDE_ALLOWED_TOOLS` | `Bash Read Edit Write Glob Grep WebFetch WebSearch` | headless Claude |
-| `CHARTROOM_WATCH_INTERVAL` | `3` | seconds |
+| `CHARTROOM_WATCH_INTERVAL` | `3` | seconds between `watch`'s full rounds (every task, backend state, overdue waits): the fallback for what does not ring its doorbell |
 | `CHARTROOM_DASHBOARD_PORT` | `4517` | the port `dashboard` and `dashboard open` use (`--port` overrides); each home on a machine needs its own |
 | `CHARTROOM_DASHBOARD_RECENT_HOURS` | `48` | how far back the dashboard's Recently finished lane reaches |
 | `CHARTROOM_DASHBOARD_THEME` | `chartroom` | the dashboard's default theme: `chartroom` or `hud` (`--theme` overrides) |
@@ -1104,6 +1117,7 @@ to the config file.
 | `CHARTROOM_SWEEP_SETTLE_MINUTES` | `60` | `sweep --apply` closes a done task only this long after its `done` report, so the XO sees it first |
 | `CHARTROOM_BASH_SEARCH` | see Install | environment only: colon-separated dirs searched for a bash ≥ 4 when started under an older one (PATH is always searched first) |
 | `CHARTROOM_PATH_APPEND` | `/opt/homebrew/bin:/usr/local/bin` on macOS, else empty | environment only: dirs appended to PATH when they exist and are missing; empty turns it off |
+| `CHARTROOM_RUNTIME_DIR` | `/tmp` | environment only: where `watch` and `listen` keep their doorbell FIFOs (`chartroom-<uid>/bells/`); every process of every home on the machine must agree on it |
 
 `CAP_PROJECT_ROOTS`, `CAP_CREW_WORKSPACE` and `CAP_WATCH_INTERVAL` are read as legacy fallbacks.
 

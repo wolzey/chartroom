@@ -106,6 +106,23 @@ are stable from 0.1.0.
   The chartroom skill says the same for the XO, and `bearings` and `continue` name a task's page.
 
 ### Changed
+- `watch` and `listen` wait on a doorbell instead of sleeping, so a wake comes within a fraction
+  of a second instead of at the next poll: `chartroom event` (and every hook, note and steer
+  record chartroom writes) rings the home's watches, `relay` the target home's, and a joined
+  task's `steer` its `listen`. Medians measured on one machine (macOS, 50 live workers or one):
+  event → `watch --once` 2.5 s → 0.11 s (one task) and 3.8 s → 0.12 s (50 tasks), relay → the
+  other home's watch 2.2–2.7 s → 0.15 s, steer → `listen` 0.6 s → 0.1 s. A ring is one byte in
+  a FIFO per listener, outside the home (`/tmp/chartroom-<uid>/bells/`, or
+  `CHARTROOM_RUNTIME_DIR`), and carries no data: the files stay the only truth. It is coalesced,
+  so not even a stopped listener can block a ringer; a dead listener's FIFO is removed by the
+  next ring in its own home. On a ring the watch reads only the logs that changed since its last
+  scan. Its full round (every task, the backends' state, overdue waits) still runs every
+  `CHARTROOM_WATCH_INTERVAL` (still 3 s): that is how it sees what rings nothing yet (a
+  launcher's or wrapper's `exited`, a line appended with `printf >>`, an hc or herdr state
+  change). Git Bash, or a filesystem without FIFOs: it polls as before.
+- The watch's full round reads every task's `meta.json` with one `jq` instead of several per
+  task, and skips closed tasks without one: at 50 live workers a round takes 0.5 s instead of
+  1.3 s, and an idle watch 14% of a core instead of 27%.
 - A Claude Code XO waits for wakes with `chartroom watch --once` as a background Bash command
   (`run_in_background: true`, no `--timeout`), started again after it handles each batch,
   instead of a streaming `watch` under the Monitor tool whose 30-minute timeout woke the XO to

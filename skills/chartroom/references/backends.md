@@ -36,7 +36,9 @@ cmux is implemented against its documented CLI but **unverified on a real cmux i
 - The worker gets one line: "Read the brief at … and follow it exactly." The brief carries
   the protocol: events, report, stop at decisions, no push.
 - Workers append to `tasks/<id>/events.log`; `chartroom watch` turns the lines that need you
-  into wakes.
+  into wakes. A line written through `chartroom event` (or a hook) rings `watch`, which wakes
+  within a fraction of a second; a line appended any other way, a launcher's `exited` among them,
+  is read at its next full round (`CHARTROOM_WATCH_INTERVAL`, 3 s).
 - New worktrees have no `node_modules` or other build products. The worker installs
   dependencies itself. Say so in the spec when it matters.
 
@@ -111,7 +113,7 @@ program from the `herdr` CLI/server below; workers on `herdr:*` never appear in 
   `close` saves the screen to `pane.log`, then `hc kill` and `hc rm`. The app drops a pane whose
   terminal ends and a tab whose last pane goes, window open or not (verified); a space goes with
   its last tab, and the next dispatch makes it again.
-- Wakes come from hc's own agent state (`hc get`, polled with `watch`): `blocked`, `error`, a turn
+- Wakes come from hc's own agent state (`hc get`, polled in each of `watch`'s full rounds): `blocked`, `error`, a turn
   ending (`idle`/`done`) without a report, whether or not `watch` saw it `working` (hc counts
   turns), and the terminal gone (`lost`; an agent that exited on its own wakes through the
   launcher's `exited` instead). hc's states come from the agent itself (OSC 7501); Claude Code
@@ -243,8 +245,8 @@ never has to reach into its terminal.
   agent fills the brief's intent and spec itself. Re-running it in the same session (same Claude
   session id, else same agent pid, else same directory) returns the same open task.
 - **Steering is a mailbox**: `tasks/<id>/mail/<n>.txt`, read up to the number in `mail/read`.
-  The agent keeps `chartroom listen <id>` armed; it blocks until a message lands, prints it,
-  marks it read, logs `agent: prompt-received mail #n` and exits. `steer` writes the message and
+  The agent keeps `chartroom listen <id>` armed; it blocks until a message lands (`steer` rings
+  it, so at once), prints it, marks it read, logs `agent: prompt-received mail #n` and exits. `steer` writes the message and
   reports `delivered` only once it is read (within `CHARTROOM_JOIN_ACK_WAIT`, default 20s),
   otherwise `queued, not yet read` and whether a listener is armed. It never types into the
   agent's terminal.
