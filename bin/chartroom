@@ -1021,11 +1021,13 @@ cmd_accept() {
 # on a prompt, a worker vanishing, a stopped worker's `waiting` window running out, or a
 # relay from another home's XO ("[relay rl-xxxx] [from <home>] ...", lib/relay.sh).
 # Routine progress, and a turn that ends right after `waiting`, are never printed.
-#   chartroom watch                      run forever (e.g. under Claude Code's Monitor)
+#   chartroom watch                      run forever, streaming
 #   chartroom watch --once [--timeout S] block until the first wake(s), print them, exit 0;
 #                                        exit 124 on timeout. Remembers its place in
 #                                        $CHARTROOM_HOME/.watch-cursor, so a loop of --once
-#                                        calls never misses a wake between calls.
+#                                        calls never misses a wake between calls. (Claude
+#                                        Code: a background Bash command, no --timeout,
+#                                        started again after each batch.)
 declare -A OFF=() HST=() LOST=()
 CURSOR_FILE="$CR_HOME/.watch-cursor"
 

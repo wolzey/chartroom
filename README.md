@@ -73,7 +73,7 @@ Per agent:
 
 | Agent | How it loads chartroom | How the XO waits for wakes |
 |---|---|---|
-| Claude Code | `chartroom install-skills --claude`, **or** `/plugin marketplace add wolzey/chartroom` then `/plugin install chartroom@chartroom` (skills only; the CLI still comes from install.sh) | `Monitor` running `chartroom watch` |
+| Claude Code | `chartroom install-skills --claude`, **or** `/plugin marketplace add wolzey/chartroom` then `/plugin install chartroom@chartroom` (skills only; the CLI still comes from install.sh) | `chartroom watch --once` as a background Bash command (`run_in_background`), started again after each batch |
 | Codex CLI | `chartroom install-skills --agents` (`~/.agents/skills`) | loop on `chartroom watch --once --timeout 1500` |
 | Gemini CLI | `chartroom install-skills --agents` (Gemini reads `~/.agents/skills`), or `gemini skills link <checkout>/skills/chartroom` | same as Codex |
 | pi | `chartroom install-skills --pi` (and, for the crew view, `pi install <checkout>/mods/crew-view-pi`) | same as Codex |
