@@ -106,6 +106,13 @@ are stable from 0.1.0.
   The chartroom skill says the same for the XO, and `bearings` and `continue` name a task's page.
 
 ### Changed
+- A Claude Code XO waits for wakes with `chartroom watch --once` as a background Bash command
+  (`run_in_background: true`, no `--timeout`), started again after it handles each batch,
+  instead of a streaming `watch` under the Monitor tool whose 30-minute timeout woke the XO to
+  re-arm it. A quiet fleet no longer wakes the XO, and starting the next batch is never news to
+  the commander. `--once` keeps its own cursor, which a streaming `watch` never moves, so
+  `references/harness-claude.md` has the XO check `chartroom status` before relaying anything
+  from the first batch in a home that used a stream. `watch` itself is unchanged.
 - The default `CHARTROOM_BACKEND_ORDER` starts with `hc:claude`, before `herdr:claude`:
   `hc:claude herdr:claude cmux:claude tmux:claude headless:codex headless:claude command`.
   `herdr:*` is unchanged and still the next choice where herdr-core is not running.

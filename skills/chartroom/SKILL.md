@@ -165,9 +165,9 @@ worktree kept, say), run `chartroom accept <id>`.
 ## Supervision
 
 Don't poll, sleep, or peek on a timer. Wait on the wake stream: `chartroom watch` (a stream)
-or `chartroom watch --once --timeout <s>` (one batch of wakes, then exit; exit 124 = nothing
-happened). Your harness reference says which one to use. Every line is a wake, as
-`[<id>] [<project>] <event>`; keep the project when you relay it:
+or `chartroom watch --once [--timeout <s>]` (one batch of wakes, then exit; exit 124 = nothing
+happened before the timeout). Your harness reference says which one to use. Every line is a
+wake, as `[<id>] [<project>] <event>`; keep the project when you relay it:
 
 - `decision`, `blocked`, `done`, `failed`: the worker reported.
 - `exited`: a headless or command run ended without reporting first.

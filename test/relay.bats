@@ -57,7 +57,7 @@ of text, café")"
   run in_b watch --once --timeout 2
   [ "$status" -eq 124 ]
   grep -qx "@relays	$(wc -c <"$B/relays/inbox.ndjson" | tr -d ' ')" "$B/.watch-cursor"
-  # a running stream (as under Claude Code's Monitor) starts at the end, then wakes within seconds
+  # a running stream (`watch` without --once) starts at the end, then wakes within seconds
   CHARTROOM_HOME="$B" "$CHARTROOM" watch >"$BATS_TEST_TMPDIR/stream" 2>&1 3>&- &
   pid=$!
   sleep 3
