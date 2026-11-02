@@ -209,7 +209,10 @@ EOF
            --hide-scrollbars --no-first-run --no-default-browser-check --no-pdf-header-footer; do
     [[ " $call " == *" $f "* ]] || { echo "missing $f in: $call"; false; }
   done
-  [[ "$call" == *" --user-data-dir=$TMPDIR/chartroom-pdf."*"/profile --print-to-pdf=$TMPDIR/chartroom-pdf."*"/out.pdf file://$TMPDIR/chartroom-pdf."*"/page.html" ]]
+  # (Git Bash: Chrome is a native program, so it gets the Windows form, C:/..., and file:///C:/...)
+  local t="$TMPDIR" u="$TMPDIR"
+  case "${OSTYPE:-}" in msys*|cygwin*) t="$(cygpath -m "$TMPDIR")"; u="/$t"; u="${u// /%20}" ;; esac
+  [[ "$call" == *" --user-data-dir=$t/chartroom-pdf."*"/profile --print-to-pdf=$t/chartroom-pdf."*"/out.pdf file://$u/chartroom-pdf."*"/page.html" ]]
   [ -z "$(ls -A "$TMPDIR")" ]
   # the page itself is untouched
   [ "$(grep -c 'Content-Security-Policy' "$PAGE")" -eq 1 ]

@@ -297,7 +297,8 @@ r-old-2 working underway" ]
   CHARTROOM_HOME="$A" cr init --name acme >/dev/null
   use_fake herdr
   export FAKE_HERDR_DIR="$BATS_TEST_TMPDIR/herdr"; mkdir -p "$FAKE_HERDR_DIR"
-  jq -n --arg a "$A" '{result: {agents: [
+  # (Git Bash: the cwd as given, not turned into C:/... on its way to a native jq.exe)
+  MSYS2_ARG_CONV_EXCL='*' jq -n --arg a "$A" '{result: {agents: [
     {agent: "claude", agent_status: "working", cwd: $a, pane_id: "w1:p1", terminal_title_stripped: "XO session"},
     {agent: "claude", agent_status: "idle", cwd: ($a + "/worktrees/x"), pane_id: "w1:p2", name: "t-x"}]}}' >"$FAKE_HERDR_DIR/agent-list.json"
   run env CHARTROOM_HOME="$A" "$CHARTROOM" radar --json
