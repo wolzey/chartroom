@@ -104,6 +104,16 @@ are stable from 0.1.0.
   the commander will read the result themselves, with the default template's rules, never a
   secret in it, `report.md` still the XO's record, and the page's ref named in the `done` event.
   The chartroom skill says the same for the XO, and `bearings` and `continue` name a task's page.
+- `mods/herdr-chartroom`: the Tasks panel for the Herdr app, now in the repo (every home's open
+  tasks from `chartroom radar --json`, in the radar's sectors). A click on a task passes it to
+  that task's home's XO: `/continue <full id>` (`$continue` for Codex) typed with `hc send` into
+  the agent running in the home's own folder, found in the app's `terminals()`, and that XO's tab
+  shown (`agent.focus`). Nothing is typed into a blocked XO (hc refuses without `--force`, never
+  passed) or a bare shell, a remote task, or a home with no XO open; a line under the header says
+  why. The chevron still opens the details, where **Open worker** now lives: `chartroom attach`
+  in the task's home for an `hc:*` worker, a tab attached to its herdr agent for `herdr:*`.
+  Installed by copying into `~/.config/herdr-app/mods/chartroom` (the app loads a symlinked mod
+  folder but does not hot-reload it). The XO lookup (`xo.js`) is unit-tested under node.
 
 ### Changed
 - `watch` and `listen` wait on a doorbell instead of sleeping, so a wake comes within a fraction

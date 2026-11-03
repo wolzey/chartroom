@@ -1,10 +1,12 @@
 // Every open chartroom task on this machine, in radar's sectors, most urgent first.
-// Reads `chartroom radar --json` only while the panel is shown. Click a task to open its worker;
-// its chevron shows the last event and PRs.
+// Reads `chartroom radar --json` only while the panel is shown. Click a task to pass it to its
+// home's XO: `/continue <id>` typed into that XO's terminal, which then comes to the front.
+// Its chevron shows the details: the last event, PRs, and "Open worker".
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { exec, theme, layout, run, spaces } from "herdr";
+import { exec, hc, theme, layout, run, spaces, terminals } from "herdr";
+import { findXo, continueLine, sendRefusal } from "./xo.js";
 
 const MOD = "chartroom";
 const EVERY = 60000;
@@ -18,8 +20,11 @@ const SECTORS = [
   { id: "docked", label: "Docked", color: "done" },
 ];
 const CAP = 500;
+// How long an outcome line stays under the header.
+const NOTICE_MS = 12000;
 
 const clip = (s) => (s && s.length > CAP ? `${s.slice(0, CAP)}…` : s ?? "");
+const firstLine = (e) => String(e?.message ?? e).trim().split("\n")[0];
 const prLabel = (url) => {
   const m = /\/(?:_git\/)?([^/]+)\/(?:pull|pullrequest)\/(\d+)/.exec(url);
   return m ? `${m[1]}#${m[2]}` : url;
@@ -33,14 +38,18 @@ function duration(ms) {
   return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
 }
 
-// A herdr worker can be opened: chartroom names its herdr agent after the task.
+// A worker that can be opened: an hc worker on this machine (`chartroom attach` shows its
+// terminal in this app), or a herdr one (chartroom names its herdr agent after the task).
 // "herdr-claude" and "herdr-codex" are chartroom's older names for herdr:claude and herdr:codex.
-const canOpen = (task) => /^herdr[:-]/.test(String(task.backend ?? "")) && task.live !== "gone";
+const isHc = (task) => /^hc:/.test(String(task.backend ?? ""));
+const isHerdr = (task) => /^herdr[:-]/.test(String(task.backend ?? ""));
+const canOpen = (task) => task.live !== "gone" && ((isHc(task) && task.local !== false) || isHerdr(task));
 
-// Opens a task's worker as a tab attached to its herdr agent, in a space named for its crew as
+// Opens a herdr worker as a tab attached to its herdr agent, in a space named for its crew as
 // terminal Herdr has it ("captain-crew"). A tab already open for it is shown again instead.
+// `chartroom attach` can't do this one: it focuses the tab in herdr's own window, not here.
 // (The radar mod keeps the same function.)
-function openWorker(task) {
+function openHerdrWorker(task) {
   const machine = task.local === false ? task.machine : null;
   const crew = `${task.home}-crew`;
   const name = `${task.short_id} · ${task.title}`.slice(0, 48);
@@ -79,6 +88,10 @@ export default class Chartroom extends View {
     this.triedAt = 0;
     this.open = new Set();
     this.details = {};
+    // The last outcome of a click ({ level: "info" | "ok" | "error", text, at }), and the tasks
+    // being passed right now (a second click while one is on its way sends nothing).
+    this.notice = null;
+    this.passing = new Set();
     // What needs you starts open; the long sections start folded, which also keeps a pass short
     // (Herdr interrupted drawing all ~45 rows at once).
     this.folded = new Set(JSON.parse(localStorage.getItem("folded") ?? '["adrift","holding","underway","docked"]'));
@@ -93,7 +106,63 @@ export default class Chartroom extends View {
   }
 
   tick(cx) {
+    if (this.notice && this.passing.size === 0 && Date.now() - this.notice.at > NOTICE_MS) {
+      this.notice = null;
+      cx.notify();
+    }
     if (!this.busy && this.visible() && Date.now() - this.triedAt > EVERY) this.refresh(cx);
+  }
+
+  say(cx, level, text) {
+    this.notice = { level, text, at: Date.now() };
+    cx.notify();
+  }
+
+  // Hands a task to its home's XO: the continue skill with the task's full id, typed into the XO's
+  // terminal with `hc send` (paste, then Enter once nobody is typing), and that terminal shown.
+  // Never into a blocked agent (hc refuses without --force, which this never passes), never into
+  // a bare shell, and it never starts an XO: each of those says why instead.
+  pass(task, cx) {
+    if (this.passing.has(task.key)) return;
+    if (task.local === false) return this.say(cx, "error", `${task.short_id} is on ${task.machine}: pass it to the XO there`);
+    const found = findXo(terminals(), task.home_path);
+    if (found.why === "none") return this.say(cx, "error", `No ${task.home} XO open: no terminal in ${task.home_path}`);
+    if (found.why === "shell") return this.say(cx, "error", `The ${task.home} XO isn't running: ${found.terminal.address} is a shell, not an agent`);
+    const t = found.xo.address;
+    if (found.status === "blocked") return this.say(cx, "error", `The ${task.home} XO (${t}) ${sendRefusal(9)}`);
+    const line = continueLine(task.id, found.app);
+    this.passing.add(task.key);
+    this.say(cx, "info", `Passing ${task.short_id} to the ${task.home} XO (${t})…`);
+    cx.spawn(async (cx) => {
+      try {
+        const r = await hc(["send", t, "--json", line]);
+        if (r.code === 0) {
+          run("agent.focus", { terminal: t });
+          this.notice = { level: "ok", text: `Sent ${line} to the ${task.home} XO (${t})`, at: Date.now() };
+        } else {
+          this.notice = { level: "error", text: `The ${task.home} XO (${t}) ${sendRefusal(r.code, r.stderr || r.stdout)}`, at: Date.now() };
+        }
+      } catch (e) {
+        this.notice = { level: "error", text: `Could not reach the ${task.home} XO (${t}): ${firstLine(e)}`, at: Date.now() };
+      }
+      this.passing.delete(task.key);
+      cx.notify();
+    });
+  }
+
+  // Shows a task's worker: an hc worker through `chartroom attach` in its own home (it focuses the
+  // worker's terminal here, as the hc runner does), a herdr one as a tab attached to it.
+  openWorker(task, cx) {
+    if (!isHc(task)) return openHerdrWorker(task);
+    cx.spawn(async (cx) => {
+      try {
+        const r = await exec("env", [`CHARTROOM_HOME=${task.home_path}`, "chartroom", "attach", task.id]);
+        if (r.code !== 0) throw new Error(r.stderr.trim() || `chartroom exited ${r.code}`);
+      } catch (e) {
+        this.notice = { level: "error", text: `Could not open ${task.short_id}'s worker: ${firstLine(e).replace(/^chartroom: /, "")}`, at: Date.now() };
+        cx.notify();
+      }
+    });
   }
 
   refresh(cx) {
@@ -201,6 +270,18 @@ export default class Chartroom extends View {
             this.link(p.url);
           })
           .child(prLabel(p.url))))))
+      .when(canOpen(task), (el) => el.child(h_flex().child(div()
+        .id(`open-${task.key}`)
+        .text_size(11.5)
+        .text_color(t.accent)
+        .cursor_pointer()
+        .hover((s) => s.underline())
+        .tooltip("Show the worker's terminal")
+        .on_click((_e, cx) => {
+          cx.stop_propagation();
+          this.openWorker(task, cx);
+        })
+        .child("Open worker"))))
       .child(div().text_size(10.5).text_color(t.dim).child(`${task.id} · ${task.backend} · worker ${task.live}`));
   }
 
@@ -208,7 +289,6 @@ export default class Chartroom extends View {
     const isOpen = this.open.has(task.key);
     const where = task.project && task.project !== task.home ? `${task.home}/${task.project}` : task.home;
     const at = task.last_activity_at ? Date.parse(task.last_activity_at) : null;
-    const openable = canOpen(task);
     const chevron = div()
       .id(`more-${task.key}`)
       .p(2)
@@ -237,7 +317,8 @@ export default class Chartroom extends View {
         .rounded(8)
         .cursor_pointer()
         .hover((s) => s.bg(t.hover))
-        .on_click((_e, cx) => (openable ? openWorker(task) : this.toggle(task, cx)))
+        .tooltip(`Pass ${task.short_id} to the ${task.home} XO`)
+        .on_click((_e, cx) => this.pass(task, cx))
         .child(this.mark(t, task, sector))
         .child(v_flex().flex_1().min_w(0).gap(2)
           .child(h_flex().gap(6).items_center()
@@ -314,6 +395,22 @@ export default class Chartroom extends View {
       )
       .when(Boolean(this.error), (el) =>
         el.child(div().id("cr-error").px(16).pb(4).flex_none().text_size(11).text_color(t.blocked).truncate().tooltip(this.error).child(this.error)),
+      )
+      // What the last click did, in full (it says why when nothing was sent); a click dismisses it.
+      .when(Boolean(this.notice), (el) =>
+        el.child(div()
+          .id("cr-notice")
+          .px(16)
+          .pb(6)
+          .flex_none()
+          .text_size(11.5)
+          .text_color({ ok: t.done, error: t.blocked }[this.notice.level] ?? t.dim)
+          .cursor_pointer()
+          .on_click((_e, cx) => {
+            this.notice = null;
+            cx.notify();
+          })
+          .child(this.notice.text)),
       )
       .when(this.fetchedAt == null && !this.error, (el) =>
         el.child(div().px(16).text_size(12).text_color(t.dim).child("Reading the radar…")),
