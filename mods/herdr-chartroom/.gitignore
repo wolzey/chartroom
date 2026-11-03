@@ -1,0 +1,3 @@
+# written by the Herdr app into a mod's folder (its API types, and a jsconfig.json when none is there)
+/gpui-kit.d.ts
+/jsconfig.json
