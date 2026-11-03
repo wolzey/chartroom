@@ -24,7 +24,8 @@ Verified on herdr-app 0.1.12 with herdr-core (`hc`) 0.1.16.
   - no terminal sits in the home's folder;
   - the only terminals there run a shell (an XO that has exited leaves its prompt behind);
   - the XO is blocked on a question or a permission prompt. hc refuses those without
-    `--force`, and the panel never passes it: answer the prompt in the XO, then click again.
+    `--force`, and the panel never passes it. It brings that XO's tab forward instead, so you
+    can answer the prompt there; click the task again once it's answered.
 
   A line under the header says what happened, or why nothing was sent. Click it to dismiss it.
   A second click while a send is still on its way sends nothing.

@@ -120,8 +120,8 @@ for example `pi install ~/.local/share/chartroom/mods/crew-view-pi`. See
 `mods/herdr-chartroom` is a side panel for the Herdr app (`herdr-app`) listing every home's open
 tasks in the radar's sectors, from `chartroom radar --json`. Clicking a task passes it to its
 home's XO: it types `/continue <id>` into the agent running in that home's folder and brings the
-XO's tab to the front. It never types into a blocked XO or a bare shell, and never starts an XO;
-when it can't send, it says why. The chevron opens the details, with PRs and **Open worker**.
+XO's tab to the front. It never types into a blocked XO (it brings that XO forward so you can
+answer its question) or a bare shell, and never starts an XO; when it can't send, it says why. The chevron opens the details, with PRs and **Open worker**.
 Install it by copying its files into `~/.config/herdr-app/mods/chartroom` (not a symlink: the app
 doesn't hot-reload one), then place it in a layout. See
 [mods/herdr-chartroom/README.md](mods/herdr-chartroom/README.md).

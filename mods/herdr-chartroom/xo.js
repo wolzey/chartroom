@@ -72,7 +72,7 @@ export function continueLine(taskId, app) {
 // codes chartroom's hc runner reads), else hc's own message (`--json` prints
 // {"error":{"kind","message"}} on stderr), else the first line it printed.
 export function sendRefusal(code, stderr) {
-  if (code === 9) return "is waiting on a question or permission: answer it there, then click again";
+  if (code === 9) return "is waiting on a question or permission, so nothing was sent: answer it, then click again";
   if (code === 3 || code === 11) return "is gone";
   const text = String(stderr ?? "").trim();
   let line = text.split("\n")[0];

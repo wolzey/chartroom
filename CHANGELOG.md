@@ -109,8 +109,8 @@ are stable from 0.1.0.
   that task's home's XO: `/continue <full id>` (`$continue` for Codex) typed with `hc send` into
   the agent running in the home's own folder, found in the app's `terminals()`, and that XO's tab
   shown (`agent.focus`). Nothing is typed into a blocked XO (hc refuses without `--force`, never
-  passed) or a bare shell, a remote task, or a home with no XO open; a line under the header says
-  why. The chevron still opens the details, where **Open worker** now lives: `chartroom attach`
+  passed; its tab is still brought forward, so its question can be answered), a bare shell, a
+  remote task, or a home with no XO open; a line under the header says why. The chevron still opens the details, where **Open worker** now lives: `chartroom attach`
   in the task's home for an `hc:*` worker, a tab attached to its herdr agent for `herdr:*`.
   Installed by copying into `~/.config/herdr-app/mods/chartroom` (the app loads a symlinked mod
   folder but does not hot-reload it). The XO lookup (`xo.js`) is unit-tested under node.

@@ -66,7 +66,7 @@ test("findXo: Claude Code or Codex over another agent and a shell, then the one 
   assert.strictEqual(X.findXo([term("t4"), pi], HOME).xo.address, "t5");
 });
 
-test("findXo: a blocked XO is still found (the caller refuses to type); its status says so", () => {
+test("findXo: a blocked XO is still found (the caller shows it and types nothing); its status says so", () => {
   const r = X.findXo([xoClaude("t2v", { status: "blocked", report: { app: "claude-code", state: "blocked", kind: "question" } })], HOME);
   assert.strictEqual(r.xo.address, "t2v");
   assert.strictEqual(r.status, "blocked");
@@ -93,7 +93,7 @@ test("continueLine: the full id, with Codex's $ and Claude Code's /", () => {
 });
 
 test("sendRefusal: hc send's exit codes, then its JSON message, then its first line", () => {
-  assert.match(X.sendRefusal(9, ""), /waiting on a question or permission/);
+  assert.match(X.sendRefusal(9, ""), /waiting on a question or permission, so nothing was sent/);
   assert.strictEqual(X.sendRefusal(3, ""), "is gone");
   assert.strictEqual(X.sendRefusal(11, ""), "is gone");
   assert.strictEqual(X.sendRefusal(1, '{"error":{"kind":"x","message":"core not running"}}'), "refused: core not running");

@@ -120,8 +120,9 @@ export default class Chartroom extends View {
 
   // Hands a task to its home's XO: the continue skill with the task's full id, typed into the XO's
   // terminal with `hc send` (paste, then Enter once nobody is typing), and that terminal shown.
-  // Never into a blocked agent (hc refuses without --force, which this never passes), never into
-  // a bare shell, and it never starts an XO: each of those says why instead.
+  // Never into a blocked agent (hc refuses without --force, which this never passes): that XO is
+  // shown so its question can be answered, and nothing is typed. Never into a bare shell, and it
+  // never starts an XO. Whenever nothing is typed, the notice says why.
   pass(task, cx) {
     if (this.passing.has(task.key)) return;
     if (task.local === false) return this.say(cx, "error", `${task.short_id} is on ${task.machine}: pass it to the XO there`);
@@ -129,7 +130,10 @@ export default class Chartroom extends View {
     if (found.why === "none") return this.say(cx, "error", `No ${task.home} XO open: no terminal in ${task.home_path}`);
     if (found.why === "shell") return this.say(cx, "error", `The ${task.home} XO isn't running: ${found.terminal.address} is a shell, not an agent`);
     const t = found.xo.address;
-    if (found.status === "blocked") return this.say(cx, "error", `The ${task.home} XO (${t}) ${sendRefusal(9)}`);
+    if (found.status === "blocked") {
+      run("agent.focus", { terminal: t });
+      return this.say(cx, "error", `The ${task.home} XO (${t}) ${sendRefusal(9)}`);
+    }
     const line = continueLine(task.id, found.app);
     this.passing.add(task.key);
     this.say(cx, "info", `Passing ${task.short_id} to the ${task.home} XO (${t})…`);
@@ -140,6 +144,8 @@ export default class Chartroom extends View {
           run("agent.focus", { terminal: t });
           this.notice = { level: "ok", text: `Sent ${line} to the ${task.home} XO (${t})`, at: Date.now() };
         } else {
+          // Blocked since the check above: shown all the same, still nothing typed.
+          if (r.code === 9) run("agent.focus", { terminal: t });
           this.notice = { level: "error", text: `The ${task.home} XO (${t}) ${sendRefusal(r.code, r.stderr || r.stdout)}`, at: Date.now() };
         }
       } catch (e) {
