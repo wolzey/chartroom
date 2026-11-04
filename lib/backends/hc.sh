@@ -81,6 +81,7 @@ hc_info() { # <id>
     HC_STATE="${HCT_STATE[$t]}"; HC_STATUS="${HCT_STATUS[$t]}"; HC_TURN="${HCT_TURN[$t]}"; name="${HCT_NAME[$t]}"
     ours=false; [[ "${HCT_LIDS[$t]}" == *" $1 "* ]] && ours=true
   else
+    HC_ASKED=1
     if ! j="$(hcx get "$t" --json 2>/dev/null)"; then hc_stream_settle "$t" gone; return 0; fi
     # (the launcher by its task's path suffix: the home may be spelled another way, via a symlink)
     IFS='|' read -r HC_STATE HC_STATUS HC_TURN name ours < <(jq -r --arg l "/tasks/$1/launch.sh" '[.state // "gone", .status.state // "", .turn // 0, .name // "", any((.argv // [])[]; tostring | endswith($l))] | map(tostring) | join("|")' <<<"$j" 2>/dev/null) || true
@@ -409,6 +410,7 @@ exited_since_dispatch() { # <id>
 # whose terminal changed are compared (hc_stream_wakes). The coprocess writes heartbeats too, so
 # once the watch is gone, even killed outright, its next write fails and it ends.
 HCS_PID="" HCS_FD="" HCS_UP="" HCS_SNAP="" HCS_DOWN="" HCS_FAILS=0 HCS_RETRY=0
+HC_ASKED="" # set when hc_info had to ask hc (`hc get`): the watch keeps that task on its fast round
 declare -A HCT_STATE=() HCT_STATUS=() HCT_TURN=() HCT_NAME=() HCT_LIDS=() HCS_SEEN=() HC_HIT=() HC_ADDR_TASK=()
 # shellcheck disable=SC2016
 HC_STREAM_JQ='
@@ -527,12 +529,6 @@ hc_stream_drain() {
   done
   return 0
 }
-# Does the stream answer for this task's terminal? (Else the watch keeps asking hc each round:
-# a terminal started before chartroom labelled them, or while the stream is down.)
-hc_stream_covers() { # <id>
-  local t; t="$(meta "$1" hc_terminal)"
-  [[ -n "$HCS_UP" && -n "$t" && -n "${HCT_STATE[$t]+x}" ]]
-}
 # The stream's changes since the last look, compared by hc_watch for each task they touch, as a
 # full round would (between rounds: the round compares every task itself).
 hc_stream_wakes() {
@@ -562,8 +558,8 @@ hc_stream_wakes() {
 # the same change wake twice.
 hc_stream_check() { # <id>
   local t up="$HCS_UP"
-  hc_stream_covers "$1" || return 0
   t="$(meta "$1" hc_terminal)"
+  [[ -n "$HCS_UP" && -n "$t" && -n "${HCT_STATE[$t]+x}" ]] || return 0
   HCS_UP=""; hc_info "$1"; HCS_UP="$up"
   case "$HC_STATE" in
     gone|finished) [[ "${HCT_STATE[$t]}" == "$HC_STATE" ]] || { HCT_STATE[$t]="$HC_STATE"; HCT_STATUS[$t]=""; } ;;

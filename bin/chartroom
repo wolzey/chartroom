@@ -1284,12 +1284,14 @@ cmd_watch() {
         r="$(backend_runner "$id")"
         if [[ -n "$r" && -n "$(meta "$id" dispatched)" ]]; then
           if [[ "$r" == hc && $verify -eq 1 ]]; then hc_stream_check "$id"; fi
+          HC_ASKED=""
           "${r}_watch" "$id"; watch_overdue "$id"
-          # A probe that pushes nothing keeps the fast cadence: hc outside the stream, a running
-          # herdr server, and the process checks (headless, command, joined). tmux, cmux and
-          # subagent probe nothing: their wakes come from the log alone.
+          # A probe that pushes nothing keeps the fast cadence: an hc task the watch had to ask hc
+          # about (one the stream does not carry, or the stream is down), a running herdr server,
+          # and the process checks (headless, command, joined). tmux, cmux and subagent probe
+          # nothing: their wakes come from the log alone.
           case "$r" in
-            hc) hc_open=1; if hc_handle_set "$id" && ! hc_stream_covers "$id"; then covered=0; fi ;;
+            hc) hc_open=1; if [[ -n "$HC_ASKED" ]]; then covered=0; fi ;;
             herdr) if herdr_up; then covered=0; fi ;;
             tmux|cmux|subagent) ;;
             *) covered=0 ;;
