@@ -87,6 +87,8 @@ source "$CR_ROOT/lib/homes.sh"
 source "$CR_ROOT/lib/relay.sh"
 # shellcheck source=../lib/radar.sh
 source "$CR_ROOT/lib/radar.sh"
+# shellcheck source=../lib/park.sh
+source "$CR_ROOT/lib/park.sh"
 for _f in "$CR_ROOT"/lib/backends/*.sh; do
   # shellcheck source=/dev/null
   source "$_f"
@@ -599,6 +601,11 @@ cmd_dispatch() {
   meta_set "$id" backend "$SELECTED"
   runner="${SELECTED%%:*}"; agent=""; [[ "$SELECTED" == *:* ]] && agent="${SELECTED#*:}"
   if [[ "$runner" != subagent || "$kind" == ship ]]; then wt="$(cmd_worktree "$id")"; fi
+  # A parked worker is not resumed by a dispatch: that starts a fresh one on the brief.
+  if [[ -n "$(meta "$id" parked)" ]]; then
+    log_event "$id" note "the parked session $(meta "$id" session_id) is left behind: a dispatch starts a fresh worker"
+    meta_set "$id" parked ""
+  fi
   log_event "$id" note "dispatched via $SELECTED"
   meta_set "$id" dispatched "$(now)"
   "${runner}_launch" "$id" "$wt" "$agent"
@@ -661,7 +668,8 @@ cmd_hook() {
       [[ -n "$payload" || -t 0 ]] || payload="$(cat 2>/dev/null || true)"
       msg="$(jq -r '.prompt // empty' <<<"$payload" 2>/dev/null || true)"
       if [[ -n "$msg" ]]; then log_event "$id" agent "prompt-received sig=$(printf '%s' "$msg" | text_sig) len=${#msg}"
-      else log_event "$id" agent "prompt-received"; fi ;;
+      else log_event "$id" agent "prompt-received"; fi
+      hook_session_id "$id" "$(jq -r '.session_id // empty' <<<"$payload" 2>/dev/null || true)" ;;
     notification)
       [[ -n "$payload" ]] || payload="$(cat 2>/dev/null || true)"
       # A joined session parked on its listener is idle on purpose; that is not a prompt.
@@ -672,7 +680,10 @@ cmd_hook() {
       payload="${3:-}"
       printf '%s %s\n' "$(now)" "$payload" >>"$(tdir "$id")/hooks.log"
       case "$(jq -r '.type // empty' <<<"$payload" 2>/dev/null)" in
-        agent-turn-complete) log_event "$id" agent "turn-ended" ;;
+        agent-turn-complete)
+          log_event "$id" agent "turn-ended"
+          msg="$(jq -r '.["thread-id"] // empty' <<<"$payload" 2>/dev/null || true)"
+          [[ -z "$msg" || "$msg" == "$(meta "$id" thread_id)" ]] || meta_set "$id" thread_id "$msg" ;;
         "") ;;
         *) log_event "$id" agent "awaiting-input: $(jq -r '.type' <<<"$payload")" ;;
       esac ;;
@@ -680,9 +691,23 @@ cmd_hook() {
   exit 0
 }
 
+# The session id a launched Claude worker reports with each prompt, kept in meta (lib/park.sh
+# resumes it): it records one for a worker started before chartroom chose ids, and Claude's
+# own word wins over the id chartroom gave it. A joined session's id is its registry key.
+hook_session_id() { # <id> <session id>
+  local cur
+  [[ -n "$2" && "$(backend_agent "$1")" == claude && "$(backend_runner "$1")" =~ ^($SESSION_RUNNERS)$ ]] || return 0
+  cur="$(meta "$1" session_id)"
+  [[ "$2" == "$cur" ]] && return 0
+  meta_set "$1" session_id "$2"
+  [[ -z "$cur" ]] || log_event "$1" note "session id is now $2 (was $cur), as the agent reports it"
+}
+
 live_of() { # <id> -> liveness word
   local r; r="$(backend_runner "$1")"
   [[ -n "$r" ]] || { echo not-started; return; }
+  # A parked worker has no process: it rests until steer or attach resumes it (lib/park.sh).
+  [[ -z "$(meta "$1" parked)" ]] || { echo parked; return; }
   CR_TASK_COMMAND="$(meta "$1" command)"
   "${r}_live" "$1" 2>/dev/null || echo unknown
 }
@@ -753,11 +778,11 @@ status_rows() { # [--all] [--id ID] [--since EPOCH]
     if [[ "$st" == closed ]]; then live=-; else live="$(live_of "$id")"; fi
     wait=""
     [[ "$st" != closed ]] && wait="$(waiting_info "$id" 2>/dev/null || true)"
-    if [[ -n "$wait" && "$live" =~ ^(stopped|gone|idle|done|listening)$ ]]; then
+    if [[ -n "$wait" && "$live" =~ ^(stopped|gone|idle|done|listening|parked)$ ]]; then
       if [[ "$(jq -r .overdue <<<"$wait")" == true ]]; then st="waiting-overdue"; else st="waiting"; fi
     elif [[ -n "$wait" ]]; then st=working
     fi
-    [[ "$st" == working && "$live" =~ ^(stopped|gone|idle|done)$ ]] && st="stopped-silent"
+    [[ "$st" == working && "$live" =~ ^(stopped|gone|idle|done|parked)$ ]] && st="stopped-silent"
     [[ "$st" == working && "$live" == blocked ]] && st="awaiting-input"
     lastline="$(grep -vE ' note: ' "$d/events.log" 2>/dev/null | tail -1 || true)"
     brk=false; breaking_of "$id" "$st" && brk=true
@@ -966,6 +991,7 @@ cmd_peek() {
   local id="${1:-}" n="${2:-15}"; [[ -n "$id" ]] || die "usage: chartroom peek <id> [n]"; need_task "$id"
   local d r; d="$(tdir "$id")"; r="$(backend_runner "$id")"
   echo "== events"; tail -n "$n" "$d/events.log"
+  [[ -z "$(meta "$id" parked)" ]] || echo "== parked since $(meta "$id" parked) (session $(meta "$id" session_id)): steer or attach resumes it; its last screen:"
   [[ -n "$r" && -n "$(meta "$id" dispatched)" ]] && "${r}_peek" "$id" "$n"
   [[ -f "$d/report.md" ]] && echo "== report: $d/report.md"
   return 0
@@ -980,7 +1006,24 @@ cmd_steer() {
   local id="$1"; shift; local msg="$*"; need_task "$id"
   [[ -n "$(meta "$id" dispatched)" ]] || die "task $id has not been dispatched"
   local r; r="$(backend_runner "$id")"
+  # A worker that can park is steered under its lock, so no park ends it mid-message; a parked
+  # one is resumed with the message as its first prompt (lib/park.sh).
+  if park_supported "$id"; then
+    task_lock "$id" 60 || die "task $id is being parked or resumed; steer again in a moment"
+    # shellcheck disable=SC2064 # the id, now
+    trap "task_unlock $(printf '%q' "$id")" EXIT
+    if is_parked "$id"; then steer_parked "$id" "$msg"; return; fi
+  fi
   if [[ "$r" == command ]]; then command_steer "$id" "$msg" "$inbox"; else "${r}_steer" "$id" "$msg"; fi
+}
+steer_parked() { # <id> <msg>
+  local id="$1" msg="$2" text rc=0
+  log_event "$id" steered "$msg"
+  text="$(steer_text "$id" "$msg")"
+  revive_task "$id" "$text" || rc=$?
+  [[ $rc -eq 1 ]] && die "could not resume the parked worker of $id: $(grep ' note: revive failed: ' "$(tdir "$id")/events.log" | tail -1 | sed 's/^.* note: revive failed: //')"
+  echo "resumed the parked session $(meta "$id" session_id) (hc terminal $(meta "$id" hc_terminal))"
+  steer_result "$id" "$msg" "$text" "$rc"
 }
 
 cmd_stop() {
@@ -992,6 +1035,19 @@ cmd_stop() {
 
 cmd_attach() {
   local id="${1:-}"; [[ -n "$id" ]] || die "usage: chartroom attach <id>"; need_task "$id"
+  # A parked worker is resumed first, with no prompt; the lock is let go before the runner's
+  # attach, which may hand this process to `hc attach`.
+  if park_supported "$id" && is_parked "$id"; then
+    task_lock "$id" 60 || die "task $id is being parked or resumed; attach again in a moment"
+    if is_parked "$id"; then
+      if ! revive_task "$id"; then
+        task_unlock "$id"
+        die "could not resume the parked worker of $id: $(grep ' note: revive failed: ' "$(tdir "$id")/events.log" | tail -1 | sed 's/^.* note: revive failed: //')"
+      fi
+      echo "resumed the parked session $(meta "$id" session_id) (hc terminal $(meta "$id" hc_terminal))"
+    fi
+    task_unlock "$id"
+  fi
   "$(backend_runner "$id")_attach" "$id"
 }
 
@@ -1036,6 +1092,12 @@ cmd_accept() {
   [[ "$st" == review ]] || die "$id is $st, not awaiting review: accept marks a worker's finished work done"
   log_event "$id" note "accepted"
   echo "accepted $id: done (chartroom close $id removes its worktree)"
+  # Follow-ups after an accept are rare: its worker parks now, not after the grace (lib/park.sh).
+  if park_supported "$id" && ! is_parked "$id"; then
+    if park_task "$id" now; then echo "parked its worker (session $(meta_file "$id" session_id)): steer or attach resumes it"
+    else echo "its worker stays live: $PARK_WHY"; fi
+  fi
+  return 0
 }
 
 # ---------------------------------------------------------------- watch
@@ -1094,6 +1156,8 @@ watch_scan_lines() { # <id> <from-offset> <to-offset>
     kind="$(line_kind "$line")"
     case "$kind" in
       decision|blocked|done|failed) wake "$id" "$line" ;;
+      # A parked worker that could not be resumed (lib/park.sh): its one wake.
+      note) if [[ "$line" == *" note: revive failed: "* ]]; then wake "$id" "$line"; fi ;;
       # A run ending, or a turn stopping, right after the worker reported (or said it is
       # waiting) is not news.
       exited) reported_upto "$id" "$pos" || wake "$id" "$line" ;;
@@ -1128,7 +1192,7 @@ watch_overdue() { # <id>
   WAIT_DUE[$id]=$((due * 1000))
   [[ "$over" == true ]] || return 0
   live="$(live_of "$id")"
-  if [[ ! "$live" =~ ^(stopped|gone|idle|done|listening)$ ]]; then clock_ms; WAIT_DUE[$id]=$((NOW_MS + WATCH_SLOW_MS)); return 0; fi
+  if [[ ! "$live" =~ ^(stopped|gone|idle|done|listening|parked)$ ]]; then clock_ms; WAIT_DUE[$id]=$((NOW_MS + WATCH_SLOW_MS)); return 0; fi
   unset "WAIT_DUE[$id]"
   local msg; msg="waiting overdue: $(jq -r '"\(.on) (since \(.since)" + (if .until then ", until \(.until)" else "" end) + ")"' <<<"$wait")"
   log_event "$id" note "$msg"
@@ -1298,6 +1362,8 @@ cmd_watch() {
           esac
         fi
       done
+      # Workers at rest for CHARTROOM_PARK_AFTER_MINUTES park (lib/park.sh): never a wake.
+      park_due >/dev/null 2>&1 || true
       MC=()
       watch_relays
       clock_ms
@@ -1543,9 +1609,14 @@ chartroom - run a crew of coding agents from one agent session (the XO)
   chartroom worktree <id>                 create (or print) the task's isolated worktree
   chartroom dispatch <id>                 launch the worker on its backend
   chartroom steer <id> [--inbox] <msg>    deliver an answer or follow-up to the worker (joined:
-                                          to its mailbox; "delivered" only once it is read)
+                                          to its mailbox; "delivered" only once it is read;
+                                          a parked worker is resumed with it)
   chartroom stop <id>                     interrupt a worker
-  chartroom attach <id>                   open a session worker's terminal (hc/herdr/cmux/tmux)
+  chartroom attach <id>                   open a session worker's terminal (hc/herdr/cmux/tmux;
+                                          a parked worker is resumed first)
+  chartroom park <id> | --due             end an hc:claude worker at rest, keeping its session
+                                          (steer and attach resume it); --due: every one at rest
+                                          for CHARTROOM_PARK_AFTER_MINUTES (the watch does this)
   chartroom event <id> <kind> [--breaking] [--detail <details>] <text>
                                           append a status event (workers use this; kinds: progress,
                                           waiting, decision, blocked, done, failed). --breaking
@@ -1692,7 +1763,7 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           saved ones); CHARTROOM_MACHINE_NAME labels this one
   chartroom accept <id>                   the commander's word that a task in review (a worker
                                           reported done) is done; keeps its worktree (close
-                                          removes it)
+                                          removes it) and parks its worker
   chartroom close <id> [--discard]        remove a clean worktree, close its tab, mark closed
                                           (a joined task's directory is never touched)
                                           (--discard only on the commander's explicit word)
@@ -1726,7 +1797,7 @@ if [[ "$cmd" =~ ^(status|ls|board|todo|inbox|relay)$ ]]; then
   done
 fi
 case "$cmd" in
-  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|steer|stop|attach|accept|close|sweep|watch|dashboard|radar|doctor|homes|version|help) "cmd_$cmd" "$@" ;;
+  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|steer|stop|attach|park|accept|close|sweep|watch|dashboard|radar|doctor|homes|version|help) "cmd_$cmd" "$@" ;;
   install-skills) cmd_install_skills "$@" ;;
   ls) cmd_status "$@" ;;
   show) cmd_show "$@" ;;

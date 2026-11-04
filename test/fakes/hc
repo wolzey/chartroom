@@ -13,6 +13,14 @@
 #                       prompts, like a truncated paste
 # `send` from a caller with $HC_TERMINAL_ID tags the text <hc from="...">...</hc>, as hc does
 # (FAKE_HC_WRAP=1: always).
+# Each terminal gets a pid (40000 + its number) and status_ms (when its status last changed).
+# A run of a chartroom launcher passes the hook the session id the launcher gives claude
+# (--session-id or --resume). A run of a launcher with no task argument (a resume with no
+# prompt) takes no prompt.
+#   FAKE_HC_RESUME_FAIL=1  a launcher that resumes ends at once, exit 1, "No conversation found"
+#                          on its screen, and the launcher's `exited` line in the task's log
+#   FAKE_HC_EXITED=1       `kill` writes the launcher's `exited` line too, as a real one would
+#   screen.<address>       what that terminal shows, over `screen`
 S="${FAKE_HC_DIR:?}"; mkdir -p "$S/terms"
 printf '%s\n' "$*" >>"$S/calls.log"
 err() { jq -cn --arg k "$1" --arg m "$2" '{error: {kind: $k, message: $m}}' >&2; exit "$3"; }
@@ -27,14 +35,25 @@ resolve() { # <address or name> -> the address (for a name, a live terminal firs
   printf '%s' "$a"
 }
 upd() { local f; f="$(tf "$1")"; shift; jq "$@" "$f" >"$f.tmp" && mv "$f.tmp" "$f"; }
+now_ms() { printf '%s000' "$(date +%s)"; }
+launcher_of() { jq -r '[(.argv // [])[] | select(endswith("/launch.sh"))][0] // empty' "$(tf "$1")"; }
+sid_of() { # <address>: the session id its launcher gives claude
+  local l; l="$(launcher_of "$1")"; [[ -n "$l" && -f "$l" ]] || return 0
+  grep -oE -- '--(session-id|resume) [0-9a-f-]+' "$l" | head -1 | cut -d' ' -f2
+}
+exited_line() { # <address> <rc>: what the task's launcher appends when its agent ends
+  local task; task="$(jq -r '.labels["chartroom.task"] // empty' "$(tf "$1")")"
+  [[ -n "$task" && -n "${CHARTROOM_HOME:-}" && -f "$CHARTROOM_HOME/tasks/$task/events.log" ]] || return 0
+  printf '%s exited: agent session ended (exit %s)\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$2" >>"$CHARTROOM_HOME/tasks/$task/events.log"
+}
 trust_up() { grep -qiE 'trust this folder|do you trust' "$S/screen" 2>/dev/null; }
 take() { # <address> <prompt>
   local t="$1" p="$2" task n
   task="$(jq -r '.labels["chartroom.task"] // empty' "$(tf "$t")")"
   n="$(cat "$S/drops" 2>/dev/null || echo 0)"
   if [[ -n "${FAKE_HC_DROP:-}" && $n -lt ${FAKE_HC_DROP_TIMES:-1} ]]; then p="${p:$FAKE_HC_DROP}"; echo $((n + 1)) >"$S/drops"; fi
-  if [[ -n "$task" && -z "${FAKE_HC_NO_HOOK:-}" ]]; then jq -cn --arg p "$p" '{prompt:$p}' | "${CHARTROOM_BIN:?}" hook "$task" prompt-submit; fi
-  [[ -n "${FAKE_HC_NO_STATUS:-}" ]] || upd "$t" --arg s "${FAKE_HC_STATUS:-done}" '.turn += 1 | .status = {app: "claude-code", state: $s}'
+  if [[ -n "$task" && -z "${FAKE_HC_NO_HOOK:-}" ]]; then jq -cn --arg p "$p" --arg s "$(sid_of "$t")" '{prompt:$p} + (if $s == "" then {} else {session_id:$s} end)' | "${CHARTROOM_BIN:?}" hook "$task" prompt-submit; fi
+  [[ -n "${FAKE_HC_NO_STATUS:-}" ]] || upd "$t" --arg s "${FAKE_HC_STATUS:-done}" --argjson ms "$(now_ms)" '.turn += 1 | .status = {app: "claude-code", state: $s} | .status_ms = $ms'
 }
 cmd="${1:-}"; shift || true
 case "$cmd" in
@@ -56,9 +75,14 @@ case "$cmd" in
       [[ -n "$a" && "$(jq -r .state "$(tf "$a")")" == live ]] && err invalid "the name $name is taken by live terminal $a" 1
     fi
     n=$(( $(cat "$S/n" 2>/dev/null || echo 0) + 1 )); echo "$n" >"$S/n"; t="t$n"
-    jq -n --arg a "$t" --arg n "$name" --arg c "$cwd" --argjson l "$labels" '{address: $a, name: (if $n == "" then null else $n end),
-      cwd: $c, argv: $ARGS.positional, labels: $l, state: "live", status: null, turn: 0, parent: null, notify: false}' --args "$@" >"$(tf "$t")"
-    if trust_up; then printf '%s' "${*: -1}" >"$S/queued.$t"; else take "$t" "${*: -1}"; fi
+    jq -n --arg a "$t" --arg n "$name" --arg c "$cwd" --argjson l "$labels" --argjson pid "$((40000 + n))" --argjson ms "$(now_ms)" '{address: $a, name: (if $n == "" then null else $n end),
+      cwd: $c, argv: $ARGS.positional, labels: $l, state: "live", status: null, turn: 0, parent: null, notify: false, pid: $pid, status_ms: $ms}' --args "$@" >"$(tf "$t")"
+    l="$(launcher_of "$t")"
+    if [[ -n "${FAKE_HC_RESUME_FAIL:-}" && -n "$l" ]] && grep -q -- '--resume ' "$l"; then
+      printf 'No conversation found with session ID: %s\n' "$(sid_of "$t")" >"$S/screen.$t"
+      upd "$t" '.state = "finished" | .reason = "exited" | .exit_code = 1'; exited_line "$t" 1
+    elif [[ "${*: -1}" == */launch.sh ]]; then :
+    elif trust_up; then printf '%s' "${*: -1}" >"$S/queued.$t"; else take "$t" "${*: -1}"; fi
     jq -c '{address, agent: "bash", cwd, name, state, turn: 0}' "$(tf "$t")" ;;
   get)
     t="$(resolve "${1:-}")"; [[ -n "$t" ]] || err not_found "no terminal \"${1:-}\"" 3
@@ -75,7 +99,7 @@ case "$cmd" in
           | {address, name, state, cwd, turn, status: .status.state}]}' --args "${lab[@]}" ;;
   read)
     t="$(resolve "${1:-}")"; [[ -n "$t" ]] || err not_found "no terminal \"${1:-}\"" 3
-    cat "$S/screen" 2>/dev/null || printf '❯ \n' ;;
+    if [[ -f "$S/screen.$t" ]]; then cat "$S/screen.$t"; else cat "$S/screen" 2>/dev/null || printf '❯ \n'; fi ;;
   keys)
     t="$(resolve "${1:-}")"; [[ -n "$t" ]] || err not_found "no terminal \"${1:-}\"" 3; shift
     for k in "$@"; do
@@ -103,6 +127,7 @@ case "$cmd" in
   interrupt) echo '{"key":"esc","outcome":"stopped"}' ;;
   kill)
     a="$(resolve "${1:-}")"; [[ -n "$a" ]] || err not_found "no terminal \"${1:-}\"" 3
+    [[ -n "${FAKE_HC_EXITED:-}" && "$(jq -r .state "$(tf "$a")")" == live ]] && exited_line "$a" 129
     upd "$a" '.state = "finished" | .reason = "killed" | .status = null'; jq -c . "$(tf "$a")" ;;
   rm)
     a="$(resolve "${1:-}")"; [[ -n "$a" ]] || err not_found "no terminal \"${1:-}\"" 3

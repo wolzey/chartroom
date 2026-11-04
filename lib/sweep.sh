@@ -235,16 +235,18 @@ sweep_herdr_panes() {
 
 # One plan: the snapshot classified (lib/sweep.jq). <close-failed> is a JSON array of task
 # ids whose close failed in this run, so nothing of theirs counts as safe.
+# .parkable: the workers at rest that --apply parks (lib/park.sh); their sessions are left to that.
 sweep_plan() { # [close-failed-json]
-  local procs tasks dash="" p _
+  local procs tasks dash="" p _ parkable
   procs="$(sweep_procs_json | sweep_procs_to_json)"
   tasks="$(sweep_tasks_json)"
+  parkable="$(park_due_json)"
   read -r dash _ < <(dashboard_running) || true
   jq -n -c --argjson procs "$procs" --argjson tasks "$tasks" --argjson panes "$(sweep_herdr_panes)" \
     --argjson homes "$(sweep_forms "$CR_HOME" | jq -R -s -c 'split("\n") | map(select(length > 0))')" \
     --argjson self "$$" --argjson idle "$((CR_SWEEP_IDLE_HOURS * 3600))" \
-    --argjson failed "${1:-[]}" --arg dash "$dash" --argjson others "$(sweep_others_json)" \
-    -f "$CR_ROOT/lib/sweep.jq"
+    --argjson failed "${1:-[]}" --arg dash "$dash" --argjson others "$(sweep_others_json)" --argjson parkable "$parkable" \
+    -f "$CR_ROOT/lib/sweep.jq" | jq -c --argjson p "$parkable" '.parkable = $p'
 }
 
 # Kill pids (TERM, then KILL whatever is still there after 5s), but only those whose argv is
@@ -281,7 +283,12 @@ sweep_kill() { # <pid<TAB>args>... on stdin
 # herdr tabs of closed tasks, then a fresh plan (the closes changed what is safe) whose
 # process kills run at once. Prints the final plan with a `result` on every item acted on.
 sweep_apply() { # <plan-json>
-  local plan="$1" id out rc failed='[]' results='{}' tab st r
+  local plan="$1" id out rc failed='[]' results='{}' tab st r line parked=()
+  # 0. park the workers at rest (lib/park.sh): they resume on steer or attach, so this is safe
+  while IFS= read -r line; do
+    [[ "$line" == parked\ * ]] || continue
+    id="${line#parked }"; id="${id%% *}"; parked+=("$id"); sweep_log "parked: $id"
+  done < <(park_due)
   # 1. close done tasks that are clean and landed (re-checked now, not trusted from the plan)
   while IFS= read -r id; do
     r="$(sweep_close_check "$id" "$(status_rows --id "$id" | jq -r .live)")"
@@ -354,6 +361,7 @@ sweep_apply() { # <plan-json>
         processes: ([$done[].pids[]] | unique | length), rss_kb: ([$done[].rss_kb] | add // 0),
         pcpu: ([$done[].pcpu] | add // 0 | . * 10 | round / 10), cpu_s: ([$done[].cpu_s] | add // 0)}
     | .summary.human = ([.items[] | select(.action == "human" or ((.result // "") | test("^(failed|skipped|not run)"))) | .task // "pid \(.pids[0])"] | unique | length)' <<<"$final")"
+  final="$(printf '%s\n' "${parked[@]+"${parked[@]}"}" | jq -R -s -c --argjson f "$final" '$f + {parked: (split("\n") | map(select(length > 0)))}')"
   while IFS=$'\t' read -r id what reason res pids; do
     sweep_log "$res: ${id:+$id }$what (pid $pids): $reason"
     [[ -n "$id" && "$res" =~ ^(stopped|killed) ]] && log_event "$id" note "sweep: $res $what (pid $pids): $reason"
@@ -436,6 +444,7 @@ sweep_print() { # <plan-json> <verbose: 0|1>
   fi
   jq -r --argjson verbose "$verbose" "$CR_SWEEP_FMT"'
     .summary as $s | $s.apply as $a
+    | (.applied // false) as $applied | ((if $applied then .parked else .parkable end) // []) as $pk
     | ([.items[] | select(.action == "human" or failed) | .why = (if failed then .result else .reason end)]
        | group_by(.task // "pid \(.pids[0] // "?")")) as $h
     # 1. the summary line
@@ -444,7 +453,8 @@ sweep_print() { # <plan-json> <verbose: 0|1>
       + ([(if $a.closes > 0 then "\($a.closes) done task(s) \(if .applied then "closed" else "to close" end)" else empty end),
           (if $a.sessions > 0 then "\($a.sessions) session(s)" else empty end),
           (if $a.orphans > 0 then "\($a.orphans) orphaned loop(s)" else empty end),
-          (if $a.daemons > 0 then "\($a.daemons) dev process tree(s)" else empty end)] | if length > 0 then join(", ") else "nothing" end)
+          (if $a.daemons > 0 then "\($a.daemons) dev process tree(s)" else empty end),
+          (if ($pk | length) > 0 then "\($pk | length) idle worker(s) \(if $applied then "parked" else "to park" end)" else empty end)] | if length > 0 then join(", ") else "nothing" end)
       + (if $a.processes > 0 then " = \($a.processes) proc(s), \($a.rss_kb | mem) RSS, \($a.pcpu)% CPU" else "" end)
       + "; needs a human: \($h | length); left alone: \($s.kept) proc(s) of live work"
       + "; load \(if .load.avg then (.load.avg | map(tostring) | join(" ")) else "?" end)\(if .load.cpus then " on \(.load.cpus) CPUs" else "" end)",

@@ -10,6 +10,7 @@
 #   $idle    seconds a finished-but-open task must be idle before its leftovers are raised
 #   $failed  task ids whose close failed in this run: nothing of theirs is safe
 #   $dash    the pid of the dashboard .dashboard.pid tracks ("" when none runs)
+#   $parkable  the ids of workers at rest that --apply parks (lib/park.sh): their sessions are kept
 #   $others  the other registered homes: {homes: their dirs, ids: their task ids, wts: the
 #            worktrees their tasks record}
 #
@@ -183,7 +184,9 @@ def wrapper: (.args | words) as $w | (($w[0] // "") | base) as $b
     + {class: "session", task: $t.id, state: $t.state, backend: $t.backend, project: $t.project,
        herdr_tab: (if $hl and $t.herdr.tab == $t.herdr_tab then $t.herdr_tab else null end),
        herdr_panes: (if $t.state == "closed" then $tp else [] end), worktree: $t.wt}
-    | . + (if ($t.state | finished | not) then {action: "keep"}
+    # a worker at rest that this sweep parks (lib/park.sh) is not a human's to end
+    | . + (if IN($t.id; $parkable[]) then {action: "keep"}
+           elif ($t.state | finished | not) then {action: "keep"}
            elif $t.joined then {action: "human", reason: "a joined session is the commander's own; ask before ending it"}
            elif $t.state == "closed" then
              (if (.pids | length) == 0 and .herdr_tab == null and (.herdr_panes | length) == 0 then

@@ -5,6 +5,7 @@
 # Without $FAKE_HERDR_APP_DIR no window answers. State in $FAKE_HERDR_APP_DIR:
 #   names/<id>    a space's or tab's name, from space.rename / tab.rename
 #   spaces.json   spaces the window already had, [{id, name}]
+#   shown         the id of the tab on screen: it, and its space, are "active"
 #   calls.log     every call
 [[ -n "${FAKE_HERDR_APP_DIR:-}" ]] || { echo "herdr-app: no Herdr window at /nonexistent/herdr-app.sock" >&2; exit 2; }
 A="$FAKE_HERDR_APP_DIR"; mkdir -p "$A/names"
@@ -16,16 +17,17 @@ names_json() {
 case "${1:-}" in
   ls)
     for f in "${FAKE_HC_DIR:-/nonexistent}"/terms/*.json; do [[ -f "$f" ]] && cat "$f"; done |
-      jq -s --argjson pre "$(cat "$A/spaces.json" 2>/dev/null || echo '[]')" --argjson names "$(names_json)" '
+      jq -s --argjson pre "$(cat "$A/spaces.json" 2>/dev/null || echo '[]')" --argjson names "$(names_json)" --arg shown "$(cat "$A/shown" 2>/dev/null)" '
         def nm($id; $d): $names[$id] // $d;
         def tabs($ts; $s): [$ts | map(select(.labels["herdr.space"] == $s)) | group_by(.labels["herdr.tab"] // .address)[]
           | (.[0].labels["herdr.tab"] // ("tb-" + .[0].address)) as $tid
-          | {id: $tid, name: nm($tid; "1"), terminals: [.[] | {terminal: .address, name}]}];
+          | {id: $tid, name: nm($tid; "1"), active: ($tid == $shown), terminals: [.[] | {terminal: .address, name}]}];
         [.[] | select(.state == "live" and (.labels["herdr.space"] // "") != "")] as $ts
         | {spaces: ([$pre[] | {id, name: nm(.id; .name), machine: null, tabs: tabs($ts; .id)}]
             + [$ts | map(.labels["herdr.space"]) | unique[] | select(. as $s | ($pre | map(.id) | index($s)) == null)
                | . as $s | {id: $s, name: nm($s; ($ts | map(select(.labels["herdr.space"] == $s))[0].cwd | split("/") | last)),
-                            machine: null, tabs: tabs($ts; $s)}])}' ;;
+                            machine: null, tabs: tabs($ts; $s)}])}
+        | .spaces |= map(.active = any(.tabs[]; .active))' ;;
   do)
     c="${2:-}"; shift 2; id="" name=""
     while [[ $# -gt 0 ]]; do

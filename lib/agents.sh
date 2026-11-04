@@ -65,13 +65,19 @@ claude_common_args() { # <id> <permission-mode or "">
 }
 
 # Full argv (one per line) for an interactive agent session. <hooks:1|0|prompt>
-interactive_argv() { # <id> <agent> <hooks>
-  local id="$1" agent="$2" hooks="$3" b
+# <session> (claude): "session" starts the session under meta session_id (--session-id),
+# "resume" resumes it (--resume), so a parked worker can be brought back (lib/park.sh).
+interactive_argv() { # <id> <agent> <hooks> [session|resume]
+  local id="$1" agent="$2" hooks="$3" ses="${4:-}" b
   b="$(agent_bin "$agent")"; [[ -n "$b" ]] || die "$agent not on PATH"
   printf '%s\n' "$b"
   case "$agent" in
     claude)
-      local perm; perm="$(meta "$id" permission)"
+      local perm sid; perm="$(meta "$id" permission)"
+      if [[ -n "$ses" ]]; then
+        sid="$(meta "$id" session_id)"; [[ -n "$sid" ]] || die "no session id recorded for $id"
+        if [[ "$ses" == resume ]]; then printf '%s\n' --resume "$sid"; else printf '%s\n' --session-id "$sid"; fi
+      fi
       claude_common_args "$id" "${perm:-$CR_CLAUDE_PERMISSION}"
       [[ "$hooks" == 1 ]] && printf '%s\n' --settings "$(claude_settings_file "$id")"
       [[ "$hooks" == prompt ]] && printf '%s\n' --settings "$(claude_settings_file "$id" prompt)"

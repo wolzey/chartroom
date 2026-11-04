@@ -197,7 +197,14 @@ hc_confirm_brief() { # <id> <text> <events.log offset before launch>
 hc_launch() { # <id> <wt> <agent>
   local id="$1" wt="$2" agent="$3" argv=() launcher task tab out t before rc=0
   hc_clear_stale "$id"; meta_set "$id" hc_launched ""
-  mapfile -t argv < <(interactive_argv "$id" "$agent" "$([[ "$agent" == claude ]] && echo prompt || echo 1)")
+  # Claude starts under a session id of chartroom's choosing, fresh each dispatch, so a parked
+  # worker can be resumed (lib/park.sh).
+  if [[ "$agent" == claude ]]; then
+    meta_set "$id" session_id "$(new_uuid)"
+    mapfile -t argv < <(interactive_argv "$id" "$agent" prompt session)
+  else
+    mapfile -t argv < <(interactive_argv "$id" "$agent" 1)
+  fi
   # hc's manual: codex needs --no-daemon under hc, or its commands run outside hc.
   [[ "$agent" == codex ]] && argv+=(--no-daemon)
   launcher="$(write_launcher "$id" "$wt" --forward "${argv[@]}")"
@@ -358,7 +365,10 @@ hc_attach() {
 
 # Wakes from hc's own state, polled with the watch loop (HST: the last status seen per task;
 # HC_TURNS: the turn count then, so a whole turn between two looks still counts).
-hc_watch_word() { # <id> -> sets W (working|idle|done|blocked|error|starting|replaced|gone)
+hc_watch_word() { # <id> -> sets W (working|idle|done|blocked|error|starting|replaced|gone|parked)
+  # A parked worker has no terminal to ask. Its turn count starts again from 0, so the revived
+  # terminal's first finished turn counts (lib/park.sh).
+  if [[ -n "$(meta "$1" parked)" ]]; then W=parked; HC_TURN=0; return 0; fi
   hc_info "$1"
   case "$HC_STATE" in live) W="${HC_STATUS:-starting}" ;; replaced) W=replaced ;; *) W=gone ;; esac
 }
@@ -385,8 +395,96 @@ hc_watch() { # <id>
   HST[$id]="$W"; HC_TURNS[$id]="$HC_TURN"
   return 0
 }
+# (A revive starts a new run as a dispatch does: the launcher's `exited` of the parked one is history.)
 exited_since_dispatch() { # <id>
-  awk '($2=="note:" && $3=="dispatched") { e=0 } $2=="exited:" { e=1 } END { exit e ? 0 : 1 }' "$(tdir "$1")/events.log"
+  awk '($2=="note:" && ($3=="dispatched" || $3=="revived")) { e=0 } $2=="exited:" { e=1 } END { exit e ? 0 : 1 }' "$(tdir "$1")/events.log"
+}
+
+# ---------------------------------------------------------------- park / revive (lib/park.sh)
+
+# Ends the terminal of a worker at rest, keeping its session: the screen goes to pane.log, the
+# park is recorded (meta parked, the note) before the terminal ends, so nothing reads its end as
+# a lost worker, and the terminal is removed (the app drops its tab). hc_terminal, hc_space and
+# hc_tab stay, for the revive. 1 (park undone) when the terminal would not end.
+hc_park() { # <id> <session id> <state>
+  local id="$1" t i
+  t="$(meta "$id" hc_terminal)"
+  hcx read "$t" --lines 2000 >>"$(tdir "$id")/pane.log" 2>/dev/null || true
+  meta_set "$id" parked "$(now)"
+  log_event "$id" note "parked (session $2; $3, its agent at rest): steer or attach resumes it"
+  hcx kill "$t" >/dev/null 2>&1 || true
+  for i in $(seq 1 20); do hc_info "$id"; [[ "$HC_STATE" =~ ^(live|replaced)$ ]] || break; sleep 0.25; done
+  if [[ "$HC_STATE" =~ ^(live|replaced)$ ]]; then
+    meta_set "$id" parked ""
+    log_event "$id" note "park undone: hc terminal $t did not end"
+    PARK_WHY="hc terminal $t did not end"
+    return 1
+  fi
+  [[ "$HC_STATE" == finished ]] && { hcx rm "$t" >/dev/null 2>&1 || true; }
+  return 0
+}
+
+# Up, with no prompt (an attach): 0 once the agent reports a state or shows its empty prompt
+# box, 1 if the terminal ends first or nothing shows in time.
+hc_wait_ready() { # <id>
+  local id="$1" i scr
+  for i in $(seq 1 $((CR_DELIVER_WAIT * 4))); do
+    hc_info "$id"
+    [[ "$HC_STATE" == live ]] || return 1
+    [[ -n "$HC_STATUS" ]] && return 0
+    scr="$(hc_screen "$id" 2>/dev/null | tail -n 15 | sed $'s/\xc2\xa0/ /g' || true)"
+    grep -qE '^[❯>] *$' <<<"$scr" && return 0
+    sleep 0.5
+  done
+  return 1
+}
+
+# Resumes a parked worker in a fresh terminal: the same worktree, launcher settings, labels and
+# tab name, running `claude --resume <session id>`, with <text> as its first prompt (as a dispatch
+# passes the brief), confirmed by the prompt hook; with no text (an attach), once it is up.
+# 0 confirmed, 2 taken but unchecked, 1 failed (logged as revive failed; the task stays parked).
+hc_revive() { # <id> [text]
+  local id="$1" text="${2:-}" wt sid argv=() launcher out t tab before rc=0 why scr code args=()
+  wt="$(meta "$id" worktree)"; sid="$(meta "$id" session_id)"
+  [[ -n "$sid" ]] || { revive_failed "$id" "no session id is recorded"; return 1; }
+  [[ -n "$wt" && -d "$wt" ]] || { revive_failed "$id" "its worktree ${wt:-(none)} is gone"; return 1; }
+  why="$(hc_probe 2>&1)" || { revive_failed "$id" "$why"; return 1; }
+  mapfile -t argv < <(interactive_argv "$id" claude prompt resume)
+  launcher="$(write_launcher "$id" "$wt" --forward "${argv[@]}")"
+  HC_SPACE="$(meta "$id" hc_space)"; [[ -n "$HC_SPACE" ]] || hc_space
+  tab="$(meta "$id" hc_tab)"; [[ -n "$tab" ]] || tab="tb$(new_uuid | tr -d -)"
+  before="$(wc -c <"$(tdir "$id")/events.log")"
+  [[ -n "$text" ]] && args=("$text")
+  out="$(hcx run --bg --json --no-parent --no-notify --name "$id" --cwd "$wt" \
+    --label "herdr.space=$HC_SPACE" --label "herdr.tab=$tab" \
+    --label "chartroom.workspace=$CR_WORKSPACE" --label "chartroom.task=$id" \
+    -- "${BASH:-bash}" "$launcher" "${args[@]+"${args[@]}"}" 2>&1)" || { revive_failed "$id" "hc run failed: $out"; return 1; }
+  t="$(jq -r '.address // empty' <<<"$out" 2>/dev/null || true)"
+  [[ -n "$t" ]] || { revive_failed "$id" "hc run gave no terminal address: $out"; return 1; }
+  meta_set "$id" hc_terminal "$t"; meta_set "$id" hc_space "$HC_SPACE"; meta_set "$id" hc_tab "$tab"
+  hc_name_layout "$id" || true
+  if [[ -n "$text" ]]; then hc_confirm_brief "$id" "$text" "$before" || rc=$?
+  else hc_wait_ready "$id" || rc=1; fi
+  # Resumed means this session: a fresh one would report another id to the prompt hook.
+  if [[ $rc -ne 1 && "$(meta_file "$id" session_id)" != "$sid" ]]; then
+    rc=1; why="claude started session $(meta_file "$id" session_id), not $sid"
+    meta_set "$id" session_id "$sid"
+  fi
+  if [[ $rc -eq 1 ]]; then
+    hc_info "$id"
+    if [[ -z "${why:-}" ]]; then
+      scr="$(hcx read "$t" --lines 40 2>/dev/null | grep -m1 -iE 'no conversation found|error|not found' || true)"
+      code="$(hcx get "$t" --json 2>/dev/null | jq -r '.exit_code // empty' 2>/dev/null || true)"
+      why="claude --resume did not come up in hc terminal $t ($HC_STATE${code:+, exit $code})${scr:+: $scr}"
+    fi
+    if [[ "$HC_STATE" == finished ]]; then hcx rm "$t" >/dev/null 2>&1 || true
+    elif [[ "$HC_STATE" =~ ^(live|replaced)$ ]]; then hcx kill "$t" >/dev/null 2>&1 || true; sleep 0.5; hcx rm "$t" >/dev/null 2>&1 || true; fi
+    revive_failed "$id" "$why"
+    return 1
+  fi
+  meta_set "$id" parked ""; meta_set "$id" hc_launched 1
+  log_event "$id" note "revived (session $sid, hc terminal $t) for $([[ -n "$text" ]] && echo steer || echo attach)"
+  return "$rc"
 }
 
 # ---------------------------------------------------------------- the watch's event stream

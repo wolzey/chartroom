@@ -200,6 +200,9 @@ load_config() {
   cfg_set CR_WAITING_GRACE WAITING_GRACE_MINUTES '' 15
   cfg_set CR_WAITING_MAX WAITING_MAX_MINUTES '' 120
   [[ "$CR_WAITING_GRACE$CR_WAITING_MAX" =~ ^[0-9]+$ ]] || die "CHARTROOM_WAITING_GRACE_MINUTES and CHARTROOM_WAITING_MAX_MINUTES must be whole minutes"
+  # Park a worker at rest this long (lib/park.sh); 0 turns automatic parking off.
+  cfg_set CR_PARK_AFTER PARK_AFTER_MINUTES '' 60
+  [[ "$CR_PARK_AFTER" =~ ^[0-9]+$ ]] || die "CHARTROOM_PARK_AFTER_MINUTES must be whole minutes (0: never park on its own)"
 }
 
 # ---------------------------------------------------------------- platform
@@ -454,14 +457,21 @@ line_kind() { local k; k="$(awk '{print $2}' <<<"$1")"; printf '%s' "${k%:}"; }
 
 # Has the worker reported since the last dispatch/steer: a terminal event, or a `waiting`
 # that nothing has followed yet? (Used to decide whether a turn ending or a process
-# exiting is news.) Reads stdin, so callers can cut the log short.
+# exiting is news.) A parked worker (lib/park.sh) is at rest until a revive takes (its note,
+# or the resumed agent taking its first prompt, which may finish its turn before the note is
+# written), so the launcher's `exited` after a park, or after a resume that failed, is not news.
+# Reads stdin, so callers can cut the log short.
 reported_awk() {
   awk '
     ($2=="note:" && $3=="dispatched") || $2=="steered:" { t=0; w=0 }
+    $2=="note:" && $3=="dispatched" { p=0 }
+    $2=="note:" && $3=="parked" { p=1 }
+    $2=="note:" && ($3=="revived" || ($3=="park" && $4=="undone:")) { p=0 }
+    $2=="agent:" && $3=="prompt-received" { p=0 }
     $2 ~ /^(decision|blocked|done|failed):$/ { t=1; w=0 }
     $2=="waiting:" { w=1 }
     $2=="progress:" { w=0 }
-    END { exit (t || w) ? 0 : 1 }'
+    END { exit (t || w || p) ? 0 : 1 }'
 }
 reported_since_dispatch() { reported_awk <"$(tdir "$1")/events.log"; }
 
