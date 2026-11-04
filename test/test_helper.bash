@@ -79,6 +79,15 @@ real_symlinks() {
   mkdir -p "$d"; : >"$d/t"; ln -sf t "$d/l" 2>/dev/null; [[ -L "$d/l" ]]
 }
 
+# A herdr server's socket where herdr looks by default ($HOME/.config/herdr/herdr.sock), so the
+# watch, the radar and sweep, which run no herdr command without one, reach the fake herdr. Bound
+# at a short path (socket paths are limited to ~100 bytes) and moved into place; nothing listens.
+herdr_sock_up() {
+  local d="$HOME/.config/herdr" s="/tmp/crhd.$$.$RANDOM"
+  mkdir -p "$d"
+  perl -MIO::Socket::UNIX -e 'IO::Socket::UNIX->new(Local => $ARGV[0], Listen => 1) or die "$!"' "$s" && mv "$s" "$d/herdr.sock"
+}
+
 # Put named fakes (test/fakes/<name>) on PATH.
 use_fake() { local f; for f in "$@"; do ln -sf "$REPO_ROOT/test/fakes/$f" "$BIN/$f"; done; }
 

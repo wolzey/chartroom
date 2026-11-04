@@ -1054,8 +1054,9 @@ cmd_accept() {
 #                                        except an agent state that came and went between
 #                                        two calls. (Claude Code: a background Bash command,
 #                                        no --timeout, started again after each batch.)
-declare -A OFF=() HST=() SEEN_ST=() SEEN_TURN=()
+declare -A OFF=() HST=() SEEN_ST=() SEEN_TURN=() WAIT_DUE=()
 CURSOR_FILE="$CR_HOME/.watch-cursor"
+WATCH_IVL_MS=3000 WATCH_SLOW_MS=60000 # cmd_watch's two intervals, from the settings
 
 # The --once cursor is created once, at the current end of every log, so history is
 # never replayed; tasks created after that are absent from it and are read from byte 0.
@@ -1115,12 +1116,20 @@ reported_upto() { # <id> <bytes>
 
 # A stopped worker whose waiting window has run out wakes once: the wake is recorded as
 # "note: waiting overdue ..." so a restarted or --once watch does not repeat it.
+# Between full rounds the watch looks again when the window runs out (WAIT_DUE, epoch ms), and,
+# for one already past it while the agent works, when hc's stream says the agent stopped.
 watch_overdue() { # <id>
-  local id="$1" wait live
+  local id="$1" wait live over ann due
+  unset "WAIT_DUE[$id]"
   wait="$(waiting_info "$id" 2>/dev/null || true)"
-  [[ -n "$wait" && "$(jq -r '.overdue and (.announced | not)' <<<"$wait")" == true ]] || return 0
+  [[ -n "$wait" ]] || return 0
+  IFS=$'\t' read -r over ann due < <(jq -r '[.overdue, .announced, (.deadline | fromdateiso8601? // 0)] | @tsv' <<<"$wait")
+  [[ "$ann" == false ]] || return 0
+  WAIT_DUE[$id]=$((due * 1000))
+  [[ "$over" == true ]] || return 0
   live="$(live_of "$id")"
-  [[ "$live" =~ ^(stopped|gone|idle|done|listening)$ ]] || return 0
+  if [[ ! "$live" =~ ^(stopped|gone|idle|done|listening)$ ]]; then clock_ms; WAIT_DUE[$id]=$((NOW_MS + WATCH_SLOW_MS)); return 0; fi
+  unset "WAIT_DUE[$id]"
   local msg; msg="waiting overdue: $(jq -r '"\(.on) (since \(.since)" + (if .until then ", until \(.until)" else "" end) + ")"' <<<"$wait")"
   log_event "$id" note "$msg"
   wake "$id" "$msg"
@@ -1138,7 +1147,7 @@ watch_baseline() { # <id> <hc|herdr> <unseen 0|1>
     [[ ! "${SEEN_TURN[$id]:-}" =~ ^[0-9]+$ ]] || HC_TURNS[$id]="${SEEN_TURN[$id]}"
   elif [[ $3 -eq 1 ]]; then :
   elif [[ "$2" == hc ]]; then hc_watch_seed "$id"
-  else HST[$id]="$(herdr_status "$id" 2>/dev/null || true)"; fi
+  else herdr_watch_status "$id"; HST[$id]="$HERDR_W"; fi
   return 0
 }
 
@@ -1147,6 +1156,32 @@ is_closed() { case "${MC["$1/"]:-}" in closed) return 0 ;; open) return 1 ;; esa
 clock_ms() { # sets NOW_MS: the time in milliseconds (bash 4: whole seconds)
   if [[ -n "${EPOCHREALTIME:-}" ]]; then NOW_MS="${EPOCHREALTIME//[!0-9]/}"; NOW_MS=$((10#${NOW_MS:0:${#NOW_MS}-3}))
   else printf -v NOW_MS '%(%s)T' -1; NOW_MS=$((NOW_MS * 1000)); fi
+}
+
+watch_ms() { # <setting> <seconds> <var>: a setting in seconds (3, 0.5) as milliseconds
+  [[ "$2" =~ ^([0-9]+)(\.([0-9]+))?$ ]] || die "$1 must be seconds, such as 3 or 0.5 (got $2)"
+  local f="${BASH_REMATCH[3]}000"
+  printf -v "$3" '%d' $((10#${BASH_REMATCH[1]} * 1000 + 10#${f:0:3}))
+}
+# Starts hc's event stream (lib/backends/hc.sh) and waits up to 2 s for its snapshot, so the round
+# that follows reads it instead of asking hc per task. One that cannot start or ends at once (an
+# hc without `events`, a core that does not answer) is tried again later, backing off from
+# CHARTROOM_WATCH_INTERVAL to CHARTROOM_WATCH_HC_INTERVAL.
+watch_hc_stream() {
+  local i back
+  if hc_stream_open; then
+    for ((i = 0; i < 20; i++)); do
+      hc_stream_drain
+      [[ -z "$HCS_UP" && -n "$HCS_FD" ]] || break
+      bell_wait 0.1 || true
+    done
+  fi
+  HCS_DOWN="" # (this attempt's own end: the round that follows is the full one)
+  [[ -z "$HCS_FD" ]] || return 0
+  HCS_FAILS=$((HCS_FAILS + 1)); back=$WATCH_IVL_MS
+  for ((i = 1; i < HCS_FAILS && back < WATCH_SLOW_MS; i++)); do back=$((back * 2)); done
+  (( back <= WATCH_SLOW_MS )) || back=$WATCH_SLOW_MS
+  clock_ms; HCS_RETRY=$((NOW_MS + back))
 }
 
 cmd_watch() {
@@ -1160,12 +1195,17 @@ cmd_watch() {
     esac
   done
   [[ "$timeout" =~ ^[0-9]+$ ]] || die "watch: --timeout takes whole seconds (got $timeout)"
-  # The full round's interval (the fallback for whatever does not ring), in milliseconds.
-  local ivl
-  [[ "$CR_WATCH_INTERVAL" =~ ^([0-9]+)(\.([0-9]+))?$ ]] || die "CHARTROOM_WATCH_INTERVAL must be seconds, such as 3 or 0.5 (got $CR_WATCH_INTERVAL)"
-  ivl="${BASH_REMATCH[3]}000"; ivl=$((10#${BASH_REMATCH[1]} * 1000 + 10#${ivl:0:3}))
+  # The full round (every task, the backend probes, overdue checks) runs every
+  # CHARTROOM_WATCH_INTERVAL while an open task's runner pushes nothing, and every
+  # CHARTROOM_WATCH_HC_INTERVAL once hc's event stream carries every open task (and no herdr
+  # server runs). Between full rounds, a light one at each ring and every CHARTROOM_WATCH_INTERVAL
+  # reads only what changed: logs newer than the last scan, the stream's lines, the relay
+  # mailbox, a waiting window that ran out. In milliseconds:
+  watch_ms CHARTROOM_WATCH_INTERVAL "$CR_WATCH_INTERVAL" WATCH_IVL_MS
+  watch_ms CHARTROOM_WATCH_HC_INTERVAL "$CR_WATCH_HC_INTERVAL" WATCH_SLOW_MS
+  (( WATCH_SLOW_MS >= WATCH_IVL_MS )) || WATCH_SLOW_MS=$WATCH_IVL_MS
   shopt -s nullglob
-  local d id f size start fresh=1 unseen b; clock_ms; start=$NOW_MS
+  local d id f size start fresh=1 unseen b i hc_ids=() hc_unseen=(); clock_ms; start=$NOW_MS
   mkdir -p "$CR_HOME/tasks"
   if [[ $once -eq 1 && -z "$cursor" ]]; then cursor="$CURSOR_FILE"; ensure_cursor; fi
   if [[ -n "$cursor" && -f "$cursor" ]]; then
@@ -1178,6 +1218,9 @@ cmd_watch() {
       esac
     done <"$cursor"
   fi
+  # The doorbell first (lib/core.sh): hc's event stream rings it too.
+  bell_open watch
+  trap 'hc_stream_close exiting; bell_close' EXIT
   meta_cache_load
   for d in "$CR_HOME"/tasks/*/; do
     id="${d%/}"; id="${id##*/}"; f="$d/events.log"
@@ -1187,24 +1230,37 @@ cmd_watch() {
     if [[ -f "$d/meta.json" ]] && ! is_closed "$id"; then
       case "$(backend_runner "$id" 2>/dev/null)" in
         herdr) watch_baseline "$id" herdr "$unseen" ;;
-        hc) [[ -n "$(meta "$id" dispatched)" ]] && watch_baseline "$id" hc "$unseen" ;;
+        hc) if [[ -n "$(meta "$id" dispatched)" ]]; then hc_ids+=("$id"); hc_unseen+=("$unseen"); fi ;;
       esac
     fi
   done
+  # hc's states from the stream's snapshot when it is in by now, else a `hc get` each.
+  if (( ${#hc_ids[@]} > 0 )); then
+    watch_hc_stream
+    for i in "${!hc_ids[@]}"; do watch_baseline "${hc_ids[$i]}" hc "${hc_unseen[$i]}"; done
+  fi
   MC=()
   f="$(relay_dir)/inbox.ndjson"
   if [[ $fresh -eq 1 && -f "$f" && -z "${OFF[@relays]+x}" ]]; then OFF[@relays]=$(($(wc -c <"$f"))); fi
-  # Between scans the watch waits on its doorbell (lib/core.sh). A ring scans only the logs that
-  # changed since the last scan started, and the relay mailbox; the full round (every task, the
-  # backend probes, overdue checks) runs every CHARTROOM_WATCH_INTERVAL, for what does not ring.
-  bell_open watch
-  trap bell_close EXIT
-  local full=1 next=0 wait r
+  # Between scans the watch waits on its doorbell. A ring, or the light round's timer, scans only
+  # the logs and task records that changed since the last scan started (a changed record, such
+  # as a dispatch or a close, brings the full round forward), the stream's lines and the relay
+  # mailbox.
+  local full=1 next=0 due wait r covered=0 verify=0 vnext=0 hc_open=${#hc_ids[@]} cur last_cur=$'\x01'
+  vnext=$((start + WATCH_SLOW_MS)) # the snapshot is fresh: the first check comes a slow interval on
   while true; do
     WATCH_FOCUS="$(focus_json)"
+    hc_stream_drain
+    if [[ -n "$HCS_DOWN" ]]; then HCS_DOWN=""; full=1; fi # the stream ended: a full round at once
     [[ $full -eq 0 ]] || bell_check
     bell_mark
     if [[ $full -eq 1 ]]; then
+      clock_ms
+      if [[ -z "$HCS_FD" && $hc_open -gt 0 ]] && (( NOW_MS >= HCS_RETRY )); then watch_hc_stream; fi
+      # Once per slow interval, hc is asked about what the stream holds (hc_stream_check).
+      verify=0
+      if [[ -n "$HCS_UP" ]] && (( NOW_MS >= vnext )); then verify=1; vnext=$((NOW_MS + WATCH_SLOW_MS)); fi
+      HC_HIT=(); herdr_round_reset; covered=1; hc_open=0
       meta_cache_load
       for d in "$CR_HOME"/tasks/*/; do
         id="${d%/}"; id="${id##*/}"; f="$d/events.log"
@@ -1216,45 +1272,62 @@ cmd_watch() {
           OFF[$id]=$size
         fi
         r="$(backend_runner "$id")"
-        if [[ -n "$r" && -n "$(meta "$id" dispatched)" ]]; then "${r}_watch" "$id"; watch_overdue "$id"; fi
+        if [[ -n "$r" && -n "$(meta "$id" dispatched)" ]]; then
+          if [[ "$r" == hc && $verify -eq 1 ]]; then hc_stream_check "$id"; fi
+          "${r}_watch" "$id"; watch_overdue "$id"
+          # Whatever pushes nothing keeps the fast cadence.
+          case "$r" in
+            hc) hc_open=1; if hc_handle_set "$id" && ! hc_stream_covers "$id"; then covered=0; fi ;;
+            herdr) if herdr_up; then covered=0; fi ;;
+            *) covered=0 ;;
+          esac
+        fi
       done
       MC=()
       watch_relays
-      clock_ms; next=$((NOW_MS + ivl))
+      clock_ms
+      if [[ $covered -eq 1 ]]; then next=$((NOW_MS + WATCH_SLOW_MS)); else next=$((NOW_MS + WATCH_IVL_MS)); fi
     else
+      hc_stream_wakes
       for f in "$CR_HOME"/tasks/*/events.log; do
         [[ "$f" -ot "$BELL_PREV" ]] && continue
         d="${f%/events.log}"; id="${d##*/}"
         [[ -f "$d/meta.json" ]] || continue
         is_closed "$id" && continue
         size=$(($(wc -c <"$f")))
-        if (( size > ${OFF[$id]:-0} )); then watch_scan_lines "$id" "${OFF[$id]:-0}" "$size"; OFF[$id]=$size; fi
+        if (( size > ${OFF[$id]:-0} )); then watch_scan_lines "$id" "${OFF[$id]:-0}" "$size"; OFF[$id]=$size; watch_overdue "$id"; fi
       done
+      if [[ -n "$BELL_PREV" ]]; then
+        for f in "$CR_HOME"/tasks/*/meta.json; do [[ "$f" -ot "$BELL_PREV" ]] || next=0; done
+      fi
       f="$(relay_dir)/inbox.ndjson"
       [[ "$f" -ot "$BELL_PREV" ]] || watch_relays
+      clock_ms
+      for id in "${!WAIT_DUE[@]}"; do (( WAIT_DUE[$id] > NOW_MS )) || watch_overdue "$id"; done
     fi
     if [[ -n "$cursor" ]]; then
-      {
-        for id in "${!OFF[@]}"; do printf '%s\t%s\n' "$id" "${OFF[$id]}"; done
-        for id in "${!HST[@]}"; do
-          [[ -n "${HST[$id]}" ]] || continue
-          printf '@state:%s\t%s\t%s\n' "$id" "${HST[$id]}" "${HC_TURNS[$id]:-}"
-        done
-      } >"$cursor.tmp" && mv "$cursor.tmp" "$cursor"
+      cur=""
+      for id in "${!OFF[@]}"; do cur+="$id"$'\t'"${OFF[$id]}"$'\n'; done
+      for id in "${!HST[@]}"; do
+        [[ -n "${HST[$id]}" ]] || continue
+        cur+="@state:$id"$'\t'"${HST[$id]}"$'\t'"${HC_TURNS[$id]:-}"$'\n'
+      done
+      if [[ "$cur" != "$last_cur" ]]; then printf '%s' "$cur" >"$cursor.tmp" && mv "$cursor.tmp" "$cursor" && last_cur="$cur"; fi
     fi
     clock_ms
     if [[ $once -eq 1 ]]; then
       [[ $WOKE -eq 1 ]] && exit 0
       if (( timeout > 0 && NOW_MS - start >= timeout * 1000 )); then echo "chartroom: watch timed out after ${timeout}s with no wakes" >&2; exit 124; fi
     fi
-    # Wait for a ring until the next full round is due, or --timeout runs out.
-    wait=$((next - NOW_MS))
+    # Wait for a ring until the next round is due: the full one, or the light one.
+    due=$next; (( due <= NOW_MS + WATCH_IVL_MS )) || due=$((NOW_MS + WATCH_IVL_MS))
+    wait=$((due - NOW_MS))
     if [[ $once -eq 1 ]] && (( timeout > 0 && start + timeout * 1000 - NOW_MS < wait )); then wait=$((start + timeout * 1000 - NOW_MS)); fi
-    full=1
     if (( wait > 0 )); then
       printf -v a '%d.%03d' $((wait / 1000)) $((wait % 1000))
-      if bell_wait "$a"; then clock_ms; (( NOW_MS >= next )) || full=0; fi
+      bell_wait "$a" || true
     fi
+    clock_ms; full=0; (( NOW_MS < next )) || full=1
   done
 }
 

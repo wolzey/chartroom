@@ -239,7 +239,7 @@ r-old-2 working underway" ]
   # herdr's enabled saved machines (a herdr that is not running is the same as none)
   use_fake herdr
   [ "$(cr radar machines --json | jq '.machines | length')" = 1 ]
-  export FAKE_HERDR_DIR="$BATS_TEST_TMPDIR/herdr"; mkdir -p "$FAKE_HERDR_DIR"
+  export FAKE_HERDR_DIR="$BATS_TEST_TMPDIR/herdr"; mkdir -p "$FAKE_HERDR_DIR"; herdr_sock_up
   echo '[{"id":"1","label":"studio","target":"me@studio.ts.net","enabled":true},{"id":"2","label":"old","target":"old","enabled":false},{"id":"3","label":"bad name;x","target":"x","enabled":true}]' >"$FAKE_HERDR_DIR/machines.json"
   [ "$(cr radar machines --json | jq -c '.machines[1:]')" = '[{"machine":"studio","local":false,"target":"me@studio.ts.net","via":"herdr"}]' ]
   # the setting wins over herdr; "none" turns other machines off
@@ -296,7 +296,7 @@ r-old-2 working underway" ]
   A="$BATS_TEST_TMPDIR/acme"
   CHARTROOM_HOME="$A" cr init --name acme >/dev/null
   use_fake herdr
-  export FAKE_HERDR_DIR="$BATS_TEST_TMPDIR/herdr"; mkdir -p "$FAKE_HERDR_DIR"
+  export FAKE_HERDR_DIR="$BATS_TEST_TMPDIR/herdr"; mkdir -p "$FAKE_HERDR_DIR"; herdr_sock_up
   # (Git Bash: the cwd as given, not turned into C:/... on its way to a native jq.exe)
   MSYS2_ARG_CONV_EXCL='*' jq -n --arg a "$A" '{result: {agents: [
     {agent: "claude", agent_status: "working", cwd: $a, pane_id: "w1:p1", terminal_title_stripped: "XO session"},

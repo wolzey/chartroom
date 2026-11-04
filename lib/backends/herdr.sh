@@ -24,7 +24,34 @@ crew_workspace() { # sets CREW_WS; when it creates the workspace, also CREW_FRES
   fi
 }
 
-herdr_status() { herdr agent get "$1" 2>/dev/null | jq -r '.result.agent.agent_status // empty' || true; }
+herdr_status() { herdr_up || return 0; herdr agent get "$1" 2>/dev/null | jq -r '.result.agent.agent_status // empty' || true; }
+# herdr's API socket, found without running herdr ($HERDR_SOCKET_PATH, else the named session's
+# under $XDG_CONFIG_HOME/herdr/sessions/, else $XDG_CONFIG_HOME/herdr/herdr.sock, as herdr 0.9.5
+# reports them): while no server is there, an agent's state is empty (gone) without running herdr,
+# and the watch, the radar and sweep run no herdr command at all.
+herdr_up() {
+  local s="${HERDR_SOCKET_PATH:-}" c="${XDG_CONFIG_HOME:-$HOME/.config}/herdr"
+  if [[ -z "$s" && -n "${HERDR_SESSION:-}" ]]; then s="$c/sessions/$HERDR_SESSION/herdr.sock"; fi
+  [[ -S "${s:-$c/herdr.sock}" ]]
+}
+# The watch asks herdr once per round (`agent list`), not once per task; on a herdr without
+# `agent list`, `agent get` per task as before. Sets HERDR_W (empty: no such agent, or no server).
+declare -A HERDR_ST=()
+HERDR_ROUND="" HERDR_W=""
+herdr_round_reset() { HERDR_ROUND=""; HERDR_ST=(); }
+herdr_watch_status() { # <id>
+  local n s
+  HERDR_W=""
+  herdr_up || return 0
+  if [[ -z "$HERDR_ROUND" ]]; then
+    HERDR_ROUND="get"
+    while IFS=$'\t' read -r n s; do
+      if [[ "$n" == @list ]]; then HERDR_ROUND=list; elif [[ -n "$n" ]]; then HERDR_ST[$n]="$s"; fi
+    done < <(herdr agent list 2>/dev/null | jq -r 'select((.result.agents | type) == "array") | "@list", (.result.agents[] | select(.name != null) | [.name, (.agent_status // "")] | @tsv)' 2>/dev/null || true)
+  fi
+  if [[ "$HERDR_ROUND" == list ]]; then HERDR_W="${HERDR_ST[$1]:-}"; else HERDR_W="$(herdr_status "$1")"; fi
+  return 0
+}
 herdr_alive() { [[ -n "$(herdr_status "$1")" ]]; }
 herdr_screen() { herdr agent read "$1" --source visible --lines 40; }
 herdr_keys() { local id="$1" k; shift; for k in "$@"; do herdr agent send-keys "$id" "$k" >/dev/null; sleep 0.3; done; }
@@ -137,11 +164,12 @@ herdr_peek() { echo "== pane (recent)"; herdr agent read "$1" --source recent --
 herdr_close() { local tab; tab="$(meta "$1" herdr_tab)"; [[ -n "$tab" ]] && herdr tab close "$tab" >/dev/null 2>&1; return 0; }
 herdr_attach() { herdr tab focus "$(meta "$1" herdr_tab)"; }
 
-# Extra wakes from herdr's own agent state. Uses the watch loop's HST map.
+# Extra wakes from herdr's own agent state. Uses the watch loop's HST map. An agent whose server
+# is down is gone: it wakes once, and costs nothing after that while the server stays down.
 herdr_watch() { # <id>
   local id="$1" st
   herdr_handle_set "$id" || return 0
-  st="$(herdr_status "$id")"; st="${st:-gone}"
+  herdr_watch_status "$id"; st="${HERDR_W:-gone}"
   if [[ "$st" != "${HST[$id]:-}" ]]; then
     case "$st" in
       blocked) wake "$id" "herdr: agent is waiting on an approval or question prompt" ;;

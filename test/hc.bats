@@ -386,3 +386,92 @@ watch_after() { # <change...>
   hc_calls | grep -qx "kill t2"
   hc_calls | grep -qx "rm t2"
 }
+
+# ---- the watch's hc event stream (FAKE_HC_EVENTS: the fake's `hc events`)
+stream_up() { export FAKE_HC_EVENTS=1 CHARTROOM_WATCH_HC_INTERVAL=30; }
+# One of hc's event lines for <terminal>, its term file changed first by <jq> so `hc get` agrees.
+hc_event() { # <terminal> <type> <data json> [jq update of the term file]
+  local n; n=$(( $(cat "$FAKE_HC_DIR/seq" 2>/dev/null || echo 0) + 1 )); echo "$n" >"$FAKE_HC_DIR/seq"
+  [[ -z "${4:-}" ]] || set_term "$1" "$4"
+  jq -cn --arg t "$1" --arg ty "$2" --argjson d "$3" --argjson s "$n" \
+    '{jsonrpc: "2.0", method: "event", params: {data: $d, seq: $s, terminal: $t, type: $ty}}' >>"$FAKE_HC_DIR/events.ndjson"
+}
+# Claude Code ending a turn: the status leaves working, then hc counts the turn.
+turn_ends() {
+  hc_event t1 status '{"status":{"app":"claude-code","state":"done"}}' '.status = {app: "claude-code", state: "done"}'
+  hc_event t1 turn "$(jq -c '{state: "done", turn: (.turn + 1)}' "$FAKE_HC_DIR/terms/t1.json")" '.turn += 1'
+}
+# hc's keep putting a shell in place of a lost agent: lost, then restarted with the shell's argv.
+agent_replaced() {
+  hc_event t1 status '{"status":null}' '.status = null'
+  hc_event t1 lost '{"exit_code":null,"finished_ms":null,"reason":"signaled","signal":9}'
+  set_term t1 '.argv = ["/bin/zsh", "-l"]'
+  hc_event t1 restarted "$(cat "$FAKE_HC_DIR/terms/t1.json")"
+}
+wakes() { grep -c . "$BATS_TEST_TMPDIR/wake" || true; }
+
+@test "hc events: a turn ended without a report, a prompt and a replaced agent wake from the stream, once each, with no hc get" {
+  core_up; stream_up
+  id="$(new_task --backend hc:claude)"
+  FAKE_HC_STATUS=working cr dispatch "$id" >/dev/null
+  : >"$FAKE_HC_DIR/calls.log"
+  watch_after turn_ends
+  grep -qx "\[$id\] \[proj\] hc: agent stopped its turn without reporting" "$BATS_TEST_TMPDIR/wake"
+  [ "$(wakes)" -eq 1 ]
+  hc_calls | grep -q "^events --json --label chartroom.workspace=chartroom-crew"
+  refute grep -q '^get' "$FAKE_HC_DIR/calls.log"
+  # the next call starts from its cursor and the stream's snapshot: the same turn is not news again
+  run cr watch --once --timeout 2
+  [ "$status" -eq 124 ]
+  # a prompt waiting for an answer (awaiting input)
+  watch_after hc_event t1 status '{"status":{"app":"claude-code","kind":"permission","state":"blocked"}}' '.status = {app: "claude-code", state: "blocked"}'
+  grep -qx "\[$id\] \[proj\] hc: agent is waiting on an approval or question prompt" "$BATS_TEST_TMPDIR/wake"
+  [ "$(wakes)" -eq 1 ]
+  # lost, then a shell in its place: one wake, as replaced (lost alone is held for what follows)
+  watch_after agent_replaced
+  grep -qx "\[$id\] \[proj\] lost: the agent in hc terminal t1 is gone (hc put a shell in its place); chartroom close $id ends it" "$BATS_TEST_TMPDIR/wake"
+  [ "$(wakes)" -eq 1 ]
+  refute grep -q '^get' "$FAKE_HC_DIR/calls.log"
+}
+
+@test "hc events: a terminal that vanishes with no event at all is lost by the slow round's own look" {
+  core_up; stream_up
+  export CHARTROOM_WATCH_HC_INTERVAL=3
+  id="$(new_task --backend hc:claude)"
+  cr dispatch "$id" >/dev/null
+  watch_after rm -f "$FAKE_HC_DIR/terms/t1.json"
+  grep -qx "\[$id\] \[proj\] lost: hc terminal t1 is no longer running" "$BATS_TEST_TMPDIR/wake"
+  [ "$(wakes)" -eq 1 ]
+}
+
+@test "hc events: when the stream ends the watch asks hc at once and every round, then takes the stream back" {
+  core_up; stream_up
+  id="$(new_task --backend hc:claude)"
+  FAKE_HC_STATUS=working cr dispatch "$id" >/dev/null
+  : >"$FAKE_HC_DIR/calls.log"
+  # (chartroom itself, not the cr function, so kill reaches the watch and not a subshell)
+  "$CHARTROOM" watch >"$BATS_TEST_TMPDIR/wake" 2>&1 3>&- &
+  local w=$! i
+  sleep 1.5
+  refute grep -q '^get' "$FAKE_HC_DIR/calls.log"
+  # the core goes away: the stream ends, and a new one cannot start yet
+  touch "$FAKE_HC_DIR/events.off"; echo EOF >>"$FAKE_HC_DIR/events.ndjson"
+  for i in $(seq 1 20); do grep -q '^get t1' "$FAKE_HC_DIR/calls.log" && break; sleep 0.1; done
+  grep -q '^get t1' "$FAKE_HC_DIR/calls.log"
+  # a change with no event at all is seen by polling
+  set_term t1 '.status.state = "idle"'
+  for i in $(seq 1 30); do grep -q "stopped its turn" "$BATS_TEST_TMPDIR/wake" && break; sleep 0.1; done
+  grep -qx "\[$id\] \[proj\] hc: agent stopped its turn without reporting" "$BATS_TEST_TMPDIR/wake"
+  # the stream can start again: the watch takes it back (its retries back off from 1 s) and
+  # stops asking
+  : >"$FAKE_HC_DIR/calls.log"; rm -f "$FAKE_HC_DIR/events.off"
+  for i in $(seq 1 100); do grep -q '^events' "$FAKE_HC_DIR/calls.log" && break; sleep 0.1; done
+  grep -q '^events' "$FAKE_HC_DIR/calls.log"
+  sleep 1; : >"$FAKE_HC_DIR/calls.log"
+  hc_event t1 status '{"status":{"app":"claude-code","state":"blocked"}}' '.status = {app: "claude-code", state: "blocked"}'
+  for i in $(seq 1 30); do grep -q "waiting on an approval" "$BATS_TEST_TMPDIR/wake" && break; sleep 0.1; done
+  kill "$w"; wait "$w" || true
+  grep -qx "\[$id\] \[proj\] hc: agent is waiting on an approval or question prompt" "$BATS_TEST_TMPDIR/wake"
+  refute grep -q '^get' "$FAKE_HC_DIR/calls.log"
+  [ "$(wakes)" -eq 2 ]
+}

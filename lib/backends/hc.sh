@@ -75,9 +75,16 @@ hc_info() { # <id>
   local t j name ours
   HC_STATE=gone; HC_STATUS=""; HC_TURN=0
   t="$(meta "$1" hc_terminal)"; [[ -n "$t" ]] || return 0
-  j="$(hcx get "$t" --json 2>/dev/null)" || return 0
-  # (the launcher by its task's path suffix: the home may be spelled another way, via a symlink)
-  IFS='|' read -r HC_STATE HC_STATUS HC_TURN name ours < <(jq -r --arg l "/tasks/$1/launch.sh" '[.state // "gone", .status.state // "", .turn // 0, .name // "", any((.argv // [])[]; tostring | endswith($l))] | map(tostring) | join("|")' <<<"$j" 2>/dev/null) || true
+  HC_ADDR_TASK[$t]="$1"
+  if [[ -n "$HCS_UP" && -n "${HCT_STATE[$t]+x}" ]]; then
+    # The watch's event stream already holds this terminal (hc_stream_drain): no `hc get`.
+    HC_STATE="${HCT_STATE[$t]}"; HC_STATUS="${HCT_STATUS[$t]}"; HC_TURN="${HCT_TURN[$t]}"; name="${HCT_NAME[$t]}"
+    ours=false; [[ "${HCT_LIDS[$t]}" == *" $1 "* ]] && ours=true
+  else
+    j="$(hcx get "$t" --json 2>/dev/null)" || return 0
+    # (the launcher by its task's path suffix: the home may be spelled another way, via a symlink)
+    IFS='|' read -r HC_STATE HC_STATUS HC_TURN name ours < <(jq -r --arg l "/tasks/$1/launch.sh" '[.state // "gone", .status.state // "", .turn // 0, .name // "", any((.argv // [])[]; tostring | endswith($l))] | map(tostring) | join("|")' <<<"$j" 2>/dev/null) || true
+  fi
   [[ -n "$HC_STATE" && "$name" == "$1" ]] || { HC_STATE=gone; HC_STATUS=""; HC_TURN=0; return 0; }
   [[ "$HC_STATE" == live && "$ours" != true ]] && { HC_STATE=replaced; HC_STATUS=""; }
   [[ "$HC_TURN" =~ ^[0-9]+$ ]] || HC_TURN=0
@@ -378,4 +385,171 @@ hc_watch() { # <id>
 }
 exited_since_dispatch() { # <id>
   awk '($2=="note:" && $3=="dispatched") { e=0 } $2=="exited:" { e=1 } END { exit e ? 0 : 1 }' "$(tdir "$1")/events.log"
+}
+
+# ---------------------------------------------------------------- the watch's event stream
+# While a watch runs, one `hc events --json --label chartroom.workspace=<workspace>` carries hc's
+# state of the crew's terminals instead of a `hc get` per task per round (verified with hc 0.1.16
+# and Claude Code 2.1.318). Its first line is a snapshot of the matching terminals, with all that
+# hc_info reads (name, argv, state, status, turn); then one `event` line per change: `status`
+# (the agent's own idle/working/done/blocked), `turn` (once the status leaves working),
+# `created`, `lost` followed by `restarted` (keep put a shell in place: the new argv) or by
+# `finished`, and `removed`; `heartbeat` every 15 s; `missed` then a fresh snapshot for a reader
+# that fell behind. `lost` alone changes nothing chartroom reads, so it is left out: what follows
+# it says whether the agent is replaced or finished.
+# A coprocess runs it through one long-lived jq, which turns each line into one fact (fields
+# split by \x1f):
+#   S <seq>, then T per terminal, then E      a snapshot
+#   T <address> <state> <status> <turn> <name> < launcher task ids >   created/restarted too
+#   U <address> <status>   N <address> <turn>   F <address> (finished)   R <address> (removed)
+#   M  missed (the snapshot that follows replaces the view)   H  heartbeat
+# and rings the watch's doorbell for each but H. The watch takes them between rounds with bash's
+# own read (no fork) into HCT_* (hc_stream_drain), hc_info answers from there, and only the tasks
+# whose terminal changed are compared (hc_stream_wakes). The coprocess writes heartbeats too, so
+# once the watch is gone, even killed outright, its next write fails and it ends.
+HCS_PID="" HCS_FD="" HCS_UP="" HCS_SNAP="" HCS_DOWN="" HCS_FAILS=0 HCS_RETRY=0
+declare -A HCT_STATE=() HCT_STATUS=() HCT_TURN=() HCT_NAME=() HCT_LIDS=() HCS_SEEN=() HC_HIT=() HC_ADDR_TASK=()
+# shellcheck disable=SC2016
+HC_STREAM_JQ='
+  def f: tostring | gsub("[\t\n\u001f]"; " ");
+  def ids: " " + ([(.argv // [])[] | tostring | capture("/tasks/(?<id>[^/]+)/launch\\.sh$")?.id] | join(" ")) + " ";
+  def rec: ["T", .address, (.state // "gone"), (.status.state? // ""), (.turn // 0), (.name // ""), ids] | map(f) | join("\u001f");
+  def snap($p): ["S\u001f\($p.seq // 0)"] + [$p.terminals[]? | rec] + ["E"];
+  foreach (inputs | fromjson? | select(type == "object")) as $l ({s: -1, out: []};
+    if ($l.terminals | type) == "array" then {s: ($l.seq // 0), out: snap($l)}
+    elif ($l.params.terminals? | type) == "array" then {s: ($l.params.seq // 0), out: snap($l.params)}
+    elif $l.method == "heartbeat" then .out = ["H"]
+    elif $l.method == "missed" then .out = ["M"]
+    elif $l.method == "event" then
+      $l.params as $p
+      | if ($p.seq // 0) <= .s then .out = []
+        else .out = [
+          if $p.type == "created" or $p.type == "restarted" then $p.data + {address: ($p.data.address // $p.terminal)} | rec
+          elif $p.type == "status" then "U\u001f\($p.terminal | f)\u001f\($p.data.status.state? // "" | f)"
+          elif $p.type == "turn" then "N\u001f\($p.terminal | f)\u001f\($p.data.turn // 0 | f)"
+          elif $p.type == "finished" then "F\u001f\($p.terminal | f)"
+          elif $p.type == "removed" then "R\u001f\($p.terminal | f)"
+          else empty end] end
+    else .out = [] end;
+    .out[])'
+
+hc_stream_ring() { { read -r -t 0 -u "$BELL_FD" || printf . >&"$BELL_FD"; } 2>/dev/null || true; }
+hc_stream_pump() { # <hc binary>: the coprocess
+  local line
+  env -u HC_TERMINAL_ID "$1" events --json --label "chartroom.workspace=$CR_WORKSPACE" 2>/dev/null |
+    jq -R -n -r --unbuffered "$HC_STREAM_JQ" 2>/dev/null |
+    while IFS= read -r line; do
+      printf '%s\n' "$line" || exit 0
+      [[ "$line" == H ]] || hc_stream_ring
+    done || true
+  hc_stream_ring
+}
+# Starts the stream if it can run: a doorbell to ring (without one the watch polls as before),
+# and a core that answers, so the watch never starts one (any hc command would).
+hc_stream_open() {
+  local hc w
+  hc_stream_close
+  [[ -n "$BELL_FD" ]] || return 1
+  hc="$(hc_bin)"; [[ -n "$hc" ]] || return 1
+  sock_answers "$(hc_socket)" || return 1
+  coproc HCS_CO { exec </dev/null 2>/dev/null; hc_stream_pump "$hc"; }
+  HCS_PID="$HCS_CO_PID"
+  exec {HCS_FD}<&"${HCS_CO[0]}" # bash closes a coprocess's own fds when it reaps it
+  w="${HCS_CO[1]}"; exec {w}>&-
+  return 0
+}
+hc_stream_close() { # [exiting]
+  if [[ -n "$HCS_PID" ]]; then
+    kill_tree "$HCS_PID"
+    [[ -n "${1:-}" ]] || wait "$HCS_PID" 2>/dev/null || true
+  fi
+  if [[ -n "$HCS_FD" ]]; then exec {HCS_FD}<&-; fi
+  HCS_PID="" HCS_FD="" HCS_UP="" HCS_SNAP=""
+  return 0
+}
+hc_stream_set() { # <address> <state> <status> <turn> <name> <launcher ids>
+  local a="$1" t="$4"
+  [[ "$t" =~ ^[0-9]+$ ]] || t=0
+  if [[ -n "${HCT_STATE[$a]+x}" && "${HCT_STATE[$a]}|${HCT_STATUS[$a]}|${HCT_TURN[$a]}|${HCT_NAME[$a]}|${HCT_LIDS[$a]}" == "$2|$3|$t|$5|$6" ]]; then return 0; fi
+  HCT_STATE[$a]="$2"; HCT_STATUS[$a]="$3"; HCT_TURN[$a]="$t"; HCT_NAME[$a]="$5"; HCT_LIDS[$a]="$6"; HC_HIT[$a]=1
+}
+hc_stream_forget() { # <address>: no longer in the stream (hc_info asks hc again)
+  unset "HCT_STATE[$1]" "HCT_STATUS[$1]" "HCT_TURN[$1]" "HCT_NAME[$1]" "HCT_LIDS[$1]"; HC_HIT[$1]=1
+}
+# Takes every fact the stream has sent so far, without waiting. At its end (the core stopped or
+# restarted, `hc update`) the stream is closed and HCS_DOWN set: the watch runs a full round at
+# once, then polls every CHARTROOM_WATCH_INTERVAL until a new stream's snapshot is in.
+hc_stream_drain() {
+  [[ -n "$HCS_FD" ]] || return 0
+  local line k a x y z n l
+  while read -r -t 0 -u "$HCS_FD"; do
+    if ! IFS= read -r -u "$HCS_FD" line; then hc_stream_close; HCS_DOWN=1; return 0; fi
+    IFS=$'\x1f' read -r k a x y z n l <<<"$line"
+    case "$k" in
+      S) HCS_SNAP=1; HCS_SEEN=() ;;
+      T)
+        if [[ -n "$HCS_SNAP" ]]; then HCS_SEEN[$a]=1; fi
+        hc_stream_set "$a" "$x" "$y" "$z" "$n" "$l" ;;
+      E)
+        for a in "${!HCT_STATE[@]}"; do [[ -n "${HCS_SEEN[$a]+x}" ]] || hc_stream_forget "$a"; done
+        HCS_SNAP=""; HCS_SEEN=(); HCS_UP=1; HCS_FAILS=0 ;;
+      U)
+        if [[ -n "${HCT_STATE[$a]+x}" && "${HCT_STATUS[$a]}" != "$x" ]]; then
+          # hc counts a turn each time the status leaves working, and says so in a `turn` line
+          # right after this one; counted here already, so a watch that wakes on this line and
+          # exits (--once) leaves its cursor at the turn hc will report, not one behind it.
+          if [[ "${HCT_STATUS[$a]}" == working && -n "$x" ]]; then HCT_TURN[$a]=$((HCT_TURN[$a] + 1)); fi
+          HCT_STATUS[$a]="$x"; HC_HIT[$a]=1
+        fi ;;
+      N) if [[ -n "${HCT_STATE[$a]+x}" && "$x" =~ ^[0-9]+$ && "${HCT_TURN[$a]}" != "$x" ]]; then HCT_TURN[$a]="$x"; HC_HIT[$a]=1; fi ;;
+      F) if [[ -n "${HCT_STATE[$a]+x}" ]]; then HCT_STATE[$a]=finished; HCT_STATUS[$a]=""; HC_HIT[$a]=1; fi ;;
+      R) if [[ -n "${HCT_STATE[$a]+x}" ]]; then HCT_STATE[$a]=gone; HCT_STATUS[$a]=""; HC_HIT[$a]=1; fi ;;
+      M) HCS_UP="" ;; # until the snapshot that follows: hc_info asks hc
+    esac
+  done
+  return 0
+}
+# Does the stream answer for this task's terminal? (Else the watch keeps asking hc each round:
+# a terminal started before chartroom labelled them, or while the stream is down.)
+hc_stream_covers() { # <id>
+  local t; t="$(meta "$1" hc_terminal)"
+  [[ -n "$HCS_UP" && -n "$t" && -n "${HCT_STATE[$t]+x}" ]]
+}
+# The stream's changes since the last look, compared by hc_watch for each task they touch, as a
+# full round would (between rounds: the round compares every task itself).
+hc_stream_wakes() {
+  local a id metas=()
+  local -A ids=()
+  (( ${#HC_HIT[@]} > 0 )) || return 0
+  for a in "${!HC_HIT[@]}"; do
+    id="${HC_ADDR_TASK[$a]:-${HCT_NAME[$a]:-}}"
+    if [[ -n "$id" && "$id" != */* && -f "$CR_HOME/tasks/$id/meta.json" ]]; then ids[$id]=1; metas+=("$CR_HOME/tasks/$id/meta.json"); fi
+  done
+  HC_HIT=()
+  (( ${#metas[@]} > 0 )) || return 0
+  meta_cache_load "${metas[@]}"
+  for id in "${!ids[@]}"; do
+    is_closed "$id" && continue
+    [[ "$(backend_runner "$id")" == hc && -n "$(meta "$id" dispatched)" ]] || continue
+    hc_watch "$id"
+    # (a waiting window that ran out while the agent worked: overdue once it stops)
+    [[ -z "${WAIT_DUE[$id]+x}" ]] || watch_overdue "$id"
+  done
+  MC=()
+  return 0
+}
+# The slow round's own look at a terminal the stream holds, for one that ended without an event
+# (the brief's one allowed slowdown). It only ever ends a terminal in the stream's view (finished,
+# gone, or replaced by a shell), never moves its status, so an event still on its way cannot make
+# the same change wake twice.
+hc_stream_check() { # <id>
+  local t up="$HCS_UP"
+  hc_stream_covers "$1" || return 0
+  t="$(meta "$1" hc_terminal)"
+  HCS_UP=""; hc_info "$1"; HCS_UP="$up"
+  case "$HC_STATE" in
+    gone|finished) [[ "${HCT_STATE[$t]}" == "$HC_STATE" ]] || { HCT_STATE[$t]="$HC_STATE"; HCT_STATUS[$t]=""; } ;;
+    replaced) [[ "${HCT_LIDS[$t]}" != *" $1 "* ]] || { HCT_LIDS[$t]=" "; HCT_STATUS[$t]=""; } ;;
+  esac
+  return 0
 }

@@ -109,6 +109,29 @@ case "$cmd" in
     [[ "$(jq -r .state "$(tf "$a")")" == finished ]] || err live "$a is still running" 1
     rm -f "$(tf "$a")"; jq -cn --arg a "$a" '{removed: $a}' ;;
   attach) : ;;
+  events)
+    # Only with FAKE_HC_EVENTS=1 (else unknown, as on an hc without it): the snapshot of the
+    # terminals carrying the labels, then each line appended to $S/events.ndjson from now on (as
+    # hc's own event lines), a heartbeat about every second, and the end of the stream at a line
+    # "EOF" (a core that stopped). It ends at its first write once nobody reads it.
+    # ($S/events.off: unknown again, as when the core is gone and a fresh stream cannot start.)
+    [[ -n "${FAKE_HC_EVENTS:-}" && ! -f "$S/events.off" ]] || err unknown "unknown command $cmd" 2
+    lab=()
+    while [[ $# -gt 0 ]]; do case "$1" in --label) lab+=("$2"); shift 2 ;; *) shift ;; esac; done
+    touch "$S/events.ndjson"; n=$(($(wc -l <"$S/events.ndjson")))
+    for f in "$S"/terms/*.json; do [[ -f "$f" ]] && cat "$f"; done | jq -s -c '
+      ($ARGS.positional | map(split("=") | {key: .[0], value: (.[1:] | join("="))}) | from_entries) as $want
+      | {channel: null, seq: 0, terminals: [.[] | select(. as $t | all($want | to_entries[]; $t.labels[.key] == .value))]}' --args "${lab[@]}" || exit 0
+    i=0
+    while true; do
+      while IFS= read -r line; do
+        n=$((n + 1))
+        [[ "$line" == EOF ]] && exit 0
+        printf '%s\n' "$line" || exit 0
+      done < <(tail -n +"$((n + 1))" "$S/events.ndjson")
+      i=$((i + 1)); (( i % 5 )) || printf '{"jsonrpc":"2.0","method":"heartbeat","params":{"seq":0}}\n' || exit 0
+      sleep 0.2
+    done ;;
   *) err unknown "unknown command $cmd" 2 ;;
 esac
 exit 0

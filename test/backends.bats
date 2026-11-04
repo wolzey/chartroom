@@ -242,7 +242,7 @@ lines"
 
 @test "herdr watch --once: a turn that ended while nobody watched wakes the next call, once" {
   use_fake herdr claude
-  export FAKE_HERDR_DIR="$BATS_TEST_TMPDIR/herdr"; mkdir -p "$FAKE_HERDR_DIR"
+  export FAKE_HERDR_DIR="$BATS_TEST_TMPDIR/herdr"; mkdir -p "$FAKE_HERDR_DIR"; herdr_sock_up
   id="$(new_task --backend herdr:claude)"
   export FAKE_HERDR_TASK="$id"
   cr dispatch "$id" >/dev/null
@@ -258,13 +258,33 @@ lines"
   [ "$status" -eq 124 ]
 }
 
+@test "herdr: with no server (no socket) the watch, status, the radar and sweep run no herdr command; a lost agent wakes once" {
+  use_fake herdr claude
+  export FAKE_HERDR_DIR="$BATS_TEST_TMPDIR/herdr"; mkdir -p "$FAKE_HERDR_DIR"; herdr_sock_up
+  id="$(new_task --backend herdr:claude)"
+  export FAKE_HERDR_TASK="$id"
+  cr dispatch "$id" >/dev/null
+  run cr watch --once --timeout 2
+  [ "$status" -eq 124 ]
+  # the server goes, and its socket with it
+  rm -f "$HOME/.config/herdr/herdr.sock"; : >"$FAKE_HERDR_DIR/calls.log"
+  run cr watch --once --timeout 5
+  [ "$output" = "[$id] [proj] lost: herdr agent is no longer running" ]
+  run cr watch --once --timeout 2
+  [ "$status" -eq 124 ]
+  [ "$(cr status --json | jq -r '.[0].live')" = gone ]
+  CHARTROOM_RADAR_MACHINES=none cr radar --json >/dev/null
+  cr sweep --json >/dev/null
+  [ ! -s "$FAKE_HERDR_DIR/calls.log" ]
+}
+
 herdr_trust_screen() {
   printf ' Quick safety check: Is this a project you created or one you trust?\n ❯ No, exit\n   Yes, I trust this folder\n' >"$FAKE_HERDR_DIR/screen"
 }
 
 @test "herdr: a start blocked by the trust dialog is answered, then the brief is delivered" {
   use_fake herdr claude
-  export FAKE_HERDR_DIR="$BATS_TEST_TMPDIR/herdr"; mkdir -p "$FAKE_HERDR_DIR"; herdr_trust_screen
+  export FAKE_HERDR_DIR="$BATS_TEST_TMPDIR/herdr"; mkdir -p "$FAKE_HERDR_DIR"; herdr_sock_up; herdr_trust_screen
   id="$(new_task --backend herdr:claude)"
   export FAKE_HERDR_TASK="$id"
   run cr dispatch "$id"
@@ -281,7 +301,7 @@ herdr_trust_screen() {
 
 @test "herdr: a stale agent from an earlier start is closed only when it is this task's own" {
   use_fake herdr claude
-  export FAKE_HERDR_DIR="$BATS_TEST_TMPDIR/herdr"; mkdir -p "$FAKE_HERDR_DIR/agents"
+  export FAKE_HERDR_DIR="$BATS_TEST_TMPDIR/herdr"; mkdir -p "$FAKE_HERDR_DIR/agents"; herdr_sock_up
   echo chartroom-crew >"$FAKE_HERDR_DIR/ws"
   id="$(new_task --backend herdr:claude)"
   export FAKE_HERDR_TASK="$id"
@@ -322,7 +342,7 @@ herdr_trust_screen() {
 
 @test "herdr: a blocked start in a folder chartroom did not create is never auto-trusted" {
   use_fake herdr claude
-  export FAKE_HERDR_DIR="$BATS_TEST_TMPDIR/herdr"; mkdir -p "$FAKE_HERDR_DIR"; herdr_trust_screen
+  export FAKE_HERDR_DIR="$BATS_TEST_TMPDIR/herdr"; mkdir -p "$FAKE_HERDR_DIR"; herdr_sock_up; herdr_trust_screen
   id="$(new_task --backend herdr:claude)"
   export FAKE_HERDR_TASK="$id"
   cr worktree "$id" >/dev/null

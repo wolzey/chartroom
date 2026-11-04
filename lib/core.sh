@@ -183,6 +183,7 @@ load_config() {
   CR_PROJECT_ROOTS="${CR_PROJECT_ROOTS//\~/$HOME}"
   cfg_set CR_WORKSPACE WORKSPACE CAP_CREW_WORKSPACE chartroom-crew
   cfg_set CR_WATCH_INTERVAL WATCH_INTERVAL CAP_WATCH_INTERVAL 3
+  cfg_set CR_WATCH_HC_INTERVAL WATCH_HC_INTERVAL '' 60
   cfg_set CR_BACKEND_ORDER BACKEND_ORDER '' 'hc:claude herdr:claude cmux:claude tmux:claude headless:codex headless:claude command'
   CR_BACKEND_ORDER="${CR_BACKEND_ORDER//,/ }"
   cfg_set CR_HARNESS HARNESS '' generic
@@ -299,9 +300,10 @@ meta() {
   meta_file "$@"
 }
 meta_file() { jq -r --arg k "$2" '.[$k] // empty | tostring' "$(tdir "$1")/meta.json"; } # never cached
-meta_cache_load() {
+meta_cache_load() { # [meta.json files: these tasks only; default every task]
   MC=()
-  local metas=("$CR_HOME"/tasks/*/meta.json) line id rest k v
+  local metas=("$@") line id rest k v
+  (( $# > 0 )) || metas=("$CR_HOME"/tasks/*/meta.json)
   [[ -e "${metas[0]-}" ]] || return 0
   # (A malformed file ends jq there: the tasks after it are left out and read one by one.)
   while IFS= read -r line; do

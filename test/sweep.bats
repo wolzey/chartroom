@@ -258,7 +258,7 @@ closed_record() { # <id> [extra-json]
 
 @test "sweep closes a closed task's herdr tab only where herdr has its agent, and a leftover pane only in its worktree" {
   use_fake herdr
-  export FAKE_HERDR_DIR="$BATS_TEST_TMPDIR/herdr"; mkdir -p "$FAKE_HERDR_DIR/agents" "$FAKE_HERDR_DIR/panes"
+  export FAKE_HERDR_DIR="$BATS_TEST_TMPDIR/herdr"; mkdir -p "$FAKE_HERDR_DIR/agents" "$FAKE_HERDR_DIR/panes"; herdr_sock_up
   closed_record ok-1 '{"backend": "herdr:claude", "herdr_tab": "w1:t1"}'
   closed_record moved-2 '{"backend": "herdr:claude", "herdr_tab": "w1:t2"}'
   closed_record pane-3 '{"backend": "herdr:claude", "herdr_tab": "w1:t3"}'

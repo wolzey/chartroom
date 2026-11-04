@@ -188,14 +188,15 @@ sweep_tasks_json() {
         wt: (if ($m.joined // "") == "1" or $w == "" or $w == (($m.project // "") | rtrimstr("/")) or ($w | split("/") | last | endswith($m.id) | not)
              then "" else $w end),
         idle: ((($r.last_at // $m.updated // $m.created // "") | fromdateiso8601? // null) as $t | if $t then (now - $t | floor) else 0 end)}]' "${metas[@]}")"
-  # herdr: one `agent list` when it answers, else `agent get` per finished herdr task.
-  if [[ -n "$(bin_of herdr)" ]]; then
+  # herdr: one `agent list` when it answers, else `agent get` per finished herdr task; nothing at
+  # all while no herdr server runs (herdr_up).
+  if [[ -n "$(bin_of herdr)" ]] && herdr_up; then
     herdr="$(herdr agent list 2>/dev/null | jq -c '[.result.agents[]? | select(.name != null) | {key: .name, value: {tab: .tab_id, status: .agent_status}}] | from_entries' 2>/dev/null || true)"
     [[ -n "$herdr" ]] || herdr='null'
   fi
   local herdr_get='{}' close='{}' r
   while IFS=$'\t' read -r id st live runner; do
-    if [[ "$runner" == herdr && "$herdr" == null && -n "$(bin_of herdr)" ]]; then
+    if [[ "$runner" == herdr && "$herdr" == null && -n "$(bin_of herdr)" ]] && herdr_up; then
       r="$(herdr agent get "$id" 2>/dev/null | jq -c '.result.agent | {tab: .tab_id, status: .agent_status}' 2>/dev/null || true)"
       [[ -n "$r" ]] && herdr_get="$(jq -c --arg id "$id" --argjson r "$r" '.[$id] = $r' <<<"$herdr_get")"
     fi
@@ -228,7 +229,7 @@ sweep_others_json() {
 # herdr's panes as [{pane, tab, cwd, agent}] (one call; [] without herdr or on an older one).
 sweep_herdr_panes() {
   local r=""
-  [[ -n "$(bin_of herdr)" ]] && r="$(herdr pane list 2>/dev/null | jq -c '[.result.panes[]? | {pane: .pane_id, tab: .tab_id, cwd: ((.foreground_cwd // .cwd // "") | rtrimstr("/")), agent: (.agent // null)}]' 2>/dev/null || true)"
+  [[ -n "$(bin_of herdr)" ]] && herdr_up && r="$(herdr pane list 2>/dev/null | jq -c '[.result.panes[]? | {pane: .pane_id, tab: .tab_id, cwd: ((.foreground_cwd // .cwd // "") | rtrimstr("/")), agent: (.agent // null)}]' 2>/dev/null || true)"
   printf '%s\n' "${r:-[]}"
 }
 
@@ -302,6 +303,7 @@ sweep_apply() { # <plan-json>
   # 2. herdr sessions of closed tasks: close the tab, but only the one herdr says the task's
   #    agent runs in (the plan carries it only when that matches the recorded tab)
   while IFS=$'\t' read -r id tab; do
+    herdr_up || continue
     st="$(herdr agent get "$id" 2>/dev/null | jq -r '.result.agent.tab_id // empty' 2>/dev/null || true)"
     [[ -n "$tab" && "$st" == "$tab" ]] || continue
     if herdr tab close "$tab" >/dev/null 2>&1; then
@@ -312,6 +314,7 @@ sweep_apply() { # <plan-json>
   #    and leftover herdr panes in a closed task's worktree (re-read: still there, same cwd)
   local pane wt cwd
   while IFS=$'\t' read -r id pane wt; do
+    herdr_up || continue
     cwd="$(herdr pane get "$pane" 2>/dev/null | jq -r '.result.pane | (.foreground_cwd // .cwd // "")' 2>/dev/null || true)"
     [[ -n "$wt" && ( "$cwd" == "$wt" || "$cwd" == "$wt"/* ) ]] || continue
     if herdr pane close "$pane" >/dev/null 2>&1; then

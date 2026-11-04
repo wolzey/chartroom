@@ -126,7 +126,7 @@ radar_normalize() { # <status-file> <herdr-file> <machine> <local> <target> <via
 
 radar_snapshot_local() {
   local tmp; tmp="$(mktemp -d)"
-  if [[ -n "$(bin_of herdr)" ]]; then herdr agent list >"$tmp/herdr" 2>/dev/null || : >"$tmp/herdr"; else : >"$tmp/herdr"; fi
+  if [[ -n "$(bin_of herdr)" ]] && herdr_up; then herdr agent list >"$tmp/herdr" 2>/dev/null || : >"$tmp/herdr"; else : >"$tmp/herdr"; fi
   radar_local_status >"$tmp/status"
   radar_normalize "$tmp/status" "$tmp/herdr" "$(radar_machine_name)" true "" "this machine" ok "" "$(radar_phys_json)"
   rm -rf "$tmp"
