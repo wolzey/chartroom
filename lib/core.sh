@@ -341,6 +341,8 @@ pid_alive() { [[ -n "${1:-}" ]] && kill -0 "$1" 2>/dev/null; }
 # `touch` would be one). No stamp: an older chartroom, or nothing written since the update.
 # A stable contract (README "State format and event protocol").
 CR_STAMP=.changed
+# (lib/relay.sh passes the other home: shellcheck 0.9.0, on CI's Linux job, does not see that call.)
+# shellcheck disable=SC2120
 stamp_changed() { { printf . >"${1:-$CR_HOME}/$CR_STAMP"; } 2>/dev/null || true; } # [home]
 
 # ---------------------------------------------------------------- doorbell

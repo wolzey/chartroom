@@ -573,6 +573,8 @@ hc_stream_open() {
   w="${HCS_CO[1]}"; exec {w}>&-
   return 0
 }
+# (The watch's EXIT trap passes "exiting", in a string shellcheck 0.9.0 does not read.)
+# shellcheck disable=SC2120
 hc_stream_close() { # [exiting]
   if [[ -n "$HCS_PID" ]]; then
     hc_stream_kill "$HCS_PID"
