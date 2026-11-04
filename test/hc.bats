@@ -470,7 +470,10 @@ wakes() { grep -c . "$BATS_TEST_TMPDIR/wake" || true; }
   sleep 1; : >"$FAKE_HC_DIR/calls.log"
   hc_event t1 status '{"status":{"app":"claude-code","state":"blocked"}}' '.status = {app: "claude-code", state: "blocked"}'
   for i in $(seq 1 30); do grep -q "waiting on an approval" "$BATS_TEST_TMPDIR/wake" && break; sleep 0.1; done
+  # a watch that is killed takes its stream with it
   kill "$w"; wait "$w" || true
+  for i in $(seq 1 20); do pgrep -f "$BIN/hc events" >/dev/null || break; sleep 0.1; done
+  refute pgrep -f "$BIN/hc events"
   grep -qx "\[$id\] \[proj\] hc: agent is waiting on an approval or question prompt" "$BATS_TEST_TMPDIR/wake"
   refute grep -q '^get' "$FAKE_HC_DIR/calls.log"
   [ "$(wakes)" -eq 2 ]

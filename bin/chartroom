@@ -1158,6 +1158,7 @@ clock_ms() { # sets NOW_MS: the time in milliseconds (bash 4: whole seconds)
   else printf -v NOW_MS '%(%s)T' -1; NOW_MS=$((NOW_MS * 1000)); fi
 }
 
+watch_sig() { WATCH_SIG="$1"; if [[ -n "$BELL_FD" ]]; then { printf . >&"$BELL_FD"; } 2>/dev/null || true; fi; }
 watch_ms() { # <setting> <seconds> <var>: a setting in seconds (3, 0.5) as milliseconds
   [[ "$2" =~ ^([0-9]+)(\.([0-9]+))?$ ]] || die "$1 must be seconds, such as 3 or 0.5 (got $2)"
   local f="${BASH_REMATCH[3]}000"
@@ -1172,7 +1173,7 @@ watch_hc_stream() {
   if hc_stream_open; then
     for ((i = 0; i < 20; i++)); do
       hc_stream_drain
-      [[ -z "$HCS_UP" && -n "$HCS_FD" ]] || break
+      [[ -z "$HCS_UP" && -n "$HCS_FD" && -z "${WATCH_SIG:-}" ]] || break
       bell_wait 0.1 || true
     done
   fi
@@ -1221,6 +1222,14 @@ cmd_watch() {
   # The doorbell first (lib/core.sh): hc's event stream rings it too.
   bell_open watch
   trap 'hc_stream_close exiting; bell_close' EXIT
+  # A signal is taken between rounds: the trap only notes it, and the loop exits, so the EXIT
+  # trap runs as on any exit. Run from inside the `read -t` a signal interrupts (bash's own
+  # handling of a fatal signal, or an `exit` in a trap), the EXIT trap's forks can outlast
+  # read's timer, which then jumps back into that read and leaves the watch spinning there.
+  # The trap also rings the watch's own doorbell, so the read it interrupted, which bash resumes
+  # after the trap, returns at once.
+  WATCH_SIG=""
+  trap 'watch_sig 129' HUP; trap 'watch_sig 130' INT; trap 'watch_sig 143' TERM
   meta_cache_load
   for d in "$CR_HOME"/tasks/*/; do
     id="${d%/}"; id="${id##*/}"; f="$d/events.log"
@@ -1249,6 +1258,7 @@ cmd_watch() {
   local full=1 next=0 due wait r covered=0 verify=0 vnext=0 hc_open=${#hc_ids[@]} cur last_cur=$'\x01'
   vnext=$((start + WATCH_SLOW_MS)) # the snapshot is fresh: the first check comes a slow interval on
   while true; do
+    [[ -z "$WATCH_SIG" ]] || exit "$WATCH_SIG"
     WATCH_FOCUS="$(focus_json)"
     hc_stream_drain
     if [[ -n "$HCS_DOWN" ]]; then HCS_DOWN=""; full=1; fi # the stream ended: a full round at once
@@ -1275,10 +1285,13 @@ cmd_watch() {
         if [[ -n "$r" && -n "$(meta "$id" dispatched)" ]]; then
           if [[ "$r" == hc && $verify -eq 1 ]]; then hc_stream_check "$id"; fi
           "${r}_watch" "$id"; watch_overdue "$id"
-          # Whatever pushes nothing keeps the fast cadence.
+          # A probe that pushes nothing keeps the fast cadence: hc outside the stream, a running
+          # herdr server, and the process checks (headless, command, joined). tmux, cmux and
+          # subagent probe nothing: their wakes come from the log alone.
           case "$r" in
             hc) hc_open=1; if hc_handle_set "$id" && ! hc_stream_covers "$id"; then covered=0; fi ;;
             herdr) if herdr_up; then covered=0; fi ;;
+            tmux|cmux|subagent) ;;
             *) covered=0 ;;
           esac
         fi
@@ -1312,7 +1325,8 @@ cmd_watch() {
         [[ -n "${HST[$id]}" ]] || continue
         cur+="@state:$id"$'\t'"${HST[$id]}"$'\t'"${HC_TURNS[$id]:-}"$'\n'
       done
-      if [[ "$cur" != "$last_cur" ]]; then printf '%s' "$cur" >"$cursor.tmp" && mv "$cursor.tmp" "$cursor" && last_cur="$cur"; fi
+      # (a temp file of its own: two watches of one cursor must not take each other's)
+      if [[ "$cur" != "$last_cur" ]]; then printf '%s' "$cur" >"$cursor.tmp.$$" && mv "$cursor.tmp.$$" "$cursor" && last_cur="$cur"; fi
     fi
     clock_ms
     if [[ $once -eq 1 ]]; then
@@ -1327,6 +1341,7 @@ cmd_watch() {
       printf -v a '%d.%03d' $((wait / 1000)) $((wait % 1000))
       bell_wait "$a" || true
     fi
+    [[ -z "$WATCH_SIG" ]] || exit "$WATCH_SIG"
     clock_ms; full=0; (( NOW_MS < next )) || full=1
   done
 }

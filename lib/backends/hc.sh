@@ -434,15 +434,25 @@ HC_STREAM_JQ='
     .out[])'
 
 hc_stream_ring() { { read -r -t 0 -u "$BELL_FD" || printf . >&"$BELL_FD"; } 2>/dev/null || true; }
-hc_stream_pump() { # <hc binary>: the coprocess
-  local line
-  env -u HC_TERMINAL_ID "$1" events --json --label "chartroom.workspace=$CR_WORKSPACE" 2>/dev/null |
-    jq -R -n -r --unbuffered "$HC_STREAM_JQ" 2>/dev/null |
-    while IFS= read -r line; do
-      printf '%s\n' "$line" || exit 0
-      [[ "$line" == H ]] || hc_stream_ring
-    done || true
+# The coprocess. Once the watch is gone (even killed outright), the next line it writes, a
+# heartbeat at the latest (15 s), fails, and it ends hc and jq with itself.
+hc_stream_pump() { # <hc binary>
+  local line in p
+  exec {in}< <(env -u HC_TERMINAL_ID "$1" events --json --label "chartroom.workspace=$CR_WORKSPACE" 2>/dev/null |
+    jq -R -n -r --unbuffered "$HC_STREAM_JQ" 2>/dev/null)
+  p=$!
+  trap '' PIPE # (that failed write returns here instead of killing this before it cleans up)
+  while IFS= read -r line <&"$in"; do
+    printf '%s\n' "$line" 2>/dev/null || break
+    [[ "$line" == H ]] || hc_stream_ring
+  done
+  hc_stream_kill "$p"
   hc_stream_ring
+}
+hc_stream_kill() { # <pid>: it and everything below it, the deepest first
+  local c
+  for c in $(pgrep -P "$1" 2>/dev/null); do hc_stream_kill "$c"; done
+  kill -TERM "$1" 2>/dev/null || true
 }
 # Starts the stream if it can run: a doorbell to ring (without one the watch polls as before),
 # and a core that answers, so the watch never starts one (any hc command would).
@@ -460,7 +470,7 @@ hc_stream_open() {
 }
 hc_stream_close() { # [exiting]
   if [[ -n "$HCS_PID" ]]; then
-    kill_tree "$HCS_PID"
+    hc_stream_kill "$HCS_PID"
     [[ -n "${1:-}" ]] || wait "$HCS_PID" 2>/dev/null || true
   fi
   if [[ -n "$HCS_FD" ]]; then exec {HCS_FD}<&-; fi
