@@ -14,7 +14,7 @@
       "name": "crew-view",
       "source": "./mods/crew-view",
       "description": "A Claude Code mod: the crew live in the XO's session, a band above the prompt and a /crew pane that browses the items (detail, /continue, copy id, PRs and artifacts, the report), the focus and its held count while focus mode is on, and the commander's todo list under it with a /todo pane (copy, continue, tick off). Inert in every other session.",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "license": "MIT"
     }
   ]

@@ -1,6 +1,6 @@
 {
   "name": "crew-view",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "chartroom's crew, live in the XO's Claude Code session: a band above the prompt led by the focus while focus mode is on, a /crew pane that browses the items, and the commander's todo list under the band, with a /todo pane to copy, continue and tick items off.",
   "author": { "name": "wolzey", "url": "https://github.com/wolzey" },
   "homepage": "https://github.com/wolzey/chartroom",

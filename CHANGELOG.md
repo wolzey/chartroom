@@ -139,7 +139,7 @@ are stable from 0.1.0.
 - The watch's full round reads every task's `meta.json` with one `jq` instead of several per
   task, and skips closed tasks without one: at 50 live workers a round takes 0.5 s instead of
   1.3 s, and an idle watch 14% of a core instead of 27%.
-- crew-view's band reads the board only when something changed, not every 15 seconds. Each
+- crew-view 0.5.0: the band reads the board only when something changed, not every 15 seconds. Each
   15-second round stats the home's new change stamp, `<home>/.changed`, without a process;
   chartroom rewrites it after each write of what the board shows (an event, a hook's line, a
   steer, a note, `new`, `dispatch`, `accept`, `close`, an inbox or focus change, an artifact, a
