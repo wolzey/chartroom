@@ -71,3 +71,15 @@ still() {
   still "$A" cr inbox list --json
   still "$A" cr artifact list --all --json
 }
+
+@test "a watch round with nothing to report leaves the stamp alone (it writes only its cursor)" {
+  local id
+  id="$(new_task --backend command --command "$STUB {id}")"
+  cr dispatch "$id" >/dev/null
+  wait_event "$id" 'exited: '
+  cr watch --once --timeout 5 >/dev/null 2>&1 || true # the exit wakes it; the next call starts past it
+  rm -f "$A/.changed"
+  run cr watch --once --timeout 2
+  [ "$status" -eq 124 ]
+  [ ! -e "$A/.changed" ]
+}

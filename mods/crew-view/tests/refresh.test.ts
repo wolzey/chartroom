@@ -45,6 +45,27 @@ test('an idle home: no board read between changes, one when the stamp moves, one
   expect(boards()).toBe(4)
 })
 
+test('a write while a read runs is read the next round: the stamp is taken as the read begins', async ($, on) => {
+  const world = XO_WORLD()
+  world.mtimes[STAMP] = 1
+  let first = true
+  // The first run's output is already on its way when a write lands and moves the stamp.
+  world.board = () => {
+    if (first) world.mtimes[STAMP] = 2
+    first = false
+    return XO_WORLD().board()
+  }
+  const w = install(on, world)
+  const boards = () => w.runs.filter(r => r[1] === 'board').length
+  await startXo($)
+  await w.clock.settle()
+  expect(boards()).toBe(1)
+  await w.clock.advance(15_000)
+  expect(boards()).toBe(2)
+  await w.clock.advance(15_000)
+  expect(boards()).toBe(2)
+})
+
 test('a failed board read is tried again the next round', async ($, on) => {
   const world = XO_WORLD()
   world.mtimes[STAMP] = 1
