@@ -35,7 +35,7 @@ set_meta() { local f="$CHARTROOM_HOME/tasks/$1/meta.json"; jq --arg k "$2" --arg
 live_of() { cr status --json | jq -r --arg i "$1" '.[] | select(.id == $i) | .live'; }
 state_of() { cr status --json | jq -r --arg i "$1" '.[] | select(.id == $i) | .state'; }
 watch_after() { # `watch --once` in the background; runs <change> once it has taken its first look
-  cr watch --once --timeout 8 >"$BATS_TEST_TMPDIR/wake" 2>&1 &
+  cr watch --once --timeout "${WATCH_AFTER_TIMEOUT:-8}" >"$BATS_TEST_TMPDIR/wake" 2>&1 &
   local w=$!; sleep 1.5; "$@"; wait "$w" || true
 }
 transcript() { # <id> [session id]: the path Claude Code keeps its session's transcript at
@@ -245,7 +245,9 @@ at_rest_long() { # <id>: its history 90 minutes old, its agent at rest for 80 (a
   id="$(worker decision "which colour?")"; sid="$(meta_of "$id" session_id)"
   cr park "$id" >/dev/null
   steer_fails() { FAKE_HC_RESUME_FAIL=1 cr steer "$id" "blue" >"$BATS_TEST_TMPDIR/out" 2>&1 && echo 0 >"$BATS_TEST_TMPDIR/rc" || echo $? >"$BATS_TEST_TMPDIR/rc"; }
-  watch_after steer_fails
+  # (A resume that fails takes about 6 s to say so, which left about a second of the usual 8 here.
+  # The watch ends at its first wake, so the longer limit costs nothing unless the wake never comes.)
+  WATCH_AFTER_TIMEOUT=30 watch_after steer_fails
   [ "$(cat "$BATS_TEST_TMPDIR/rc")" -ne 0 ]
   grep -q "could not resume the parked worker of $id: claude --resume did not come up in hc terminal t2 (finished, exit 1): No conversation found with session ID: $sid" "$BATS_TEST_TMPDIR/out"
   # one wake, from the note; the dead resume's exited line is not news
