@@ -156,6 +156,24 @@ are stable from 0.1.0.
   JSON is unchanged. Per board run on copies of three homes (forks; CPU including children): 10
   task dirs 355 → 292, 0.54 → 0.44 s; 65 dirs 2,145 → 1,515, 3.8 → 2.5 s; 215 dirs 5,417 →
   1,385, 8.3 → 2.4 s.
+- `watch` takes hc's agent state from hc instead of asking for it: one `hc events` stream per
+  watch (a snapshot, then a line per status, turn or terminal change) replaces a `hc get` per hc
+  task per round, and only the tasks whose terminal changed are compared. With every open task
+  on the stream, or on a runner with nothing to poll, its full round runs every
+  `CHARTROOM_WATCH_HC_INTERVAL` (60 s) instead of every 3 s; every `CHARTROOM_WATCH_INTERVAL`
+  it still looks, without a fork, at the logs and task records changed since its last scan. No
+  herdr command runs while herdr's socket is missing (the watch, `status`, the radar, `sweep`),
+  and with a server up each round asks `herdr agent list` once instead of `agent get` per task.
+  Measured over 120 s of `watch --once` on a scratch copy of a home with 15 open tasks (6 on hc,
+  8 on a herdr server that is down, 1 subagent): 16.2% of a core (9,245 forks, 2,955 execs) →
+  1.1% (733 forks, 189 execs); on one with 2 hc tasks, 2.5% → 0.3%. A real Claude Code turn
+  ending now wakes 0.02–0.07 s after hc's line (polling: 0.1–2.4 s). What can come later: a
+  terminal that vanishes with no event at all, found by the 60 s round's own `hc get`. When the
+  stream ends (the core stopped, `hc update`) a full round runs at once and the watch polls
+  until a new stream is in; it never starts a core to get one.
+- A signal ends `watch` between rounds, so its EXIT trap runs as on any exit (one run from
+  inside an interrupted `read -t` could leave the watch spinning); two watches of one cursor no
+  longer take each other's temp file.
 - A Claude Code XO waits for wakes with `chartroom watch --once` as a background Bash command
   (`run_in_background: true`, no `--timeout`), started again after it handles each batch,
   instead of a streaming `watch` under the Monitor tool whose 30-minute timeout woke the XO to

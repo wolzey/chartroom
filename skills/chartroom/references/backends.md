@@ -38,7 +38,8 @@ cmux is implemented against its documented CLI but **unverified on a real cmux i
 - Workers append to `tasks/<id>/events.log`; `chartroom watch` turns the lines that need you
   into wakes. A line written through `chartroom event` (or a hook) rings `watch`, which wakes
   within a fraction of a second; a line appended any other way, a launcher's `exited` among them,
-  is read at its next full round (`CHARTROOM_WATCH_INTERVAL`, 3 s).
+  is read within `CHARTROOM_WATCH_INTERVAL` (3 s), by the light round that looks, without a fork,
+  at every log and task record changed since the last scan.
 - New worktrees have no `node_modules` or other build products. The worker installs
   dependencies itself. Say so in the spec when it matters.
 
@@ -113,12 +114,25 @@ program from the `herdr` CLI/server below; workers on `herdr:*` never appear in 
   `close` saves the screen to `pane.log`, then `hc kill` and `hc rm`. The app drops a pane whose
   terminal ends and a tab whose last pane goes, window open or not (verified); a space goes with
   its last tab, and the next dispatch makes it again.
-- Wakes come from hc's own agent state (`hc get`, polled in each of `watch`'s full rounds): `blocked`, `error`, a turn
-  ending (`idle`/`done`) without a report, whether or not `watch` saw it `working` (hc counts
-  turns), and the terminal gone (`lost`; an agent that exited on its own wakes through the
-  launcher's `exited` instead). hc's states come from the agent itself (OSC 7501); Claude Code
-  2.1.314 reports them unprompted (verified). A Codex turn end wakes through its notify event
-  instead, so it never wakes twice.
+- Wakes come from hc's own agent state: `blocked`, `error`, a turn ending (`idle`/`done`)
+  without a report, whether or not `watch` saw it `working` (hc counts turns), and the terminal
+  gone (`lost`; an agent that exited on its own wakes through the launcher's `exited` instead).
+  hc's states come from the agent itself (OSC 7501); Claude Code 2.1.314 reports them unprompted
+  (verified). A Codex turn end wakes through its notify event instead, so it never wakes twice.
+- hc pushes that state. While `watch` runs it keeps one `hc events --json --label
+  chartroom.workspace=<workspace>`: a snapshot of the workspace's terminals, then a line per
+  change (`status`, `turn`, `created`, `lost` then `restarted` or `finished`, `removed`; verified
+  with hc 0.1.16 and Claude Code 2.1.318, `blocked` with its `kind` included). The watch reads
+  the lines between rounds without a fork and compares only the tasks whose terminal changed, so
+  a turn end or a prompt wakes as fast as the line arrives. Its full round asks `hc get` only for
+  a terminal the stream does not carry (one started before chartroom labelled them) and while
+  the stream is down; once the stream carries every open task, that round runs every
+  `CHARTROOM_WATCH_HC_INTERVAL` (60 s) instead of every 3 s, and asks hc about the streamed
+  terminals too. So a terminal that vanishes with no event at all wakes within that interval,
+  the one wake that can come later than before. When the stream ends (the core stopped or
+  restarted, `hc update`), a full round runs at once and the watch polls every
+  `CHARTROOM_WATCH_INTERVAL` until a new stream's snapshot is in. It starts a stream only when
+  the core answers, never a core. Without a doorbell (Git Bash) there is no stream: it polls.
 - A lost agent is not a working one: the app turns on hc's keep for every terminal it adopts,
   and keep puts the user's shell in place of a program that dies by a signal or with the core,
   under the same address and name, still live, with no status (verified). chartroom checks that
@@ -142,7 +156,13 @@ program from the `herdr` CLI/server below; workers on `herdr:*` never appear in 
 - A prompt sent while Claude's startup splash is still up is dropped. chartroom waits for idle,
   then confirms delivery (status `working`, or the text visible) and retries up to 4 times.
 - Wakes come from herdr's own agent state: `blocked` (prompt up), a `working` agent going
-  `idle`/`done` without a report, and an agent that is `gone`.
+  `idle`/`done` without a report, and an agent that is `gone`. Each round asks once, `herdr agent
+  list`, for every herdr task (a herdr without it: `agent get` per task).
+- No server, no herdr command: chartroom looks for herdr's socket in bash first
+  (`$HERDR_SOCKET_PATH`, else `$XDG_CONFIG_HOME/herdr/sessions/<HERDR_SESSION>/herdr.sock`, else
+  `~/.config/herdr/herdr.sock`, as herdr 0.9.5 reports them). Without it every herdr agent is
+  `gone` in `status`, wakes `lost` once, and costs the watch, the radar and `sweep` nothing after
+  that; with it a herdr task keeps the watch's full round at `CHARTROOM_WATCH_INTERVAL`.
 - `stop` sends Esc; `close` closes the tab; `attach` focuses it.
 
 ## tmux:<agent>

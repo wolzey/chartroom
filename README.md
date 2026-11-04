@@ -1046,10 +1046,13 @@ write them:
 
 `watch` waits on a doorbell: whatever chartroom records (`chartroom event`, a hook's line, a
 relay) rings it once the line is on disk, and it wakes within a fraction of a second, reading
-only the logs that changed. Every `CHARTROOM_WATCH_INTERVAL` seconds (default 3) it also makes a
-full round: every task, the backends' own state (hc, herdr, a worker's pid), overdue waits. That
-round is how it sees what rings nothing yet: a line appended with `printf >>`, a launcher's or
-wrapper's `exited`, an agent state change. `listen` waits on its own, which `steer` rings. A
+only the logs that changed. Every `CHARTROOM_WATCH_INTERVAL` seconds (default 3) it looks, without
+a fork, at every log and task record changed since its last scan, which is how it sees a line
+appended with `printf >>` or a launcher's or wrapper's `exited`. Its full round (every task, the
+backends' own state, overdue waits) runs at that interval while a worker's state must be polled
+(herdr, a worker's pid). hc pushes its agents' state through `hc events`, so with every open task
+on hc (or on runners with nothing to poll) the full round runs every
+`CHARTROOM_WATCH_HC_INTERVAL` seconds (default 60) instead. `listen` waits on its own, which `steer` rings. A
 ring carries no data, so the files stay the only truth. The doorbell is a FIFO per listener
 outside the home, in `/tmp/chartroom-<uid>/bells/` (`CHARTROOM_RUNTIME_DIR` moves it); on Git
 Bash, or where no FIFO can be made, `watch` and `listen` poll as before.
@@ -1122,7 +1125,8 @@ to the config file.
 | `CHARTROOM_CLAUDE_PERMISSION` | *(agent default)* | interactive Claude `--permission-mode` |
 | `CHARTROOM_CLAUDE_HEADLESS_PERMISSION` | `acceptEdits` | |
 | `CHARTROOM_CLAUDE_ALLOWED_TOOLS` | `Bash Read Edit Write Glob Grep WebFetch WebSearch` | headless Claude |
-| `CHARTROOM_WATCH_INTERVAL` | `3` | seconds between `watch`'s full rounds (every task, backend state, overdue waits): the fallback for what does not ring its doorbell |
+| `CHARTROOM_WATCH_INTERVAL` | `3` | seconds between `watch`'s looks at what does not ring its doorbell, and between its full rounds (every task, backend state, overdue waits) while a worker's state must be polled |
+| `CHARTROOM_WATCH_HC_INTERVAL` | `60` | seconds between `watch`'s full rounds while hc's event stream carries every open task: how late a terminal that vanishes with no event at all can wake |
 | `CHARTROOM_DASHBOARD_PORT` | `4517` | the port `dashboard` and `dashboard open` use (`--port` overrides); each home on a machine needs its own |
 | `CHARTROOM_DASHBOARD_RECENT_HOURS` | `48` | how far back the dashboard's Recently finished lane reaches |
 | `CHARTROOM_DASHBOARD_THEME` | `chartroom` | the dashboard's default theme: `chartroom` or `hud` (`--theme` overrides) |
