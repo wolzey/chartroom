@@ -164,6 +164,7 @@ relay_send() {
   # The relay itself, the one write in the target home; then this home's own copy.
   mkdir -p "$theirs"
   printf '%s\n' "$rec" >>"$theirs/inbox.ndjson"
+  stamp_changed "$path" # its board shows the relay
   bell_ring "$path" watch # its watches wake now (a dead one's FIFO is that home's to remove)
   if ! { mkdir -p "$mine" && printf '%s\n' "$rec" >>"$mine/outbox.ndjson"; }; then
     warn "relayed $id to $to, but could not keep a copy in $mine/outbox.ndjson"
@@ -183,7 +184,7 @@ relay_ack() {
       none) die "relay ack: no relay $q received in this home (chartroom relay list --all)" ;;
       acked) echo "$q was already acked" ;;
       open)
-        jq -n -c --arg id "$q" --arg at "$(now)" '{schema: 1, kind: "ack", id: $id, at: $at}' >>"$f"
+        jq -n -c --arg id "$q" --arg at "$(now)" '{schema: 1, kind: "ack", id: $id, at: $at}' >>"$f" && stamp_changed
         rows="$(jq -c --arg id "$q" 'map(if .id == $id and .direction == "in" then .acked = true else . end)' <<<"$rows")"
         echo "acked $q" ;;
     esac

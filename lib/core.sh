@@ -319,11 +319,24 @@ project_label() { local p; p="$(meta "$1" project 2>/dev/null || true)"; p="${p%
 meta_set() { # meta_set <id> <key> <string-value>
   local f; f="$(tdir "$1")/meta.json"
   unset "MC[$1/]"
-  jq --arg k "$2" --arg v "$3" '.[$k]=$v | .updated=(now|todate)' "$f" >"$f.tmp" && mv "$f.tmp" "$f"
+  jq --arg k "$2" --arg v "$3" '.[$k]=$v | .updated=(now|todate)' "$f" >"$f.tmp" && mv "$f.tmp" "$f" && stamp_changed
 }
 # One line per event, always: newlines in the text become spaces. Rings the home's watches.
-log_event() { printf '%s %s: %s\n' "$(now)" "$2" "${3//$'\n'/ }" >>"$(tdir "$1")/events.log"; bell_ring "" watch; }
+log_event() { printf '%s %s: %s\n' "$(now)" "$2" "${3//$'\n'/ }" >>"$(tdir "$1")/events.log"; stamp_changed; bell_ring "" watch; }
 pid_alive() { [[ -n "${1:-}" ]] && kill -0 "$1" 2>/dev/null; }
+
+# ---------------------------------------------------------------- change stamp
+# $CHARTROOM_HOME/.changed is rewritten after each write of what the board shows, once the write
+# is on disk: a task's events.log (log_event) and meta.json (meta_set), inbox.md (inbox_rewrite),
+# focus.json, an artifact, a relay into the home and its ack. A view that polls the board
+# (crew-view's band, a panel) stats it and reads the board again only when its mtime moved, with
+# a slow refresh for what moves with the clock alone (ages, waiting windows, a focus running out)
+# and for what writes without chartroom (a line appended with printf >>, a hand edit). The byte
+# it holds means nothing: one byte written moves the mtime on every filesystem, with no fork (a
+# `touch` would be one). No stamp: an older chartroom, or nothing written since the update.
+# A stable contract (README "State format and event protocol").
+CR_STAMP=.changed
+stamp_changed() { { printf . >"${1:-$CR_HOME}/$CR_STAMP"; } 2>/dev/null || true; } # [home]
 
 # ---------------------------------------------------------------- doorbell
 # A listener (watch, listen) waits on its own FIFO instead of sleeping, and whatever writes a

@@ -145,13 +145,13 @@ focus_off() {
   f="$(focus_file)"; focus="$(focus_json)"
   if [[ "$focus" == null ]]; then
     out="$(focus_ran_out)"
-    rm -f "$f"
+    [[ ! -e "$f" ]] || { rm -f "$f"; stamp_changed; }
     if [[ -n "$out" ]]; then jq -r "$FOCUS_JQ"' "focus: off (\(focus_name) had run out at \(.until))"' <<<"$out"
     else echo "focus: already off"; fi
     return 0
   fi
   board="$(dashboard_json)" # before the file goes, so the held marks are this focus's
-  rm -f "$f"
+  rm -f "$f"; stamp_changed
   n="$(jq '.focus.held' <<<"$board")"
   jq -r --argjson n "$n" "$FOCUS_JQ"' "focus off: \(focus_name), on for \(now - (.since | fromdateiso8601) | focus_dur). "
     + (if $n == 0 then "Nothing was held." else "\($n) held, now back in view:" end)' <<<"$focus"
@@ -181,7 +181,7 @@ focus_on() { # <duration or ""> <scope words, comma-separated, or ""> <name...>
   mkdir -p "$CR_HOME"
   focus="$(jq -n -c --arg names "${names[*]}" --arg scope "${scope[*]-}" --arg since "$(now)" --argjson until "$until" \
     '{schema: 1, projects: ($names | split(" ")), scope: ($scope | split(" ") | map(select(length > 0))), since: $since, until: $until}')"
-  printf '%s\n' "$focus" >"$(focus_file).tmp" && mv "$(focus_file).tmp" "$(focus_file)"
+  printf '%s\n' "$focus" >"$(focus_file).tmp" && mv "$(focus_file).tmp" "$(focus_file)" && stamp_changed
   # What it covers now (the open tasks' projects and items, and inbox items), so the rules are seen
   # when it is set; a focus that covers nothing is kept (a project may have no work yet).
   shopt -s nullglob

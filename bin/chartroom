@@ -812,7 +812,7 @@ inbox_rewrite() { # <awk program> [awk -v assignments...]
       have = have t "|"; return t
     }
     BEGIN { srand(seed) }
-    '"$prog" "$f" >"$f.tmp" && mv "$f.tmp" "$f"
+    '"$prog" "$f" >"$f.tmp" && mv "$f.tmp" "$f" && stamp_changed
 }
 
 # An inbox item's project label: a repo path is reduced to its directory name (as status

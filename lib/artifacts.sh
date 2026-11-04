@@ -195,6 +195,7 @@ artifact_add() { # <task-or-inbox-id> --kind K --title T [--description D] [--sl
       created: (if $created == "" then $now else $created end), updated: $now, done: null}' >"$m.tmp"
   mv "$f.tmp" "$f" && mv "$m.tmp" "$m"
   [[ -z "$mine" || "$mine" == "$f" ]] || rm -f -- "$mine"
+  stamp_changed # (an inbox item's artifact logs no event)
   ref="$(artifacts_json --owner "$type" "$owner" | jq -r --arg s "$slug" '.[] | select(.slug == $s) | .ref')"
   if [[ "$type" == task ]]; then log_event "$owner" note "artifact $slug ($kind) $([[ -n "$old" ]] && echo updated || echo added): $title"; fi
   [[ -z "$old" ]] || warn "replaced the $([[ "$kind" == page ]] && echo page || echo text) of $ref (was: $old)"
@@ -262,7 +263,7 @@ artifact_done() { # <ref>
   local m="${AR_FILE%.*}.json" was
   was="$(jq -r '.done // empty' "$m")"
   if [[ -n "$was" ]]; then echo "$AR_REF was already done ($was)"; return 0; fi
-  jq --arg now "$(now)" '.done = $now' "$m" >"$m.tmp" && mv "$m.tmp" "$m"
+  jq --arg now "$(now)" '.done = $now' "$m" >"$m.tmp" && mv "$m.tmp" "$m" && stamp_changed
   if [[ "$AR_TYPE" == task ]]; then log_event "$AR_OWNER" note "artifact $AR_SLUG done: $AR_TITLE"; fi
   echo "done $AR_REF: $AR_TITLE"
 }

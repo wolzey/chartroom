@@ -1011,6 +1011,7 @@ $CHARTROOM_HOME/                    default ~/.chartroom
   inbox/<i-xxxx>/artifacts/         the same, for an inbox item
   relays/inbox.ndjson               relays from other homes' XOs, and this home's acks, one JSON record per line
   relays/outbox.ndjson              the relays this home sent
+  .changed                          the change stamp: rewritten after each write of what the board shows (its mtime is what counts)
   .dashboard.pid  .dashboard.log    only while `chartroom dashboard --daemon` runs
   .dashboard.token                  the dashboard's access token (0600), once it has been on the network
   sweep.log                         what `chartroom sweep --apply` closed, stopped and killed, one line each
@@ -1051,6 +1052,21 @@ ring carries no data, so the files stay the only truth. The doorbell is a FIFO p
 outside the home, in `/tmp/chartroom-<uid>/bells/` (`CHARTROOM_RUNTIME_DIR` moves it); on Git
 Bash, or where no FIFO can be made, `watch` and `listen` poll as before.
 
+`.changed`, the home's change stamp, is for views that poll the board (crew-view's band; the
+radar and the Herdr panel may use it too): chartroom rewrites it after each write of what the
+board shows, once that write is on disk. That covers a task's `events.log` (`chartroom event`, a
+hook's line, a steer, chartroom's notes) and `meta.json` (`new`, `dispatch`, `accept`, `close`, a
+runner's handles), `inbox.md` (`inbox add|project|tag`, `todo done`), `focus.json`, an artifact
+(`artifact add|done`, an inbox item's included), and a relay into the home and its ack (`relay`
+rewrites the target home's stamp). Nothing that only reads writes it. The contract is its path
+and its mtime: a reader stats it and reads the board again when the mtime moved; what the file
+holds means nothing (one byte, so the write moves the mtime on every filesystem, without a fork).
+It does not move for what writes without chartroom (a line appended with `printf >>`, a
+launcher's or wrapper's `exited`, a hand edit), for what moves with the clock alone (ages, a
+`waiting` window running out, a focus whose `--for` ends) or for a backend's state (a worker's
+terminal ending), so a reader keeps a slow refresh as well (crew-view's is 5 minutes). A home
+without one has an older chartroom, or nothing written since the update.
+
 `chartroom event <id> decision|blocked|failed --breaking <text>` writes the text as
 `[breaking] <text>` (the line format is unchanged): focus mode never holds such a report.
 
@@ -1061,8 +1077,9 @@ Any later report, steer or dispatch closes the wait. `status --json` rows carry 
 `waiting_until` and `waiting_since` (null without an open wait), and focus mode's `breaking`,
 `in_focus` and `held` (in focus and not held while focus is off); so do the lanes JSON's cards.
 
-The event line format, the brief protocol and `meta.json`'s `schema` field are stable from 0.1.
-CLI flags may change before 1.0.
+The event line format, the brief protocol and `meta.json`'s `schema` field are stable from 0.1;
+the change stamp's path and meaning are stable from the release that adds it. CLI flags may
+change before 1.0.
 
 ## Safety model
 
