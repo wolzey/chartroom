@@ -81,11 +81,12 @@ hc_info() { # <id>
     HC_STATE="${HCT_STATE[$t]}"; HC_STATUS="${HCT_STATUS[$t]}"; HC_TURN="${HCT_TURN[$t]}"; name="${HCT_NAME[$t]}"
     ours=false; [[ "${HCT_LIDS[$t]}" == *" $1 "* ]] && ours=true
   else
-    j="$(hcx get "$t" --json 2>/dev/null)" || return 0
+    if ! j="$(hcx get "$t" --json 2>/dev/null)"; then hc_stream_settle "$t" gone; return 0; fi
     # (the launcher by its task's path suffix: the home may be spelled another way, via a symlink)
     IFS='|' read -r HC_STATE HC_STATUS HC_TURN name ours < <(jq -r --arg l "/tasks/$1/launch.sh" '[.state // "gone", .status.state // "", .turn // 0, .name // "", any((.argv // [])[]; tostring | endswith($l))] | map(tostring) | join("|")' <<<"$j" 2>/dev/null) || true
+    [[ "$HC_STATE" != finished || "$name" != "$1" ]] || hc_stream_settle "$t" finished "$name" "$HC_TURN"
   fi
-  [[ -n "$HC_STATE" && "$name" == "$1" ]] || { HC_STATE=gone; HC_STATUS=""; HC_TURN=0; return 0; }
+  [[ -n "$HC_STATE" && "$name" == "$1" ]] || { HC_STATE=gone; HC_STATUS=""; HC_TURN=0; hc_stream_settle "$t" gone; return 0; }
   [[ "$HC_STATE" == live && "$ours" != true ]] && { HC_STATE=replaced; HC_STATUS=""; }
   [[ "$HC_TURN" =~ ^[0-9]+$ ]] || HC_TURN=0
   return 0
@@ -482,6 +483,13 @@ hc_stream_set() { # <address> <state> <status> <turn> <name> <launcher ids>
   [[ "$t" =~ ^[0-9]+$ ]] || t=0
   if [[ -n "${HCT_STATE[$a]+x}" && "${HCT_STATE[$a]}|${HCT_STATUS[$a]}|${HCT_TURN[$a]}|${HCT_NAME[$a]}|${HCT_LIDS[$a]}" == "$2|$3|$t|$5|$6" ]]; then return 0; fi
   HCT_STATE[$a]="$2"; HCT_STATUS[$a]="$3"; HCT_TURN[$a]="$t"; HCT_NAME[$a]="$5"; HCT_LIDS[$a]="$6"; HC_HIT[$a]=1
+}
+# A terminal the stream does not carry that hc says has ended (finished, or not there: the core
+# answers, since the stream is up): final, so it goes into the stream's view and the watch stops
+# asking about it, as it would for one the stream reported ending.
+hc_stream_settle() { # <address> <finished|gone> [name] [turn]
+  [[ -n "$HCS_UP" && -z "${HCT_STATE[$1]+x}" ]] || return 0
+  HCT_STATE[$1]="$2"; HCT_STATUS[$1]=""; HCT_TURN[$1]="${4:-0}"; HCT_NAME[$1]="${3:-}"; HCT_LIDS[$1]=" "
 }
 hc_stream_forget() { # <address>: no longer in the stream (hc_info asks hc again)
   unset "HCT_STATE[$1]" "HCT_STATUS[$1]" "HCT_TURN[$1]" "HCT_NAME[$1]" "HCT_LIDS[$1]"; HC_HIT[$1]=1

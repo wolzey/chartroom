@@ -83,6 +83,7 @@ real_symlinks() {
 # watch, the radar and sweep, which run no herdr command without one, reach the fake herdr. Bound
 # at a short path (socket paths are limited to ~100 bytes) and moved into place; nothing listens.
 herdr_sock_up() {
+  case "${OSTYPE:-}" in msys*|cygwin*) return 0 ;; esac # (herdr_up does not look there)
   local d="$HOME/.config/herdr" s="/tmp/crhd.$$.$RANDOM"
   mkdir -p "$d"
   perl -MIO::Socket::UNIX -e 'IO::Socket::UNIX->new(Local => $ARGV[0], Listen => 1) or die "$!"' "$s" && mv "$s" "$d/herdr.sock"

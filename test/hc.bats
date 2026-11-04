@@ -478,3 +478,22 @@ wakes() { grep -c . "$BATS_TEST_TMPDIR/wake" || true; }
   refute grep -q '^get' "$FAKE_HC_DIR/calls.log"
   [ "$(wakes)" -eq 2 ]
 }
+
+@test "hc events: a terminal already gone when the stream starts is asked about once; a waiting window running out between slow rounds wakes on time" {
+  core_up; stream_up
+  export CHARTROOM_WAITING_GRACE_MINUTES=0
+  id="$(new_task --backend hc:claude)"
+  cr dispatch "$id" >/dev/null
+  other="$(TITLE="other task" new_task --backend hc:claude)"
+  cr dispatch "$other" >/dev/null
+  rm -f "$FAKE_HC_DIR/terms/t2.json"
+  : >"$FAKE_HC_DIR/calls.log"
+  local u; TZ=UTC printf -v u '%(%Y-%m-%dT%H:%M:%SZ)T' $((EPOCHSECONDS + 4))
+  cr event "$id" waiting "CI on the branch until $u"
+  run cr watch --once --timeout 15
+  [ "$status" -eq 0 ]
+  [[ "$output" == "[$id] [proj] waiting overdue: CI on the branch until $u (since "* ]]
+  # the stream carries t1, so hc was asked only about t2, once, and never again
+  [ "$(grep -c '^get' "$FAKE_HC_DIR/calls.log")" -eq 1 ]
+  grep -qx 'get t2 --json' "$FAKE_HC_DIR/calls.log"
+}

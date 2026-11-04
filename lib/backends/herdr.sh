@@ -29,7 +29,9 @@ herdr_status() { herdr_up || return 0; herdr agent get "$1" 2>/dev/null | jq -r 
 # under $XDG_CONFIG_HOME/herdr/sessions/, else $XDG_CONFIG_HOME/herdr/herdr.sock, as herdr 0.9.5
 # reports them): while no server is there, an agent's state is empty (gone) without running herdr,
 # and the watch, the radar and sweep run no herdr command at all.
+# (Git Bash: herdr's Windows preview is not known to keep a socket file there, so no gate.)
 herdr_up() {
+  [[ "${CR_PLATFORM:-}" != msys ]] || return 0
   local s="${HERDR_SOCKET_PATH:-}" c="${XDG_CONFIG_HOME:-$HOME/.config}/herdr"
   if [[ -z "$s" && -n "${HERDR_SESSION:-}" ]]; then s="$c/sessions/$HERDR_SESSION/herdr.sock"; fi
   [[ -S "${s:-$c/herdr.sock}" ]]

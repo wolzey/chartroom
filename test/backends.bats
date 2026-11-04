@@ -259,6 +259,7 @@ lines"
 }
 
 @test "herdr: with no server (no socket) the watch, status, the radar and sweep run no herdr command; a lost agent wakes once" {
+  case "${OSTYPE:-}" in msys*|cygwin*) skip "Git Bash: herdr_up does not look for a socket" ;; esac
   use_fake herdr claude
   export FAKE_HERDR_DIR="$BATS_TEST_TMPDIR/herdr"; mkdir -p "$FAKE_HERDR_DIR"; herdr_sock_up
   id="$(new_task --backend herdr:claude)"
