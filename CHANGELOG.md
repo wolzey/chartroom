@@ -114,6 +114,12 @@ are stable from 0.1.0.
   in the task's home for an `hc:*` worker, a tab attached to its herdr agent for `herdr:*`.
   Installed by copying into `~/.config/herdr-app/mods/chartroom` (the app loads a symlinked mod
   folder but does not hot-reload it). The XO lookup (`xo.js`) is unit-tested under node.
+  It reads the radar only while on screen (a layout without the panel no longer counts as shown;
+  an open overlay or a pane in the shown tab does), and then only after a change instead of once a
+  minute: the app's `watchFolder` on each home's `tasks/` (a task's `meta.json`, `events.log`,
+  `report.md` or `brief.md`; not a headless worker's `claude.jsonl`) or the state of a listed
+  task's worker in `terminals()`, at most once a minute (the old pace, which a busy crew reaches),
+  and every 5 minutes regardless (once a minute after a failed read or for a home it cannot watch). The schedule (`schedule.js`) is unit-tested under node.
 
 ### Changed
 - `watch` and `listen` wait on a doorbell instead of sleeping, so a wake comes within a fraction

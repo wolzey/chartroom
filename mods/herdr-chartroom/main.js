@@ -1,15 +1,17 @@
 // Every open chartroom task on this machine, in radar's sectors, most urgent first.
-// Reads `chartroom radar --json` only while the panel is shown. Click a task to pass it to its
-// home's XO: `/continue <id>` typed into that XO's terminal, which then comes to the front.
-// Its chevron shows the details: the last event, PRs, and "Open worker".
+// Reads `chartroom radar --json` only while the panel is shown, and then only after a change: a
+// watch on each home's tasks/ folder, a worker's state changing, or every 5 minutes regardless
+// (schedule.js). Click a task to pass it to its home's XO: `/continue <id>` typed into that XO's
+// terminal, which then comes to the front. Its chevron shows the details: the last event, PRs,
+// and "Open worker".
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { exec, hc, theme, layout, run, spaces, terminals } from "herdr";
+import { exec, hc, theme, layout, panes, props, run, spaces, terminals, watchFolder } from "herdr";
 import { findXo, continueLine, sendRefusal } from "./xo.js";
+import { QUIET_MS, due, onScreen, taskDirs, touches, workerSig } from "./schedule.js";
 
 const MOD = "chartroom";
-const EVERY = 60000;
 // Radar's own order (lib/dashboard/radar.jq), most urgent first.
 const SECTORS = [
   { id: "decision", label: "Decision", color: "blocked" },
@@ -67,18 +69,6 @@ function openHerdrWorker(task) {
   }
 }
 
-// Is a block showing this mod on screen? Hidden nodes and other stack children aren't.
-function present(node) {
-  return node?.content?.mod === MOD || (node?.children ?? []).some(present);
-}
-function shown(node) {
-  if (!node || node.hidden) return false;
-  if (node.content?.mod === MOD) return true;
-  const kids = node.children ?? [];
-  if (node.type === "stack") return shown(kids.find((c) => c.id === node.active) ?? kids[0]);
-  return kids.some(shown);
-}
-
 export default class Chartroom extends View {
   init(_props, cx) {
     this.tasks = [];
@@ -95,14 +85,32 @@ export default class Chartroom extends View {
     // What needs you starts open; the long sections start folded, which also keeps a pass short
     // (Herdr interrupted drawing all ~45 rows at once).
     this.folded = new Set(JSON.parse(localStorage.getItem("folded") ?? '["adrift","holding","underway","docked"]'));
-    // A cheap check; the fetch itself runs at most once a minute, and only while shown.
+    // What has changed since the last read began (schedule.js due() decides when to read again):
+    // a watched task file, or a worker's live state.
+    this.dirty = false;
+    this.changedAt = 0;
+    this.dirtyAt = 0;
+    // The listed tasks (ids of this machine's rows) and their workers' state at the last read.
+    this.ids = new Set();
+    this.workers = "";
+    // Each home's tasks/ folder: watched (a watch costs nothing; only a read does), and the ones
+    // the app refused to watch, which are read at the old once-a-minute pace instead.
+    this.homes = new Set();
+    this.watched = new Set();
+    this.unwatched = new Set();
+    // A cheap check that spawns nothing: the radar itself is read only while shown, after a change.
     cx.timer.every(3000, (cx) => this.tick(cx));
     this.tick(cx);
   }
 
   visible() {
-    const l = layout();
-    return !present(l) || shown(l);
+    return onScreen({ overlay: props()?.overlay, layout: layout(), spaces: spaces(), panes: panes() }, MOD);
+  }
+
+  changed(now) {
+    if (!this.dirty) this.dirtyAt = now;
+    this.dirty = true;
+    this.changedAt = now;
   }
 
   tick(cx) {
@@ -110,7 +118,38 @@ export default class Chartroom extends View {
       this.notice = null;
       cx.notify();
     }
-    if (!this.busy && this.visible() && Date.now() - this.triedAt > EVERY) this.refresh(cx);
+    const now = Date.now();
+    const workers = workerSig(terminals(), this.ids);
+    if (workers !== this.workers) {
+      this.workers = workers;
+      this.changed(now);
+    }
+    const retry = Boolean(this.error) || [...this.homes].some((d) => this.unwatched.has(d));
+    if (due({ busy: this.busy, shown: this.visible(), dirty: this.dirty, changedAt: this.changedAt, dirtyAt: this.dirtyAt, triedAt: this.triedAt, retry }, now)) this.refresh(cx);
+  }
+
+  // Watches one home's tasks/ folder while that home is registered. A batch that touches a row's
+  // files marks the panel stale; the read follows once writes go quiet (and the floor allows).
+  // Waiting on cx also ends the loop when the mod reloads.
+  watch(dir, cx) {
+    if (this.watched.has(dir)) return;
+    this.watched.add(dir);
+    this.unwatched.delete(dir);
+    cx.spawn(async (cx) => {
+      try {
+        while (this.homes.has(dir)) {
+          const paths = await watchFolder(dir);
+          if (!this.homes.has(dir) || !touches(paths, dir)) continue;
+          this.changed(Date.now());
+          await cx.sleep(QUIET_MS);
+          this.tick(cx);
+        }
+      } catch {
+        // Refused (on Linux, a tree above 4096 folders) or gone: read at the old pace instead.
+        if (this.homes.has(dir)) this.unwatched.add(dir);
+      }
+      this.watched.delete(dir);
+    });
   }
 
   say(cx, level, text) {
@@ -175,6 +214,8 @@ export default class Chartroom extends View {
     if (this.busy) return;
     this.busy = true;
     this.triedAt = Date.now();
+    // Taken first: a change during the read brings the next one.
+    this.dirty = false;
     cx.spawn(async (cx) => {
       cx.notify();
       try {
@@ -182,10 +223,16 @@ export default class Chartroom extends View {
         if (r.code !== 0) throw new Error(r.stderr.trim() || `chartroom exited ${r.code}`);
         const d = JSON.parse(r.stdout);
         this.tasks = d.agents ?? [];
+        // The workers to follow from here (a turn that ended during the read waits for the next).
+        this.ids = new Set(this.tasks.filter((x) => x.local !== false).map((x) => x.id));
+        this.workers = workerSig(terminals(), this.ids);
         this.error = null;
         this.fetchedAt = Date.now();
         // Details are a snapshot; reopened rows fetch them again.
         this.details = {};
+        // The homes this read covered are the ones to watch; a home no longer registered stops.
+        this.homes = new Set(taskDirs(d));
+        for (const dir of this.homes) this.watch(dir, cx);
       } catch (e) {
         // Keep the last board: a slow or failed read shouldn't blank the panel.
         this.error = String(e?.message ?? e).split("\n")[0];

@@ -8,9 +8,10 @@ Verified on herdr-app 0.1.12 with herdr-core (`hc`) 0.1.16.
 
 ## What it does
 
-- **The list.** It runs `chartroom radar --json` once a minute while the panel is shown (the
-  refresh button reads it at once). What needs you starts open; the other sectors start folded,
-  and a click on a sector's name folds or opens it (remembered per panel).
+- **The list.** It runs `chartroom radar --json` when it first shows, then again only after
+  something changed, and only while the panel is on screen (the refresh button reads it at once).
+  What needs you starts open; the other sectors start folded, and a click on a sector's name folds
+  or opens it (remembered per panel). See [When it reads the radar](#when-it-reads-the-radar).
 - **Click a task: pass it to its XO.** The panel finds the XO of *that task's* home and types
   `/continue <full task id>` into it (`$continue <id>` for a Codex XO), then shows that XO's tab
   so you see the answer. The XO is the agent session running in the home's own folder: a live
@@ -46,7 +47,7 @@ files, and copy again after you update chartroom (the app reloads a mod when its
 ```sh
 mkdir -p ~/.config/herdr-app/mods/chartroom
 cd ~/.local/share/chartroom/mods/herdr-chartroom   # or your checkout's mods/herdr-chartroom
-cp main.js xo.js mod.json compass.svg refresh.svg ~/.config/herdr-app/mods/chartroom/
+cp main.js xo.js schedule.js mod.json compass.svg refresh.svg ~/.config/herdr-app/mods/chartroom/
 herdr-app check ~/.config/herdr-app/mods/chartroom
 ```
 
@@ -79,12 +80,40 @@ belongs in the tab bar, which means a clone of the shipped `tabs` mod
 `layout.select {stack: "panel-body", child: "chartroom"}` and `layout.show {id: "panel"}`. That
 clone is part of the layout, not this mod, and isn't included here. `compass.svg` is here for it.
 
+## When it reads the radar
+
+A radar read runs `chartroom status` in every home on this machine: a few seconds of CPU and a
+few thousand short processes. So the panel reads only when it has to (`schedule.js`):
+
+- **Only while on screen.** A layout block counts while it is shown: not in a hidden column, and
+  not while its stack shows another child. A copy opened as an overlay (`mod.open`) counts while
+  it is open, and a copy in a tab's pane while that tab is shown. Herdr keeps a hidden copy alive
+  and its timers running; it now reads nothing. (A layout without the panel used to count as
+  shown.) The mod API says nothing about the window being minimised or covered (`window()` has
+  `active`, which is keyboard focus), so a minimised window still counts.
+- **After a change.** It watches each home's `tasks/` folder with the app's `watchFolder` (the
+  homes the last read covered) and reads again when a task's `meta.json`, `events.log`,
+  `report.md` or `brief.md` changes, or a task folder comes or goes. It ignores what the panel
+  doesn't show, such as a headless worker's `claude.jsonl`. It also reads when the state of a
+  listed task's worker changes in the app's `terminals()` (an hc worker's turn ending writes no
+  file), which spawns nothing to check. A burst of writes waits 1.5 s to be read as one change.
+- **At most once a minute** for changes, the old poll's pace: a busy crew changes something more
+  often than that, and then the panel costs what it used to. The first change after a quiet
+  minute shows within a few seconds.
+- **Every 5 minutes** whatever happened, for what nothing announces: a `waiting` window running
+  out, or a change the watch missed. After a failed read, or while the app refuses to watch a
+  home (on Linux, a tree above 4096 folders), it reads once a minute instead.
+
+A hidden panel still notes changes, and reads once it is shown again if anything changed or the
+5 minutes are up.
+
 ## Files
 
 | File | What it is |
 |---|---|
 | `main.js` | the panel |
 | `xo.js` | which terminal is a home's XO and what to type into it: pure, unit-tested by `test/js/herdr-xo.test.js` (`bats test/dashboard-js.bats`) |
+| `schedule.js` | when to read the radar: on screen or not, which watched paths matter, the workers' state, the floor and the fallback: pure, unit-tested by `test/js/herdr-schedule.test.js` |
 | `mod.json` | `place: none`, the title |
 | `refresh.svg`, `compass.svg` | the refresh button; the tab bar button's icon |
 
