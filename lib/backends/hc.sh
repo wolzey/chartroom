@@ -407,13 +407,17 @@ exited_since_dispatch() { # <id>
 # a lost worker, and the terminal is removed (the app drops its tab). hc_terminal, hc_space and
 # hc_tab stay, for the revive. 1 (park undone) when the terminal would not end.
 hc_park() { # <id> <session id> <state>
-  local id="$1" t i
+  local id="$1" t i up
   t="$(meta "$id" hc_terminal)"
   hcx read "$t" --lines 2000 >>"$(tdir "$id")/pane.log" 2>/dev/null || true
   meta_set "$id" parked "$(now)"
   log_event "$id" note "parked (session $2; $3, its agent at rest): steer or attach resumes it"
   hcx kill "$t" >/dev/null 2>&1 || true
+  # The end is hc's own word: in the watch's round the event stream's view moves only between
+  # rounds, so it would still say live (as in hc_stream_check).
+  up="${HCS_UP:-}"; HCS_UP=""
   for i in $(seq 1 20); do hc_info "$id"; [[ "$HC_STATE" =~ ^(live|replaced)$ ]] || break; sleep 0.25; done
+  HCS_UP="$up"
   if [[ "$HC_STATE" =~ ^(live|replaced)$ ]]; then
     meta_set "$id" parked ""
     log_event "$id" note "park undone: hc terminal $t did not end"

@@ -186,6 +186,25 @@ at_rest_long() { # <id>: its history 90 minutes old, its agent at rest for 80 (a
   [ -z "$(meta_of "$d" parked)" ]
 }
 
+@test "park: with hc's event stream up, the watch's park sees the terminal end from hc and stays parked" {
+  core_up
+  # The stream says nothing after the snapshot (the fake writes no line for a kill): its view of
+  # the terminal stays live through the round, so only hc itself can say the terminal ended.
+  export FAKE_HC_EVENTS=1 CHARTROOM_WATCH_HC_INTERVAL=30
+  a="$(worker done "finished")"; at_rest_long "$a"
+  t="$(meta_of "$a" hc_terminal)"
+  : >"$FAKE_HC_DIR/calls.log"
+  run cr watch --once --timeout 8
+  [ "$status" -eq 124 ]
+  hc_calls | grep -q '^events '
+  [ -n "$(meta_of "$a" parked)" ]
+  [ "$(live_of "$a")" = parked ]
+  refute grep -q 'park undone' "$CHARTROOM_HOME/tasks/$a/events.log"
+  hc_calls | grep -qx "kill $t"
+  hc_calls | grep -qx "rm $t"
+  [ ! -f "$FAKE_HC_DIR/terms/$t.json" ]
+}
+
 @test "park: steer resumes a parked worker in a fresh terminal: --resume, its tab, the message first" {
   core_up
   id="$(worker decision "which colour?")"; sid="$(meta_of "$id" session_id)"; tab="$(meta_of "$id" hc_tab)"

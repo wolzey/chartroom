@@ -107,7 +107,7 @@ park_tool_cmd() { # <args>
 # or now (park, accept: its turn over, whatever the time). Sets PARK_WHY (why not), and on
 # success PARK_SID (its session id), PARK_SID_FROM (meta | legacy) and PARK_STATE. Reads only.
 park_check() { # <id> <mode>
-  local id="$1" mode="$2" st t j pid procs line sid ms last now_s lp tab cs
+  local id="$1" mode="$2" st t j pid procs line sid ms last now_s lp tab cs up
   PARK_WHY=""; PARK_SID=""; PARK_SID_FROM=""; PARK_STATE=""
   [[ -z "$(meta_file "$id" closed)" ]] || { PARK_WHY="it is closed"; return 1; }
   [[ -z "$(meta_file "$id" parked)" ]] || { PARK_WHY="it is already parked"; return 1; }
@@ -120,7 +120,9 @@ park_check() { # <id> <mode>
   PARK_STATE="$st"
   t="$(meta_file "$id" hc_terminal)"
   j="$(hcx get "$t" --json 2>/dev/null)" || { PARK_WHY="its hc terminal ${t:-?} does not answer"; return 1; }
-  hc_info "$id"
+  # From hc, as the status_ms and pid beside it: in the watch's round the event stream's view is
+  # as old as the round.
+  up="${HCS_UP:-}"; HCS_UP=""; hc_info "$id"; HCS_UP="$up"
   [[ "$HC_STATE" == live ]] || { PARK_WHY="its hc terminal is $HC_STATE"; return 1; }
   case "$HC_STATUS" in
     idle|done) ;;
