@@ -27,6 +27,8 @@ common_setup() {
   unset HC_TERMINAL_ID HC_TERMINAL_SOCKET HC_SCOPE HC_SOCKET HC_SESSION HERDR_APP_HOME
   unset CLAUDECODE CLAUDE_PID CLAUDE_CODE_SESSION_ID CHARTROOM_TASK
   export XDG_STATE_HOME="$BATS_TEST_TMPDIR/state"
+  # (A runner's own would move herdr's socket away from this test's HOME: see herdr_sock_up.)
+  unset XDG_CONFIG_HOME
   # The doorbell's FIFOs (lib/core.sh), here instead of /tmp/chartroom-<uid>.
   export CHARTROOM_RUNTIME_DIR="$BATS_TEST_TMPDIR/run"
   # Never a real browser: `artifact pdf` finds no Chrome unless a test puts the fake on
