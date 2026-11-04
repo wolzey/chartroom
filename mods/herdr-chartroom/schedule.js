@@ -65,8 +65,9 @@ export function touches(paths, root) {
 }
 
 // The tasks/ folders to watch, from a radar read: this machine's homes that it read. A home it
-// could not read (no tasks/ folder) gets no watch. (Once chartroom keeps a home-level change
-// stamp that every record write touches, watching it instead of tasks/ makes touches() moot.)
+// could not read (no tasks/ folder) gets no watch. (A home-level change stamp, <home>/.changed,
+// is coming: one file in the home root, which watchFolder can't watch without the whole home and
+// its worktrees, so it would be a stat in main.js's tick instead, through fs/promises.)
 export function taskDirs(radar) {
   if (radar?.machine?.local === false) return [];
   return (radar?.machine?.homes ?? [])
