@@ -160,7 +160,8 @@ program from the `herdr` CLI/server below; workers on `herdr:*` never appear in 
   list`, for every herdr task (a herdr without it: `agent get` per task).
 - No server, no herdr command: chartroom looks for herdr's socket in bash first
   (`$HERDR_SOCKET_PATH`, else `$XDG_CONFIG_HOME/herdr/sessions/<HERDR_SESSION>/herdr.sock`, else
-  `~/.config/herdr/herdr.sock`, as herdr 0.9.5 reports them). Without it every herdr agent is
+  `~/.config/herdr/herdr.sock`, as herdr 0.9.5 reports them; not on Git Bash, where herdr's
+  Windows preview is not known to keep a socket file). Without it every herdr agent is
   `gone` in `status`, wakes `lost` once, and costs the watch, the radar and `sweep` nothing after
   that; with it a herdr task keeps the watch's full round at `CHARTROOM_WATCH_INTERVAL`.
 - `stop` sends Esc; `close` closes the tab; `attach` focuses it.
