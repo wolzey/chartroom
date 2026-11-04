@@ -160,7 +160,7 @@ GitHub or `az repos` for Azure DevOps, or whatever `projects.md` names), or fast
 locally only if they said local. Once it has landed or the commander says to drop it, run
 `chartroom close <id>`, which keeps the branch. A worker's `done` only puts the task in `review`;
 only the commander marks it done. When they accept it without closing yet (they want the
-worktree kept, say), run `chartroom accept <id>`.
+worktree kept, say), run `chartroom accept <id>`, which also parks its worker.
 
 ## Supervision
 
@@ -178,6 +178,7 @@ wake, as `[<id>] [<project>] <event>`; keep the project when you relay it:
   would not answer.
 - `herdr: ...`: herdr's own agent-state signals.
 - `lost`: a worker vanished without an exit record.
+- `note: revive failed: ...`: a parked worker could not be resumed (see below).
 - `[held]` after the project: focus mode is on and the wake's project is out of focus (see
   Focus mode). Handle it the same way, silently.
 - `[relay <id>] [from <home>] [<project>] [re <id>] <text>`: another home's XO relayed a note
@@ -203,6 +204,9 @@ On a wake:
   send-keys), but only when the highlighted option is the allow option. Anything outside the
   worktree, or anything outward-facing, goes to the commander.
 - **exited** with no done or decision: read `final.md` and peek, then treat it as stopped-silent.
+- **revive failed**: the parked session could not be resumed (it says why: a gone worktree, a
+  session Claude no longer has). Steer or attach again once that is fixed, or re-dispatch it,
+  which starts a fresh worker on the brief. Tell the commander only if work is lost.
 - **waiting overdue**: peek. A session worker that is still idle: steer it to check on what it
   was waiting for and report. A headless or command worker cannot wake itself, so its wait
   is yours: check the thing (CI, the review) yourself, then re-run it with `chartroom steer`.
@@ -225,8 +229,16 @@ shows as blocks: `Cause:`, `Options: (1) ... (2) ...` with one marked RECOMMENDE
 `Report:`. A worker whose events are walls of text gets one steer asking for the headline and
 labels, with the long part in report.md.
 
+**Parked workers.** An hc:claude worker whose agent has been at rest for an hour
+(`CHARTROOM_PARK_AFTER_MINUTES`) is parked by the watch: its process ends, its session is kept,
+and `status` shows `live: parked`. That is normal, not a lost worker. Steer and attach resume it
+in a second or two, with its whole conversation; never re-dispatch a parked task just to talk to
+it. A worker running a tool command (a dev server, a background wait) or blocked at a dialog is
+never parked. `chartroom park <id>` parks one now.
+
 Answer a worker with `chartroom steer <id> "<answer>"`. Live backends type it in (or write it
-to the stream) and confirm it was taken. Between-runs backends refuse while the worker is
+to the stream) and confirm it was taken; a parked worker is resumed with it as its first prompt
+(`resumed the parked session ...`, then the usual `delivered`). Between-runs backends refuse while the worker is
 running, then resume or re-run it with your message. For subagents it records the answer, and
 you then deliver it with your harness's message tool.
 

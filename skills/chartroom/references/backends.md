@@ -144,8 +144,44 @@ program from the `herdr` CLI/server below; workers on `herdr:*` never appear in 
   is checked by connecting to it before any `hc` command runs, because every `hc` command, even
   `hc ls` or `hc server status`, starts a core when none answers (verified, also over a stale
   socket a killed core left behind).
+- **Parking (hc:claude).** Each dispatch starts claude under a session id chartroom picks
+  (`--session-id`, meta `session_id`, fresh per dispatch); the prompt hook records the id Claude
+  reports, which wins. A worker whose agent is at rest (hc status `idle`/`done`, nothing prompted
+  since) for `CHARTROOM_PARK_AFTER_MINUTES` (60) is parked by the watch; `accept` and
+  `chartroom park <id>` park one at once, `sweep --apply` the ones due. Parking saves the screen
+  to `pane.log`, sets meta `parked` and logs `note: parked (session <id>; ...)` **before** it
+  ends the terminal (`hc kill`, `hc rm`; the app drops the tab), so the launcher's `exited` that
+  follows is not news. Live idle workers measured 4 processes and 1.06–1.11 GB each (launcher,
+  claude, its MCP servers); a parked one, none.
+  - Never parked: a turn under way or a prompt taken after its turn ended, an agent blocked at a
+    dialog, a joined session, a tool command still running under the agent (Claude Code runs
+    every tool command, background ones too, in a shell sourcing one of its shell snapshots;
+    any shell under the agent counts), no recorded session id, or no transcript for it under
+    `~/.claude/projects` (or `$CLAUDE_CONFIG_DIR`). A worker from before ids were recorded is
+    recognised from Claude Code's own `sessions/<pid>.json`, only when that session's
+    transcript holds the task's brief line. A refusal is kept in `tasks/<id>/.park-check` (one
+    look per grace) and noted when its reason changes.
+  - `steer` on a parked worker resumes it: a fresh `hc run` in the worktree with the same labels
+    (`herdr.space`, the recorded `herdr.tab`) and launcher settings, running
+    `claude --resume <id>` with the message (or its one-line pointer) as its first prompt,
+    confirmed by the prompt hook's signature and session id, then `note: revived (...)`.
+    `attach` (and the Herdr panel's Open worker, which runs it) resumes with no prompt, then
+    shows it. Verified on claude 2.1.318: the message is taken 1.06 s after `hc run`, the prompt
+    box is up in 1.1–2.1 s for 4–75 MB transcripts, context kept, no trust dialog. An unknown id
+    exits 1 ("No conversation found"); a revive that fails logs `note: revive failed: ...`, the
+    one wake for it, and the task stays parked. `dispatch` starts a parked task afresh (a new
+    session). Park, steer and attach of a parkable worker share a per-task lock, so no park ends
+    a worker while a message goes in.
+  - The watch never probes a parked worker (`live: parked`), and starts its turn count from 0, so
+    a resumed worker's first finished turn counts. `waiting` and `waiting-overdue` hold while
+    parked. Its first turn after a resume re-caches the conversation (measured: 33k of 53k
+    tokens read from cache, 20 s after parking), which a live worker steered after the prompt
+    cache's lifetime pays as well. hc:codex never parks yet. Under hc, Codex's notify fires and
+    carries `thread-id`, which chartroom records as `thread_id` (verified on codex-cli 0.158.0),
+    but hc reports no status or turns for Codex, so its at-rest check would have to come from
+    the notify events, and its revive (`codex resume <thread>`) is not built.
 - Untested here: Windows (off unless `CHARTROOM_HC_ANY_OS=1`), other machines (`hc run --on`).
-  `sweep` and the radar still read herdr only.
+  `sweep` and the radar still read herdr only (sweep's parking excepted).
 
 ## herdr:<agent> (first class)
 

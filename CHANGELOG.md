@@ -7,6 +7,24 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- Idle hc:claude workers park, and resume on demand. A worker whose agent has been at rest for
+  `CHARTROOM_PARK_AFTER_MINUTES` (default 60; `0` turns it off) is parked by the watch: its
+  screen goes to `pane.log`, `note: parked (session <id>; ...)` is logged, and its terminal ends,
+  freeing its agent and MCP servers (measured on live idle workers: 4 processes and 1.06–1.11 GB
+  each). `steer`, `attach` and the Herdr panel's Open worker resume it in a fresh hc terminal in
+  the same worktree and tab (`claude --resume <id>`, the message as its first prompt, confirmed
+  by the prompt hook): the message is taken about a second after the terminal starts (verified
+  on claude 2.1.318). `accept` parks a worker at once; `chartroom park <id>` parks one now and
+  `park --due` every one due; `sweep --apply` parks the ones due, and its dry run lists them. A
+  worker is never parked mid-turn, blocked at a dialog, joined, while a tool command it started
+  still runs (a dev server, a monitor, a background wait), or without a recorded session and its
+  transcript. A parked worker reads `live: parked` everywhere, keeps its task state, and is never
+  probed by the watch. A resume that fails logs `note: revive failed: ...`, which wakes the XO
+  once; the task stays parked. Each hc:claude dispatch now starts claude under a session id
+  chartroom picks (`--session-id`, meta `session_id`), and the prompt hook records the id Claude
+  reports; a worker from before that is recognised from Claude Code's own session record when
+  its transcript is the task's. Codex's notify records its thread id (`thread_id`); hc:codex
+  does not park yet (hc reports no turns for Codex).
 - The `hc:<agent>` session runner (`hc:claude`, `hc:codex`): workers in herdr-core terminals,
   which the Herdr app shows. Workers on `herdr:*` live in the separate `herdr` server, which the
   app never shows. One terminal per task, named after it, started with `hc run --bg --no-parent

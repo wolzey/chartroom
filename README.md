@@ -906,6 +906,8 @@ either. herdr's agent and pane lists add the sessions it hosts. All the rules li
   last fetch: it never fetches), through `chartroom close`, which still refuses a dirty worktree.
   A task that reported done less than `CHARTROOM_SWEEP_SETTLE_MINUTES` ago waits, so the XO sees
   its report first;
+- parks the hc:claude workers at rest for `CHARTROOM_PARK_AFTER_MINUTES` (see
+  [Idle workers park](#idle-workers-park)): their sessions resume on steer or attach;
 - stops the sessions of closed tasks (a herdr tab or pane only when herdr places it in the task's
   own tab or worktree; otherwise the processes);
 - kills orphaned chartroom loops: a `watch` run from this home whose session is gone (its nearest
@@ -930,6 +932,37 @@ quiet, and when you say the machine is hot or slow; it relays the summary line a
 about what needs a human. There is no daemon: a harness that can schedule (Claude Code's `/loop`,
 cron) can run `chartroom sweep --apply` now and then. Not on Git Bash (its `ps` has no working
 directories or argv); WSL2 works.
+
+## Idle workers park
+
+A Claude Code worker that has finished its turn still holds its agent and that agent's MCP
+servers: about 1.1 GB and four processes each, measured on idle workers, doing nothing until the
+next message. So an hc:claude worker at rest is **parked**: chartroom ends its terminal and
+keeps its Claude session id, and `steer`, `attach` (and the Herdr panel's Open worker) resume
+that session in a fresh terminal in the same worktree, with the same tab name, in a second or two
+(`claude --resume <id>`, the message as its first prompt). Nothing is lost: the agent picks up
+with its whole conversation.
+
+- **When.** The watch parks a worker whose agent has been at rest (its turn over, nothing
+  prompted since) for `CHARTROOM_PARK_AFTER_MINUTES` (default 60), whatever the task is waiting
+  on: review, a decision, a blocker, a `waiting` window, a plan awaiting approval. `accept` parks
+  one at once, `chartroom park <id>` parks one now, and `sweep --apply` parks the ones due.
+  The first turn after a resume re-caches the conversation. With a grace at least as long as
+  the prompt cache lasts, a live worker steered as late pays the same. That is an hour for the
+  Claude Code sessions here; the API's default is 5 minutes.
+- **Never** a worker mid-turn, one blocked at a dialog, a joined session, one running a tool
+  command (a dev server, a monitor, a background wait: it would die with the agent), or one with
+  no recorded session or transcript. A refusal says why, once, as a `note: not parked: ...`.
+- **Seeing it.** `status`, the board, the dashboard and the panel show `live: parked`, and the
+  task keeps its state (a parked `waiting` task is still `waiting`). `peek` shows the screen saved
+  when it parked. Its Herdr tab goes while it is parked.
+- **Wakes.** A parked worker costs the watch nothing: it is not probed. A resume that fails
+  (the session is gone, the worktree moved) wakes the XO once with `note: revive failed: ...`,
+  and the task stays parked.
+
+hc:claude only, for now. Each launch gives claude a session id of chartroom's choosing
+(`--session-id`), and the prompt hook records the one Claude reports. A worker started before
+that is recognised from Claude Code's own session record when its transcript is the task's.
 
 ## Concepts
 
@@ -1149,6 +1182,7 @@ to the config file.
 | `CHARTROOM_WAITING_MAX_MINUTES` | `120` | ... or this long after the event, when it names no until-time |
 | `CHARTROOM_SWEEP_IDLE_HOURS` | `24` | `sweep` raises a finished-but-open task's leftovers (and its own long-running processes) only after this long idle (`--idle-hours` overrides) |
 | `CHARTROOM_SWEEP_SETTLE_MINUTES` | `60` | `sweep --apply` closes a done task only this long after its `done` report, so the XO sees it first |
+| `CHARTROOM_PARK_AFTER_MINUTES` | `60` | the watch (and `sweep --apply`) parks an hc:claude worker at rest this long; `0` never parks on its own ([Idle workers park](#idle-workers-park)) |
 | `CHARTROOM_BASH_SEARCH` | see Install | environment only: colon-separated dirs searched for a bash ≥ 4 when started under an older one (PATH is always searched first) |
 | `CHARTROOM_PATH_APPEND` | `/opt/homebrew/bin:/usr/local/bin` on macOS, else empty | environment only: dirs appended to PATH when they exist and are missing; empty turns it off |
 | `CHARTROOM_RUNTIME_DIR` | `/tmp` | environment only: where `watch` and `listen` keep their doorbell FIFOs (`chartroom-<uid>/bells/`); every process of every home on the machine must agree on it |
