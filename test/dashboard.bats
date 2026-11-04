@@ -206,6 +206,27 @@ EOF
   [ "$status" -eq 1 ]
 }
 
+@test "board: a task closed before the recent window is never read on its own, and status skips every closed one" {
+  build_fleet
+  # A jq that logs its arguments: a read of one task's record ends with that task's meta.json.
+  mv "$BIN/jq" "$BIN/jq.real"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>"%s"\nexec "%s" "$@"\n' "$BATS_TEST_TMPDIR/jq.log" "$BIN/jq.real" >"$BIN/jq"
+  chmod +x "$BIN/jq"
+  own() { grep -cE "/tasks/$1/+meta\.json$" "$BATS_TEST_TMPDIR/jq.log" || true; }
+  BOARD="$(cr board --json)"
+  [ "$(lane_ids recent)" = "t-closed-recent" ]
+  [ "$(own t-closed-old)" -eq 0 ]
+  [ "$(own t-closed-recent)" -gt 0 ]
+  # its record is still there for show
+  [ "$(cr show t-closed-old --json | jq -c '[.state, .lane]')" = '["closed",null]' ]
+  : >"$BATS_TEST_TMPDIR/jq.log"
+  [ "$(cr status --json | jq -r 'map(.id) | index("t-closed-recent")')" = null ]
+  [ "$(own t-closed-old)" -eq 0 ]; [ "$(own t-closed-recent)" -eq 0 ]
+  [ "$(own t-working)" -gt 0 ]
+  # status --all still reads and lists every task
+  [ "$(cr status --json --all | jq -r 'map(.id) | index("t-closed-old") != null')" = true ]
+}
+
 @test "lanes: legacy home (captain.md, 'Waiting on the captain', old backend names, CAP_HOME)" {
   local legacy="$BATS_TEST_TMPDIR/legacy"
   mkdir -p "$legacy/tasks/old-one"

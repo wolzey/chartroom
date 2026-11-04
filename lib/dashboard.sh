@@ -99,13 +99,16 @@ dashboard_task_extra() { # <id>
 # isDraft}} (the server fills it from gh); without it every PR is "unknown" and nothing
 # depends on gh.
 dashboard_json() { # [pr-states-file]
-  local prs_file="${1:-}" row id rows=() hours arts
+  local prs_file="${1:-}" row id rows=() hours arts since
   hours="$(cfg DASHBOARD_RECENT_HOURS '' 48)"
   [[ "$hours" =~ ^[0-9]+$ ]] || die "CHARTROOM_DASHBOARD_RECENT_HOURS must be a whole number of hours"
+  # A task closed before the recent window is on no lane (lanes.jq): its row is never built. This
+  # cutoff is taken before lanes.jq takes its own, so it never leaves out a task lanes.jq keeps.
+  printf -v since '%(%s)T' -1; since=$((since - 10#$hours * 3600))
   while IFS= read -r row; do
     id="$(jq -r .id <<<"$row")"
     rows+=("$(jq -c --argjson x "$(dashboard_task_extra "$id")" '. + $x' <<<"$row")")
-  done < <(status_rows --all ${CR_BOARD_ID:+--id "$CR_BOARD_ID"}) # CR_BOARD_ID (`show`): that task alone; the inbox stays
+  done < <(status_rows --all --since "$since" ${CR_BOARD_ID:+--id "$CR_BOARD_ID"}) # CR_BOARD_ID (`show`): that task alone; the inbox stays
   local prs='{}'
   if [[ -n "$prs_file" && -s "$prs_file" ]]; then prs="$(jq -c 'if type == "object" then . else {} end' "$prs_file" 2>/dev/null || echo '{}')"; fi
   arts="$(artifacts_json --open)"

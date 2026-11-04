@@ -712,20 +712,42 @@ state_of() { # derived from the last wake-worthy event; a restart re-derives the
 # (lib/focus.sh; in focus and not held while focus is off). base: the branch it was cut from;
 # mentions: the other open tasks its brief or events name by id (a handoff, a follow-up), which
 # the radar stacks it with (lib/dashboard/stacks.js); [] for a closed task.
-status_rows() { # [--all] [--id ID]
-  local all=0 only="" id st d dirs live lastline wait shorts focus brk open_ids ment
+# --since <epoch seconds> (with --all) leaves out a task closed before then, or whose close time
+# cannot be read: the board's recent lane drops those (lib/dashboard/lanes.jq), so its cost
+# follows the open work and the recent window, not the home's history.
+status_rows() { # [--all] [--id ID] [--since EPOCH]
+  local all=0 only="" since="" id st d dirs live lastline wait shorts focus brk open_ids ment k a b
   while [[ $# -gt 0 ]]; do
-    case "$1" in --all) all=1; shift ;; --id) only="$2"; all=1; shift 2 ;; *) shift ;; esac
+    case "$1" in --all) all=1; shift ;; --id) only="$2"; all=1; shift 2 ;; --since) since="$2"; shift 2 ;; *) shift ;; esac
   done
+  [[ -z "$since" || "$since" =~ ^-?[0-9]+$ ]] || die "status_rows --since takes epoch seconds (got $since)"
   shorts="$(short_ids_json)"; focus="$(focus_json)"
   shopt -s nullglob
   local metas=("$CR_HOME"/tasks/*/meta.json)
-  open_ids=""; [[ ${#metas[@]} -gt 0 ]] && open_ids="$(jq -r 'select((.closed // "") == "") | .id' "${metas[@]}" 2>/dev/null || true)"
+  # One jq over every meta.json: the open tasks' ids (the pool `mentions` looks for), and each
+  # closed task by its directory, so the rows below skip one without a fork of its own: always
+  # without --all, and with --since when it closed before then. A record this jq does not reach
+  # (a malformed meta.json ends it there) is read on its own below, as every record once was.
+  local -A skip=()
+  open_ids=""
+  if [[ ${#metas[@]} -gt 0 ]]; then
+    while IFS=$'\t' read -r k a b; do
+      case "$k" in
+        open) open_ids+="$b"$'\n' ;;
+        closed) [[ $all -eq 1 && ( -z "$since" || "$b" == recent ) ]] || skip[$a]=1 ;;
+      esac
+    done < <(jq -r --argjson since "${since:-0}" '(input_filename | split("/") | .[-2]) as $dir
+      | if (.closed // "") == "" then ["open", $dir, (.id | tostring)]
+        else ["closed", $dir, (if ((.closed | tostring | try fromdateiso8601 catch null) // -1) >= $since then "recent" else "old" end)] end
+      | @tsv' "${metas[@]}" 2>/dev/null || true)
+    open_ids="${open_ids%$'\n'}"
+  fi
   dirs=("$CR_HOME"/tasks/*/)
   [[ -n "$only" ]] && dirs=("$CR_HOME/tasks/$only/") # one task (resolve, show): read only its record
   for d in "${dirs[@]}"; do
     id="${d%/}"; id="${id##*/}"; [[ -f "$d/meta.json" ]] || continue
     [[ -z "$only" || "$id" == "$only" ]] || continue
+    [[ -z "${skip[$id]+x}" ]] || continue
     st="$(state_of "$id")"
     [[ $all -eq 1 || "$st" != closed ]] || continue
     if [[ "$st" == closed ]]; then live=-; else live="$(live_of "$id")"; fi
