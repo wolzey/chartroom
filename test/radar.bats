@@ -365,6 +365,10 @@ radar_until() {
   done
   echo "timed out waiting for $cond; last: $out" >&2; return 1
 }
+# The ssh calls the requests made: every call but the collector's own status reads, which go on
+# in the background while a page watches, so a count of every call can move between two requests
+# (on Git Bash, where each request is a slow process start, often enough to fail a run).
+request_ssh() { grep -vc ' chartroom status --json --all-homes$' "$SSHD/calls.log" || true; }
 
 @test "server: /radar and /api/radar merge every machine; peek and file serve only what the radar shows" {
   need_python
@@ -400,7 +404,8 @@ radar_until() {
   # files: this machine's read directly, the other's over ssh; only the task files
   [[ "$(get "$URL/api/radar/file?$tm&f=events.log")" == *"blocked: need staging credentials"* ]]
   [ "$(get "$URL/api/radar/file?m=box&h=acme&id=r-1&f=report.md")" = "# Box report" ]
-  local n; n="$(wc -l <"$SSHD/calls.log")"
+  # what the radar does not show is refused before ssh: no call beyond the peek and file above
+  local n; n="$(request_ssh)"; [ "$n" -eq 2 ]
   [ "$(code "$URL/api/radar/file?$tm&f=meta.json")" = 404 ]
   [ "$(code "$URL/api/radar/file?m=box&h=acme&id=r-1&f=meta.json")" = 404 ]
   [ "$(code "$URL/api/radar/peek?m=box&h=acme&id=r-2")" = 404 ]
@@ -410,7 +415,7 @@ radar_until() {
   [ "$(code "$URL/api/radar/peek?m=box&h=acme")" = 400 ]
   [ "$(code "$URL/api/radar/peek?m=box&h=acme&pane=w1:p1;x")" = 400 ]
   [ "$(code -X POST "$URL/api/radar")" = 405 ]
-  [ "$(wc -l <"$SSHD/calls.log")" -eq "$n" ]
+  [ "$(request_ssh)" -eq "$n" ]
   # the page carries the archive's cutoffs
   [ "$(get "$URL/api/radar" | jq -c .settings)" = '{"done_hours":24,"stale_days":3}' ]
   # the other machine stops answering: its agents stay, marked stale, and the machine says why
