@@ -65,9 +65,10 @@ export function touches(paths, root) {
 }
 
 // The tasks/ folders to watch, from a radar read: this machine's homes that it read. A home it
-// could not read (no tasks/ folder) gets no watch. (A home-level change stamp, <home>/.changed,
-// is coming: one file in the home root, which watchFolder can't watch without the whole home and
-// its worktrees, so it would be a stat in main.js's tick instead, through fs/promises.)
+// could not read (no tasks/ folder) gets no watch. (The home's change stamp, <home>/.changed, is
+// one file in the home root, which watchFolder can't watch without the whole home and its
+// worktrees. Only its mtime moves, and the app's fs/promises has no stat, so the panel would need
+// a process per look to read it: tasks/ stays watched.)
 export function taskDirs(radar) {
   if (radar?.machine?.local === false) return [];
   return (radar?.machine?.homes ?? [])
