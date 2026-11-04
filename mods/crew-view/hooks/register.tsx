@@ -20,12 +20,19 @@
 // twice: `chartroom todo done`; a task's decision only clears when the XO relays the answer), `o`
 // (`/continue <id>` into the prompt) and `a` (show the held items too). `/todo off` hides the
 // list, `/todo add <text>` and `/todo done <ref>` run the CLI's. The list follows focus.json and
-// inbox.md within seconds (a stat every 3 s, no process), the rest with the 15 s poll.
+// inbox.md within seconds (a stat every 3 s, no process), the rest with the board.
+//
+// The board (`chartroom board --json`) is read when the mod wakes, when a pane opens or a command
+// changes something, and otherwise only when the home's change stamp moved: every 15 s the mod
+// stats `<home>/.changed` (no process), which chartroom rewrites after each write of what the
+// board shows, and reads the board when its mtime differs from the one the last read began with.
+// A read at least every 5 minutes, stamp or not, keeps ages and waiting windows current and
+// catches what writes without chartroom. An idle home costs one board run per 5 minutes.
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderSurface } from 'claude-code'
 
 import type { CrewBoard, CrewDetail, CrewView, TodoItem, TodoList } from '../types'
-import { bandSegments, configPath, detailActions, detailLines, homesPath, isUnderWorktrees, paneLines, parseBoard, parseDetail, resolveHome, samePath } from './crew'
+import { STAMP_FILE, bandSegments, boardDue, configPath, detailActions, detailLines, homesPath, isUnderWorktrees, paneLines, parseBoard, parseDetail, resolveHome, samePath, stampKey } from './crew'
 import type { ActionId, Tone } from './crew'
 import { doneRefusal, parseTodo, shownItems, todoActions, todoBandLines, todoKey, todoPaneLines } from './todo'
 import type { TodoActionId } from './todo'
@@ -118,6 +125,9 @@ let polling = false
 let pollAgain = false
 // focus.json and inbox.md as last stat'ed ("mtime:size" each), so a change polls at once.
 let watched = ''
+// The change stamp as the last good board read found it when it began, and when it began; null
+// until one succeeds (a failed read is tried again the next round).
+let lastRead: { stamp: string; at: number } | null = null
 // Whether this load of the module has registered /crew and started the timer.
 let started = false
 // Whether this plugin holds /todo: a person's own /todo (a skill, a command file) keeps the name,
@@ -132,19 +142,25 @@ async function poll($: EngineInterface): Promise<void> {
   }
   polling = true
   try {
+    // Taken before the run: a write while it runs moves the stamp past this, and reads again.
+    const began = { stamp: await stampNow($), at: await $.clock.now() }
     const ran = await runChartroom($, ['board', '--json'])
     const parsed = 'error' in ran ? ran : parseBoard(ran.stdout)
     if ('error' in parsed) {
+      lastRead = null
       await update($, error, () => parsed.error)
     } else if (parsed.board.home && !samePath(parsed.board.home, home)) {
+      lastRead = null
       await update($, error, () => `chartroom's home is ${parsed.board.home}, not ${home}`)
     } else {
       const list = 'stdout' in ran ? parseTodo(ran.stdout) : null
       await update($, board, () => parsed.board)
       await update($, todo, () => list)
       await update($, error, () => null)
+      lastRead = began
     }
   } catch (err) {
+    lastRead = null
     await update($, error, () => `crew view: ${String(err).split('\n')[0]}`).catch(() => {})
   } finally {
     polling = false
@@ -318,9 +334,16 @@ async function showing($: EngineInterface): Promise<boolean> {
   return (await isOpen($)) || (await isOpen($, false, TODO_PANE))
 }
 
-/** The timer's poll; skipped while nothing shows the board. */
+/** The home's change stamp now (`mtime:size`, `-` while there is none); a stat, no process. */
+async function stampNow($: EngineInterface): Promise<string> {
+  return $.fs.stat(`${home}/${STAMP_FILE}`).then(stampKey, () => '-')
+}
+
+/** The timer's round: reads the board once the stamp moved or the slow refresh is due; nothing while nothing shows it. */
 async function tick($: EngineInterface) {
-  if (await showing($)) await poll($)
+  // A read under way took the stamp as it began; what moves it meanwhile shows the next round.
+  if (polling || !(await showing($))) return
+  if (boardDue(lastRead, await stampNow($), await $.clock.now())) await poll($)
 }
 
 /** Polls at once when focus.json or inbox.md changed: focus mode turned on or off, an item added or ticked. */

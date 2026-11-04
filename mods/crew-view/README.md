@@ -116,12 +116,25 @@ live inside the XO's session:
   header says `/crew todo`.
 
 It reads `chartroom board --json` (chartroom on PATH, else `~/.local/bin/chartroom`) when it
-wakes, every 15 seconds after, and whenever a pane opens; the todo list rides in the same JSON
-(`.todo`), so it costs no second read. Every 3 seconds it stats `focus.json` and `inbox.md` in the
-home (no process), and reads the board at once when either changed: focus mode turning on or off,
-an item added or ticked off elsewhere, shows within seconds, without a restart. It reads
-`chartroom show <id> --json` when an item opens, and again with each poll while it is open. With
-the band and the list both off and both panes closed, nothing is read.
+wakes, whenever a pane opens or a `/todo` command changes something, and otherwise **only when
+something changed**: every 15 seconds it stats the home's change stamp, `<home>/.changed` (no
+process), which chartroom rewrites after each write of what the board shows (an event, a hook's
+line, a steer, `new`, `dispatch`, `accept`, `close`, an inbox or focus change, an artifact, a
+relay; [the contract](../../README.md#state-format-and-event-protocol-the-contract)). When the
+stamp's mtime differs from the one the last read began with, it reads the board; when it does
+not, the round runs no process. It also reads at least every 5 minutes, stamp or not: that keeps
+ages and `waiting` windows current and catches what writes without chartroom (a worker's
+`printf >>` fallback for events, a hand edit), so the band lags such a change by 5 minutes at
+most. An idle home costs one board run per 5 minutes, where it was one per 15 seconds. A failed
+read is tried again the next round. A home without a stamp (an older chartroom, or one nothing
+has written to since the update) is read only by the 5-minute refresh until its first write.
+
+The todo list rides in the same JSON (`.todo`), so it costs no second read. Every 3 seconds the
+mod also stats `focus.json` and `inbox.md` in the home (no process), and reads the board at once
+when either changed: focus mode turning on or off, an item added or ticked off elsewhere, shows
+within seconds, without a restart, and so does a hand edit of `inbox.md`. It reads `chartroom
+show <id> --json` when an item opens, and again with each board read while it is open. With the
+band and the list both off and both panes closed, nothing is read.
 
 ### What this Claude Code build supports
 
@@ -221,4 +234,4 @@ The todo list lives in this mod, not a sibling one, because it needs everything 
 has: the XO-only gating and the wake on the skill, the board poll (the list rides in its JSON),
 the chartroom runner, the clipboard and `/continue` helpers, and the same `$.state`. A sibling
 plugin installs as a folder of its own, so it could not import these; it would carry a copy of
-the gating and run a second poll every 15 seconds.
+the gating and run a second board poll of its own.

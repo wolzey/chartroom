@@ -3,18 +3,21 @@
 import { expect, test } from 'claude-code/testing'
 
 import { homeEntries, homesPath, resolveHome } from '../hooks/crew'
-import { BAND_PROPS, HOME, XO_WORLD, install, startXo } from './world'
+import { BAND_PROPS, HOME, STAMP, XO_WORLD, install, startXo } from './world'
 
 const XO = `${HOME}/.captain`
 
 for (const skill of ['captain', 'chartroom', 'chartroom:captain']) {
-  test(`the XO session wakes when it loads ${skill}: registers /crew and /todo, polls, keeps polling`, async ($, on) => {
-    const w = install(on, XO_WORLD())
+  test(`the XO session wakes when it loads ${skill}: registers /crew and /todo, polls, polls again on a change`, async ($, on) => {
+    const world = XO_WORLD()
+    world.mtimes[STAMP] = 1
+    const w = install(on, world)
     const expanded = await startXo($, XO, skill)
     expect(expanded.text).toBe(`the ${skill} skill`)
     await w.clock.settle()
     expect(w.commands).toEqual(['crew', 'todo'])
     expect(w.runs).toEqual([['chartroom', 'board', '--json']])
+    world.mtimes[STAMP] = 2
     await w.clock.advance(15_000)
     expect(w.runs).toHaveLength(2)
     const ui = await $.ui.mount({ plugin: 'crew-view', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS(100) })
@@ -38,11 +41,14 @@ test('the XO session stays inert until the skill loads: no command, no process, 
 })
 
 test('loading the skill twice starts one poll, not two', async ($, on) => {
-  const w = install(on, XO_WORLD())
+  const world = XO_WORLD()
+  world.mtimes[STAMP] = 1
+  const w = install(on, world)
   await startXo($)
   await $.skill.prompt({ skill: 'chartroom', text: 'again' })
   await w.clock.settle()
   expect(w.commands).toEqual(['crew', 'todo'])
+  world.mtimes[STAMP] = 2
   await w.clock.advance(15_000)
   expect(w.runs).toHaveLength(2)
 })

@@ -4,7 +4,7 @@ import { expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 import { detailActions, detailLines, parseDetail } from '../hooks/crew'
-import { HOME, PANE_PROPS, XO_WORLD, install, showJson, startXo } from './world'
+import { HOME, PANE_PROPS, STAMP, XO_WORLD, install, showJson, startXo } from './world'
 import type { World } from './world'
 
 const NOW = Date.parse('2026-10-12T15:12:30Z')
@@ -49,13 +49,17 @@ test('a row opens its item: chartroom show runs and the detail draws; back retur
 test('an open detail follows the board while the pane is open, and rests once it closes', async ($, on) => {
   let open = true
   on('ui.panes', () => ({ value: open ? [{ id: 'crew', title: 'Crew', isShown: true, isFocused: true, isPlaced: true }] : [] }))
-  const { w, ui } = await pane($, on)
+  const world = XO_WORLD()
+  world.mtimes[STAMP] = 1
+  const { w, ui } = await pane($, on, world)
   await ui.press({ key: 'row-108a' })
   const shows = () => w.runs.filter(r => r[1] === 'show').length
   expect(shows()).toBe(1)
+  world.mtimes[STAMP] = 2
   await w.clock.advance(15_000)
   expect(shows()).toBe(2)
   open = false
+  world.mtimes[STAMP] = 3
   await w.clock.advance(15_000)
   expect(shows()).toBe(2)
 })

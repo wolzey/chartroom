@@ -90,8 +90,10 @@ outcome, PRs, artifacts and where the worker runs. From there, `c` puts `/contin
 prompt (Enter runs it), `y` copies the id, `p` a PR URL, `a` an artifact, `r` reads the report,
 `b` goes back; `/crew <id>` opens an item directly. `q` or Esc closes the pane, `/crew` toggles
 it, and `/crew off` hides the band for the session. While [focus mode](#focus-mode-one-project-at-a-time)
-is on, the band leads with `🎯 <project> · N held` and counts only what is in focus. It polls
-`chartroom board --json` every 15 seconds and reads an item with `chartroom show <id> --json`.
+is on, the band leads with `🎯 <project> · N held` and counts only what is in focus. It reads
+`chartroom board --json` only when the home's change stamp (`.changed`, below) moved, which it
+stats every 15 seconds without a process, and at least every 5 minutes; an item it reads with
+`chartroom show <id> --json`.
 
 Under the band sits [your todo list](#your-next-steps-the-todo-list), styled like Claude Code's
 own: the first three things you owe the crew (`☐ [legal] i-7f3a sign the NDA · due 10-22`),

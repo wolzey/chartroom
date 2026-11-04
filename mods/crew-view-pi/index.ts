@@ -8,8 +8,9 @@
 // timer, runs no process and draws nothing. Once awake it stays awake for the session: a
 // session entry records it, so /reload and a resumed session wake again at session_start.
 //
-// Awake: a one-line band above the editor, polled from `chartroom board --json` every 15 s,
-// and `/crew [id]`, a browser of the lanes (up/down, Enter) with an item's detail
+// Awake: a one-line band above the editor, read from `chartroom board --json` when the home's
+// change stamp moves (`<home>/.changed`, stat'ed every 15 s; no process between changes) and at
+// least every 5 minutes, and `/crew [id]`, a browser of the lanes (up/down, Enter) with an item's detail
 // (`chartroom show <id> --json`) and its actions: c continue (`/skill:continue <id>` into the
 // editor), y copy the id, p copy a PR, r read the report, a copy an artifact, b back, q close.
 // `/crew off` hides the band for the session, `/crew on` brings it back.
@@ -27,7 +28,7 @@ import { Markdown, matchesKey, truncateToWidth } from '@earendil-works/pi-tui'
 import type { Component, TUI } from '@earendil-works/pi-tui'
 
 import type { CrewBoard, CrewDetail, TodoItem, TodoList } from '../crew-view/types'
-import { bandSegments, configPath, detailActions, detailLines, homesPath, isUnderWorktrees, paneLines, parseBoard, parseDetail, resolveHome, samePath } from '../crew-view/hooks/crew'
+import { STAMP_FILE, bandSegments, boardDue, configPath, detailActions, detailLines, homesPath, isUnderWorktrees, paneLines, parseBoard, parseDetail, resolveHome, samePath, stampKey } from '../crew-view/hooks/crew'
 import type { ActionId, PaneLine, Tone } from '../crew-view/hooks/crew'
 import { doneRefusal, parseTodo, todoActions, todoBandLines, todoKey, todoPaneLines } from '../crew-view/hooks/todo'
 import type { TodoActionId } from '../crew-view/hooks/todo'
@@ -100,6 +101,9 @@ export default function crewView(pi: ExtensionAPI) {
   let todoOff = false
   // focus.json and inbox.md as last stat'ed, so a change polls at once.
   let watched = ''
+  // The change stamp as the last good board read found it when it began, and when it began; null
+  // until one succeeds (a failed read is tried again the next round).
+  let lastRead: { stamp: string; at: number } | null = null
   // Redraws whatever shows the board: the band's TUI, and the browser while it is open.
   const redraws = new Set<() => void>()
   const redraw = () => redraws.forEach(fn => fn())
@@ -133,6 +137,9 @@ export default function crewView(pi: ExtensionAPI) {
       return
     }
     polling = true
+    // Taken before the run: a write while it runs moves the stamp past this, and reads again.
+    const began = { stamp: stampNow(), at: Date.now() }
+    let read: typeof lastRead = null
     try {
       const ran = await runChartroom(['board', '--json'])
       const parsed = 'error' in ran ? ran : parseBoard(ran.stdout)
@@ -142,8 +149,10 @@ export default function crewView(pi: ExtensionAPI) {
         board = parsed.board
         todo = 'stdout' in ran ? parseTodo(ran.stdout) : null
         error = null
+        read = began
       }
     } finally {
+      lastRead = read
       polling = false
       redraw()
     }
@@ -155,6 +164,20 @@ export default function crewView(pi: ExtensionAPI) {
 
   /** Something shows the board: the band, the todo list, or a browser. */
   const showing = () => !bandOff || !todoOff || browserOpen
+
+  /** The home's change stamp now (`mtime:size`, `-` while there is none); a stat, no process. */
+  function stampNow(): string {
+    try {
+      return xoHome ? stampKey(statSync(`${xoHome}/${STAMP_FILE}`)) : '-'
+    } catch {
+      return '-'
+    }
+  }
+
+  /** The timer's round: a board read once the stamp moved or the slow refresh is due; none while a read runs or nothing shows it. */
+  function tick() {
+    if (!polling && showing() && boardDue(lastRead, stampNow(), Date.now())) void poll()
+  }
 
   /** Polls at once when focus.json or inbox.md changed (focus on or off, an item added or ticked). */
   function watchFiles() {
@@ -274,7 +297,7 @@ export default function crewView(pi: ExtensionAPI) {
     showBand(ctx)
     void poll()
     // Nothing shows the board with the band and the list off and no browser open: no read then.
-    timer = setInterval(() => void (showing() ? poll() : undefined), POLL_MS)
+    timer = setInterval(tick, POLL_MS)
     watcher = setInterval(watchFiles, WATCH_MS)
   }
 

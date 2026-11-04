@@ -57,8 +57,11 @@ for Claude Code: chartroom's crew, live inside the XO's pi session.
   band and the todo list are off and no browser is open, nothing reads the board.
 
 It reads `chartroom board --json` (chartroom on PATH, else `~/.local/bin/chartroom`) when it
-wakes and every 15 seconds after (the todo list rides in the same JSON), and `chartroom show <id>
---json` when an item opens. The lane, band, detail and todo text come from the Claude Code mod's
+wakes, and after that only when the home's change stamp (`<home>/.changed`, stat'ed every 15
+seconds, no process) moved since the last read began, or at least every 5 minutes; the todo list
+rides in the same JSON. The rules are the Claude Code mod's (its README, "It reads `chartroom
+board --json`"), from the same helper (`boardDue`). It reads `chartroom show <id> --json` when an
+item opens. The lane, band, detail and todo text come from the Claude Code mod's
 own helpers (`../crew-view/hooks/crew.ts`, `../crew-view/hooks/todo.ts`), so the two views never
 disagree.
 

@@ -83,6 +83,36 @@ export function samePath(a: string, b: string): boolean {
   return norm(a) === norm(b)
 }
 
+// ---------------------------------------------------------------- when to read the board
+
+/**
+ * The home's change stamp, `<home>/.changed`: chartroom rewrites it after each write of what the
+ * board shows (lib/core.sh stamp_changed; README "State format and event protocol"). Its mtime
+ * is all that counts.
+ */
+export const STAMP_FILE = '.changed'
+
+/**
+ * The slow refresh: a board read at least this often, stamp or not, for what moves with the
+ * clock alone (ages, waiting windows, a focus running out) and for what writes without the CLI
+ * (a worker's `printf >>` fallback, a hand edit).
+ */
+export const REFRESH_MS = 5 * 60_000
+
+/** A stat of the stamp as the views compare it: `mtime:size`, or `-` while there is none. */
+export function stampKey(stat: { kind?: string; mtimeMs: number; size: number } | null | undefined): string {
+  return stat && stat.kind !== 'dir' ? `${stat.mtimeMs}:${stat.size}` : '-'
+}
+
+/**
+ * Whether a round reads the board: none read yet (or the last one failed), the stamp moved since
+ * the last read began, or that read is REFRESH_MS old. A missing stamp (an older chartroom, or
+ * nothing written since the update) reads `-` every round, so only the slow refresh reads then.
+ */
+export function boardDue(last: { stamp: string; at: number } | null, stamp: string, nowMs: number): boolean {
+  return last === null || stamp !== last.stamp || nowMs - last.at >= REFRESH_MS
+}
+
 // ---------------------------------------------------------------- board
 
 const LANES = ['needs_you', 'in_progress', 'on_hold', 'ready', 'recent'] as const

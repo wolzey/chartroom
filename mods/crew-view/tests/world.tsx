@@ -4,6 +4,8 @@ import { mock } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 export const HOME = '/srv/xo'
+/** The XO home's change stamp (lib/core.sh stamp_changed): a test moves it with `mtimes`. */
+export const STAMP = `${HOME}/.captain/.changed`
 
 /** A `chartroom board --json` payload shaped like the CLI's (fields the mod ignores included). */
 export function boardJson(over: Record<string, unknown> = {}): string {
@@ -98,7 +100,7 @@ export type World = {
   artifact: (ref: string) => Ran
   /** What `chartroom todo <args>` prints. */
   todo: (args: string[]) => Ran
-  /** Files whose stat answers this mtime (focus.json, inbox.md); any other path stats as a folder. */
+  /** Files whose stat answers this mtime (focus.json, inbox.md, STAMP); any other path stats as a folder. */
   mtimes: Record<string, number>
   /** The prompt box's draft. */
   draft: string
