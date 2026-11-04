@@ -139,6 +139,23 @@ are stable from 0.1.0.
 - The watch's full round reads every task's `meta.json` with one `jq` instead of several per
   task, and skips closed tasks without one: at 50 live workers a round takes 0.5 s instead of
   1.3 s, and an idle watch 14% of a core instead of 27%.
+- crew-view's band reads the board only when something changed, not every 15 seconds. Each
+  15-second round stats the home's new change stamp, `<home>/.changed`, without a process;
+  chartroom rewrites it after each write of what the board shows (an event, a hook's line, a
+  steer, a note, `new`, `dispatch`, `accept`, `close`, an inbox or focus change, an artifact, a
+  relay into the home and its ack). The band runs `chartroom board --json` when the stamp's mtime
+  moved since the last read began, and at least every 5 minutes for ages, `waiting` windows and
+  what writes without chartroom (a worker's `printf >>` fallback, a hand edit). Measured live in
+  an idle Claude Code session on a copy of a 10-task home: 38 board runs in 9¼ minutes before,
+  3 after (one at wake, one 2 s after a `chartroom event`, one 5-minute refresh). crew-view-pi
+  does the same. The stamp's path and meaning are a stable contract (README, "State format and
+  event protocol"), for the radar and the Herdr panel too.
+- The board leaves out a task closed before its recent window before building its row, and
+  `status` every closed task, using the one `jq` over the meta files it already ran. A board
+  run's cost now follows the open work and the recent window, not the home's history, and its
+  JSON is unchanged. Per board run on copies of three homes (forks; CPU including children): 10
+  task dirs 355 → 292, 0.54 → 0.44 s; 65 dirs 2,145 → 1,515, 3.8 → 2.5 s; 215 dirs 5,417 →
+  1,385, 8.3 → 2.4 s.
 - A Claude Code XO waits for wakes with `chartroom watch --once` as a background Bash command
   (`run_in_background: true`, no `--timeout`), started again after it handles each batch,
   instead of a streaming `watch` under the Monitor tool whose 30-minute timeout woke the XO to
