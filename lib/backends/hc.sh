@@ -517,7 +517,7 @@ declare -A HCT_STATE=() HCT_STATUS=() HCT_TURN=() HCT_NAME=() HCT_LIDS=() HCS_SE
 # shellcheck disable=SC2016
 HC_STREAM_JQ='
   def f: tostring | gsub("[\t\n\u001f]"; " ");
-  def ids: " " + ([(.argv // [])[] | tostring | capture("/tasks/(?<id>[^/]+)/launch\\.sh$")?.id] | join(" ")) + " ";
+  def ids: " " + ([(.argv // [])[] | tostring | capture("/tasks/(?<id>[^/]+)/launch\\.sh$")? | .id] | join(" ")) + " ";
   def rec: ["T", .address, (.state // "gone"), (.status.state? // ""), (.turn // 0), (.name // ""), ids] | map(f) | join("\u001f");
   def snap($p): ["S\u001f\($p.seq // 0)"] + [$p.terminals[]? | rec] + ["E"];
   foreach (inputs | fromjson? | select(type == "object")) as $l ({s: -1, out: []};
