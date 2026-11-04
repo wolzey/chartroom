@@ -68,8 +68,8 @@ bin_of() { type -P "$1" 2>/dev/null || true; }
 # The config file is KEY=VALUE lines (no shell evaluation), at
 # ${XDG_CONFIG_HOME:-~/.config}/chartroom/config or $CHARTROOM_CONFIG. A home may hold its
 # own `config` in the same format (several homes on one machine: each its own workspace,
-# dashboard port, project roots); it can set any key but CHARTROOM_HOME and CHARTROOM_PLATFORM,
-# which are read before the home is known.
+# dashboard port, project roots); it can set any key but CHARTROOM_HOME, which is read before
+# the home is known.
 
 CR_CONFIG_FILE="${CHARTROOM_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/chartroom/config}"
 # The homes on this machine (lib/homes.sh): `name=path` lines, next to the config file.
@@ -77,7 +77,7 @@ CR_HOMES_FILE="${CR_CONFIG_FILE%/*}/homes"
 CR_HOME_CONFIG=""
 declare -A CR_HOME_CFG=() CR_FILE_CFG=()
 
-# A trailing CR (a file saved by a Windows editor) is not part of the value.
+# A trailing CR (a file saved with CRLF line endings) is not part of the value.
 cfg_value_in() { # <file> <KEY>
   [[ -f "$1" ]] || return 0
   local cr=$'\r'
@@ -94,8 +94,8 @@ cfg_pairs() { # <file>
 
 # The config file and the home's own config are each read once, into CR_FILE_CFG and
 # CR_HOME_CFG, and load_config sets its twenty-odd settings with cfg_set: every run starts
-# there, and forks are slow on Git Bash (a lookup per setting through $(...) was some forty
-# forks a run, more than a hundred processes with a config file).
+# there (a lookup per setting through $(...) was some forty forks a run, more than a hundred
+# processes with a config file).
 load_file_config() {
   CR_FILE_CFG=()
   [[ -f "$CR_CONFIG_FILE" ]] || return 0
@@ -109,7 +109,7 @@ load_home_config() {
   [[ -f "$CR_HOME_CONFIG" ]] || return 0
   local k v
   while IFS=$'\t' read -r k v; do
-    [[ "$k" == CHARTROOM_HOME || "$k" == CHARTROOM_PLATFORM ]] && continue
+    [[ "$k" == CHARTROOM_HOME ]] && continue
     CR_HOME_CFG[$k]="$v"
   done < <(cfg_pairs "$CR_HOME_CONFIG")
 }
@@ -173,11 +173,7 @@ resolve_home() {
 load_config() {
   CR_HOME_CFG=(); CR_HOME_CONFIG=""
   load_file_config
-  detect_platform
   resolve_home
-  # Git Bash: a Windows-form home (C:\chartroom\home, as a Windows tool would pass it)
-  # becomes /c/chartroom/home, so globs and path joins keep working.
-  if [[ "$CR_PLATFORM" == msys && "$CR_HOME" =~ ^[A-Za-z]:[\\/] ]]; then CR_HOME="$(cygpath -u "$CR_HOME")"; fi
   load_home_config
   cfg_set CR_PROJECT_ROOTS PROJECT_ROOTS CAP_PROJECT_ROOTS ''
   CR_PROJECT_ROOTS="${CR_PROJECT_ROOTS//\~/$HOME}"
@@ -205,89 +201,9 @@ load_config() {
   [[ "$CR_PARK_AFTER" =~ ^[0-9]+$ ]] || die "CHARTROOM_PARK_AFTER_MINUTES must be whole minutes (0: never park on its own)"
 }
 
-# ---------------------------------------------------------------- platform
-# CR_PLATFORM: posix (macOS, Linux), wsl (Linux under WSL) or msys (Git for Windows' Git
-# Bash, MSYS2, Cygwin). Windows-only behaviour hangs off this, so macOS and Linux keep their
-# code paths. CHARTROOM_PLATFORM overrides the detection.
-detect_platform() {
-  cfg_set CR_PLATFORM PLATFORM '' ''
-  if [[ -z "$CR_PLATFORM" ]]; then
-    case "${OSTYPE:-}" in
-      msys*|cygwin*) CR_PLATFORM=msys ;;
-      linux*)
-        CR_PLATFORM=posix
-        if [[ -n "${WSL_DISTRO_NAME:-}" || "$(cat /proc/sys/kernel/osrelease 2>/dev/null)" == *[Mm]icrosoft* ]]; then CR_PLATFORM=wsl; fi ;;
-      *) CR_PLATFORM=posix ;;
-    esac
-  fi
-  [[ "$CR_PLATFORM" =~ ^(posix|wsl|msys)$ ]] || die "CHARTROOM_PLATFORM must be posix, wsl or msys (got $CR_PLATFORM)"
-  if [[ "$CR_PLATFORM" == msys ]]; then
-    # A native jq.exe under MSYS can write CRLF (jq 1.8.1 does for some output and not for
-    # other), which would leave a CR on captured values; --binary turns that off, so it is
-    # passed whenever this jq accepts it.
-    CR_JQ_BINARY=""; command jq -b -n 1 >/dev/null 2>&1 && CR_JQ_BINARY=1
-    # /tmp's Windows path, so msys_jq converts most file operands without a cygpath each.
-    CR_MSYS_TMP="$(cygpath -m /tmp 2>/dev/null || true)"
-    export CR_JQ_BINARY CR_MSYS_TMP
-    jq() { msys_jq "$@"; }
-    export -f jq msys_jq
-  fi
-  return 0
-}
-
-# Git Bash: run the native jq.exe with its arguments as written. MSYS would rewrite any
-# path-looking argument, so a --arg value such as /tmp/x (a worktree, the home, a steer
-# message starting with /) would be stored as C:/...; with that off, file operands (the
-# ones that exist) are converted to Windows paths here instead: drive and /tmp paths in
-# bash, anything else in one cygpath call (forks are slow on Windows).
-msys_jq() {
-  local a d i=0 skip=0 out=() files=() at=() conv=() bin=()
-  [[ -n "${CR_JQ_BINARY:-}" ]] && bin=(-b)
-  for a in "$@"; do
-    out+=("$a")
-    if (( skip > 0 )); then skip=$((skip - 1))
-    elif [[ "$a" == --arg || "$a" == --argjson ]]; then skip=2
-    elif [[ "$a" == /* && -e "$a" ]]; then
-      if [[ "$a" =~ ^/([A-Za-z])/ ]]; then d="${BASH_REMATCH[1]}"; out[i]="${d^^}:${a:2}"
-      elif [[ -n "${CR_MSYS_TMP:-}" && "$a" == /tmp/* ]]; then out[i]="$CR_MSYS_TMP${a:4}"
-      else files+=("$a"); at+=("$i"); fi
-    fi
-    i=$((i + 1))
-  done
-  if (( ${#files[@]} > 0 )); then
-    mapfile -t conv < <(cygpath -m -- "${files[@]}")
-    for i in "${!at[@]}"; do out[${at[$i]}]="${conv[$i]}"; done
-  fi
-  MSYS2_ARG_CONV_EXCL='*' command jq "${bin[@]}" "${out[@]}"
-}
-
-# A path as native Windows programs (python.exe, claude.exe) read it: C:/chartroom/home on Git
-# Bash, unchanged elsewhere.
-win_path() { if [[ "$CR_PLATFORM" == msys ]]; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
-
-# Stop a process and its children. On Git Bash a native child (claude.exe, codex) does not
-# die with its MSYS parent, and taskkill /T cannot reach one exec'd from a forked subshell
-# (its Windows parent is gone), so the pid and all its MSYS descendants (by
-# <proc>/<pid>/ppid) are ended by their Windows pids. CHARTROOM_PROC (default /proc) lets
-# the tests stand in a process table.
+# Stop a process and its children.
 kill_tree() { # <pid>
-  local pid="$1" proc="${CHARTROOM_PROC:-/proc}" p d x todo args=()
-  if [[ "$CR_PLATFORM" == msys ]]; then
-    todo=("$pid")
-    while (( ${#todo[@]} > 0 )); do
-      p="${todo[0]}"; todo=("${todo[@]:1}")
-      if { read -r x <"$proc/$p/winpid"; } 2>/dev/null; then args+=(//PID "$x"); fi
-      for d in "$proc"/[0-9]*; do
-        { read -r x <"$d/ppid"; } 2>/dev/null && [[ "$x" == "$p" ]] && todo+=("${d##*/}")
-      done
-    done
-    if (( ${#args[@]} > 0 )); then
-      taskkill //F //T "${args[@]}" >/dev/null 2>&1 || true
-    else
-      warn "could not end the Windows process tree of pid $pid; its agent may still be running"
-    fi
-  fi
-  pkill -TERM -P "$pid" 2>/dev/null || true; kill -TERM "$pid" 2>/dev/null || true
+  pkill -TERM -P "$1" 2>/dev/null || true; kill -TERM "$1" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------- task records
@@ -359,8 +275,8 @@ stamp_changed() { { printf . >"${1:-$CR_HOME}/$CR_STAMP"; } 2>/dev/null || true;
 #     <name>-<pid>.fifo     one per listener: watch-<pid>, listen-<task id>-<pid>
 #     <name>-<pid>.mark0|1  the watch's scan markers (bell_mark)
 # A FIFO whose listener is gone is removed only by a ringer of its own home; a ring into another
-# home skips it. Git Bash, a runtime dir not ours, or a filesystem where mkfifo fails: no FIFO,
-# and the listener polls as before.
+# home skips it. A runtime dir not ours, or a filesystem where mkfifo fails: no FIFO, and the
+# listener polls as before.
 declare -A BELL_DIRS=()
 BELL_AT="" BELL_NAME="" BELL_FILE="" BELL_FD="" BELL_PREV="" BELL_MARK=0
 bell_root() { local r="${CHARTROOM_RUNTIME_DIR:-/tmp}"; printf '%s/chartroom-%s' "${r%/}" "$EUID"; }
@@ -368,7 +284,6 @@ bell_root_ok() { [[ -d "$1" && ! -L "$1" && -O "$1" ]]; } # <root>: ours, and no
 # Sets BELL_AT to a home's bell directory (not created); 1 when there is none.
 bell_dir_of() { # <home>
   BELL_AT=""
-  [[ "${CR_PLATFORM:-}" != msys ]] || return 1
   local h="${1%/}" p s=""; h="${h:-/}"
   if [[ -z "${BELL_DIRS[$h]+x}" ]]; then
     p="$(cd -P -- "$h" 2>/dev/null && pwd)" && s="$(cksum <<<"$p")" || p=""
@@ -444,7 +359,7 @@ slugify() {
 }
 
 # The worker's single instruction, identical on every backend.
-task_prompt() { printf 'Read the brief at %s/brief.md and follow it exactly. Your task id is %s.' "$(win_path "$(tdir "$1")")" "$1"; }
+task_prompt() { printf 'Read the brief at %s/brief.md and follow it exactly. Your task id is %s.' "$(tdir "$1")" "$1"; }
 
 # A short signature of a prompt's text: whitespace runs collapsed and trimmed, so a typed
 # message and what the agent's prompt hook received compare equal; first 12 hex of sha256.

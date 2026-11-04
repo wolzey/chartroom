@@ -8,7 +8,6 @@ setup() {
   common_setup
   cr init >/dev/null
   PY="$(type -P python3 || true)"
-  case "${OSTYPE:-}" in msys*|cygwin*) PY="${CR_TEST_PYTHON:-}" ;; esac
 }
 
 teardown() {
@@ -18,19 +17,9 @@ teardown() {
   CHARTROOM_HOME="$BATS_TEST_TMPDIR/other" cr dashboard stop >/dev/null 2>&1 || true
 }
 
-# The server's pid is python's own. On Git Bash that is a Windows pid, which kill cannot see.
-srv_alive() {
-  case "${OSTYPE:-}" in
-    msys*|cygwin*) tasklist //FI "PID eq $1" //NH 2>/dev/null | grep -qw "$1" ;;
-    *) kill -0 "$1" 2>/dev/null ;;
-  esac
-}
-srv_kill() {
-  case "${OSTYPE:-}" in
-    msys*|cygwin*) taskkill //F //PID "$1" >/dev/null 2>&1 ;;
-    *) kill "$1" 2>/dev/null ;;
-  esac
-}
+# The server's pid is python's own.
+srv_alive() { kill -0 "$1" 2>/dev/null; }
+srv_kill() { kill "$1" 2>/dev/null; }
 
 ago() { jq -rn --argjson s "$1" 'now - $s | floor | todate'; }
 
@@ -253,8 +242,7 @@ EOF
 # ---------------------------------------------------------------- server
 
 need_python() { [[ -n "$PY" ]] || skip "python3 not available"; link_tool "$PY" python3; }
-# Git Bash computes the board much more slowly (every process start is expensive there).
-CURL_MAX=10; case "${OSTYPE:-}" in msys*|cygwin*) CURL_MAX=60 ;; esac
+CURL_MAX=10
 get() { curl -s --max-time "$CURL_MAX" "$@"; }
 code() { curl -s -o /dev/null --max-time "$CURL_MAX" -w '%{http_code}' "$@"; }
 start_daemon() {
@@ -363,11 +351,8 @@ start_exposed() {
   # the token: made on first use, private, and printed in the URLs
   local tf="$CHARTROOM_HOME/.dashboard.token" t
   t="$(cat "$tf")"; [[ "$t" =~ ^[A-Za-z0-9_-]{40,}$ ]]
-  # (Git Bash: NTFS has no POSIX modes; the home's ACL, private under the user profile, applies)
-  case "${OSTYPE:-}" in msys*|cygwin*) ;; *)
-    [ "$(stat -c %a "$tf" 2>/dev/null || stat -f %Lp "$tf")" = 600 ]
-    [ "$(stat -c %a "$CHARTROOM_HOME/.dashboard.log" 2>/dev/null || stat -f %Lp "$CHARTROOM_HOME/.dashboard.log")" = 600 ]
-  esac
+  [ "$(stat -c %a "$tf" 2>/dev/null || stat -f %Lp "$tf")" = 600 ]
+  [ "$(stat -c %a "$CHARTROOM_HOME/.dashboard.log" 2>/dev/null || stat -f %Lp "$CHARTROOM_HOME/.dashboard.log")" = 600 ]
   [[ "$OUT" == *"dashboard running: http://127.0.0.1:$PORT/?token=$t (pid $SRV_PID"* ]]
   [[ "$OUT" == *"WARNING: listening on 0.0.0.0:$PORT (every interface)"*"the access token is the only lock"* ]]
   # one URL per non-loopback interface address, each with the token
@@ -623,7 +608,6 @@ start_exposed() {
 
 @test "server: PR states come from gh when present, and its absence is reported, not fatal" {
   need_python
-  case "${OSTYPE:-}" in msys*|cygwin*) skip "a native Windows python cannot run the bash fake gh" ;; esac
   use_fake gh
   printf '%s\n' "100 done: https://github.com/acme/todo-cli/pull/8" "50 note: accepted" | fixture t-review subagent
   export FAKE_GH_STATES="$BATS_TEST_TMPDIR/gh.json"

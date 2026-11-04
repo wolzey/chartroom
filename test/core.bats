@@ -77,6 +77,12 @@ EOF
   [ "$(jq -r .home <<<"$output")" = "$BATS_TEST_TMPDIR/new" ]
 }
 
+@test "config: a CRLF config file gives clean values" {
+  printf 'CHARTROOM_WORKSPACE=fleet\r\nCHARTROOM_BRANCH_PREFIX="crlf/"\r\n' >"$CHARTROOM_CONFIG"
+  id="$(new_task)"
+  [ "$(meta_of "$id" branch)" = "crlf/$id" ]
+}
+
 @test "config file is read, env wins" {
   printf 'CHARTROOM_WORKSPACE=from-file\nCHARTROOM_BACKEND_ORDER="command"\n' >"$CHARTROOM_CONFIG"
   run cr doctor --json
@@ -399,8 +405,8 @@ EOF
 }
 
 @test "dispatch returns at once even when its output is captured (worker detached)" {
-  # well under the stub's sleep; Git Bash's process start-up is slow, so it gets more room
-  local sleep=6 bound=3; case "${OSTYPE:-}" in msys*|cygwin*) sleep=30 bound=20 ;; esac
+  # well under the stub's sleep
+  local sleep=6 bound=3
   id="$(new_task --backend command --command "STUB_SLEEP=$sleep $STUB {id}")"
   s=$(date +%s)
   out="$(cr dispatch "$id")"

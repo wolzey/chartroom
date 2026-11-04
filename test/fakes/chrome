@@ -11,7 +11,6 @@ for a in "$@"; do
   esac
 done
 url="${url//%20/ }"
-[[ "$url" =~ ^/[A-Za-z]: ]] && url="${url:1}" # file:///C:/... on Windows
 fail="${FAKE_CHROME_FAIL:-}"
 if [[ "$fail" == 1 || ( -n "$fail" && -e "$fail" ) || -z "$out" || -z "$url" ]]; then
   echo "fake chrome: nothing printed" >&2; exit 1

@@ -10,7 +10,6 @@ setup() {
   common_setup
   cr init >/dev/null
   PY="$(type -P python3 || true)"
-  case "${OSTYPE:-}" in msys*|cygwin*) PY="${CR_TEST_PYTHON:-}" ;; esac
   SRC="$BATS_TEST_TMPDIR/src"; mkdir -p "$SRC"
   CSP="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; base-uri 'none'; form-action 'none'"
 }
@@ -209,10 +208,8 @@ EOF
            --hide-scrollbars --no-first-run --no-default-browser-check --no-pdf-header-footer; do
     [[ " $call " == *" $f "* ]] || { echo "missing $f in: $call"; false; }
   done
-  # (Git Bash: Chrome is a native program, so it gets the Windows form, C:/..., and file:///C:/...)
-  local t="$TMPDIR" u="$TMPDIR"
-  case "${OSTYPE:-}" in msys*|cygwin*) t="$(cygpath -m "$TMPDIR")"; u="/$t"; u="${u// /%20}" ;; esac
-  [[ "$call" == *" --user-data-dir=$t/chartroom-pdf."*"/profile --print-to-pdf=$t/chartroom-pdf."*"/out.pdf file://$u/chartroom-pdf."*"/page.html" ]]
+  local t="$TMPDIR"
+  [[ "$call" == *" --user-data-dir=$t/chartroom-pdf."*"/profile --print-to-pdf=$t/chartroom-pdf."*"/out.pdf file://$t/chartroom-pdf."*"/page.html" ]]
   [ -z "$(ls -A "$TMPDIR")" ]
   # the page itself is untouched
   [ "$(grep -c 'Content-Security-Policy' "$PAGE")" -eq 1 ]
@@ -301,7 +298,7 @@ EOF
 # ---------------------------------------------------------------- the dashboard
 
 need_python() { [[ -n "$PY" ]] || skip "python3 not available"; link_tool "$PY" python3; }
-CURL_MAX=10; case "${OSTYPE:-}" in msys*|cygwin*) CURL_MAX=60 ;; esac
+CURL_MAX=10
 get() { curl -s --max-time "$CURL_MAX" "$@"; }
 code() { curl -s -o /dev/null --max-time "$CURL_MAX" -w '%{http_code}' "$@"; }
 # (an "end" line after them, so the last header keeps its newline through $(...))

@@ -47,8 +47,8 @@ cmux is implemented against its documented CLI but **unverified on a real cmux i
 
 | Mode | Backends | What `steer` does |
 |---|---|---|
-| live | hc, herdr, cmux, tmux, headless:claude (not on Git Bash) | Delivers now and confirms it was taken: Claude in hc/herdr/tmux/cmux by the prompt hook's signature of the submitted text, headless:claude by the replayed message, herdr without the hook by its agent state or the text on screen; Codex sessions report `submitted, not verified` |
-| between-runs | headless:codex, command, headless:claude on Git Bash | Refuses while running; afterwards resumes (`codex exec resume`) or re-runs the template with the message. `command` also has `steer --inbox` (best effort) |
+| live | hc, herdr, cmux, tmux, headless:claude | Delivers now and confirms it was taken: Claude in hc/herdr/tmux/cmux by the prompt hook's signature of the submitted text, headless:claude by the replayed message, herdr without the hook by its agent state or the text on screen; Codex sessions report `submitted, not verified` |
+| between-runs | headless:codex, command | Refuses while running; afterwards resumes (`codex exec resume`) or re-runs the template with the message. `command` also has `steer --inbox` (best effort) |
 | host | subagent | Records it; you deliver it with your harness's message tool |
 | mailbox | joined:<agent> | Writes to the joined session's mailbox; "delivered" only once its listener (or `listen --check`) read it, else "queued, not yet read" |
 
@@ -132,7 +132,7 @@ program from the `herdr` CLI/server below; workers on `herdr:*` never appear in 
   the one wake that can come later than before. When the stream ends (the core stopped or
   restarted, `hc update`), a full round runs at once and the watch polls every
   `CHARTROOM_WATCH_INTERVAL` until a new stream's snapshot is in. It starts a stream only when
-  the core answers, never a core. Without a doorbell (Git Bash) there is no stream: it polls.
+  the core answers, never a core. Without a doorbell there is no stream: it polls.
 - A lost agent is not a working one: the app turns on hc's keep for every terminal it adopts,
   and keep puts the user's shell in place of a program that dies by a signal or with the core,
   under the same address and name, still live, with no status (verified). chartroom checks that
@@ -180,7 +180,7 @@ program from the `herdr` CLI/server below; workers on `herdr:*` never appear in 
     carries `thread-id`, which chartroom records as `thread_id` (verified on codex-cli 0.158.0),
     but hc reports no status or turns for Codex, so its at-rest check would have to come from
     the notify events, and its revive (`codex resume <thread>`) is not built.
-- Untested here: Windows (off unless `CHARTROOM_HC_ANY_OS=1`), other machines (`hc run --on`).
+- Untested here: other machines (`hc run --on`).
   `sweep` and the radar still read herdr only (sweep's parking excepted).
 
 ## herdr:<agent> (first class)
@@ -196,8 +196,7 @@ program from the `herdr` CLI/server below; workers on `herdr:*` never appear in 
   list`, for every herdr task (a herdr without it: `agent get` per task).
 - No server, no herdr command: chartroom looks for herdr's socket in bash first
   (`$HERDR_SOCKET_PATH`, else `$XDG_CONFIG_HOME/herdr/sessions/<HERDR_SESSION>/herdr.sock`, else
-  `~/.config/herdr/herdr.sock`, as herdr 0.9.5 reports them; not on Git Bash, where herdr's
-  Windows preview is not known to keep a socket file). Without it every herdr agent is
+  `~/.config/herdr/herdr.sock`, as herdr 0.9.5 reports them). Without it every herdr agent is
   `gone` in `status`, wakes `lost` once, and costs the watch, the radar and `sweep` nothing after
   that; with it a herdr task keeps the watch's full round at `CHARTROOM_WATCH_INTERVAL`.
 - `stop` sends Esc; `close` closes the tab; `attach` focuses it.
@@ -267,8 +266,6 @@ program from the `herdr` CLI/server below; workers on `herdr:*` never appear in 
   wrapper closes stdin. claude 2.1.289 does not exit on that late EOF, so after 5s the wrapper
   ends it (`exited: … ended by chartroom after its final result`). The session is already saved:
   a later `steer` runs `claude -p --resume <uuid>` (verified to keep context).
-- On Git Bash (Windows), stdin is an anonymous pipe instead of a FIFO, so steering is
-  between runs: refused while it runs, then `--resume`. `stop` ends the Windows process tree.
 - `final.md` gets the last `result` text; `peek` summarises messages, tool calls and results.
 
 ## command
@@ -318,9 +315,6 @@ never has to reach into its terminal.
   mid-turn, `working`/`idle`/`blocked` from hooks or herdr's pane state, `stopped` once the pid
   is gone. `watch` records the pid ending once as `exited: joined agent session ended` and wakes
   on it unless the worker had reported.
-- **Not on Git Bash (Windows)**: `join` refuses there, and `doctor` says so. A native Windows
-  agent is outside Git Bash's process tree (whose `ps` has no `-o` either), so neither the
-  agent nor its pid can be found. Join from WSL2, where it works as on Linux.
 - **Hooks (Claude Code)**: the join skill declares Stop, Notification and UserPromptSubmit
   hooks in its frontmatter; Claude Code registers them when the skill is invoked and keeps them
   for the rest of the session. They are static, so they look the task up by the payload's

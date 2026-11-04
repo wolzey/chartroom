@@ -4,7 +4,6 @@
 
 load test_helper
 setup() {
-  case "${OSTYPE:-}" in msys*|cygwin*) skip "chartroom join is off on Git Bash (test/windows.bats); WSL2 runs this suite as Linux" ;; esac
   common_setup
   cr init >/dev/null
   export CLAUDECODE=1 CLAUDE_PID=$$ CLAUDE_CODE_SESSION_ID=sess-1

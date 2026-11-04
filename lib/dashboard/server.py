@@ -92,9 +92,8 @@ PDF_SECONDS = 120  # a print (the CLI's own timeout is CHARTROOM_PDF_TIMEOUT, 60
 class Board:
     """Runs the CLI for the lanes, caches the result, and keeps gh PR states on the side."""
 
-    def __init__(self, cli, home, use_gh, bash=None):
-        # On Windows a native python cannot run bin/chartroom (a bash script) by itself.
-        self.cli, self.home = ([bash] if bash else []) + [cli], home
+    def __init__(self, cli, home, use_gh):
+        self.cli, self.home = [cli], home
         self.lock = threading.Lock()
         self.cached, self.cached_at = None, 0.0
         fd, self.pr_file = tempfile.mkstemp(prefix="chartroom-dashboard-prs-", suffix=".json")
@@ -148,8 +147,7 @@ class Board:
         fd, out = tempfile.mkstemp(prefix="chartroom-page-", suffix=".pdf")
         os.close(fd)
         try:
-            # (forward slashes: on Git Bash the CLI is bash, and C:/... is a path to it)
-            proc = subprocess.run(self.cli + ["artifact", "pdf", ref, "--out", out.replace("\\", "/")],
+            proc = subprocess.run(self.cli + ["artifact", "pdf", ref, "--out", out],
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=PDF_SECONDS)
             if proc.returncode != 0:
                 raise RuntimeError(proc.stderr.decode("utf-8", "replace").strip().replace("chartroom: ", "") or "the print failed")
@@ -219,18 +217,14 @@ def iso(t):
 def run_cli(argv, timeout):
     """argv in a process group of its own, the whole group killed on timeout, so an ssh it started
     never outlives it. Returns (returncode, stdout, stderr); raises subprocess.TimeoutExpired."""
-    kw = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
-    proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kw)
+    proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        if os.name == "nt":
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        else:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except OSError:
-                pass
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
         proc.communicate()
         raise
     return proc.returncode, out, err
@@ -276,22 +270,6 @@ class Radar:
         self.discover_error = None
         self.cache, self.flight = {}, {}
         self.herdr = shutil.which("herdr")
-        # Windows: the CLI runs under Git Bash and reports this machine's homes as MSYS paths
-        # (/c/..., /tmp/...), which this native python cannot open; Git Bash's cygpath converts them
-        self.cygpath = shutil.which("cygpath") if os.name == "nt" else None
-        self.native_paths = {}
-
-    def native(self, p):
-        """A home path from this machine's snapshot, as this python opens it (converted once)."""
-        if not self.cygpath or not isinstance(p, str) or not p.startswith("/"):
-            return p
-        if p not in self.native_paths:
-            try:
-                out = subprocess.run([self.cygpath, "-m", p], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10).stdout
-                self.native_paths[p] = out.decode("utf-8", "replace").strip() or p
-            except (OSError, subprocess.TimeoutExpired):
-                self.native_paths[p] = p
-        return self.native_paths[p]
 
     def watched(self):
         return time.time() - self.watched_at < RADAR_WATCH_SECONDS
@@ -334,7 +312,7 @@ class Radar:
         """This machine's change gate: every home's task files (mtime, size) and herdr's agent states."""
         h = hashlib.sha1()
         for home in ((src.good or {}).get("machine") or {}).get("homes") or []:
-            p = self.native(home.get("path"))
+            p = home.get("path")
             if not p:
                 continue
             base = os.path.join(glob.escape(p), "tasks", "*")
@@ -494,7 +472,7 @@ class Radar:
             return 404, "not found\n"
         if src.spec.get("local"):
             try:
-                with open(os.path.join(self.native(rec["home_path"]), "tasks", tid, name), "rb") as fh:
+                with open(os.path.join(rec["home_path"], "tasks", tid, name), "rb") as fh:
                     return 200, fh.read()
             except (OSError, TypeError):
                 return 404, "%s has no %s\n" % (tid, name)
@@ -560,17 +538,6 @@ def is_loopback(host):
 
 def interface_addrs():
     """This machine's non-loopback IPv4 addresses (LAN, VPN and overlay interfaces alike)."""
-    if os.name == "nt":  # no ip or ifconfig; Windows resolves its own host name to every adapter's address
-        try:
-            found = [ai[4][0] for ai in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)]
-        except OSError:
-            found = []
-        addrs = []
-        for a in found:
-            ip = ipaddress.ip_address(a)
-            if not (ip.is_loopback or ip.is_link_local) and a not in addrs:
-                addrs.append(a)
-        return addrs
     cmds = [["ifconfig", "-a"]] if platform.system() == "Darwin" else [["ip", "-o", "-4", "addr", "show"], ["ifconfig", "-a"]]
     for cmd in cmds:
         exe = shutil.which(cmd[0]) or next((d + "/" + cmd[0] for d in ("/sbin", "/usr/sbin")
@@ -790,28 +757,13 @@ def make_handler(board, port, page, viewer, host, use_token, home):
     return Handler
 
 
-class Server(ThreadingHTTPServer):
-    """On Windows, SO_REUSEADDR (http.server's default) lets a second server bind a port that
-    one is already listening on; ask for the port exclusively there instead."""
-    if os.name == "nt":
-        allow_reuse_address = False
-
-        def server_bind(self):
-            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-            super().server_bind()
-
-
 def main():
-    if os.name == "nt":  # LF in the log on Windows too: bash greps it, line ends included
-        sys.stdout.reconfigure(newline="\n")
-        sys.stderr.reconfigure(newline="\n")
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=4517)
     ap.add_argument("--host", default=LOOPBACK, help="IPv4 address to bind (0.0.0.0: every interface)")
     ap.add_argument("--no-token", action="store_true", help="beyond loopback, serve without the access token")
     ap.add_argument("--pidfile")
     ap.add_argument("--bin", required=True, help="path to bin/chartroom")
-    ap.add_argument("--bash", help="run --bin with this bash (Git Bash on Windows)")
     ap.add_argument("--open", action="store_true")
     ap.add_argument("--no-gh", action="store_true")
     ap.add_argument("--theme", choices=THEMES, default="chartroom", help="the page's default theme")
@@ -835,7 +787,7 @@ def main():
         viewer = Page(os.path.join(HERE, "pages.html"), args.theme)
     except (OSError, ValueError) as exc:
         sys.exit("chartroom dashboard: %s" % exc)
-    board = Board(args.bin, home, not args.no_gh, args.bash)
+    board = Board(args.bin, home, not args.no_gh)
     board.radar = Radar(board.cli)  # the fleet radar's data and page ride on the board into the handler
     try:
         board.radar_page = Page(os.path.join(HERE, "radar.html"), args.theme)
@@ -848,7 +800,7 @@ def main():
         print("chartroom dashboard: no task page: %s" % exc, flush=True)
         board.task_page = None
     try:
-        httpd = Server((args.host, args.port), None)
+        httpd = ThreadingHTTPServer((args.host, args.port), None)
     except OSError as exc:
         sys.exit("chartroom dashboard: cannot listen on %s:%d: %s" % (args.host, args.port, exc.strerror or exc))
     httpd.daemon_threads = True
@@ -873,7 +825,7 @@ def main():
     signal.signal(signal.SIGINT, cleanup)
     if args.pidfile:
         tmp = args.pidfile + ".tmp"
-        with open(tmp, "w", newline="\n") as fh:  # LF on Windows too: bash reads it
+        with open(tmp, "w") as fh:
             # the bound host only when it is not the default, so a default pid file reads as before
             fh.write("%d %d%s\n" % (os.getpid(), port, "" if args.host == LOOPBACK else " " + args.host))
         os.replace(tmp, args.pidfile)

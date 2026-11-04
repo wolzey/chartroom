@@ -56,7 +56,6 @@ sock_answers() { # <path>
 }
 
 hc_probe() {
-  [[ "$CR_PLATFORM" != msys || -n "${CHARTROOM_HC_ANY_OS:-}" ]] || { echo "hc on Windows is unverified (CHARTROOM_HC_ANY_OS=1 to try it)"; return 1; }
   [[ -n "$(hc_bin)" ]] || { echo "hc (herdr-core) not on PATH"; return 1; }
   local s; s="$(hc_socket)"
   sock_answers "$s" || { echo "herdr-core not running (no live socket${s:+ at $s}; open Herdr or run hc server start)"; return 1; }

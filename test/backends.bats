@@ -13,11 +13,6 @@ setup() { common_setup; }
   [[ "$output" == *"subagent"*"only inside Claude Code"* ]]
   run cr doctor --json
   [ "$(jq -r .auto <<<"$output")" = null ]
-  # Git Bash: herdr stays off unless opted in (test_helper opts in for the other tests)
-  case "${OSTYPE:-}" in msys*|cygwin*)
-    CHARTROOM_HERDR_ANY_OS="" run cr doctor --json
-    [ "$(jq -r '.backends[]|select(.backend=="herdr:claude").reason' <<<"$output")" = "herdr on Windows is unverified (CHARTROOM_HERDR_ANY_OS=1 to try it)" ] ;;
-  esac
 }
 
 @test "doctor: CI disables session runners; harness=claude enables subagent" {
@@ -97,7 +92,6 @@ setup() { common_setup; }
 }
 
 @test "headless:claude: pre-assigned session, live steer over the FIFO, resume after exit" {
-  case "${OSTYPE:-}" in msys*|cygwin*) skip "Git Bash steers headless claude between runs (test/windows.bats)" ;; esac
   use_fake claude
   export FAKE_TURN=8
   id="$(new_task --backend headless:claude)"
@@ -168,9 +162,8 @@ setup() { common_setup; }
   id="$(new_task --backend tmux:claude)"
   export FAKE_TMUX_TASK="$id"
   cr dispatch "$id" >/dev/null
-  # the brief's prompt was confirmed by its signature (on Git Bash the prompt names the brief by
-  # its Windows path, as a native agent needs)
-  b="$CHARTROOM_HOME/tasks/$id"; case "${OSTYPE:-}" in msys*|cygwin*) b="$(cygpath -m "$b")" ;; esac
+  # the brief's prompt was confirmed by its signature
+  b="$CHARTROOM_HOME/tasks/$id"
   sig="$(printf '%s' "Read the brief at $b/brief.md and follow it exactly. Your task id is $id." | (source "$REPO_ROOT/lib/core.sh"; text_sig))"
   events "$id" | grep -q "agent: prompt-received sig=$sig len="
   # a full match
@@ -259,7 +252,6 @@ lines"
 }
 
 @test "herdr: with no server (no socket) the watch, status, the radar and sweep run no herdr command; a lost agent wakes once" {
-  case "${OSTYPE:-}" in msys*|cygwin*) skip "Git Bash: herdr_up does not look for a socket" ;; esac
   use_fake herdr claude
   export FAKE_HERDR_DIR="$BATS_TEST_TMPDIR/herdr"; mkdir -p "$FAKE_HERDR_DIR"; herdr_sock_up
   id="$(new_task --backend herdr:claude)"

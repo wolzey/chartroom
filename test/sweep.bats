@@ -5,7 +5,6 @@
 
 load test_helper
 setup() {
-  case "${OSTYPE:-}" in msys*|cygwin*) skip "chartroom sweep is off on Git Bash; WSL2 runs this suite as Linux" ;; esac
   common_setup
   cr init >/dev/null
   export CHARTROOM_SWEEP_SETTLE_MINUTES=0
@@ -16,7 +15,6 @@ setup() {
 }
 teardown() {
   local p
-  [[ -n "${SPAWNED:-}" && -f "$SPAWNED" ]] || return 0 # setup skipped (Git Bash)
   while read -r p; do
     [[ -n "$p" ]] || continue
     pkill -KILL -P "$p" 2>/dev/null || true; kill -KILL "$p" 2>/dev/null || true

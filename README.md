@@ -47,9 +47,10 @@ dashboard can show the fleet in a browser).
 
 ## Install
 
+chartroom runs on macOS and Linux only.
+
 Requirements: bash ≥ 4 (macOS: `brew install bash`), `jq`, `git`. Optional, per backend:
-the Herdr app (herdr-core, `hc`), herdr, cmux (macOS), tmux ≥ 3.0, the `claude` and/or `codex` CLIs. On Windows, see
-[Windows](#windows).
+the Herdr app (herdr-core, `hc`), herdr, cmux (macOS), tmux ≥ 3.0, the `claude` and/or `codex` CLIs.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/wolzey/chartroom/main/install.sh | bash
@@ -127,53 +128,6 @@ answer its question) or a bare shell, and never starts an XO; when it can't send
 Install it by copying its files into `~/.config/herdr-app/mods/chartroom` (not a symlink: the app
 doesn't hot-reload one), then place it in a layout. See
 [mods/herdr-chartroom/README.md](mods/herdr-chartroom/README.md).
-
-### Windows
-
-chartroom is bash, so on Windows it runs in WSL2 or in Git Bash. It doesn't run in
-PowerShell or cmd.
-
-- **WSL2 (recommended): everything works, as on Linux.** Install chartroom, the agents
-  (`claude`, `codex`) and your repositories inside WSL, and run the XO there. Keep the
-  repositories on the WSL filesystem (`~/code`), not under `/mnt/c`. A Windows-side
-  `claude.exe` isn't used, and skills installed in WSL are seen by WSL agents only. For
-  `dashboard open`, install `wslu` (`wslview`); without it chartroom falls back to PowerShell's
-  `Start-Process`. The Windows browser reaches the dashboard through WSL's localhost forwarding,
-  which is on by default. Other devices reach a `dashboard --expose` in WSL only with WSL's
-  mirrored networking (`networkingMode=mirrored` in `.wslconfig`); in the default NAT mode it is
-  reachable from this Windows machine alone.
-- **Git Bash (Git for Windows): the core, `headless:claude`, `headless:codex`, `command`,
-  `subagent` and the dashboard.** There are no session runners: Git for Windows has no tmux,
-  cmux is macOS-only, and herdr's Windows build is a preview that chartroom leaves off unless
-  `CHARTROOM_HERDR_ANY_OS=1` (hc likewise, `CHARTROOM_HC_ANY_OS=1`). Install jq and Python (`winget install jqlang.jq Python.Python.3.12`),
-  run the installer from Git Bash, and add `~/.local/bin` to your PATH in `~/.bashrc`. Some
-  things differ from macOS and Linux:
-  - The checkout is LF whatever `core.autocrlf` says (`.gitattributes`).
-  - `~/.local/bin/chartroom` is a small launcher script, because Git Bash's `ln -s` copies.
-  - `install-skills` links with directory junctions, which need no Developer Mode, into
-    `%USERPROFILE%\.claude\skills` and the others.
-  - A native `jq.exe`'s CRLF output is turned off with `--binary`.
-  - `headless:claude` takes steering between runs, by resuming the session, not live.
-  - `stop` ends the worker's whole Windows process tree.
-  - `dashboard open` uses `start`.
-  - `dashboard --expose` and `--host` work under the native python, token and all. The first
-    time, Windows Defender Firewall asks whether Python may accept connections: allow it on the
-    networks you mean to use, or other devices cannot connect. NTFS has no `0600` mode, so
-    `.dashboard.token` and `.dashboard.log` are kept private by the home folder's ACL, which
-    under `%USERPROFILE%` only you, SYSTEM and Administrators can read.
-  - `chartroom join` is unavailable: it finds the session by its process tree, and a native
-    Windows agent is outside Git Bash's. Join a running session from WSL2.
-  - `watch` and `listen` have no doorbell (MSYS FIFOs and native Windows processes don't mix):
-    `watch` wakes at its next round, every `CHARTROOM_WATCH_INTERVAL` seconds, and `listen`
-    checks every second.
-  - Workers that chartroom launches inherit its `jq`: an exported bash function that runs
-    `jq.exe` with `--binary` and passes its arguments unconverted (file operands become Windows
-    paths). It is harmless for ordinary use; `command jq` runs `jq.exe` itself.
-
-  `chartroom doctor` lists these under `note:`. The Windows CI job runs the test suite in Git
-  Bash.
-- **PowerShell / cmd:** not supported. To install from PowerShell, hand over to Git Bash:
-  `& "$env:ProgramFiles\Git\bin\bash.exe" -lc "curl -fsSL https://raw.githubusercontent.com/wolzey/chartroom/main/install.sh | bash"`.
 
 ### Updating, and running on several machines
 
@@ -320,8 +274,7 @@ How it is built, and what it promises:
 - `dashboard open` reuses this home's dashboard if it answers on its port; otherwise it
   replaces a stale pid file (or a server that stopped answering), starts one with `--daemon`
   and waits for it. Then it opens the URL with `CHARTROOM_OPENER`, else `open` (macOS) or
-  `xdg-open`; on WSL, `wslview` or PowerShell's `Start-Process`; on Git Bash, `start`. It prints
-  the URL either way. A lock in the home (holding its owner's pid; taken over only when that pid is gone) keeps two calls from starting two
+  `xdg-open`. It prints the URL either way. A lock in the home (holding its owner's pid; taken over only when that pid is gone) keeps two calls from starting two
   servers. The `dashboard` skill (`/dashboard`) runs exactly this.
 - **Themes.** `chartroom` (a nautical chart table) and `hud` (machine vision: red and amber,
   scanlines, a header radar, a reticle that locks onto cards). Both keep the same lanes and
@@ -930,8 +883,7 @@ another home. Those are raised only once the task has been idle for `--idle-hour
 The `sweep` skill has the XO run `chartroom sweep --apply` at session start, when the fleet goes
 quiet, and when you say the machine is hot or slow; it relays the summary line and asks you only
 about what needs a human. There is no daemon: a harness that can schedule (Claude Code's `/loop`,
-cron) can run `chartroom sweep --apply` now and then. Not on Git Bash (its `ps` has no working
-directories or argv); WSL2 works.
+cron) can run `chartroom sweep --apply` now and then.
 
 ## Idle workers park
 
@@ -1141,8 +1093,7 @@ change before 1.0.
 Environment variables win. Then the home's own `config`, if it has one (several homes on one
 machine), then `~/.config/chartroom/config` (`KEY=VALUE`, no shell evaluation;
 `CHARTROOM_CONFIG` overrides the path). The home's `config` can set every key but
-`CHARTROOM_HOME` and `CHARTROOM_PLATFORM`. The homes on the machine are listed in `homes`, next
-to the config file.
+`CHARTROOM_HOME`. The homes on the machine are listed in `homes`, next to the config file.
 
 | Key | Default | |
 |---|---|---|
@@ -1170,14 +1121,11 @@ to the config file.
 | `CHARTROOM_RADAR_REMOTE_PATH` | `$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin` | put first on PATH on another machine (its non-interactive ssh shell lacks them) |
 | `CHARTROOM_RADAR_LOCAL_MIN_SECONDS` / `_LOCAL_MAX_SECONDS` / `_REMOTE_SECONDS` | `15` / `60` / `60` | while the radar is open: this machine is re-read on a change at most this often, and at least this often; another machine this often |
 | `CHARTROOM_RADAR_DONE_HOURS` / `_STALE_DAYS` | `24` / `3` | the radar's "active only" view archives a docked task quiet this many hours, and a task whose session is gone and quiet this many days |
-| `CHARTROOM_OPENER` | `open` / `xdg-open` (WSL: `wslview`, PowerShell; Git Bash: `start`) | command `dashboard open` runs with the URL |
+| `CHARTROOM_OPENER` | `open` / `xdg-open` | command `dashboard open` runs with the URL |
 | `CHARTROOM_CLIPBOARD` | `pbcopy` / `wl-copy` / `xclip` / `xsel`, whichever is there | command `artifact copy` pipes the text into (split on spaces); `-` prints it instead |
 | `CHARTROOM_CHROME` | the first of `google-chrome`, `chromium`, `chrome`, `msedge` (and kin) on PATH, else the usual app locations | the Chrome or Chromium `artifact pdf` prints with: a path or a command name; when set, nothing else is tried |
 | `CHARTROOM_PDF_PAPER` | `letter` | the paper `artifact pdf` prints on: `letter`, `legal`, `ledger`, `tabloid`, `a3`, `a4`, `a5`, `b4`, `b5` (`--paper` overrides) |
 | `CHARTROOM_PDF_TIMEOUT` | `60` | seconds `artifact pdf` waits for Chrome before giving up |
-| `CHARTROOM_PLATFORM` | *(detected)* | `posix`, `wsl` or `msys` (Git Bash); override only if detection is wrong |
-| `CHARTROOM_HERDR_ANY_OS` | *(unset)* | `1` offers herdr on Git Bash, where its Windows preview is unverified |
-| `CHARTROOM_HC_ANY_OS` | *(unset)* | `1` offers hc (herdr-core) on Git Bash, where chartroom has not verified it |
 | `CHARTROOM_WAITING_GRACE_MINUTES` | `15` | a `waiting` worker turns `waiting-overdue` this long after its until-time |
 | `CHARTROOM_WAITING_MAX_MINUTES` | `120` | ... or this long after the event, when it names no until-time |
 | `CHARTROOM_SWEEP_IDLE_HOURS` | `24` | `sweep` raises a finished-but-open task's leftovers (and its own long-running processes) only after this long idle (`--idle-hours` overrides) |
@@ -1194,9 +1142,6 @@ to the config file.
 **Does it work without herdr or tmux?** Yes. In a plain terminal it uses tmux if it's installed,
 otherwise headless workers. Over SSH or in CI it runs headless or command workers only.
 `chartroom doctor` tells you which.
-
-**Does it work on Windows?** Yes, in WSL2 (everything) or Git Bash (headless, command and
-subagent workers, and the dashboard). See [Windows](#windows).
 
 **Can a worker be something other than Claude or Codex?** Yes: `--backend command --command
 'your-agent --prompt {prompt} --cwd {worktree}'`. The worker reports by appending event lines
@@ -1215,7 +1160,7 @@ through your forge's CLI.
 ## Contributing
 
 ```bash
-shellcheck -x -S warning bin/chartroom lib/*.sh lib/backends/*.sh install.sh scripts/*.sh test/stub-agent test/windows-smoke.sh test/fakes/*
+shellcheck -x -S warning bin/chartroom lib/*.sh lib/backends/*.sh install.sh scripts/*.sh test/stub-agent test/fakes/*
 bats test/                 # no hc/herdr/tmux/cmux/claude/codex needed: fakes and a stub agent
 CHARTROOM_TEST_REAL_CHROME=1 bats test/pages.bats   # also print one page with a real Chrome (opt-in: the rest use a fake)
 scripts/privacy-gate.sh    # no personal data in tracked files or commits; only the owner's (or a listed collaborator's) noreply email in history

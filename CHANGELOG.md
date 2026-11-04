@@ -153,7 +153,7 @@ are stable from 0.1.0.
   scan. Its full round (every task, the backends' state, overdue waits) still runs every
   `CHARTROOM_WATCH_INTERVAL` (still 3 s): that is how it sees what rings nothing yet (a
   launcher's or wrapper's `exited`, a line appended with `printf >>`, an hc or herdr state
-  change). Git Bash, or a filesystem without FIFOs: it polls as before.
+  change). A filesystem without FIFOs: it polls as before.
 - The watch's full round reads every task's `meta.json` with one `jq` instead of several per
   task, and skips closed tasks without one: at 50 live workers a round takes 0.5 s instead of
   1.3 s, and an idle watch 14% of a core instead of 27%.
@@ -280,10 +280,6 @@ are stable from 0.1.0.
     An unreachable machine keeps its last ships, marked stale.
   - **Cost.** The server collects off the request path, only while a radar page is open, with a
     change gate for this machine and process-group timeouts.
-  - **Windows.** On Git Bash the server, a native python, opens this machine's task files (the
-    panel's file links, the change gate) by their Windows paths, converted once each with Git
-    Bash's `cygpath`; it had opened the radar's `/c/...` and `/tmp/...` paths as given, so a file
-    link was a 404 and the gate never saw a task change.
   - **Machine label.** `CHARTROOM_MACHINE_NAME` labels this machine (default: the host name).
 - Relays between homes: XO-to-XO messages on one machine, with no daemon. `chartroom relay
   <home> [--re <id>] [--project P] [--from <this home>] <message|->` appends one record to the
@@ -312,7 +308,7 @@ are stable from 0.1.0.
   with the home they came from; bearings reads the open ones.
 - Several XOs on one machine: one home each (one per company or client, say), side by side.
   A home may keep its own `config` (`KEY=VALUE`, as the config file), which wins over
-  `~/.config/chartroom/config` for every key but `CHARTROOM_HOME` and `CHARTROOM_PLATFORM`.
+  `~/.config/chartroom/config` for every key but `CHARTROOM_HOME`.
   `chartroom init --name <n>` writes it with a workspace (`<n>-crew`) and a dashboard port (the
   next free from 4518) of the home's own, and adds the home to a list of homes, `homes` next to
   the config file (`name=path` lines). `chartroom homes [--json]` lists them (path, workspace,
@@ -504,26 +500,6 @@ are stable from 0.1.0.
   once as `exited` and wakes `watch`. `doctor` lists `joined:claude` and `joined:codex` with
   their steering. New config: `CHARTROOM_JOIN_ACK_WAIT` (seconds `steer` waits for the read,
   default 20).
-- Windows. WSL2 works as Linux does. Git Bash (Git for Windows) runs the core, the
-  `headless`, `command` and `subagent` backends and the dashboard:
-  - `install.sh` writes a launcher script where `ln -s` copies.
-  - `install-skills` links with directory junctions.
-  - A native `jq.exe` gets its arguments unconverted (MSYS would rewrite a path-looking
-    `--arg` value into `C:/...`), with file operands passed as Windows paths, and its CRLF
-    output is turned off with `--binary`.
-  - `headless:claude` reads a pipe and steers between runs.
-  - `stop` ends the worker's Windows process tree.
-  - The dashboard runs under a native python (`python3`, `python` or `py -3`, never the
-    Microsoft Store stub). It gets Windows paths and bash, and is tracked by its Windows pid.
-    `--host` and `--expose` work there too: it asks Windows for its addresses (no `ifconfig`),
-    and its log is LF.
-  - `dashboard open` uses `start`, or on WSL `wslview` or PowerShell.
-
-  herdr is off on Git Bash unless `CHARTROOM_HERDR_ANY_OS=1`, and `chartroom join` is off there
-  (a native agent is outside Git Bash's process tree; WSL2 joins). `doctor` prints the platform and
-  notes on Windows only (`--json` adds `platform` and `notes` there); macOS and Linux output is
-  unchanged. `CHARTROOM_PLATFORM` overrides the detection. README: a Windows section. CI: a
-  windows-latest job (Git Bash: bats, install, and a native-process smoke test).
 - A rulings ledger. `chartroom rule add --topic <slug> "<text>"` appends the commander's
   lasting preference to `rulings.log` (`<ts> [r-xxxx] topic=... supersedes=... src=... :: text`,
   append-only); the newest ruling in a topic wins and records the one it supersedes, and the
@@ -590,8 +566,17 @@ are stable from 0.1.0.
   creates it (never overwrites), `chartroom status` prints a one-line count of open items,
   the XO skill keeps it current, and `bearings` folds its waiting items into "Needs you".
 
+### Removed
+- Windows support, in WSL2 and in Git Bash: chartroom runs on macOS and Linux only. WSL2 is not
+  special-cased any more, so `dashboard open` there uses only `CHARTROOM_OPENER` or `xdg-open`,
+  and `doctor` no longer reports its platform or notes (`platform` and `notes` in `--json`).
+  Gone with it: the `CHARTROOM_PLATFORM`, `CHARTROOM_HERDR_ANY_OS` and `CHARTROOM_HC_ANY_OS`
+  settings, the dashboard server's `--bash` flag, the Windows CI job, `install.sh`'s launcher
+  script (where `ln -s` fails, it now stops), and `install-skills`' directory junctions and marked
+  copies. Output and behaviour on macOS and Linux are otherwise unchanged.
+
 ### Fixed
-- Every chartroom command starts with far fewer processes, which Git Bash makes slow: the config
+- Every chartroom command starts with far fewer processes: the config
   file and the home's own config are read once, and the twenty-odd settings each run reads are
   set without a `$(...)`. Each setting forked twice, and ran a three-process `sed` pipeline when a
   config file exists: `chartroom version` forked 44 times (98 forks and 61 programs with a
@@ -685,10 +670,9 @@ are stable from 0.1.0.
   JSON API is unchanged.
 
 ### Fixed
-- Checkouts are LF whatever `core.autocrlf` says (`.gitattributes`). Git for Windows' default
-  CRLF checkout stopped `bin/chartroom` at its first line.
-- A config file with CRLF line endings, saved by a Windows editor, no longer leaves a CR on
-  every value.
+- Checkouts are LF whatever `core.autocrlf` says (`.gitattributes`). A CRLF checkout stopped
+  `bin/chartroom` at its first line.
+- A config file with CRLF line endings no longer leaves a CR on every value.
 - The dashboard's compiled python cache is no longer tracked.
 
 ## [0.1.0] - 2026-10-05

@@ -383,7 +383,6 @@ cmd_sweep() {
   done
   [[ "$CR_SWEEP_IDLE_HOURS" =~ ^[0-9]+$ ]] || die "--idle-hours (CHARTROOM_SWEEP_IDLE_HOURS) must be a whole number of hours"
   [[ "$(cfg SWEEP_SETTLE_MINUTES '' 60)" =~ ^[0-9]+$ ]] || die "CHARTROOM_SWEEP_SETTLE_MINUTES must be a whole number of minutes"
-  [[ "$CR_PLATFORM" != msys ]] || die "chartroom sweep is unavailable on Git Bash (its ps cannot list working directories or argv); run it in WSL2"
   [[ -d "$CR_HOME/tasks" ]] || die "no chartroom home at $CR_HOME ($CR_HOME_SOURCE); pass the right one as CHARTROOM_HOME=<path>"
   local plan
   plan="$(sweep_plan)"

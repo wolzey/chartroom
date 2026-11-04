@@ -14,7 +14,6 @@ setup() {
   export CHARTROOM_MACHINE_NAME="Test Mac"
   SSHD="$BATS_TEST_TMPDIR/ssh"; mkdir -p "$SSHD"
   PY="$(type -P python3 || true)"
-  case "${OSTYPE:-}" in msys*|cygwin*) PY="${CR_TEST_PYTHON:-}" ;; esac
 }
 
 teardown() {
@@ -297,8 +296,7 @@ r-old-2 working underway" ]
   CHARTROOM_HOME="$A" cr init --name acme >/dev/null
   use_fake herdr
   export FAKE_HERDR_DIR="$BATS_TEST_TMPDIR/herdr"; mkdir -p "$FAKE_HERDR_DIR"; herdr_sock_up
-  # (Git Bash: the cwd as given, not turned into C:/... on its way to a native jq.exe)
-  MSYS2_ARG_CONV_EXCL='*' jq -n --arg a "$A" '{result: {agents: [
+  jq -n --arg a "$A" '{result: {agents: [
     {agent: "claude", agent_status: "working", cwd: $a, pane_id: "w1:p1", terminal_title_stripped: "XO session"},
     {agent: "claude", agent_status: "idle", cwd: ($a + "/worktrees/x"), pane_id: "w1:p2", name: "t-x"}]}}' >"$FAKE_HERDR_DIR/agent-list.json"
   run env CHARTROOM_HOME="$A" "$CHARTROOM" radar --json
@@ -350,12 +348,11 @@ r-old-2 working underway" ]
 # ---------------------------------------------------------------- the server
 
 need_python() { [[ -n "$PY" ]] || skip "python3 not available"; link_tool "$PY" python3; }
-CURL_MAX=10; case "${OSTYPE:-}" in msys*|cygwin*) CURL_MAX=60 ;; esac
+CURL_MAX=10
 get() { curl -s --max-time "$CURL_MAX" "$@"; }
 code() { curl -s -o /dev/null --max-time "$CURL_MAX" -w '%{http_code}' "$@"; }
-# Poll /api/radar (curl args, then a jq condition) until the condition holds: ~40s at most, ~120s
-# on Git Bash (every process start is expensive there, as CURL_MAX says).
-RADAR_POLLS=80; case "${OSTYPE:-}" in msys*|cygwin*) RADAR_POLLS=240 ;; esac
+# Poll /api/radar (curl args, then a jq condition) until the condition holds: ~40s at most.
+RADAR_POLLS=80
 radar_until() {
   local cond="${*: -1}" i out
   for i in $(seq 1 "$RADAR_POLLS"); do
@@ -366,8 +363,7 @@ radar_until() {
   echo "timed out waiting for $cond; last: $out" >&2; return 1
 }
 # The ssh calls the requests made: every call but the collector's own status reads, which go on
-# in the background while a page watches, so a count of every call can move between two requests
-# (on Git Bash, where each request is a slow process start, often enough to fail a run).
+# in the background while a page watches, so a count of every call can move between two requests.
 request_ssh() { grep -vc ' chartroom status --json --all-homes$' "$SSHD/calls.log" || true; }
 
 @test "server: /radar and /api/radar merge every machine; peek and file serve only what the radar shows" {

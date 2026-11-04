@@ -66,7 +66,7 @@ claude_legacy_session() { # <id> <agent pid> <cwd> -> the session id, or nothing
 
 # ---------------------------------------------------------------- the agent's processes
 # This user's processes as "pid ppid args" lines. CHARTROOM_PS_FILE stands in a process table
-# (the tests), as CHARTROOM_PROC does for kill_tree.
+# (the tests).
 park_ps() {
   if [[ -n "${CHARTROOM_PS_FILE:-}" ]]; then cat "$CHARTROOM_PS_FILE"; else ps -ww -A -o pid=,ppid=,args= 2>/dev/null; fi
 }

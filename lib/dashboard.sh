@@ -25,33 +25,15 @@ dashboard_url() { # <host> <port> [path]
   printf 'http://%s:%s/%s%s\n' "$(dashboard_local_host "$1")" "$2" "${3:-}" "$t"
 }
 
-# The dashboard's python as an argv prefix, in CR_PY (empty when there is none). Git Bash
-# rarely has a python3 (python.org installs python and py), and the Microsoft Store's
-# python3.exe stub is on PATH but only opens the Store, so there a candidate must run.
+# The dashboard's python as an argv prefix, in CR_PY (empty when there is none).
 CR_PY=()
 find_python() {
-  local c b try
+  local b
   CR_PY=()
-  if [[ "$CR_PLATFORM" != msys ]]; then
-    b="$(bin_of python3)"; [[ -n "$b" ]] && CR_PY=("$b"); return 0
-  fi
-  for c in python3 python py; do
-    b="$(bin_of "$c")"; [[ -n "$b" ]] || continue
-    try=("$b"); [[ "$c" == py ]] && try+=(-3)
-    if "${try[@]}" -c 'import sys; sys.exit(sys.version_info < (3, 8))' >/dev/null 2>&1; then CR_PY=("${try[@]}"); return 0; fi
-  done
+  b="$(bin_of python3)"; [[ -n "$b" ]] && CR_PY=("$b")
   return 0
 }
-python_missing() {
-  if [[ "$CR_PLATFORM" == msys ]]; then
-    echo "the dashboard needs python 3.8+ (a python3, python or py -3 that runs; the Microsoft Store stub does not count); 'chartroom dashboard --json' works without it"
-  else echo "the dashboard needs python3 (standard library only); 'chartroom dashboard --json' works without it"; fi
-}
-
-# Git Bash: a Windows process's command line (empty when there is no such process).
-win_cmdline() { # <windows pid>
-  powershell.exe -NoProfile -NonInteractive -Command "(Get-CimInstance Win32_Process -Filter 'ProcessId=$1').CommandLine" 2>/dev/null || true
-}
+python_missing() { echo "the dashboard needs python3 (standard library only); 'chartroom dashboard --json' works without it"; }
 
 # Open inbox.md items as JSON: {waiting:[{short_id,date,project,text}], approvals:[...]}. Same
 # rules as inbox_line: bullets under "## Waiting ..." / "## Approvals ...", "(none)" excluded.
@@ -136,15 +118,8 @@ dashboard_running() { # -> prints "pid port host" when a dashboard for this home
   read -r pid port host <"$f" || true
   # A stale file's pid may now belong to something else (after a reboot): never claim or
   # signal a process that is not this server.
-  if [[ "$CR_PLATFORM" == msys ]]; then
-    # Native python wrote its Windows pid, which kill -0 and Git Bash's ps cannot see.
-    port="${port%$'\r'}"; host="${host%$'\r'}"
-    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-    win_cmdline "$pid" | grep -qE 'dashboard[/\\]server\.py' || return 1
-  else
-    pid_alive "$pid" || return 1
-    ps -p "$pid" -o command= 2>/dev/null | grep -q 'dashboard/server\.py' || return 1
-  fi
+  pid_alive "$pid" || return 1
+  ps -p "$pid" -o command= 2>/dev/null | grep -q 'dashboard/server\.py' || return 1
   printf '%s %s %s\n' "$pid" "$port" "${host:-127.0.0.1}"
 }
 
@@ -154,12 +129,9 @@ dashboard_stop() {
     [[ -f "$f" ]] && rm -f "$f"
     echo "dashboard not running"; return 0
   fi
-  if [[ "$CR_PLATFORM" == msys ]]; then taskkill //F //PID "$pid" >/dev/null 2>&1 || true
-  else
-    kill "$pid" 2>/dev/null || true
-    for i in $(seq 1 50); do pid_alive "$pid" || break; sleep 0.1; done
-    pid_alive "$pid" && { kill -9 "$pid" 2>/dev/null || true; }
-  fi
+  kill "$pid" 2>/dev/null || true
+  for i in $(seq 1 50); do pid_alive "$pid" || break; sleep 0.1; done
+  pid_alive "$pid" && { kill -9 "$pid" 2>/dev/null || true; }
   rm -f "$f"
   echo "dashboard stopped (pid $pid, port $port$([[ "$host" == 127.0.0.1 ]] || echo ", host $host"))"
 }
@@ -177,8 +149,7 @@ PY
 # `dashboard open`: reuse this home's dashboard when it answers, else start one as a daemon
 # (a stale pid file, or a server that stopped answering, is replaced), then open its URL (at
 # CR_DASHBOARD_PATH, when set: `artifact open` opens the page viewer)
-# with CHARTROOM_OPENER, else `open` (macOS) or `xdg-open`, else on WSL `wslview` or
-# PowerShell's Start-Process and on Git Bash `start`; without any, print it. A lock
+# with CHARTROOM_OPENER, else `open` (macOS) or `xdg-open`; without any, print it. A lock
 # in the home keeps two concurrent calls from starting two servers.
 dashboard_open() { # [daemon args...]
   local lock="$CR_HOME/.dashboard.lock" i pid p h url opener owner
@@ -214,19 +185,11 @@ dashboard_open() { # [daemon args...]
   opener="$(cfg OPENER '' '')"
   if [[ -z "$opener" ]]; then
     if [[ "$(uname -s)" == Darwin && -n "$(bin_of open)" ]]; then opener=open
-    elif [[ -n "$(bin_of xdg-open)" ]]; then opener=xdg-open
-    elif [[ "$CR_PLATFORM" == wsl && -n "$(bin_of wslview)" ]]; then opener=wslview
-    elif [[ "$CR_PLATFORM" == wsl && -n "$(bin_of powershell.exe)" ]]; then opener=open_url_powershell
-    elif [[ "$CR_PLATFORM" == msys ]]; then opener=open_url_start; fi
+    elif [[ -n "$(bin_of xdg-open)" ]]; then opener=xdg-open; fi
   fi
   if [[ -n "$opener" ]] && $opener "$url" >/dev/null 2>&1; then echo "dashboard open: $url"
   else echo "dashboard running: $url (no browser opener found; open it yourself)"; fi
 }
-
-# Windows browser openers. The URL is http://<address>:<port>/, with ?token= when exposed: a
-# URL-safe token, so nothing in it reads as cmd or PowerShell syntax.
-open_url_powershell() { powershell.exe -NoProfile -NonInteractive -Command "Start-Process '$1'"; }
-open_url_start() { cmd //c start "" "$1"; }
 
 cmd_dashboard() {
   local port open=0 daemon=0 json=0 prs_file="" gh=1 theme host token=1
@@ -275,19 +238,12 @@ cmd_dashboard() {
     die "a dashboard for $CR_HOME is already running: http://$(dashboard_local_host "$h"):$p (pid $pid); 'chartroom dashboard stop' first"
   fi
   mkdir -p "$CR_HOME"
-  # Paths in Windows form for a native python on Git Bash (unchanged elsewhere), which also
-  # cannot run bin/chartroom, a bash script, without being handed bash.
-  local args=("$(win_path "$CR_ROOT/lib/dashboard/server.py")" --port "$port" --pidfile "$(win_path "$(dashboard_pidfile)")" --bin "$(win_path "$CR_BIN")")
-  # (Git Bash's own bash.exe: $BASH may be a wrapper script, which python cannot run either.)
-  if [[ "$CR_PLATFORM" == msys ]]; then
-    local b="$BASH"; [[ -e /usr/bin/bash.exe ]] && b=/usr/bin/bash.exe
-    args+=(--bash "$(win_path "$b")")
-  fi
+  local args=("$CR_ROOT/lib/dashboard/server.py" --port "$port" --pidfile "$(dashboard_pidfile)" --bin "$CR_BIN")
   [[ $open -eq 1 ]] && args+=(--open)
   [[ $gh -eq 0 ]] && args+=(--no-gh)
   args+=(--theme "$theme" --host "$host")
   [[ $token -eq 0 ]] && args+=(--no-token)
-  CHARTROOM_HOME="$(win_path "$CR_HOME")"; export CHARTROOM_HOME
+  export CHARTROOM_HOME="$CR_HOME"
   if [[ $daemon -eq 0 ]]; then exec "${CR_PY[@]}" "${args[@]}"; fi
   local log="$CR_HOME/.dashboard.log" i
   # the log carries the token's URL when the server is exposed: private to the owner
@@ -295,10 +251,7 @@ cmd_dashboard() {
   ( umask 077; nohup "${CR_PY[@]}" "${args[@]}" >"$log" 2>&1 </dev/null & echo $! >"$log.pid" )
   local child; child="$(cat "$log.pid")"; rm -f "$log.pid"
   for i in $(seq 1 100); do
-    # On Git Bash $! is an MSYS pid and the pid file holds python's Windows pid, so a server
-    # that could not start (bind its port, make its token) shows only in its log.
-    [[ "$CR_PLATFORM" == msys ]] && grep -q '^chartroom dashboard: cannot' "$log" 2>/dev/null && break
-    if read -r pid p h < <(dashboard_running) && [[ "$pid" == "$child" || "$CR_PLATFORM" == msys ]]; then
+    if read -r pid p h < <(dashboard_running) && [[ "$pid" == "$child" ]]; then
       if [[ "$h" == 127.* ]]; then
         echo "dashboard running: http://$h:$p (pid $pid; log $log; stop with: chartroom dashboard stop)"
       else
@@ -310,7 +263,7 @@ cmd_dashboard() {
       fi
       return 0
     fi
-    [[ "$CR_PLATFORM" == msys ]] || pid_alive "$child" || break
+    pid_alive "$child" || break
     sleep 0.1
   done
   tail -n 20 "$log" >&2 2>/dev/null || true

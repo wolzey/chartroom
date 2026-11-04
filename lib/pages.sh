@@ -119,9 +119,7 @@ page_chrome() {
     p="$(bin_of "$c")"; [[ -n "$p" ]] && { printf '%s' "$p"; return 0; }
   done
   for p in "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" "$HOME/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
-           "/Applications/Chromium.app/Contents/MacOS/Chromium" "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge" \
-           "/c/Program Files/Google/Chrome/Application/chrome.exe" "/c/Program Files (x86)/Google/Chrome/Application/chrome.exe" \
-           "/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"; do
+           "/Applications/Chromium.app/Contents/MacOS/Chromium" "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"; do
     [[ -f "$p" && -x "$p" ]] && { printf '%s' "$p"; return 0; }
   done
   return 0
@@ -147,7 +145,7 @@ page_chrome_reap() { # <profile dir>
 # size last, scripts off, in a throwaway profile. Writes <out> only once a PDF came out, and leaves
 # no Chrome running.
 page_print() { # <page file> <out pdf> <css page size>
-  local chrome tmp t u i pid secs why
+  local chrome tmp u i pid secs why
   chrome="$(page_chrome)"
   [[ -n "$chrome" ]] || die "$(page_chrome_missing)"
   secs="$(cfg PDF_TIMEOUT '' 60)"
@@ -156,17 +154,17 @@ page_print() { # <page file> <out pdf> <css page size>
   cp -- "$1" "$tmp/page.html"
   page_csp_insert "$tmp/page.html"
   printf '\n<style>@page { size: %s; }</style>\n' "$3" >>"$tmp/page.html"
-  t="$(win_path "$tmp")"; u="$t/page.html"; [[ "$u" == /* ]] || u="/$u"; u="${u// /%20}"
-  "$chrome" "${PAGE_CHROME_FLAGS[@]}" "--user-data-dir=$t/profile" "--print-to-pdf=$t/out.pdf" "file://$u" \
+  u="$tmp/page.html"; u="${u// /%20}"
+  "$chrome" "${PAGE_CHROME_FLAGS[@]}" "--user-data-dir=$tmp/profile" "--print-to-pdf=$tmp/out.pdf" "file://$u" \
     >"$tmp/chrome.log" 2>&1 </dev/null &
   pid=$!
   for ((i = 0; i < secs * 10; i++)); do pid_alive "$pid" || break; sleep 0.1; done
   if pid_alive "$pid"; then
-    kill "$pid" 2>/dev/null || true; page_chrome_reap "$t/profile"; rm -rf "$tmp"
+    kill "$pid" 2>/dev/null || true; page_chrome_reap "$tmp/profile"; rm -rf "$tmp"
     die "Chrome did not finish printing within ${secs}s (CHARTROOM_PDF_TIMEOUT; $chrome)"
   fi
   wait "$pid" 2>/dev/null || true
-  page_chrome_reap "$t/profile"
+  page_chrome_reap "$tmp/profile"
   if [[ "$(head -c 5 "$tmp/out.pdf" 2>/dev/null || true)" != %PDF- ]]; then
     why="$(grep -vE '^\[[0-9:/.]+:' "$tmp/chrome.log" | grep -v '^[[:space:]]*$' | tail -1 || true)"
     rm -rf "$tmp"

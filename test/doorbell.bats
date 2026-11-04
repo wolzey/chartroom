@@ -1,12 +1,10 @@
 #!/usr/bin/env bats
 # The doorbell (lib/core.sh): watch and listen wait on a FIFO of their own, and whatever writes
 # a record rings it, so a wake comes at once instead of at the next round. Each watch here runs
-# with a 30 s fallback round, so only a ring can wake it within the test's 2 s. Git Bash has no
-# doorbell (test/windows.bats); the real Windows job would wait out the fallback here.
+# with a 30 s fallback round, so only a ring can wake it within the test's 2 s.
 
 load test_helper
 setup() {
-  case "${OSTYPE:-}" in msys*|cygwin*) skip "no doorbell on Git Bash: it polls (test/windows.bats)" ;; esac
   common_setup
   A="$BATS_TEST_TMPDIR/acme"; B="$BATS_TEST_TMPDIR/globex"
   CHARTROOM_HOME="$A" cr init --name acme >/dev/null

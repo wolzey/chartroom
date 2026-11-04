@@ -18,7 +18,6 @@ setup() { common_setup; }
 }
 
 @test "install-skills never replaces a real directory or a foreign symlink" {
-  real_symlinks || skip "ln -s does not make symlinks here"
   mkdir -p "$HOME/.claude/skills/chartroom" "$HOME/.agents/skills"
   ln -s /tmp "$HOME/.agents/skills/bearings"
   run cr install-skills --claude --agents
@@ -48,8 +47,7 @@ setup() { common_setup; }
   export CHARTROOM_REPO="$src" CHARTROOM_REF=main
   run bash "$REPO_ROOT/install.sh"
   [ "$status" -eq 0 ]
-  if real_symlinks; then [ -L "$HOME/.local/bin/chartroom" ]
-  else grep -qx '# chartroom launcher, written by install.sh' "$HOME/.local/bin/chartroom"; fi
+  [ -L "$HOME/.local/bin/chartroom" ]
   [[ "$output" == *"installed chartroom"* ]]
   [ -f "$CHARTROOM_HOME/commander.md" ]
   run "$HOME/.local/bin/chartroom" version
@@ -57,6 +55,10 @@ setup() { common_setup; }
   run bash "$REPO_ROOT/install.sh"
   [ "$status" -eq 0 ]
   [[ "$output" == *"updating"* ]]
+  rm "$HOME/.local/bin/chartroom"; echo 'echo mine' >"$HOME/.local/bin/chartroom"
+  run bash "$REPO_ROOT/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"exists and is not a symlink; not replacing it"* ]]
 }
 
 @test "install.sh refuses to overwrite a non-checkout" {

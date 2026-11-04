@@ -6,7 +6,6 @@
 load test_helper
 setup() {
   common_setup
-  case "${OSTYPE:-}" in msys*|cygwin*) skip "hc is unverified on Git Bash (its guard: windows.bats)" ;; esac
   use_fake hc herdr-app claude
   export FAKE_HC_DIR="$BATS_TEST_TMPDIR/hc" FAKE_HERDR_APP_DIR="$BATS_TEST_TMPDIR/app"
   mkdir -p "$FAKE_HC_DIR" "$FAKE_HERDR_APP_DIR"
