@@ -111,6 +111,11 @@ herdr_clear_stale() { # <id>
   log_event "$id" note "closed the stale herdr tab $tab left by an earlier start ($st)"
 }
 
+herdr_brief_waits() { # <id> <agent> <tab>
+  meta_set "$1" brief_pending 1; meta_set "$1" herdr_launched 1
+  echo "herdr $2 worker waiting at a startup dialog chartroom will not answer: answer it in herdr tab $3 (chartroom attach $1); the watch delivers its brief once it clears"
+}
+
 herdr_launch() { # <id> <wt> <agent>
   local id="$1" wt="$2" agent="$3" ws pane tab
   herdr_clear_stale "$id"; meta_set "$id" herdr_launched ""
@@ -137,10 +142,16 @@ herdr_launch() { # <id> <wt> <agent>
     sleep 0.5
   done
   sleep 1
-  if ! handle_trust "$id" "$agent" herdr_screen herdr_keys && [[ $blocked -eq 1 ]]; then
-    die "the $agent worker is waiting at a startup dialog chartroom will not answer; answer it in herdr tab $tab, then dispatch $id again"
-  fi
+  # Never prompted through a dialog (herdr reads Codex's hooks dialog as idle): the text is dropped
+  # and Enter answers it. The watch delivers the brief once it clears (lib/stuck.sh).
+  if ! startup_dialogs "$id" "$agent" herdr_screen herdr_keys; then herdr_brief_waits "$id" "$agent" "$tab"; return 0; fi
   herdr agent wait "$id" --until idle --until "done" --timeout 30000 >/dev/null 2>&1 || true
+  if ! startup_dialogs "$id" "$agent" herdr_screen herdr_keys; then herdr_brief_waits "$id" "$agent" "$tab"; return 0; fi
+  # A dialog neither of us can name: herdr says it is blocked, which is enough not to prompt through it.
+  if [[ $blocked -eq 1 && "$(herdr_status "$id")" == blocked ]]; then
+    prompt_sync "$id" "herdr: the agent is blocked at a startup dialog; a human must answer it"
+    herdr_brief_waits "$id" "$agent" "$tab"; return 0
+  fi
   local rc=0; herdr_deliver "$id" "$(task_prompt "$id")" || rc=$?
   [[ $rc -eq 1 ]] && die "agent started but did not take the brief; inspect tab $tab"
   meta_set "$id" herdr_launched 1
@@ -152,6 +163,7 @@ herdr_live() {
   local st; st="$(herdr_status "$1")"; echo "${st:-gone}"
 }
 herdr_steer() {
+  steer_guard herdr "$1"
   log_event "$1" steered "$2"
   local text rc=0; text="$(steer_text "$1" "$2")"
   herdr_deliver "$1" "$text" || rc=$?
@@ -169,8 +181,10 @@ herdr_watch() { # <id>
   herdr_handle_set "$id" || return 0
   herdr_watch_status "$id"; st="${HERDR_W:-gone}"
   if [[ "$st" != "${HST[$id]:-}" ]]; then
+    # (Recorded, so the log's account of a prompt ends with it: lib/stuck.sh reads it.)
+    if [[ "${HST[$id]:-}" == blocked && "$st" != gone ]]; then prompt_sync "$id" ""; fi
     case "$st" in
-      blocked) wake "$id" "herdr: agent is waiting on an approval or question prompt" ;;
+      blocked) log_event "$id" agent "awaiting-input: herdr: agent is waiting on an approval or question prompt" ;;
       idle|done) [[ "${HST[$id]:-}" == working ]] && ! reported_since_dispatch "$id" && wake "$id" "herdr: agent stopped its turn without reporting" ;;
       gone) [[ -n "${HST[$id]:-}" ]] && wake "$id" "lost: herdr agent is no longer running" ;;
     esac

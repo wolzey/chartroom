@@ -9,7 +9,7 @@ names still work: `codex` = `headless:codex`, `herdr-claude` = `herdr:claude`,
 
 `chartroom doctor` shows every backend, whether it can run here, why not, and how it steers.
 Last verified against: claude 2.1.289 (joined: 2.1.293; hc: 2.1.314), codex-cli 0.158.0, herdr 0.9.1,
-hc (herdr-core) 0.1.14 with herdr-app 0.1.9, tmux 3.x (October 2026).
+hc (herdr-core) 0.1.14 with herdr-app 0.1.9 (hc:codex: hc 0.1.16), tmux 3.x (October 2026).
 cmux is implemented against its documented CLI but **unverified on a real cmux install**.
 
 ## Selection and fallback
@@ -64,6 +64,62 @@ alone and raised as `agent: awaiting-input`. chartroom never edits `~/.claude.js
 `-c projects."<path>".trust_level="trusted"` override does **not** suppress the dialog.)
 Headless runs (`claude -p`, `codex exec`) show no dialog.
 
+Codex then shows "Hooks need review" for any hook it has not seen: a project's `.codex/hooks.json`,
+in each new worktree (it trusts by path), and a per-run `-c hooks...` too. chartroom never trusts
+one, because hooks run outside the sandbox. By default it raises `agent: awaiting-input`, and
+`CHARTROOM_CODEX_HOOKS_DIALOG=skip` takes Esc instead, in a worktree chartroom created (the agent
+starts without those hooks; the log says so).
+
+**The brief is never typed at a dialog.** The text is dropped and Enter answers the dialog
+(verified on tmux, codex-cli 0.158.0). Dispatch exits 0 and says the worker is waiting. hc passes
+the brief as the agent's first prompt, which waits behind the dialog (verified: a skipped dialog,
+and the brief ran about 4 s later). tmux, cmux and herdr leave meta `brief_pending`, and the
+watch's next look delivers the brief once the dialog has gone: `note: the brief went in once the
+dialog cleared`, or `agent: awaiting-input: ...` if the agent does not confirm it.
+
+## Stuck workers (lib/stuck.sh)
+
+Each task the watch's full round covers gets a look at most every `CHARTROOM_LOOK_INTERVAL` (60 s):
+one read of its terminal, or the size of its output file, plus a few small forks. The look raises
+what the agent does not report itself, delivers a brief that waited behind a dialog, and runs the
+stall watchdog.
+
+| Stuck state | hc:claude | hc:codex | herdr | tmux, cmux | headless:*, command |
+|---|---|---|---|---|---|
+| Approval prompt | hc's `blocked`, at once | terminal title, pushed by `hc events`, at once | herdr's `blocked` (Codex: its own title rule) | Claude: `Notification` hook. Codex: title (tmux) or screen, within a look | cannot occur: no terminal |
+| Question | hc's `blocked` | a turn end (Codex asks in prose; `request_user_input` was not offered in the default mode) | herdr's `blocked` | Claude: hook. Codex: a turn end | a turn end or `exited` |
+| Trust or hooks dialog | at dispatch; later, the screen, within a look | same | at dispatch (herdr reads the hooks dialog as idle); later, the screen, within a look | at dispatch; Codex later, the screen, within a look | none shown |
+| Idle with no event | a turn end, then `stalled` | notify's turn end, then `stalled` | a turn end, then `stalled` | hook or notify, then `stalled` | `exited`, or `stalled` |
+| Wedged process | `stalled` | `stalled` | `stalled` | `stalled` | `stalled` |
+
+- **Prompts** log `agent: awaiting-input: <what>`, which wakes through the event scan, and
+  `agent: prompt-cleared` once gone, so status, the dashboard and a restarted or `--once` watch all
+  read the same record. Codex sets its terminal title to `[ . ] Action Required | ...` and
+  `[ ! ] ...` in turn while an approval is up (verified on codex-cli 0.158.0). `hc events` carries each
+  title change, many a second under its spinner, so the stream's jq reduces them to the one fact
+  that matters. Only an overlay's own footer on a screen's last lines counts, never the same words in a
+  transcript. A `PermissionRequest` hook also fires at once (verified), but a per-run hook raises
+  the "Hooks need review" dialog itself, at every dispatch, unless the commander trusts it, so
+  chartroom does not use one.
+- **`steer` refuses a Codex worker at a prompt.** Typed text and Enter at its approval overlay
+  approve the command (verified through `hc send`, which does not refuse because hc does not
+  know Codex is blocked).
+- **Stalled**: a task whose state is `working`, with no open `waiting`, not parked, not at a prompt
+  already raised, whose output and non-note events have not changed for `CHARTROOM_STALL_MINUTES`
+  (10; `0` turns it off), wakes once as `stalled: no output or events for N min ... Last output:
+  ...`, recorded as a `note`, like `waiting overdue`. New output or an event re-arms it, and
+  `tasks/<id>/.stall` keeps its place across restarts. What ticks by itself does not count as
+  output: elapsed times, a clock, spinner glyphs, Claude's rotating verb and tip, and any working line
+  with `esc to interrupt`. Claude's token count does count, since it moves when the model does.
+  A real Codex waiting on a background command prints a new line about once a minute (verified), so
+  it does not stall.
+- **A long command**: from the point the stall is due, the CPU of what runs under the agent (its
+  tools; not the agent's own processes) is sampled per look. At 10% of a core or more, it is at
+  work and the wake waits, up to `CHARTROOM_STALL_BUSY_MAX_MINUTES` (60), when it fires anyway and
+  says `still using CPU`. A command that is idle (a `sleep`, a hung network call) fires on time.
+  cmux cannot name a root process, so it has no such check.
+- Not covered: `joined` (the commander's own session) and `subagent` (the host's).
+
 ## hc:<agent> (the Herdr app; first in the default order)
 
 The Herdr desktop app (`herdr-app`) shows only terminals run by herdr-core (`hc`), a different
@@ -96,29 +152,35 @@ program from the `herdr` CLI/server below; workers on `herdr:*` never appear in 
 - The brief's delivery is confirmed by Claude's `UserPromptSubmit` hook, which fires for a first
   prompt given as an argument too (verified), so claude gets only that hook (`prompt` mode, as on
   herdr). Codex gets `--no-daemon` (hc's manual: otherwise its commands run outside hc) and keeps
-  its `notify` hook for turn ends, because whether hc sees Codex's turns is unverified (hc has no
-  Codex integration of its own; a program reports its state itself). Its brief counts as taken
-  once hc reports it working or a turn, an agent event arrives, or its screen shows it working.
-  **hc:codex is implemented against fakes only; not yet run against a real codex under hc.**
+  its `notify` hook for turn ends: hc reports no status and no turns for Codex (verified on hc
+  0.1.16 and codex-cli 0.158.0; a program reports its state itself, and Codex does not). Its brief
+  counts as taken once an agent event arrives or its screen shows it working. Codex's own
+  title-generator thread fires notify too, with a first input message of "Generate a concise,
+  single-line task title": chartroom ignores it, as neither a turn end nor the worker's thread.
 - Trust dialog: the same policy as every session runner (screen from `hc read`, keys from
-  `hc keys`). hc reports no status while the dialog is up. A dialog chartroom will not answer
-  leaves the worker waiting with its brief queued as its first prompt (Claude runs it once the
-  dialog is answered, verified): dispatch says so and exits 0, and the `awaiting-input` event wakes
-  the XO.
+  `hc keys`). hc reports no status while the dialog is up. A dialog chartroom will not answer,
+  Codex's "Hooks need review" among them, leaves the worker waiting with its brief queued as its
+  first prompt (Claude and Codex run it once the dialog is answered, verified): dispatch says so
+  and exits 0, and the `awaiting-input` event wakes the XO. Dispatch keeps looking for a dialog
+  until the brief is taken, so one that comes up late, or right after the one it answered, is
+  caught too.
 - `steer` = `hc send` (paste, Enter once nobody is typing), confirmed by the prompt hook's
   signature as for tmux; without the hook, hc's `started` flag or a `working` status. A blocked
   agent (a permission or question dialog) is never typed into: hc refuses without `--force`,
-  and chartroom never passes it.
+  and chartroom never passes it. hc does not know a Codex is blocked, so chartroom refuses
+  that itself, from its title or screen.
 - `peek` = `hc read`; `stop` = `hc interrupt` (Esc, and hc reports what happened); `attach` =
   `herdr-app do agent.focus --terminal <t>` (with no window: `hc attach <t>` in a terminal);
   `close` saves the screen to `pane.log`, then `hc kill` and `hc rm`. The app drops a pane whose
   terminal ends and a tab whose last pane goes, window open or not (verified); a space goes with
   its last tab, and the next dispatch makes it again.
-- Wakes come from hc's own agent state: `blocked`, `error`, a turn ending (`idle`/`done`)
-  without a report, whether or not `watch` saw it `working` (hc counts turns), and the terminal
-  gone (`lost`; an agent that exited on its own wakes through the launcher's `exited` instead).
-  hc's states come from the agent itself (OSC 7501); Claude Code 2.1.314 reports them unprompted
-  (verified). A Codex turn end wakes through its notify event instead, so it never wakes twice.
+- Wakes come from hc's own agent state: `blocked` (as `agent: awaiting-input: hc: ...`), `error`,
+  a turn ending (`idle`/`done`) without a report, whether or not `watch` saw it `working` (hc counts
+  turns), and the terminal gone (`lost`; an agent that exited on its own wakes through the
+  launcher's `exited` instead). hc's states come from the agent itself (OSC 7501); Claude Code
+  2.1.314 reports them unprompted (verified). Codex reports none: its turn end wakes through its
+  notify event, and its approval prompts through its terminal title (see Stuck workers), which reads
+  as `blocked` while up.
 - hc pushes that state. While `watch` runs it keeps one `hc events --json --label
   chartroom.workspace=<workspace>`: a snapshot of the workspace's terminals, then a line per
   change (`status`, `turn`, `created`, `lost` then `restarted` or `finished`, `removed`; verified
@@ -191,9 +253,12 @@ program from the `herdr` CLI/server below; workers on `herdr:*` never appear in 
   `agent_pane_busy`. Extra agent flags (sandbox, model, `--add-dir`) are passed after `--`.
 - A prompt sent while Claude's startup splash is still up is dropped. chartroom waits for idle,
   then confirms delivery (status `working`, or the text visible) and retries up to 4 times.
-- Wakes come from herdr's own agent state: `blocked` (prompt up), a `working` agent going
-  `idle`/`done` without a report, and an agent that is `gone`. Each round asks once, `herdr agent
-  list`, for every herdr task (a herdr without it: `agent get` per task).
+- Wakes come from herdr's own agent state: `blocked` (prompt up, as `agent: awaiting-input:
+  herdr: ...`), a `working` agent going `idle`/`done` without a report, and an agent that is
+  `gone`. Each round asks once, `herdr agent list`, for every herdr task (a herdr without it:
+  `agent get` per task). herdr 0.9.5's rules read Codex's approval overlay as `blocked` and its
+  "Hooks need review" dialog as `idle` (verified with `herdr agent explain` on real screens), so
+  that dialog is told from the screen.
 - No server, no herdr command: chartroom looks for herdr's socket in bash first
   (`$HERDR_SOCKET_PATH`, else `$XDG_CONFIG_HOME/herdr/sessions/<HERDR_SESSION>/herdr.sock`, else
   `~/.config/herdr/herdr.sock`, as herdr 0.9.5 reports them). Without it every herdr agent is
@@ -225,9 +290,10 @@ program from the `herdr` CLI/server below; workers on `herdr:*` never appear in 
   pointer ("Message from the XO ...: read <file> and act on it."). Typing them was where text got
   cut (a newline submits early; a long paste races Enter). The confirmation then covers the
   pointer, not the agent's reading of the file.
-- Codex has no prompt-submitted or approval hook, so for Codex sessions delivery confirmation
-  reads the screen ("esc to interrupt") and cannot check the text: `steer` says `submitted, not
-  verified`, never `delivered`. Approval prompts are not signalled. This is weaker than Claude, and
+- Codex's prompt-submitted hook would need a review like any other (see the dialogs above), so for
+  Codex sessions delivery confirmation reads the screen ("esc to interrupt") and cannot check the
+  text: `steer` says `submitted, not verified`, never `delivered`. Its approval prompts come from
+  the pane's title and screen, within a look (see Stuck workers). This is weaker than Claude, and
   Codex may report an intermediate turn end while it is still working.
 - `attach` = `tmux attach` (or `switch-client` inside tmux). `close` kills the window.
 
@@ -235,8 +301,8 @@ program from the `herdr` CLI/server below; workers on `herdr:*` never appear in 
 
 - manaflow-ai/cmux. One cmux workspace titled `$CHARTROOM_WORKSPACE`, one surface (tab) per
   task (`workspace create --cwd --command`, then `new-surface`), created unfocused.
-- Same launcher, hooks and confirmation as tmux. Keys go through `send-key --force` so a
-  trust dialog can be answered. `peek` reads the screen (`read-screen --scrollback`); there is no
+- Same launcher, hooks and confirmation as tmux; a Codex prompt is told from the screen alone
+  (no title to read). Keys go through `send-key --force` so a trust dialog can be answered. `peek` reads the screen (`read-screen --scrollback`); there is no
   pipe-pane, so `close` snapshots the scrollback into `pane.log` before closing the surface.
 - cmux's default socket mode only accepts commands from processes started inside cmux. If
   the XO runs elsewhere, enable automation mode (cmux Settings, or
@@ -252,7 +318,8 @@ program from the `herdr` CLI/server below; workers on `herdr:*` never appear in 
 - Thread id from the first `thread.started` event; `steer` after the run runs
   `codex exec … resume <thread> "<message>"` with the full conversation (verified).
 - `model` / `effort` in meta map to `-m` and `model_reasoning_effort`.
-- The wrapper appends `exited: … (exit N)`; a process that dies without one is reported `lost`.
+- The wrapper appends `exited: … (exit N)`; a process that dies without one is reported `lost`. A
+  run whose `codex.jsonl` stops growing wakes as `stalled` (`claude.jsonl` for headless:claude).
 
 ## headless:claude
 
@@ -276,6 +343,8 @@ program from the `herdr` CLI/server below; workers on `herdr:*` never appear in 
 - `steer` re-runs it with `{prompt}` = the message and `CHARTROOM_STEER` set.
   `steer --inbox` appends to `inbox.md` while it runs; the brief tells workers to read it after
   each milestone, but nothing guarantees they do.
+- A run whose `output.log` stops growing wakes as `stalled`, with its last lines; one still using
+  CPU waits, up to the cap (see Stuck workers).
 - This is also the test backend: `test/stub-agent` drives the whole lifecycle with no AI.
 
 ## subagent

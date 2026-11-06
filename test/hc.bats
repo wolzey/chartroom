@@ -310,7 +310,7 @@ watch_after() { # <change...>
   set_term t1 '.status.state = "blocked"'
   run cr watch --once --timeout 5
   [ "$status" -eq 0 ]
-  [ "$output" = "[$id] [proj] hc: agent is waiting on an approval or question prompt" ]
+  [[ "$output" == "[$id] [proj] "*" agent: awaiting-input: hc: agent is waiting on an approval or question prompt" ]]
   run cr watch --once --timeout 2
   [ "$status" -eq 124 ]
   grep -qx "@state:$id"$'\t'"blocked"$'\t'"1" "$CHARTROOM_HOME/.watch-cursor"
@@ -330,7 +330,7 @@ watch_after() { # <change...>
   [ "$output" = "[$id] [proj] hc: agent stopped its turn without reporting" ]
   set_term t1 '.status.state = "blocked"'
   run cr watch --once --timeout 5
-  [ "$output" = "[$id] [proj] hc: agent is waiting on an approval or question prompt" ]
+  [[ "$output" == "[$id] [proj] "*" agent: awaiting-input: hc: agent is waiting on an approval or question prompt" ]]
   run cr watch --once --timeout 2
   [ "$status" -eq 124 ]
   # a cursor from before it kept agent state (no @state lines) starts from the state now: a
@@ -424,7 +424,7 @@ wakes() { grep -c . "$BATS_TEST_TMPDIR/wake" || true; }
   [ "$status" -eq 124 ]
   # a prompt waiting for an answer (awaiting input)
   watch_after hc_event t1 status '{"status":{"app":"claude-code","kind":"permission","state":"blocked"}}' '.status = {app: "claude-code", state: "blocked"}'
-  grep -qx "\[$id\] \[proj\] hc: agent is waiting on an approval or question prompt" "$BATS_TEST_TMPDIR/wake"
+  grep -qE "^\[$id\] \[proj\] [^ ]+ agent: awaiting-input: hc: agent is waiting on an approval or question prompt$" "$BATS_TEST_TMPDIR/wake"
   [ "$(wakes)" -eq 1 ]
   # lost, then a shell in its place: one wake, as replaced (lost alone is held for what follows)
   watch_after agent_replaced
@@ -473,7 +473,7 @@ wakes() { grep -c . "$BATS_TEST_TMPDIR/wake" || true; }
   kill "$w"; wait "$w" || true
   for i in $(seq 1 20); do pgrep -f "$BIN/hc events" >/dev/null || break; sleep 0.1; done
   refute pgrep -f "$BIN/hc events"
-  grep -qx "\[$id\] \[proj\] hc: agent is waiting on an approval or question prompt" "$BATS_TEST_TMPDIR/wake"
+  grep -qE "^\[$id\] \[proj\] [^ ]+ agent: awaiting-input: hc: agent is waiting on an approval or question prompt$" "$BATS_TEST_TMPDIR/wake"
   refute grep -q '^get' "$FAKE_HC_DIR/calls.log"
   [ "$(wakes)" -eq 2 ]
 }

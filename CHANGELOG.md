@@ -6,7 +6,38 @@ are stable from 0.1.0.
 
 ## [Unreleased]
 
+### Fixed
+- A Codex worker at an approval prompt no longer sits unnoticed. hc reports no state for Codex and
+  its notify fires only at a turn's end, so nothing woke the XO (one sat 45 minutes). Its terminal
+  title says `Action Required` while an approval is up: hc:codex reads that from `hc events` at once,
+  tmux:codex from the pane's title, cmux:codex from the screen, each as
+  `agent: awaiting-input: Codex approval prompt: <command>`, then `agent: prompt-cleared`.
+- `steer` no longer approves a Codex prompt. Text and Enter at its approval overlay ran the command,
+  because the overlay drops the text and Enter takes "Yes, proceed", and `hc send` does not refuse
+  an agent hc does not know is blocked. `steer` now refuses while a Codex worker is at a prompt.
+- A dialog no longer loses a brief or misreports one. Codex's "Hooks need review", which every
+  dispatch into a repo with Codex hooks meets, went unrecognised: hc dispatch said "did not take
+  the brief" though it was queued, and tmux, cmux and herdr typed the brief at the dialog, which
+  drops the text and answers it with Enter. Dispatch now raises it as `agent: awaiting-input` and
+  exits 0; on tmux, cmux and herdr the watch delivers the brief once it clears (a herdr start blocked
+  at a dialog no longer fails the dispatch). It is never trusted; `CHARTROOM_CODEX_HOOKS_DIALOG=skip`
+  takes Esc instead, in a worktree chartroom created.
+- Codex's title-generator thread no longer reads as the worker ending its turn. Its notify logged a
+  false `agent: turn-ended`, which woke the XO as "stopped its turn without reporting" while the
+  worker was just starting, and recorded that thread's id as the worker's `thread_id`.
+
+### Changed
+- hc and herdr's own `blocked` state now wakes as `agent: awaiting-input: hc: ...` (or `herdr: ...`),
+  logged like every other prompt, not as a bare `hc: ...` line.
+
 ### Added
+- A stall watchdog: a task in flight (not `waiting`, not parked, not at a prompt already raised)
+  whose output and events have not changed for `CHARTROOM_STALL_MINUTES` (default 10; `0` turns it
+  off) wakes once as `stalled: no output or events for N min ... Last output: ...`, on hc, herdr,
+  tmux, cmux, headless and command. New output or an event re-arms it. What ticks by itself is not
+  output, and a command still using CPU holds the wake back, up to
+  `CHARTROOM_STALL_BUSY_MAX_MINUTES` (default 60). The watch looks at a task at most every
+  `CHARTROOM_LOOK_INTERVAL` seconds (default 60).
 - Idle hc:claude workers park, and resume on demand. A worker whose agent has been at rest for
   `CHARTROOM_PARK_AFTER_MINUTES` (default 60; `0` turns it off) is parked by the watch: its
   screen goes to `pane.log`, `note: parked (session <id>; ...)` is logged, and its terminal ends,

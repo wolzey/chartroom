@@ -229,7 +229,10 @@ lines"
   jq '.worktree_created="0"' "$CHARTROOM_HOME/tasks/$id2/meta.json" >"$BATS_TEST_TMPDIR/m" && mv "$BATS_TEST_TMPDIR/m" "$CHARTROOM_HOME/tasks/$id2/meta.json"
   : >"$FAKE_TMUX_DIR/calls.log"
   FAKE_TMUX_TASK="$id2" run cr dispatch "$id2"
-  ! grep -q "send-keys -t %2 Down" "$FAKE_TMUX_DIR/calls.log"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"waiting at a startup dialog chartroom will not answer"* ]]
+  ! grep -q "send-keys -t %2" "$FAKE_TMUX_DIR/calls.log" # no keys, and no brief typed at the dialog
+  [ "$(meta_of "$id2" brief_pending)" = 1 ]
   events "$id2" | grep -q "agent: awaiting-input: trust dialog for a folder chartroom did not create"
 }
 
@@ -341,11 +344,12 @@ herdr_trust_screen() {
   cr worktree "$id" >/dev/null
   jq '.worktree_created="0"' "$CHARTROOM_HOME/tasks/$id/meta.json" >"$BATS_TEST_TMPDIR/m" && mv "$BATS_TEST_TMPDIR/m" "$CHARTROOM_HOME/tasks/$id/meta.json"
   run cr dispatch "$id"
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"waiting at a startup dialog chartroom will not answer; answer it in herdr tab"* ]]
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"waiting at a startup dialog chartroom will not answer: answer it in herdr tab"*"the watch delivers its brief once it clears"* ]]
   ! grep -q "^agent send-keys" "$FAKE_HERDR_DIR/calls.log"
   ! grep -q "^agent prompt" "$FAKE_HERDR_DIR/calls.log"
   events "$id" | grep -q "agent: awaiting-input: trust dialog for a folder chartroom did not create"
+  [ "$(meta_of "$id" brief_pending)" = 1 ]
 }
 
 @test "trust answer keys per agent" {

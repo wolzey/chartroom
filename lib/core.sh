@@ -8,7 +8,8 @@ WORKER_KINDS='progress|waiting|decision|blocked|done|failed'
 #   note     bookkeeping (created, dispatched, worktree, fallbacks)
 #   steered  the XO sent the worker a message
 #   exited   a headless/command process ended (exit N)
-#   agent    an agent-native signal: "turn-ended", "awaiting-input: <why>", "prompt-received"
+#   agent    an agent-native signal: "turn-ended", "awaiting-input: <why>", "prompt-cleared",
+#            "prompt-received"
 CORE_KINDS='note|steered|exited|agent'
 EVENT_KINDS="$WORKER_KINDS|$CORE_KINDS"
 TERMINAL_KINDS='decision|blocked|done|failed'
@@ -199,6 +200,16 @@ load_config() {
   # Park a worker at rest this long (lib/park.sh); 0 turns automatic parking off.
   cfg_set CR_PARK_AFTER PARK_AFTER_MINUTES '' 60
   [[ "$CR_PARK_AFTER" =~ ^[0-9]+$ ]] || die "CHARTROOM_PARK_AFTER_MINUTES must be whole minutes (0: never park on its own)"
+  # A worker must not sit stuck unnoticed (lib/stuck.sh): how often the watch looks at a task's
+  # terminal, how long it may stay quiet (0: no stall wakes), how long a command still using CPU
+  # holds that wake back, and what a Codex "Hooks need review" dialog gets (ask: wake the XO;
+  # skip: Esc, in a worktree chartroom created; the hooks then do not run for that worker).
+  cfg_set CR_LOOK_INTERVAL LOOK_INTERVAL '' 60
+  cfg_set CR_STALL_MINUTES STALL_MINUTES '' 10
+  cfg_set CR_STALL_BUSY_MAX STALL_BUSY_MAX_MINUTES '' 60
+  [[ "$CR_STALL_MINUTES" =~ ^[0-9]+(\.[0-9]+)?$ && "$CR_STALL_BUSY_MAX" =~ ^[0-9]+(\.[0-9]+)?$ ]] || die "CHARTROOM_STALL_MINUTES and CHARTROOM_STALL_BUSY_MAX_MINUTES must be minutes, such as 10 (CHARTROOM_STALL_MINUTES=0: no stall wakes)"
+  cfg_set CR_CODEX_HOOKS_DIALOG CODEX_HOOKS_DIALOG '' ask
+  [[ "$CR_CODEX_HOOKS_DIALOG" =~ ^(ask|skip)$ ]] || die "CHARTROOM_CODEX_HOOKS_DIALOG must be ask or skip (got $CR_CODEX_HOOKS_DIALOG)"
 }
 
 # Stop a process and its children.

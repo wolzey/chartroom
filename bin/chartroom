@@ -89,6 +89,8 @@ source "$CR_ROOT/lib/relay.sh"
 source "$CR_ROOT/lib/radar.sh"
 # shellcheck source=../lib/park.sh
 source "$CR_ROOT/lib/park.sh"
+# shellcheck source=../lib/stuck.sh
+source "$CR_ROOT/lib/stuck.sh"
 for _f in "$CR_ROOT"/lib/backends/*.sh; do
   # shellcheck source=/dev/null
   source "$_f"
@@ -674,6 +676,9 @@ cmd_hook() {
     codex-notify)
       payload="${3:-}"
       printf '%s %s\n' "$(now)" "$payload" >>"$(tdir "$id")/hooks.log"
+      # Codex names each new session in a little thread of its own, whose turn fires notify too
+      # (verified on codex-cli 0.158.0): no turn of the worker's ended, and it is not its thread.
+      [[ "$(jq -r '(.["input-messages"][0]? // "") | tostring | startswith("Generate a concise, single-line task title")' <<<"$payload" 2>/dev/null)" != true ]] || exit 0
       case "$(jq -r '.type // empty' <<<"$payload" 2>/dev/null)" in
         agent-turn-complete)
           log_event "$id" agent "turn-ended"
@@ -1111,6 +1116,8 @@ cmd_accept() {
 #                                        except an agent state that came and went between
 #                                        two calls. (Claude Code: a background Bash command,
 #                                        no --timeout, started again after each batch.)
+# A prompt nothing reports, and a worker gone quiet, come from the look each task gets
+# (lib/stuck.sh): `agent: awaiting-input: ...` and `stalled: ...`.
 declare -A OFF=() HST=() SEEN_ST=() SEEN_TURN=() WAIT_DUE=()
 CURSOR_FILE="$CR_HOME/.watch-cursor"
 WATCH_IVL_MS=3000 WATCH_SLOW_MS=60000 # cmd_watch's two intervals, from the settings
@@ -1264,6 +1271,9 @@ cmd_watch() {
   watch_ms CHARTROOM_WATCH_INTERVAL "$CR_WATCH_INTERVAL" WATCH_IVL_MS
   watch_ms CHARTROOM_WATCH_HC_INTERVAL "$CR_WATCH_HC_INTERVAL" WATCH_SLOW_MS
   (( WATCH_SLOW_MS >= WATCH_IVL_MS )) || WATCH_SLOW_MS=$WATCH_IVL_MS
+  watch_ms CHARTROOM_LOOK_INTERVAL "$CR_LOOK_INTERVAL" LOOK_MS
+  watch_ms CHARTROOM_STALL_MINUTES "$CR_STALL_MINUTES" STALL_SECS; STALL_SECS=$((STALL_SECS * 60 / 1000))
+  watch_ms CHARTROOM_STALL_BUSY_MAX_MINUTES "$CR_STALL_BUSY_MAX" STALL_BUSY_SECS; STALL_BUSY_SECS=$((STALL_BUSY_SECS * 60 / 1000))
   shopt -s nullglob
   local d id f size start fresh=1 unseen b i hc_ids=() hc_unseen=(); clock_ms; start=$NOW_MS
   mkdir -p "$CR_HOME/tasks"
@@ -1329,7 +1339,7 @@ cmd_watch() {
       # Once per slow interval, hc is asked about what the stream holds (hc_stream_check).
       verify=0
       if [[ -n "$HCS_UP" ]] && (( NOW_MS >= vnext )); then verify=1; vnext=$((NOW_MS + WATCH_SLOW_MS)); fi
-      HC_HIT=(); herdr_round_reset; covered=1; hc_open=0
+      HC_HIT=(); herdr_round_reset; covered=1; hc_open=0; LOOK_ANY=0
       meta_cache_load
       for d in "$CR_HOME"/tasks/*/; do
         id="${d%/}"; id="${id##*/}"; f="$d/events.log"
@@ -1355,6 +1365,8 @@ cmd_watch() {
             tmux|cmux|subagent) ;;
             *) covered=0 ;;
           esac
+          # Its own cadence (lib/stuck.sh): a prompt nothing reports, a brief behind a dialog, a stall.
+          watch_look "$id" "$r" || true
         fi
       done
       # Workers at rest for CHARTROOM_PARK_AFTER_MINUTES park (lib/park.sh): never a wake.
@@ -1363,6 +1375,7 @@ cmd_watch() {
       watch_relays
       clock_ms
       if [[ $covered -eq 1 ]]; then next=$((NOW_MS + WATCH_SLOW_MS)); else next=$((NOW_MS + WATCH_IVL_MS)); fi
+      if [[ $LOOK_ANY -eq 1 ]] && (( next > NOW_MS + LOOK_MS )); then next=$((NOW_MS + LOOK_MS)); fi
     else
       hc_stream_wakes
       for f in "$CR_HOME"/tasks/*/events.log; do
@@ -1679,7 +1692,9 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           "[<id>] [<project>] <event>" ("[<id>] [<project>]
                                           [held] <event>" for a project out of focus), and one
                                           per relay from another home, "[relay <id>] [from
-                                          <home>] [<project>] [re <id>] <text>"
+                                          <home>] [<project>] [re <id>] <text>". Also looks at
+                                          each task for a prompt nothing reports (agent:
+                                          awaiting-input) and a worker gone quiet (stalled)
   chartroom dashboard [--port N] [--open] [--daemon] [--no-gh] [--theme chartroom|hud]
                       [--host ADDR | --expose] [--no-token]
                                           read-only web view (127.0.0.1, port

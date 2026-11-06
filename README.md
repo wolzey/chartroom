@@ -885,6 +885,30 @@ quiet, and when you say the machine is hot or slow; it relays the summary line a
 about what needs a human. There is no daemon: a harness that can schedule (Claude Code's `/loop`,
 cron) can run `chartroom sweep --apply` now and then.
 
+## Stuck workers wake the XO
+
+A worker must not sit stuck with nobody knowing. Where the agent reports a prompt itself, the
+wake comes from that report. For what it does not report, the watch looks at each task at most once
+a minute (`CHARTROOM_LOOK_INTERVAL`), with one read of its terminal or output file:
+
+- **A prompt or dialog** wakes as `agent: awaiting-input: <what>`, on every live backend. That is
+  a Codex approval prompt too (Codex reports no state to hc, and its notify fires only at a turn's
+  end): chartroom reads the `Action Required` it sets in its terminal title, at once on hc, and
+  from the screen where there is no title to read.
+- **`steer` refuses a Codex worker at a prompt**, because text and Enter there would approve the command.
+- **A startup dialog never loses the brief.** Dispatch says the worker is waiting, exits 0 and
+  raises the dialog; the brief starts once it clears. Codex's "Hooks need review" is never trusted
+  for you: answer it, or set `CHARTROOM_CODEX_HOOKS_DIALOG=skip` to take Esc in worktrees chartroom
+  created, so those hooks do not run for those workers.
+- **A worker gone quiet** wakes once as `stalled: no output or events for 10 min ... Last output:
+  ...`: a task in flight, not `waiting`, not parked, not at a prompt already raised, whose output and
+  events have not changed for `CHARTROOM_STALL_MINUTES` (`0` turns it off). New output or an event
+  re-arms it. What ticks by itself (a timer, a spinner) is not output, and a command still using CPU
+  holds the wake back for up to `CHARTROOM_STALL_BUSY_MAX_MINUTES`.
+
+`skills/chartroom/references/backends.md` has the table of each stuck state per backend. A joined
+session (your own) and a subagent (the host's) are not looked at.
+
 ## Idle workers park
 
 A Claude Code worker that has finished its turn still holds its agent and that agent's MCP
@@ -1024,10 +1048,10 @@ write them:
 | `progress` | worker | no |
 | `waiting` | worker, right before ending a turn to wait on CI, a review, a timer or a person: what, and until when (`... until 2026-01-05T15:30:00Z`) if known | no; once, as `waiting overdue: ...`, if the worker is still stopped when the window runs out |
 | `decision` `blocked` `done` `failed` | worker | yes |
-| `note` | chartroom (created, dispatched, worktree, fallback, accepted, closed, `waiting overdue`) | no |
+| `note` | chartroom (created, dispatched, worktree, fallback, accepted, closed, `waiting overdue`, `stalled`) | no |
 | `steered` | chartroom (`steer`) | no |
 | `exited` | process wrappers (`... (exit N)`) | yes, unless the worker reported first |
-| `agent` | hooks: `turn-ended`, `awaiting-input: <why>`, `prompt-received` | `turn-ended` without a report, and `awaiting-input` |
+| `agent` | hooks and the watch: `turn-ended`, `awaiting-input: <why>`, `prompt-cleared`, `prompt-received` | `turn-ended` without a report, and `awaiting-input` |
 
 `watch` waits on a doorbell: whatever chartroom records (`chartroom event`, a hook's line, a
 relay) rings it once the line is on disk, and it wakes within a fraction of a second, reading
@@ -1131,6 +1155,10 @@ machine), then `~/.config/chartroom/config` (`KEY=VALUE`, no shell evaluation;
 | `CHARTROOM_SWEEP_IDLE_HOURS` | `24` | `sweep` raises a finished-but-open task's leftovers (and its own long-running processes) only after this long idle (`--idle-hours` overrides) |
 | `CHARTROOM_SWEEP_SETTLE_MINUTES` | `60` | `sweep --apply` closes a done task only this long after its `done` report, so the XO sees it first |
 | `CHARTROOM_PARK_AFTER_MINUTES` | `60` | the watch (and `sweep --apply`) parks an hc:claude worker at rest this long; `0` never parks on its own ([Idle workers park](#idle-workers-park)) |
+| `CHARTROOM_LOOK_INTERVAL` | `60` | seconds between the watch's looks at one task: its screen or output, for a prompt nothing reports, a brief behind a dialog, and a stall ([Stuck workers wake the XO](#stuck-workers-wake-the-xo)) |
+| `CHARTROOM_STALL_MINUTES` | `10` | a task in flight with no new output or event for this long wakes once as `stalled`; `0` turns it off |
+| `CHARTROOM_STALL_BUSY_MAX_MINUTES` | `60` | a quiet command still using CPU holds the `stalled` wake back for up to this long |
+| `CHARTROOM_CODEX_HOOKS_DIALOG` | `ask` | Codex's "Hooks need review" dialog at startup: `ask` wakes the XO; `skip` takes Esc in a worktree chartroom created, so those hooks do not run for that worker. Never trusts a hook |
 | `CHARTROOM_BASH_SEARCH` | see Install | environment only: colon-separated dirs searched for a bash ≥ 4 when started under an older one (PATH is always searched first) |
 | `CHARTROOM_PATH_APPEND` | `/opt/homebrew/bin:/usr/local/bin` on macOS, else empty | environment only: dirs appended to PATH when they exist and are missing; empty turns it off |
 | `CHARTROOM_RUNTIME_DIR` | `/tmp` | environment only: where `watch` and `listen` keep their doorbell FIFOs (`chartroom-<uid>/bells/`); every process of every home on the machine must agree on it |

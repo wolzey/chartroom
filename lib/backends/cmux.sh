@@ -67,7 +67,10 @@ cmux_keys() {
   done
 }
 
-cmux_launch() { session_launch cmux "$1" "$2" "$3"; echo "cmux $3 worker running (workspace $CR_WORKSPACE, tab $1; watch: chartroom attach $1)"; }
+cmux_launch() {
+  session_launch cmux "$1" "$2" "$3"
+  if [[ -n "$SESSION_WAITING" ]]; then echo "cmux $3 $SESSION_WAITING"; else echo "cmux $3 worker running (workspace $CR_WORKSPACE, tab $1; watch: chartroom attach $1)"; fi
+}
 cmux_live() { session_live cmux "$1"; }
 cmux_steer() { session_steer cmux "$1" "$2"; }
 cmux_stop() { cmux_alive "$1" && cmux_keys "$1" esc; return 0; }

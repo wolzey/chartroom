@@ -101,6 +101,12 @@ interactive_argv() { # <id> <agent> <hooks> [session|resume]
 # Enter); Codex puts it on "1. Trust and continue" (answer: Enter). Anything else is left
 # for a human and raised as an `agent: awaiting-input` event. chartroom never edits
 # ~/.claude.json or ~/.codex/config.toml to pre-trust a path.
+#
+# Codex then asks about hooks: "Hooks need review" for any project or per-run hook it has not
+# seen, in each new worktree (its trust is by path, and hooks run outside the sandbox). chartroom
+# never trusts one. By default the dialog goes to the XO as `agent: awaiting-input`; with
+# CHARTROOM_CODEX_HOOKS_DIALOG=skip it takes Esc in a worktree chartroom created, which starts
+# the agent without those hooks.
 
 trust_dialog_up() { grep -qiE 'trust this folder|do you trust' <<<"$1"; }
 
@@ -119,8 +125,9 @@ trust_answer_keys() { # <agent> <screen>
 
 # Shared by every session runner. <id> <agent> <screen-fn> <keys-fn>
 # screen-fn <id> prints the visible screen; keys-fn <id> <key>... sends named keys.
+# 1: a dialog is up that chartroom will not answer, raised as `agent: awaiting-input`.
 handle_trust() {
-  local id="$1" agent="$2" screen_fn="$3" keys_fn="$4" i scr keys
+  local id="$1" agent="$2" screen_fn="$3" keys_fn="$4" i scr keys what
   for i in 1 2 3 4 5 6 7 8; do
     scr="$("$screen_fn" "$id" 2>/dev/null || true)"
     if trust_dialog_up "$scr"; then
@@ -139,9 +146,32 @@ handle_trust() {
       sleep 3
       return 0
     fi
+    # (Before the prompt-box check below: a dialog's own "› 1. ..." line looks like the prompt box.)
+    what="$(screen_prompt "$id" "$agent" "$scr")"
+    if [[ -n "$what" ]]; then
+      if [[ "$what" == *'"Hooks need review"'* && "$CR_CODEX_HOOKS_DIALOG" == skip && "$(meta "$id" worktree_created)" == 1 ]]; then
+        "$keys_fn" "$id" esc
+        log_event "$id" note "continued past Codex's \"Hooks need review\" dialog without those hooks (CHARTROOM_CODEX_HOOKS_DIALOG=skip): they do not run for this worker"
+        sleep 1
+        continue
+      fi
+      prompt_sync "$id" "$what"
+      return 1
+    fi
     # The agent's main UI is up (prompt box) - no dialog this time.
     grep -qE '(^|[[:space:]])(❯|›|>)[[:space:]]' <<<"$scr" && [[ $i -ge 3 ]] && return 0
     sleep 1
   done
   return 0
+}
+
+# The dialogs of a start, one after another: Codex shows folder trust, then its hooks dialog once
+# that is answered. 1: one is up that chartroom will not answer (raised by handle_trust).
+startup_dialogs() { # <id> <agent> <screen-fn> <keys-fn>
+  local i
+  for i in 1 2 3; do
+    handle_trust "$@" || return 1
+    [[ -n "$(screen_prompt "$1" "$2" "$("$3" "$1" 2>/dev/null || true)")" ]] || return 0
+  done
+  return 1
 }

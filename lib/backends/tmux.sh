@@ -1,7 +1,8 @@
 # shellcheck shell=bash
 # tmux runner: one tmux session per crew ($CHARTROOM_WORKSPACE), one window per task.
-# Output is piped to <task>/pane.log from the start; turn ends and approval prompts come
-# from agent hooks (Claude Stop/Notification, Codex notify), not from screen scraping.
+# Output is piped to <task>/pane.log from the start; turn ends and Claude's approval prompts come
+# from agent hooks (Claude Stop/Notification, Codex notify). Codex has no approval hook that does
+# not itself need a review: its title and screen say so (lib/stuck.sh).
 # CHARTROOM_TMUX_SOCKET=<name> runs the crew on a separate tmux server (tmux -L).
 
 tmx() {
@@ -42,7 +43,12 @@ tmux_keys() {
   done
 }
 
-tmux_launch() { session_launch tmux "$1" "$2" "$3"; echo "tmux $3 worker running (session $CR_WORKSPACE, window $1; watch: chartroom attach $1)"; }
+tmux_launch() {
+  session_launch tmux "$1" "$2" "$3"
+  if [[ -n "$SESSION_WAITING" ]]; then echo "tmux $3 $SESSION_WAITING"; else echo "tmux $3 worker running (session $CR_WORKSPACE, window $1; watch: chartroom attach $1)"; fi
+}
+# Codex's approval prompts show in its title (lib/stuck.sh); tmux reports the title of a pane.
+tmux_title() { tmx display-message -p -t "$(meta "$1" tmux_pane)" '#{pane_title}' 2>/dev/null || true; }
 tmux_live() { session_live tmux "$1"; }
 tmux_steer() { session_steer tmux "$1" "$2"; }
 tmux_stop() { tmux_alive "$1" && tmux_keys "$1" esc; return 0; }

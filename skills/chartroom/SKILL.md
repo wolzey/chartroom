@@ -174,8 +174,10 @@ wake, as `[<id>] [<project>] <event>`; keep the project when you relay it:
 - `agent: turn-ended (stopped its turn without reporting)`: a session worker went idle silently.
   A turn (or run) that ends right after a `waiting` event is not a wake.
 - `waiting overdue: ...`: a stopped worker's `waiting` window ran out (once per wait).
-- `agent: awaiting-input: ...`: an approval or question prompt is up, or a trust dialog chartroom
-  would not answer.
+- `agent: awaiting-input: ...`: on any live backend, an approval or question prompt is up, or a
+  startup dialog chartroom would not answer: a folder trust dialog, or Codex's "Hooks need review".
+- `stalled: no output or events for N min ... Last output: ...`: a task in flight has gone quiet:
+  an agent wedged, or idle after a wake nobody acted on. Once per stall; new output re-arms it.
 - `herdr: ...`: herdr's own agent-state signals.
 - `lost`: a worker vanished without an exit record.
 - `note: revive failed: ...`: a parked worker could not be resumed (see below).
@@ -202,7 +204,18 @@ On a wake:
 - **awaiting input**: peek. A routine in-worktree action (tests, installs, local git) may be
   approved by typing into the worker's terminal (`chartroom attach <id>`, or the runner's own
   send-keys), but only when the highlighted option is the allow option. Anything outside the
-  worktree, or anything outward-facing, goes to the commander.
+  worktree, or anything outward-facing, goes to the commander. `steer` refuses while a Codex
+  worker is at a prompt, because Enter there approves the command: never get around that by
+  typing text and Enter into its terminal yourself.
+- **"Hooks need review"** (Codex, at startup): the brief waits behind it and starts once it
+  clears. Esc continues without those hooks, for this worker only. Trusting them lets them run
+  outside the sandbox, so that is the commander's call. A repo with hooks raises this at every
+  Codex dispatch, because Codex trusts by path and each worktree is new; if the commander has
+  said hooks can be skipped, set `CHARTROOM_CODEX_HOOKS_DIALOG=skip`.
+- **stalled**: read the last output in the wake, then peek. A command that says it is idle, or a
+  frozen screen, is probably wedged: `chartroom stop <id>`, then steer or re-dispatch it. An agent
+  idle at its prompt: steer it, or close it if it is finished. If it is legitimately waiting on
+  something, tell it to post `waiting`, which holds this wake.
 - **exited** with no done or decision: read `final.md` and peek, then treat it as stopped-silent.
 - **revive failed**: the parked session could not be resumed (it says why: a gone worktree, a
   session Claude no longer has). Steer or attach again once that is fixed, or re-dispatch it,

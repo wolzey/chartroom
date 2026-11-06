@@ -30,7 +30,7 @@ write_launcher() { # <id> <wt> [--forward] <argv...>
 # working | idle (turn ended) | blocked (awaiting input).
 hook_state() { # <id>
   awk '
-    ($2=="note:" && $3=="dispatched") || $2=="steered:" || ($2=="agent:" && $3=="prompt-received") { s="working" }
+    ($2=="note:" && $3=="dispatched") || $2=="steered:" || ($2=="agent:" && ($3=="prompt-received" || $3=="prompt-cleared")) { s="working" }
     $2=="agent:" && $3=="turn-ended" { s="idle" }
     $2=="agent:" && $3 ~ /^awaiting-input/ { s="blocked" }
     END { print (s=="" ? "working" : s) }' "$(tdir "$1")/events.log"
@@ -133,18 +133,28 @@ session_launch() { # <runner> <id> <wt> <agent>
   mapfile -t argv < <(interactive_argv "$id" "$agent" 1)
   launcher="$(write_launcher "$id" "$wt" "${argv[@]}")"
   "${r}_open" "$id" "$wt" "$launcher"
-  handle_trust "$id" "$agent" "${r}_screen" "${r}_keys" || true
+  SESSION_WAITING=""
+  # Never type the brief at a dialog: the text is dropped and Enter answers it (lib/stuck.sh).
+  if ! startup_dialogs "$id" "$agent" "${r}_screen" "${r}_keys"; then session_brief_waits "$id"; return 0; fi
   session_wait_ready "$r" "$id"
+  if ! startup_dialogs "$id" "$agent" "${r}_screen" "${r}_keys"; then session_brief_waits "$id"; return 0; fi
   local rc=0; session_deliver "$r" "$id" "$agent" "$(task_prompt "$id")" || rc=$?
   [[ $rc -eq 1 ]] && die "agent started but did not confirm the brief; inspect it with: chartroom attach $id"
   [[ $rc -eq 2 ]] && log_event "$id" note "the agent took a prompt, but its text could not be checked ($agent has no prompt hook)"
   return 0
 }
 
+# A launch that met a dialog: the watch delivers the brief once it clears (brief_pending_look).
+session_brief_waits() { # <id>
+  meta_set "$1" brief_pending 1
+  SESSION_WAITING="worker waiting at a startup dialog chartroom will not answer: answer it (chartroom attach $1); the watch delivers its brief once it clears"
+}
+
 session_steer() { # <runner> <id> <msg>
   local r="$1" id="$2" msg="$3" agent
   agent="$(backend_agent "$id")"
   "${r}_alive" "$id" || die "the $r session for $id is gone; re-dispatch it"
+  steer_guard "$r" "$id"
   log_event "$id" steered "$msg"
   local text rc=0; text="$(steer_text "$id" "$msg")"
   session_deliver "$r" "$id" "$agent" "$text" || rc=$?

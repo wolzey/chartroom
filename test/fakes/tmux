@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # fake tmux: enough of the CLI for chartroom's tmux runner. State in $FAKE_TMUX_DIR.
 # Pressing Enter simulates Claude's UserPromptSubmit hook for task $FAKE_TMUX_TASK.
+# $S/title is the pane's title (`display-message '#{pane_title}'`), as an agent sets it.
 [[ "${1:-}" == -L || "${1:-}" == -S ]] && shift 2
 [[ "${1:-}" == -V ]] && { echo "tmux ${FAKE_TMUX_VERSION:-3.4}"; exit 0; }
 S="${FAKE_TMUX_DIR:?}"; mkdir -p "$S/panes"
@@ -15,7 +16,9 @@ case "$cmd" in
   pipe-pane) : ;;
   display-message)
     t="$(target "$@")"; [[ -f "$S/panes/${t#%}" ]] || exit 1
-    if [[ "${*: -1}" == '#{pane_pid}' ]]; then echo "${FAKE_TMUX_PANE_PID:-999999}"; else echo "$t"; fi ;;
+    if [[ "${*: -1}" == '#{pane_pid}' ]]; then echo "${FAKE_TMUX_PANE_PID:-999999}"
+    elif [[ "${*: -1}" == '#{pane_title}' ]]; then cat "$S/title" 2>/dev/null || echo host.local
+    else echo "$t"; fi ;;
   capture-pane) cat "$S/screen" 2>/dev/null || printf '❯ \n' ;;
   send-keys)
     # -l text accumulates in the input box; C-u clears it; Enter submits it to the

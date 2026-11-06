@@ -19,9 +19,10 @@
 # session, never hang off whatever terminal HC_TERMINAL_ID names (it leaks into processes
 # started from one, other homes' XOs included), and hc types no notes into the XO; chartroom's
 # own wake stream reports them. hc tracks Claude's state itself (OSC 7501, verified), so, as on
-# herdr, claude gets only the prompt hook. Codex keeps its notify hook for turn ends (whether hc
-# sees Codex's turns is unverified); hc still reports a blocked, failed or lost one. The
-# terminal's address is recorded and every later call checks it still carries the task's name.
+# herdr, claude gets only the prompt hook. Codex reports no state to hc, no status and no turns
+# (verified on codex-cli 0.158.0, hc 0.1.16), so it keeps its notify hook for turn ends, and its
+# approval prompts come from the terminal title it sets, which hc carries (below, lib/stuck.sh).
+# The terminal's address is recorded and every later call checks it still carries the task's name.
 
 declare -A HC_TURNS=() # watch: each task's hc turn count at the last look
 
@@ -69,25 +70,28 @@ hc_handle_set() { [[ -n "$(meta "$1" hc_terminal)" ]]; }
 # the task's launcher, because hc's keep (which the app turns on) put a shell in place of a lost
 # program, under the same address and name (verified); gone: no terminal at the address, or one
 # that no longer carries the task's name), HC_STATUS (working, idle, done, blocked, error, or
-# empty before the agent reports) and HC_TURN.
+# empty before the agent reports; blocked too for an agent that reports nothing but whose title
+# says Action Required, as Codex's does at an approval prompt: HC_TITLE_BLOCKED) and HC_TURN.
+HC_TITLE_BLOCKED=""
 hc_info() { # <id>
-  local t j name ours
-  HC_STATE=gone; HC_STATUS=""; HC_TURN=0
+  local t j name ours act=0
+  HC_STATE=gone; HC_STATUS=""; HC_TURN=0; HC_TITLE_BLOCKED=""
   t="$(meta "$1" hc_terminal)"; [[ -n "$t" ]] || return 0
   HC_ADDR_TASK[$t]="$1"
   if [[ -n "$HCS_UP" && -n "${HCT_STATE[$t]+x}" ]]; then
     # The watch's event stream already holds this terminal (hc_stream_drain): no `hc get`.
-    HC_STATE="${HCT_STATE[$t]}"; HC_STATUS="${HCT_STATUS[$t]}"; HC_TURN="${HCT_TURN[$t]}"; name="${HCT_NAME[$t]}"
+    HC_STATE="${HCT_STATE[$t]}"; HC_STATUS="${HCT_STATUS[$t]}"; HC_TURN="${HCT_TURN[$t]}"; name="${HCT_NAME[$t]}"; act="${HCT_ACT[$t]:-0}"
     ours=false; [[ "${HCT_LIDS[$t]}" == *" $1 "* ]] && ours=true
   else
     HC_ASKED=1
     if ! j="$(hcx get "$t" --json 2>/dev/null)"; then hc_stream_settle "$t" gone; return 0; fi
     # (the launcher by its task's path suffix: the home may be spelled another way, via a symlink)
-    IFS='|' read -r HC_STATE HC_STATUS HC_TURN name ours < <(jq -r --arg l "/tasks/$1/launch.sh" '[.state // "gone", .status.state // "", .turn // 0, .name // "", any((.argv // [])[]; tostring | endswith($l))] | map(tostring) | join("|")' <<<"$j" 2>/dev/null) || true
+    IFS='|' read -r HC_STATE HC_STATUS HC_TURN name ours act < <(jq -r --arg l "/tasks/$1/launch.sh" '[.state // "gone", .status.state // "", .turn // 0, .name // "", any((.argv // [])[]; tostring | endswith($l)), (if (.title // "" | tostring | test("^\\[ [.!] \\] Action Required")) then 1 else 0 end)] | map(tostring) | join("|")' <<<"$j" 2>/dev/null) || true
     [[ "$HC_STATE" != finished || "$name" != "$1" ]] || hc_stream_settle "$t" finished "$name" "$HC_TURN"
   fi
   [[ -n "$HC_STATE" && "$name" == "$1" ]] || { HC_STATE=gone; HC_STATUS=""; HC_TURN=0; hc_stream_settle "$t" gone; return 0; }
   [[ "$HC_STATE" == live && "$ours" != true ]] && { HC_STATE=replaced; HC_STATUS=""; }
+  if [[ "$HC_STATE" == live && -z "$HC_STATUS" && "$act" == 1 ]]; then HC_STATUS=blocked; HC_TITLE_BLOCKED=1; fi
   [[ "$HC_TURN" =~ ^[0-9]+$ ]] || HC_TURN=0
   return 0
 }
@@ -175,9 +179,11 @@ hc_took_prompt() { # <id> <events.log offset> <turn before>
 
 # The brief went in with the launch, so this only watches for it: 0 when claude's prompt hook
 # reports its signature, 2 when the agent took a prompt but its text cannot be checked, 1 when
-# the terminal ended or nothing showed in time.
+# the terminal ended or nothing showed in time, 3 when a dialog chartroom will not answer holds it
+# back (raised as `agent: awaiting-input`; the brief starts once it clears).
 hc_confirm_brief() { # <id> <text> <events.log offset before launch>
-  local id="$1" text="$2" before="$3" want="" i new
+  local id="$1" text="$2" before="$3" want="" i new agent scr
+  agent="$(backend_agent "$id")"
   hc_has_prompt_hook "$id" && want="$(printf '%s' "$text" | text_sig)"
   for i in $(seq 1 $((CR_DELIVER_WAIT * 4))); do
     if [[ -n "$want" ]]; then
@@ -187,6 +193,11 @@ hc_confirm_brief() { # <id> <text> <events.log offset before launch>
     hc_info "$id"
     [[ "$HC_STATE" == live ]] || return 1
     [[ -z "$want" ]] && hc_took_prompt "$id" "$before" 0 && return 2
+    # A dialog can come up later than handle_trust looked, or right after the one it answered.
+    scr="$(hc_screen "$id" 2>/dev/null || true)"
+    if [[ -n "$(screen_prompt "$id" "$agent" "$scr")" ]]; then
+      handle_trust "$id" "$agent" hc_screen hc_keys || return 3
+    fi
     sleep 1
   done
   hc_took_prompt "$id" "$before" 0 && return 2
@@ -227,6 +238,11 @@ hc_launch() { # <id> <wt> <agent>
     return 0
   fi
   hc_confirm_brief "$id" "$task" "$before" || rc=$?
+  if [[ $rc -eq 3 ]]; then
+    meta_set "$id" hc_launched 1
+    echo "hc $agent worker waiting at a startup dialog chartroom will not answer: answer it in Herdr (chartroom attach $id); it starts on the brief once answered"
+    return 0
+  fi
   [[ $rc -eq 1 ]] && die "the $agent worker did not take the brief (hc terminal $t is $HC_STATE); check: chartroom peek $id"
   [[ $rc -eq 2 ]] && log_event "$id" note "the agent took a prompt, but its text could not be checked ($agent has no prompt hook)"
   meta_set "$id" hc_launched 1
@@ -304,6 +320,9 @@ hc_deliver() { # <id> <text>
 hc_steer() {
   local id="$1" msg="$2" text rc=0
   hc_alive "$id" || die "the hc terminal for $id is gone; re-dispatch it"
+  # (hc refuses a blocked agent itself, below, but does not know of one it reads from a title.)
+  [[ "$HC_TITLE_BLOCKED" != 1 ]] || die "the agent is blocked at a dialog (a permission or a question); answer it first (chartroom attach $id), then steer again"
+  steer_guard hc "$id"
   log_event "$id" steered "$msg"
   text="$(steer_text "$id" "$msg")"
   hc_deliver "$id" "$text" || rc=$?
@@ -373,13 +392,19 @@ hc_watch_word() { # <id> -> sets W (working|idle|done|blocked|error|starting|rep
 }
 hc_watch_seed() { local W; hc_watch_word "$1"; HST[$1]="$W"; HC_TURNS[$1]="$HC_TURN"; }
 hc_watch() { # <id>
-  local id="$1" W prev pturn
+  local id="$1" W prev pturn what
   hc_handle_set "$id" || return 0
   hc_watch_word "$id"
   prev="${HST[$id]:-}"; pturn="${HC_TURNS[$id]:-}"
   if [[ "$W" != "$prev" || ( "$W" =~ ^(idle|done)$ && -n "$pturn" && "$HC_TURN" -gt "$pturn" ) ]]; then
+    # (Recorded, so the log's account of a prompt ends with it: lib/stuck.sh reads it.)
+    if [[ "$prev" == blocked && "$W" =~ ^(starting|working|idle|done|error)$ ]]; then prompt_sync "$id" ""; fi
     case "$W" in
-      blocked) wake "$id" "hc: agent is waiting on an approval or question prompt" ;;
+      blocked)
+        if [[ -n "$HC_TITLE_BLOCKED" ]]; then
+          what="$(screen_prompt "$id" "$(backend_agent "$id")" "$(hc_screen "$id" 2>/dev/null || true)")"
+          prompt_sync "$id" "${what:-$CODEX_TITLE_WHAT}"
+        else log_event "$id" agent "awaiting-input: hc: agent is waiting on an approval or question prompt"; fi ;;
       error) wake "$id" "hc: agent reported an error; read its screen (chartroom peek $id)" ;;
       # (Codex: its notify's `agent: turn-ended` wakes through the event stream instead.)
       idle|done)
@@ -468,6 +493,7 @@ hc_revive() { # <id> [text]
   hc_name_layout "$id" || true
   if [[ -n "$text" ]]; then hc_confirm_brief "$id" "$text" "$before" || rc=$?
   else hc_wait_ready "$id" || rc=1; fi
+  [[ $rc -ne 3 ]] || rc=2 # (taken, behind a dialog already raised)
   # Resumed means this session: a fresh one would report another id to the prompt hook.
   if [[ $rc -ne 1 && "$(meta_file "$id" session_id)" != "$sid" ]]; then
     rc=1; why="claude started session $(meta_file "$id" session_id), not $sid"
@@ -499,12 +525,15 @@ hc_revive() { # <id> [text]
 # `created`, `lost` followed by `restarted` (keep put a shell in place: the new argv) or by
 # `finished`, and `removed`; `heartbeat` every 15 s; `missed` then a fresh snapshot for a reader
 # that fell behind. `lost` alone changes nothing chartroom reads, so it is left out: what follows
-# it says whether the agent is replaced or finished.
+# it says whether the agent is replaced or finished. `title` is each change of the terminal's
+# title, many a second while Codex animates its spinner (verified with hc 0.1.16, codex-cli
+# 0.158.0), so jq keeps them to one fact: the title's "Action Required" going on or off.
 # A coprocess runs it through one long-lived jq, which turns each line into one fact (fields
 # split by \x1f):
 #   S <seq>, then T per terminal, then E      a snapshot
-#   T <address> <state> <status> <turn> <name> < launcher task ids >   created/restarted too
+#   T <address> <state> <status> <turn> <name> < launcher task ids > <title's 1|0>   created/restarted too
 #   U <address> <status>   N <address> <turn>   F <address> (finished)   R <address> (removed)
+#   A <address> <title's 1|0>
 #   M  missed (the snapshot that follows replaces the view)   H  heartbeat
 # and rings the watch's doorbell for each but H. The watch takes them between rounds with bash's
 # own read (no fork) into HCT_* (hc_stream_drain), hc_info answers from there, and only the tasks
@@ -512,21 +541,27 @@ hc_revive() { # <id> [text]
 # once the watch is gone, even killed outright, its next write fails and it ends.
 HCS_PID="" HCS_FD="" HCS_UP="" HCS_SNAP="" HCS_DOWN="" HCS_FAILS=0 HCS_RETRY=0
 HC_ASKED="" # set when hc_info had to ask hc (`hc get`): the watch keeps that task on its fast round
-declare -A HCT_STATE=() HCT_STATUS=() HCT_TURN=() HCT_NAME=() HCT_LIDS=() HCS_SEEN=() HC_HIT=() HC_ADDR_TASK=()
+declare -A HCT_STATE=() HCT_STATUS=() HCT_TURN=() HCT_NAME=() HCT_LIDS=() HCT_ACT=() HCS_SEEN=() HC_HIT=() HC_ADDR_TASK=()
 # shellcheck disable=SC2016
 HC_STREAM_JQ='
   def f: tostring | gsub("[\t\n\u001f]"; " ");
   def ids: " " + ([(.argv // [])[] | tostring | capture("/tasks/(?<id>[^/]+)/launch\\.sh$")? | .id] | join(" ")) + " ";
-  def rec: ["T", .address, (.state // "gone"), (.status.state? // ""), (.turn // 0), (.name // ""), ids] | map(f) | join("\u001f");
+  def act: if (tostring | test("^\\[ [.!] \\] Action Required")) then 1 else 0 end;
+  def rec: ["T", .address, (.state // "gone"), (.status.state? // ""), (.turn // 0), (.name // ""), ids, (.title // "" | act)] | map(f) | join("\u001f");
   def snap($p): ["S\u001f\($p.seq // 0)"] + [$p.terminals[]? | rec] + ["E"];
-  foreach (inputs | fromjson? | select(type == "object")) as $l ({s: -1, out: []};
-    if ($l.terminals | type) == "array" then {s: ($l.seq // 0), out: snap($l)}
-    elif ($l.params.terminals? | type) == "array" then {s: ($l.params.seq // 0), out: snap($l.params)}
+  def acts($p): reduce ($p.terminals[]?) as $t ({}; .[$t.address] = ($t.title // "" | act));
+  foreach (inputs | fromjson? | select(type == "object")) as $l ({s: -1, out: [], act: {}};
+    if ($l.terminals | type) == "array" then {s: ($l.seq // 0), out: snap($l), act: acts($l)}
+    elif ($l.params.terminals? | type) == "array" then {s: ($l.params.seq // 0), out: snap($l.params), act: acts($l.params)}
     elif $l.method == "heartbeat" then .out = ["H"]
     elif $l.method == "missed" then .out = ["M"]
     elif $l.method == "event" then
       $l.params as $p
       | if ($p.seq // 0) <= .s then .out = []
+        elif $p.type == "title" then
+          ($p.data.title // "" | act) as $a
+          | if (.act[$p.terminal] // 0) == $a then .out = []
+            else .act[$p.terminal] = $a | .out = ["A\u001f\($p.terminal | f)\u001f\($a)"] end
         else .out = [
           if $p.type == "created" or $p.type == "restarted" then $p.data + {address: ($p.data.address // $p.terminal)} | rec
           elif $p.type == "status" then "U\u001f\($p.terminal | f)\u001f\($p.data.status.state? // "" | f)"
@@ -583,36 +618,36 @@ hc_stream_close() { # [exiting]
   HCS_PID="" HCS_FD="" HCS_UP="" HCS_SNAP=""
   return 0
 }
-hc_stream_set() { # <address> <state> <status> <turn> <name> <launcher ids>
+hc_stream_set() { # <address> <state> <status> <turn> <name> <launcher ids> <title's 1|0>
   local a="$1" t="$4"
   [[ "$t" =~ ^[0-9]+$ ]] || t=0
-  if [[ -n "${HCT_STATE[$a]+x}" && "${HCT_STATE[$a]}|${HCT_STATUS[$a]}|${HCT_TURN[$a]}|${HCT_NAME[$a]}|${HCT_LIDS[$a]}" == "$2|$3|$t|$5|$6" ]]; then return 0; fi
-  HCT_STATE[$a]="$2"; HCT_STATUS[$a]="$3"; HCT_TURN[$a]="$t"; HCT_NAME[$a]="$5"; HCT_LIDS[$a]="$6"; HC_HIT[$a]=1
+  if [[ -n "${HCT_STATE[$a]+x}" && "${HCT_STATE[$a]}|${HCT_STATUS[$a]}|${HCT_TURN[$a]}|${HCT_NAME[$a]}|${HCT_LIDS[$a]}|${HCT_ACT[$a]:-0}" == "$2|$3|$t|$5|$6|${7:-0}" ]]; then return 0; fi
+  HCT_STATE[$a]="$2"; HCT_STATUS[$a]="$3"; HCT_TURN[$a]="$t"; HCT_NAME[$a]="$5"; HCT_LIDS[$a]="$6"; HCT_ACT[$a]="${7:-0}"; HC_HIT[$a]=1
 }
 # A terminal the stream does not carry that hc says has ended (finished, or not there: the core
 # answers, since the stream is up): final, so it goes into the stream's view and the watch stops
 # asking about it, as it would for one the stream reported ending.
 hc_stream_settle() { # <address> <finished|gone> [name] [turn]
   [[ -n "$HCS_UP" && -z "${HCT_STATE[$1]+x}" ]] || return 0
-  HCT_STATE[$1]="$2"; HCT_STATUS[$1]=""; HCT_TURN[$1]="${4:-0}"; HCT_NAME[$1]="${3:-}"; HCT_LIDS[$1]=" "
+  HCT_STATE[$1]="$2"; HCT_STATUS[$1]=""; HCT_TURN[$1]="${4:-0}"; HCT_NAME[$1]="${3:-}"; HCT_LIDS[$1]=" "; HCT_ACT[$1]=0
 }
 hc_stream_forget() { # <address>: no longer in the stream (hc_info asks hc again)
-  unset "HCT_STATE[$1]" "HCT_STATUS[$1]" "HCT_TURN[$1]" "HCT_NAME[$1]" "HCT_LIDS[$1]"; HC_HIT[$1]=1
+  unset "HCT_STATE[$1]" "HCT_STATUS[$1]" "HCT_TURN[$1]" "HCT_NAME[$1]" "HCT_LIDS[$1]" "HCT_ACT[$1]"; HC_HIT[$1]=1
 }
 # Takes every fact the stream has sent so far, without waiting. At its end (the core stopped or
 # restarted, `hc update`) the stream is closed and HCS_DOWN set: the watch runs a full round at
 # once, then polls every CHARTROOM_WATCH_INTERVAL until a new stream's snapshot is in.
 hc_stream_drain() {
   [[ -n "$HCS_FD" ]] || return 0
-  local line k a x y z n l
+  local line k a x y z n l m
   while read -r -t 0 -u "$HCS_FD"; do
     if ! IFS= read -r -u "$HCS_FD" line; then hc_stream_close; HCS_DOWN=1; return 0; fi
-    IFS=$'\x1f' read -r k a x y z n l <<<"$line"
+    IFS=$'\x1f' read -r k a x y z n l m <<<"$line"
     case "$k" in
       S) HCS_SNAP=1; HCS_SEEN=() ;;
       T)
         if [[ -n "$HCS_SNAP" ]]; then HCS_SEEN[$a]=1; fi
-        hc_stream_set "$a" "$x" "$y" "$z" "$n" "$l" ;;
+        hc_stream_set "$a" "$x" "$y" "$z" "$n" "$l" "$m" ;;
       E)
         for a in "${!HCT_STATE[@]}"; do [[ -n "${HCS_SEEN[$a]+x}" ]] || hc_stream_forget "$a"; done
         HCS_SNAP=""; HCS_SEEN=(); HCS_UP=1; HCS_FAILS=0 ;;
@@ -627,6 +662,7 @@ hc_stream_drain() {
       N) if [[ -n "${HCT_STATE[$a]+x}" && "$x" =~ ^[0-9]+$ && "${HCT_TURN[$a]}" != "$x" ]]; then HCT_TURN[$a]="$x"; HC_HIT[$a]=1; fi ;;
       F) if [[ -n "${HCT_STATE[$a]+x}" ]]; then HCT_STATE[$a]=finished; HCT_STATUS[$a]=""; HC_HIT[$a]=1; fi ;;
       R) if [[ -n "${HCT_STATE[$a]+x}" ]]; then HCT_STATE[$a]=gone; HCT_STATUS[$a]=""; HC_HIT[$a]=1; fi ;;
+      A) if [[ -n "${HCT_STATE[$a]+x}" && "${HCT_ACT[$a]:-0}" != "$x" ]]; then HCT_ACT[$a]="$x"; HC_HIT[$a]=1; fi ;;
       M) HCS_UP="" ;; # until the snapshot that follows: hc_info asks hc
     esac
   done

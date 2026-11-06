@@ -171,6 +171,14 @@ test("feed: a decision right after a steer opens its own thread, which its own s
   const th = E.feed(E.parseLog(log));
   assert.deepStrictEqual(th.map((t) => [t.type, t.events.map((e) => e.kind).join(",")]), [["thread", "decision,steered"], ["thread", "decision,steered"]]);
 });
+test("noisy: a stall and a prompt stand out; a prompt's end and the watch's other notes fold away", () => {
+  const n = (line) => E.noisy(E.parseLine("2026-11-06T14:00:00Z " + line));
+  assert.strictEqual(n("note: stalled: no output or events for 10 min. Last output: a | b"), false);
+  assert.strictEqual(n("agent: awaiting-input: Codex approval prompt: $ touch x"), false);
+  assert.strictEqual(n("agent: prompt-cleared"), true);
+  assert.strictEqual(n("note: the brief went in once the dialog cleared"), true);
+});
+
 test("feed: progress runs collapse; noise folds into system-event items, merged across a thread; newest first", () => {
   const items = E.feed(E.parseLog(LOG));
   assert.deepStrictEqual(items.map((it) => it.type + ":" + it.events.length),

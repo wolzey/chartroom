@@ -2,7 +2,8 @@
 # fake hc (herdr-core): enough of the CLI for chartroom's hc runner. State in $FAKE_HC_DIR:
 #   terms/<address>.json  each terminal, as `hc get --json` prints it
 #   screen                what every terminal shows (default: a prompt box). A trust dialog there
-#                         holds the run's first prompt until `keys enter` answers it, as Claude does.
+#                         holds the run's first prompt until `keys enter` answers it, as Claude does;
+#                         `keys esc` skips Codex's "Hooks need review" dialog.
 #   calls.log             every call
 # `run` and `send` simulate the agent taking a prompt: Claude's UserPromptSubmit hook for the
 # terminal's chartroom.task label (a run's last argument is its first prompt), then a turn.
@@ -103,6 +104,7 @@ case "$cmd" in
   keys)
     t="$(resolve "${1:-}")"; [[ -n "$t" ]] || err not_found "no terminal \"${1:-}\"" 3; shift
     for k in "$@"; do
+      [[ "$k" != esc ]] || ! grep -qF 'Hooks need review' "$S/screen" 2>/dev/null || rm -f "$S/screen"
       if [[ "$k" == enter ]] && trust_up; then
         rm -f "$S/screen"
         if [[ -f "$S/queued.$t" ]]; then take "$t" "$(cat "$S/queued.$t")"; rm -f "$S/queued.$t"; fi
