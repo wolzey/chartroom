@@ -38,8 +38,8 @@ brain_class() { # <command>
     version|help|-h|--help|-v|--version|homes|node|install-skills|brain) echo local ;;
     join|hook) echo refuse ;;
     watch|attach|dashboard|doctor|artifact|init|sweep|rule|new|project) echo hybrid ;;
-    worktree|dispatch|event|listen|status|ls|board|resolve|show|todo|inbox|relay|focus|peek|steer|stop|park|accept|close|radar|nodes|tell|ask|snooze) echo forward ;;
-    app) echo local ;; # it refuses in a client home itself: the app runs on the brain
+    worktree|dispatch|event|listen|status|ls|board|resolve|show|todo|inbox|relay|focus|peek|steer|stop|park|accept|close|radar|nodes|tell|ask|snooze|link|brief|set) echo forward ;;
+    app|attachment) echo local ;; # each refuses in a client home itself: the app runs on the brain; a file to attach must be there
     *) echo local ;; # an unknown command dies here as anywhere
   esac
 }

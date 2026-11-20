@@ -34,7 +34,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 API = 1
 LOOPBACK = "127.0.0.1"
@@ -54,6 +54,17 @@ ARTIFACT_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,127}/[a-z0-9][a-z0-9-]{0,
 DURATION = re.compile(r"^[0-9]{1,4}[mhd]$")
 UTC = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
 TASK_FILES = ("brief.md", "plan.md", "report.md", "events.log")
+ATT_ID = re.compile(r"^att-[0-9a-f]{4,}$")
+ATTACH_MAX = 25 * 1024 * 1024
+# An attachment is shown in the page only when it is a kind a browser renders without running
+# anything; every other kind (HTML, SVG, ...) is only ever downloaded.
+INLINE_TYPES = ("image/png", "image/jpeg", "image/gif", "image/webp", "video/mp4", "video/quicktime", "video/webm",
+                "application/pdf", "text/plain", "text/csv", "application/json")
+GITHUB_PR = re.compile(r"^https://github\.com/([^/\s]+/[^/\s]+)/pull/([0-9]+)$")
+PR_TTL = 600  # an open PR's state is looked up again after this long
+PR_PASS = 60  # a pass over the PRs at most this often
+PR_PER_PASS = 30  # and this many lookups in one pass
+TICKET_CACHE = 2.0
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
                 ".svg": "image/svg+xml", ".png": "image/png", ".json": "application/json", ".webmanifest": "application/manifest+json",
                 ".txt": "text/plain; charset=utf-8", ".woff2": "font/woff2", ".ico": "image/x-icon"}
@@ -337,6 +348,105 @@ class Actions:
             return {i: {k: self.recs[i].get(k) for k in ("state", "error", "at", "done_at", "home", "action")} for i in self.order[-200:]}
 
 
+class Prs:
+    """GitHub PR states for the PRs the snapshots name, looked up with gh in the background while
+    someone looks at the app. A merged or closed PR is final and never looked up again; an open one
+    is looked up again after PR_TTL. No gh, or gh failing, only means no state ("No check data")."""
+
+    def __init__(self, hub):
+        self.hub = hub
+        self.gh = os.environ.get("CHARTROOM_GH") or "gh"
+        self.states = {}
+        self.error = None
+
+    def urls(self):
+        seen = []
+        for h in list(self.hub.homes.values()):
+            for t in ((h.snapshot or {}).get("tasks") or []):
+                for u in t.get("prs") or []:
+                    if isinstance(u, str) and GITHUB_PR.match(u) and u not in seen:
+                        seen.append(u)
+        return seen
+
+    @staticmethod
+    def shape(url, d):
+        state = (d.get("state") or "").upper()
+        if state == "MERGED":
+            st = "merged"
+        elif state == "CLOSED":
+            st = "closed"
+        elif d.get("isDraft"):
+            st = "draft"
+        elif d.get("reviewDecision") == "APPROVED":
+            st = "approved"
+        elif d.get("reviewDecision") == "CHANGES_REQUESTED":
+            st = "changes"
+        else:
+            st = "open"
+        checks = None
+        roll = d.get("statusCheckRollup") or []
+        if roll:
+            c = {"total": len(roll), "pass": 0, "fail": 0, "run": 0}
+            for r in roll:
+                v = (r.get("conclusion") or r.get("state") or r.get("status") or "").upper()
+                if v in ("SUCCESS", "NEUTRAL", "SKIPPED"):
+                    c["pass"] += 1
+                elif v in ("FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"):
+                    c["fail"] += 1
+                else:
+                    c["run"] += 1
+            checks = c
+        m = GITHUB_PR.match(url)
+        reviewers = []
+        for r in d.get("latestReviews") or []:
+            who = ((r.get("author") or {}).get("login")) or "someone"
+            rs = {"APPROVED": "approved", "CHANGES_REQUESTED": "changes"}.get((r.get("state") or "").upper(), "commented")
+            reviewers.append({"name": who, "state": rs})
+        return {"url": url, "repo": m.group(1) if m else "", "num": "#" + (m.group(2) if m else str(d.get("number", ""))),
+                "title": d.get("title") or "", "state": st, "automerge": bool(d.get("autoMergeRequest")),
+                "branch": d.get("headRefName"), "base": d.get("baseRefName"), "checks": checks,
+                "reviewers": reviewers, "merged_at": d.get("mergedAt"), "checked_at": time.time()}
+
+    def lookup(self, url):
+        try:
+            p = subprocess.run([self.gh, "pr", "view", url, "--json",
+                                "number,title,state,isDraft,reviewDecision,statusCheckRollup,headRefName,baseRefName,mergedAt,autoMergeRequest,latestReviews"],
+                               capture_output=True, timeout=25, env=child_env())
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            self.error = str(exc)
+            return False
+        if p.returncode != 0:
+            self.error = last_line(p.stderr.decode("utf-8", "replace")) or "gh pr view failed"
+            return p.returncode != 4  # 4: not signed in, nothing more will work this pass
+        try:
+            self.states[url] = self.shape(url, json.loads(p.stdout.decode("utf-8")))
+            self.error = None
+        except ValueError:
+            self.error = "unreadable gh output"
+        return True
+
+    def loop(self):
+        while True:
+            time.sleep(PR_PASS)
+            if not self.hub.watched():
+                continue
+            now, done, changed = time.time(), 0, False
+            for url in self.urls():
+                st = self.states.get(url)
+                if st and (st["state"] in ("merged", "closed") or now - st["checked_at"] < PR_TTL):
+                    continue
+                if done >= PR_PER_PASS:
+                    break
+                done += 1
+                before = json.dumps(st, sort_keys=True, default=str) if st else None
+                if not self.lookup(url):
+                    break
+                if json.dumps(self.states.get(url), sort_keys=True, default=str) != before:
+                    changed = True
+            if changed:
+                self.hub.bump()
+
+
 # The writes: each is one chartroom verb with a fixed argv shape; text goes on stdin.
 def verb_for(action, body):
     """-> (argv after the binary, stdin bytes or None) or raises ValueError with what is wrong."""
@@ -376,13 +486,59 @@ def verb_for(action, body):
         if isinstance(ref, str) and ARTIFACT_REF.match(ref):
             return ["artifact", "done", ref], None
         raise ValueError("ref: an inbox item (i-xxxx) or an artifact (<id>/<slug>)")
+    if action == "comment":
+        task = need("task", TASK_ID, "a task id")
+        text = body.get("text")
+        if not isinstance(text, str) or not text.strip() or len(text) > 16000:
+            raise ValueError("text: a comment of at most 16000 characters")
+        # "@xo ..." goes to the XO; anything else steers the worker, in the commander's words
+        if re.match(r"^\s*@xo\b", text, re.I):
+            return ["tell", "--via", "app", "--re", task, "-"], re.sub(r"^\s*@xo\b[:,]?\s*", "", text, flags=re.I).encode("utf-8")
+        return ["steer", task, "The commander: " + text.strip()], None
+    if action == "link":
+        task = need("task", TASK_ID, "a task id")
+        url = body.get("url")
+        if not isinstance(url, str) or not re.match(r"^https?://[^\s\"'<>]{3,2000}$", url):
+            raise ValueError("url: an http(s) URL")
+        argv = ["link", task, url, "--by", "commander"]
+        if isinstance(body.get("title"), str) and body["title"].strip():
+            argv += ["--title", body["title"].strip()[:200]]
+        return argv, None
+    if action == "unlink":
+        task = need("task", TASK_ID, "a task id")
+        url = body.get("url")
+        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            raise ValueError("url: a linked URL")
+        return ["link", "rm", task, url], None
+    if action == "unattach":
+        return ["attachment", "rm", need("task", TASK_ID, "a task id"), need("att", ATT_ID, "an attachment id")], None
+    if action == "set":
+        task = need("task", TASK_ID, "a task id")
+        argv = ["set", task]
+        if "priority" in body:
+            argv.append("priority=" + need("priority", re.compile(r"^(urgent|high|medium|low|none)$"), "urgent, high, medium, low or none"))
+        if "labels" in body:
+            labels = body["labels"]
+            if not isinstance(labels, list) or not all(isinstance(x, str) and re.match(r"^[a-z0-9][a-z0-9._-]{0,31}$", x) for x in labels):
+                raise ValueError("labels: a list of lowercase labels")
+            argv.append("labels=" + ",".join(labels))
+        if len(argv) == 2:
+            raise ValueError("nothing to set")
+        return argv, None
+    if action == "brief":
+        task = need("task", TASK_ID, "a task id")
+        sec = body.get("sections")
+        if not isinstance(sec, dict) or not sec or not all(isinstance(k, str) and isinstance(v, str) for k, v in sec.items()):
+            raise ValueError("sections: {heading: text}")
+        return ["brief", task, "--sections", "-"], json.dumps(sec).encode("utf-8")
     raise KeyError(action)
 
 
-def make_handler(hub, args, root, actions):
+def make_handler(hub, args, root, actions, prs):
     app_dir = os.path.join(root, "app")
     shared_dir = os.path.join(root, "lib", "dashboard")
     user = (args.user or "").strip().lower()
+    tickets = {}  # (home, task) -> (time, hub version, body): a ticket asked for twice in a row is read once
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "chartroom-app"
@@ -439,13 +595,19 @@ def make_handler(hub, args, root, actions):
                 return self.static(os.path.join(shared_dir, path[len("/shared/"):]))
             if path == "/api/v1/state":
                 hub.looked()
-                return self.json(200, dict(hub.state(), user=self.who(), actions=actions.recent()))
+                return self.json(200, dict(hub.state(), user=self.who(), actions=actions.recent(), prs=prs.states, gh_error=prs.error))
             if path == "/api/v1/stream":
                 hub.looked()
                 return self.stream()
             m = re.match(r"^/api/v1/homes/([^/]+)/tasks/([^/]+)/files/([^/]+)$", path)
             if m:
                 return self.task_file(*[unquote(x) for x in m.groups()])
+            m = re.match(r"^/api/v1/homes/([^/]+)/tasks/([^/]+)$", path)
+            if m:
+                return self.ticket(*[unquote(x) for x in m.groups()])
+            m = re.match(r"^/api/v1/homes/([^/]+)/tasks/([^/]+)/attachments/([^/]+)$", path)
+            if m:
+                return self.attachment(*[unquote(x) for x in m.groups()])
             return self.send(404, "not found\n", "text/plain; charset=utf-8")
 
         def inside(self, base, rel):
@@ -475,6 +637,136 @@ def make_handler(hub, args, root, actions):
             with open(f, "rb") as fh:
                 data = fh.read(4 * 1024 * 1024)
             return self.send(200, data, "text/plain; charset=utf-8")
+
+        def ticket(self, home, tid):
+            h = hub.homes.get(home)
+            if not h or not TASK_ID.match(tid) or not os.path.isfile(os.path.join(h.path, "tasks", tid, "meta.json")):
+                return self.json(404, {"error": "no such task"})
+            key = (home, tid)
+            hit = tickets.get(key)
+            if hit and hit[1] == hub.version and time.time() - hit[0] < TICKET_CACHE:
+                return self.send(200, hit[2], "application/json")
+            code, out, err = run([args.bin, "app", "task", tid, "--json"], h.path, timeout=60)
+            if code != 0:
+                return self.json(500, {"error": last_line(err) or "could not read the task"})
+            tickets[key] = (time.time(), hub.version, out.encode("utf-8"))
+            return self.send(200, out, "application/json")
+
+        def attachment(self, home, tid, att):
+            h = hub.homes.get(home)
+            if not h or not TASK_ID.match(tid) or not ATT_ID.match(att):
+                return self.send(404, "not found\n", "text/plain; charset=utf-8")
+            d = os.path.join(h.path, "tasks", tid, "attachments", att)
+            rec = None
+            try:
+                with open(os.path.join(h.path, "tasks", tid, "attachments.ndjson"), encoding="utf-8", errors="replace") as fh:
+                    for line in fh:
+                        try:
+                            r = json.loads(line)
+                        except ValueError:
+                            continue
+                        if isinstance(r, dict) and r.get("id") == att:
+                            rec = None if r.get("removed") else r
+            except OSError:
+                pass
+            names = os.listdir(d) if rec and os.path.isdir(d) else []
+            if not rec or rec.get("name") not in names:
+                return self.send(404, "not found\n", "text/plain; charset=utf-8")
+            f = os.path.join(d, rec["name"])
+            size = os.path.getsize(f)
+            inline = rec.get("type") in INLINE_TYPES
+            ctype = rec["type"] if inline else "application/octet-stream"
+            if ctype.startswith("text/") or ctype == "application/json":
+                ctype += "; charset=utf-8"
+            start, end, code = 0, size - 1, 200
+            rng = re.match(r"^bytes=(\d*)-(\d*)$", self.headers.get("Range") or "")
+            if rng and size:
+                a, b = rng.groups()
+                if a:
+                    start, end = int(a), min(int(b), size - 1) if b else size - 1
+                elif b:
+                    start, end = max(0, size - int(b)), size - 1
+                if start > end or start >= size:
+                    self.send_response(416)
+                    self.send_header("Content-Range", "bytes */%d" % size)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                code = 206
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(end - start + 1))
+            self.send_header("Accept-Ranges", "bytes")
+            if code == 206:
+                self.send_header("Content-Range", "bytes %d-%d/%d" % (start, end, size))
+            self.send_header("Content-Disposition", "%s; filename*=UTF-8''%s" % ("inline" if inline else "attachment", quote(rec["name"])))
+            self.send_header("Content-Security-Policy", "sandbox; default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Cache-Control", "private, max-age=3600")
+            self.end_headers()
+            if self.command == "HEAD":
+                return
+            with open(f, "rb") as fh:
+                fh.seek(start)
+                left = end - start + 1
+                while left > 0:
+                    chunk = fh.read(min(65536, left))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    left -= len(chunk)
+
+        def upload(self, home, tid):
+            """A file the commander attaches: the raw body, at most 25 MB, streamed to a temporary file
+            in the task's folder, then `chartroom attachment add`, which keeps it and steers the worker."""
+            h = hub.homes.get(home)
+            if not h or not TASK_ID.match(tid) or not os.path.isfile(os.path.join(h.path, "tasks", tid, "meta.json")):
+                return self.json(404, {"error": "no such task"})
+            try:
+                n = int(self.headers.get("Content-Length") or "-1")
+            except ValueError:
+                n = -1
+            if n < 0:
+                return self.json(411, {"error": "the upload needs a length"})
+            if n > ATTACH_MAX:
+                return self.json(413, {"error": "attachments hold at most 25 MB; link a bigger file instead"})
+            name = unquote(self.headers.get("X-Filename") or "") or "file"
+            caption = unquote(self.headers.get("X-Caption") or "")[:500]
+            ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            d = os.path.join(h.path, "tasks", tid, "attachments")
+            os.makedirs(d, mode=0o700, exist_ok=True)
+            aid = self.headers.get("X-Chartroom-Action") or ""
+            if not ACTION_ID.match(aid):
+                aid = "s-%x-%x" % (int(time.time() * 1000), threading.get_ident() & 0xffffff)
+            known = actions.recs.get(aid)
+            if known:  # a retry of an upload the server already has: never a second copy
+                return self.json(202, {"ok": True, "id": aid, "state": known["state"], "error": known.get("error")})
+            tmp = os.path.join(d, ".incoming-" + aid)
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "wb") as fh:
+                left = n
+                while left > 0:
+                    chunk = self.rfile.read(min(65536, left))
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    left -= len(chunk)
+            if left > 0:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                return self.json(400, {"error": "the upload was cut short"})
+            argv = ["attachment", "add", tid, "--by", "commander", "--name", name]
+            if re.match(r"^[a-z]+/[a-z0-9.+-]+$", ctype) and ctype != "application/octet-stream":
+                argv += ["--type", ctype]
+            if caption.strip():
+                argv += ["--caption", caption.strip()]
+            if self.headers.get("X-Silent") == "1":
+                argv.append("--silent")
+            # queued like every write: the file waits in the task's folder until the verb keeps it
+            r = actions.submit(aid, home, "attach", argv + [tmp], None, cleanup=tmp)
+            return self.json(202, {"ok": True, "id": r["id"], "state": r["state"], "error": r.get("error")})
 
         def stream(self):
             self.send_response(200)
@@ -506,13 +798,18 @@ def make_handler(hub, args, root, actions):
             h = self.headers
             # No cross-site writes: our own header (a form or an image cannot send it), JSON only,
             # and when the browser says where the request came from, it came from this app.
-            if h.get("X-Chartroom-App") != "1" or not (h.get("Content-Type") or "").startswith("application/json"):
+            if h.get("X-Chartroom-App") != "1":
                 return self.json(403, {"error": "writes come from the app only"})
             if h.get("Sec-Fetch-Site") not in (None, "same-origin", "none"):
                 return self.json(403, {"error": "cross-site write refused"})
             origin = h.get("Origin")
             if origin and urlsplit(origin).netloc.lower() != (h.get("Host") or "").lower():
                 return self.json(403, {"error": "cross-origin write refused"})
+            up = re.match(r"^/api/v1/homes/([^/]+)/tasks/([^/]+)/attachments$", path)
+            if up:
+                return self.upload(unquote(up.group(1)), unquote(up.group(2)))
+            if not (h.get("Content-Type") or "").startswith("application/json"):
+                return self.json(403, {"error": "writes come from the app only"})
             m = re.match(r"^/api/v1/homes/([^/]+)/([a-z]+)$", path)
             if not m:
                 return self.json(404, {"error": "not found"})
@@ -572,7 +869,8 @@ def main():
     httpd.daemon_threads = True
     port = httpd.server_address[1]
     actions = Actions(hub, args.bin, os.path.join(os.path.dirname(args.pidfile), "app-actions.ndjson") if args.pidfile else None)
-    httpd.RequestHandlerClass = make_handler(hub, args, args.root, actions)
+    prs = Prs(hub)
+    httpd.RequestHandlerClass = make_handler(hub, args, args.root, actions, prs)
 
     def cleanup(*_):
         if args.pidfile:
@@ -600,6 +898,7 @@ def main():
             hub.discover()
 
     threading.Thread(target=rediscover, daemon=True).start()
+    threading.Thread(target=prs.loop, daemon=True).start()
     httpd.serve_forever()
 
 

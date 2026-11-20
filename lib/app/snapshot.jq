@@ -54,7 +54,9 @@ def askline: sub("^[^ ]+ [a-z-]+: ?"; "");
      last_event: (.last_event // .last), last_at: (.last_event_at // .last_at // .dispatched // .created),
      waiting_on, waiting_until, branch: (.branch // null), prs: (.prs // []), files: (.files // []),
      has_report, breaking: (.breaking // false), in_focus: (.in_focus != false), held: (.held // false),
-     ask: (.ask // null), intent: (.intent // null), artifacts: arts_of("task"; .id)}] as $tasks
+     ask: (.ask // null), intent: (.intent // null), artifacts: arts_of("task"; .id),
+     links: (.links // []), priority: (.priority // null), labels: (.labels // []),
+     initiative: (.initiative // null), milestone: (.milestone // null)}] as $tasks
 
 | ([$tasks[] | select(.status == "needs" or .status == "review")
     | . as $t

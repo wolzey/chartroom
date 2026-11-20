@@ -75,7 +75,11 @@ app_snapshot_json() {
         intent="$(app_intent "$id")" ;;
     esac
     rows+=("$(jq -c --argjson x "$extra" --argjson ask "$ask" --arg intent "$intent" \
-      '. + $x + {ask: $ask, intent: (if $intent == "" then null else $intent end)}' <<<"$row")")
+      --argjson links "$(links_json "$id")" --slurpfile meta "$(tdir "$id")/meta.json" \
+      '. + $x + {ask: $ask, intent: (if $intent == "" then null else $intent end),
+        prs: ([$links[] | select(.kind == "pr") | .url]), links: $links,
+        priority: ($meta[0].priority // null), labels: ($meta[0].labels // []),
+        initiative: ($meta[0].initiative // null), milestone: ($meta[0].milestone // null)}' <<<"$row")")
   done < <(status_rows --all --since "$since")
   local answers='{}' d f
   d="$(ask_dir)"
@@ -153,6 +157,9 @@ cmd_app() {
     snapshot)
       shift; [[ "${1:-}" == --json ]] || die "usage: chartroom app snapshot --json"
       app_snapshot_json; return ;;
+    task)
+      shift; [[ $# -eq 2 && "$2" == --json ]] || die "usage: chartroom app task <id> --json"
+      need_task "$1"; ticket_json "$1"; return ;;
     stop) app_stop; return ;;
     status)
       local pid port
