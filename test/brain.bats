@@ -302,9 +302,20 @@ new_remote() { # a task made through the client; prints its id
   [ "$status" -eq 0 ]; [ "$(jq -r .runner <<<"$output")" = hc ]; [ "$(jq -r .hc_terminal <<<"$output")" = t9 ]
   use_fake herdr-app
   export FAKE_HERDR_APP_DIR="$BATS_TEST_TMPDIR/app" CHARTROOM_BRAIN_HC_MACHINE=studio
+  mkdir -p "$FAKE_HERDR_APP_DIR"
+  echo '{"spaces": [{"id": "sp1", "name": "mine", "machine": null, "tabs": [{"id": "tb1", "name": "1", "terminals": [{"terminal": "t1"}]}]},
+    {"id": "sp2", "name": "acme-crew", "machine": "studio", "tabs": [{"id": "tb2", "name": "9", "terminals": [{"terminal": "studio/t9"}]}]}]}' >"$FAKE_HERDR_APP_DIR/ls.json"
+  echo tb1 >"$FAKE_HERDR_APP_DIR/shown"
   run cr attach "$id"
   [ "$status" -eq 0 ]; [[ "$output" == *"showing $id in Herdr (terminal t9 on studio)"* ]]
-  grep -q 'do agent.focus --terminal studio/t9' "$FAKE_HERDR_APP_DIR/calls.log"
+  grep -q 'do space.select --id sp2' "$FAKE_HERDR_APP_DIR/calls.log"
+  [ "$(cat "$FAKE_HERDR_APP_DIR/shown")" = tb2 ]
+  # a window that does not hold that terminal: a tab attached to it instead (the fake refuses
+  # terminal.open, so with no terminal here attach says what to run)
+  echo '{"spaces": []}' >"$FAKE_HERDR_APP_DIR/ls.json"
+  run cr attach "$id"
+  [ "$status" -ne 0 ]; [[ "$output" == *"hc attach studio/t9"* ]]
+  grep -q 'do terminal.open' "$FAKE_HERDR_APP_DIR/calls.log"
   unset FAKE_HERDR_APP_DIR CHARTROOM_BRAIN_HC_MACHINE
   run cr attach "$id"
   [ "$status" -ne 0 ]; [[ "$output" == *"ssh -t studio hc attach t9"* ]]

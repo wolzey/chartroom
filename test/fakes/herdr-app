@@ -16,6 +16,12 @@ names_json() {
 }
 case "${1:-}" in
   ls)
+    # (a window that also shows a linked machine's terminals: ls.json as given, with "shown" the
+    # active tab)
+    if [[ -f "$A/ls.json" ]]; then
+      jq --arg shown "$(cat "$A/shown" 2>/dev/null)" '.spaces |= map(.tabs |= map(.active = (.id == $shown)) | .active = any(.tabs[]; .active))' "$A/ls.json"
+      exit 0
+    fi
     for f in "${FAKE_HC_DIR:-/nonexistent}"/terms/*.json; do [[ -f "$f" ]] && cat "$f"; done |
       jq -s --argjson pre "$(cat "$A/spaces.json" 2>/dev/null || echo '[]')" --argjson names "$(names_json)" --arg shown "$(cat "$A/shown" 2>/dev/null)" '
         def nm($id; $d): $names[$id] // $d;
@@ -35,7 +41,8 @@ case "${1:-}" in
     done
     case "$c" in
       space.rename|tab.rename) printf '%s' "$name" >"$A/names/$id" ;;
-      agent.focus|tab.close) : ;;
+      agent.focus|tab.close|space.select) : ;;
+      tab.select) printf '%s' "$id" >"$A/shown" ;;
       *) echo '{"error": "unknown command"}'; exit 1 ;;
     esac
     echo '{"ok": true}' ;;

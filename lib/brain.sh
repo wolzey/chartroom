@@ -840,13 +840,26 @@ brain_hc_machine() {
   hcx machine ls --json 2>/dev/null | jq -r --arg t "$BRAIN_TARGET" \
     '[.machines[]? | select(.target == $t or .name == $t or .host == $t) | .name | select(test("^[A-Za-z0-9_.-]{1,64}$"))] | first // empty' 2>/dev/null || true
 }
+# Show the app's tab that holds <machine/terminal>: select its space and tab, then check it is the
+# one on screen. 1 when the app has no such tab.
+brain_happ_select() { # <address>
+  local addr="$1" sp tb
+  read -r sp tb < <(happ ls 2>/dev/null | jq -r --arg a "$addr" \
+    'first(.spaces[]? as $s | $s.tabs[]? as $t | select(any($t.terminals[]?; .terminal == $a)) | "\($s.id) \($t.id)") // empty' 2>/dev/null) || true
+  [[ -n "${sp:-}" && -n "${tb:-}" ]] || return 1
+  happ "do" space.select --id "$sp" >/dev/null 2>&1 || return 1
+  happ "do" tab.select --id "$tb" >/dev/null 2>&1 || return 1
+  happ ls 2>/dev/null | jq -e --arg a "$addr" 'any(.spaces[]? | select(.active) | .tabs[]? | select(.active); any(.terminals[]?; .terminal == $a))' >/dev/null 2>&1
+}
 brain_show_hc() { # <id> <terminal>
   local id="$1" t="$2" m addr
   m="$(brain_hc_machine)"
   if [[ -n "$m" ]]; then
     addr="$m/$t"
     if happ ls >/dev/null 2>&1; then
-      if happ "do" agent.focus --terminal "$addr" >/dev/null 2>&1; then echo "showing $id in Herdr (terminal $t on $m)"; return 0; fi
+      # The app shows a linked machine's terminals in spaces of their own; agent.focus answers ok
+      # for one without showing it (verified with herdr-app 0.1.16), so its tab is selected.
+      if brain_happ_select "$addr"; then echo "showing $id in Herdr (terminal $t on $m)"; return 0; fi
       if happ "do" terminal.open --argv "$(jq -cn --arg h "$(hc_bin)" --arg a "$addr" '[$h, "attach", $a]')" >/dev/null 2>&1; then
         echo "opened a Herdr tab on $id (hc attach $addr; ctrl+\\ detaches)"; return 0
       fi
@@ -1131,7 +1144,9 @@ brain_verb_status() {
   brain_client_lines
   if [[ "$reach" == true ]]; then echo "contact:  ok (chartroom $(cat "$BRAIN_SD/version" 2>/dev/null), protocol $BRAIN_PROTOCOL)"
   else echo "contact:  UNREACHABLE: ${BRAIN_LAST:-no answer}"; fi
-  local m; m="$(brain_hc_machine)"; echo "attach:   ${m:+hc machine $m}${m:-no hc machine link to the brain here (attach falls back to ssh -t in a terminal)}"
+  local m; m="$(brain_hc_machine)"
+  if [[ -n "$m" ]]; then echo "attach:   through this machine's hc link to the brain (machine $m)"
+  else echo "attach:   no hc machine link to the brain here (attach falls back to ssh -t in a terminal)"; fi
   brain_tunnel_line
   [[ "$reach" == true ]] || exit "$BRAIN_EX_UNREACHABLE"
 }
