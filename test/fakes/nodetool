@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# fake tool for the node probe, linked under a tool's name (claude, codex, gh, go, docker, node,
+# ruby, herdr, tmux). It answers from $FAKE_NODE_DIR/tools/<name>/:
+#   version   the version it prints (--version, -V, version, ruby's -e, docker info's server)
+#   daemon    docker: "up" answers `docker info`; anything else (or none) fails, as with no daemon
+#   login     claude/codex/gh: "yes" logged in, "no" not, "core" only inside an hc core
+#             (FAKE_IN_HC_CORE=1), as a Mac's keychain is closed to an ssh session
+name="${0##*/}"; d="${FAKE_NODE_DIR:-/nonexistent}/tools/$name"
+v="$(cat "$d/version" 2>/dev/null || echo 1.0.0)"
+logged_in() {
+  case "$(cat "$d/login" 2>/dev/null)" in yes) return 0 ;; core) [[ "${FAKE_IN_HC_CORE-}" == 1 ]] ;; *) return 1 ;; esac
+}
+case "$name ${1:-} ${2:-}" in
+  "claude auth status")
+    if logged_in; then echo '{"loggedIn": true, "authMethod": "claude.ai"}'; else echo '{"loggedIn": false, "authMethod": "none"}'; fi; exit 0 ;;
+  "codex login status"|"gh auth status") logged_in && { echo "logged in"; exit 0; }; echo "not logged in" >&2; exit 1 ;;
+  "docker info"*) [[ "$(cat "$d/daemon" 2>/dev/null)" == up ]] && { echo "$v"; exit 0; }; echo "Cannot connect to the Docker daemon" >&2; exit 1 ;;
+  "ruby -e"*) printf '%s' "$v" ;;
+  "go version"*) echo "go version go$v darwin/arm64" ;;
+  *) echo "$name $v" ;;
+esac

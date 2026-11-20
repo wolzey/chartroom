@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# fake sysctl: `sysctl -n <key>` prints $FAKE_NODE_DIR/sysctl/<key>; any other key (or no
+# $FAKE_NODE_DIR) is unknown, as on a machine without it.
+[[ "${1:-}" == -n && -n "${FAKE_NODE_DIR:-}" && -f "$FAKE_NODE_DIR/sysctl/${2:-}" ]] || { echo "sysctl: unknown oid '${2:-}'" >&2; exit 1; }
+cat "$FAKE_NODE_DIR/sysctl/$2"

@@ -48,13 +48,18 @@ radar_remote_path() {
 # Run one fixed, read-only command on <target>. Never prompts (BatchMode), gives up on a dead
 # link (ConnectTimeout, ServerAlive*), and reuses one connection per target while the radar polls
 # (the control socket lives in this home; skipped when its path would be too long for a socket).
-radar_ssh() { # <target> <remote command>
-  local o=(-o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR)
-  if [[ $(( ${#CR_HOME} + 48 )) -le 100 ]] && mkdir -p "$CR_HOME/.radar" 2>/dev/null; then
+# (`chartroom nodes` shares the options, sending its probe script on stdin: radar_ssh_opts.) The
+# control socket is kept only in a home that exists, so a machine with no home gets none made.
+radar_ssh_opts() { # sets RADAR_SSH_O
+  RADAR_SSH_O=(-o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o LogLevel=ERROR)
+  if [[ -d "$CR_HOME" && $(( ${#CR_HOME} + 48 )) -le 100 ]] && mkdir -p "$CR_HOME/.radar" 2>/dev/null; then
     chmod 700 "$CR_HOME/.radar" 2>/dev/null || true
-    o+=(-o ControlMaster=auto -o "ControlPath=$CR_HOME/.radar/%C" -o ControlPersist=120)
+    RADAR_SSH_O+=(-o ControlMaster=auto -o "ControlPath=$CR_HOME/.radar/%C" -o ControlPersist=120)
   fi
-  ssh "${o[@]}" -- "$1" "$2" </dev/null
+}
+radar_ssh() { # <target> <remote command>
+  radar_ssh_opts
+  ssh "${RADAR_SSH_O[@]}" -- "$1" "$2" </dev/null
 }
 
 # The machines the radar reads, as JSON: this one first, then the others.

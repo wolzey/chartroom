@@ -58,6 +58,21 @@ take() { # <address> <prompt>
 }
 cmd="${1:-}"; shift || true
 case "$cmd" in
+  -V|--version) echo "hc 0.1.21-fake" ;;
+  # `exec [--timeout N] [--env K=V]... -- argv`: runs argv here, as the core would, marked
+  # FAKE_IN_HC_CORE=1 so a fake tool can answer as it does inside a login-session core.
+  exec)
+    envs=()
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --timeout|--on|--cwd) shift 2 ;;
+        --env) envs+=("$2"); shift 2 ;;
+        --) shift; break ;;
+        --*) shift ;;
+        *) break ;;
+      esac
+    done
+    exec env FAKE_IN_HC_CORE=1 "${envs[@]}" "$@" ;;
   server) [[ "${1:-}" == status ]] && echo '{"version":"0.1.14-fake","live":0}' ;;
   run)
     name="" cwd="" labels='{}'
