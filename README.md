@@ -381,7 +381,8 @@ showing when it was last read, or why it could not be.
   `herdr --machine <m> agent list`.
 - **Read-only, always.** Nothing ever runs on another machine except that status call, its
   `chartroom peek <id>`, and `cat` of one of the five task files. Each is built only from ids and
-  home paths that machine reported.
+  home paths that machine reported. (`chartroom nodes` adds one more, also read-only: its probe
+  script, [below](#several-machines-nodes).)
 - **An older chartroom** ignores `--all-homes` and answers for its default home only. The radar
   tells this from the shape of the answer, since the version string may not have changed, and
   says so on the machine's chip.
@@ -435,7 +436,7 @@ m3             ok       node: 6w cpu100% mem75%  16 (12P+4E) load 1.2  48G 92% f
   `lib/nodeprobe.sh`, sent over `ssh -o BatchMode=yes <target> 'bash -s'`: it needs nothing installed
   there (not even chartroom), writes nothing, and runs on a Mac's own bash 3.2. Each machine is
   probed side by side, and one that does not answer within `CHARTROOM_NODES_TIMEOUT` seconds (45) reads
-  `timeout`. ssh's own failures read `unreachable`, or `auth` when ssh would need you (a key, a
+  `timeout` (its ssh is ended; the probe there stops by its own bounds, at most about 90 seconds). ssh's own failures read `unreachable`, or `auth` when ssh would need you (a key, a
   host key, a Tailscale check).
 - **Tools and logins are checked where a worker would run.** A tool counts when it works, not
   when its binary is there (`docker` needs its daemon to answer). On a Mac, an ssh session cannot

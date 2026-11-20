@@ -130,7 +130,7 @@ messages go on **stdin as JSON**, never interpolated into the shell line. Remote
 | `R` | RAM |
 | `L` | 1-minute load average |
 | `F` | free memory fraction (macOS `kern.memorystatus_level`) |
-| `w` | live chartroom workers |
+| `w` | live workers (stage 1 counts every live agent in the node's hc core, crew or not: honest about resources, generous with slots) |
 | `r` | reservations younger than 180 s (the node's own, plus the dispatcher's in-flight placements) |
 
 A worker's cost is `c` = `CHARTROOM_WORKER_CPU` (default 1.5 cores) and `m` = `CHARTROOM_WORKER_MEM_GB` (default 1.5;
@@ -203,8 +203,9 @@ stop placing there). It never kills a worker.
     only the binary); `go version`, `ruby -v`, `node -v`; bash ≥ 4.
   - These run **through the node's login-session runner core** (`hc exec`), only after its socket answers (a probe
     never starts a core).
-  - With no core answering, logins read `unknown (no runner core)`. For the filter, unknown means no, because an ssh
-    shell cannot see a Mac's keychain.
+  - With no core answering, logins read `unknown` over ssh. For the filter, unknown means no, because an ssh
+    shell cannot see a Mac's keychain. A probe run locally outside ssh (`chartroom node probe` in a terminal of the
+    login session) checks them directly.
 - **Checkouts** are git repos at most 3 levels under the node's `CHARTROOM_NODE_PROJECT_ROOTS`, with their canonical
   remote, path and `FETCH_HEAD` age. A node never clones on its own (that would be a later, opt-in
   `CHARTROOM_NODE_CLONE`).
