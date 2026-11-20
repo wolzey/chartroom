@@ -30,7 +30,7 @@ refute() { if "$@"; then echo "expected to fail: $*" >&2; return 1; fi; }
 hc_calls() { cat "$FAKE_HC_DIR/calls.log"; }
 term() { jq -r "$2" "$FAKE_HC_DIR/terms/$1.json"; }
 set_term() { local t="$1" f; shift; f="$FAKE_HC_DIR/terms/$t.json"; jq "$@" "$f" >"$f.tmp" && mv "$f.tmp" "$f"; }
-set_meta() { local f="$CHARTROOM_HOME/tasks/$1/meta.json"; jq --arg k "$2" --arg v "$3" '.[$k] = $v' "$f" >"$f.tmp" && mv "$f.tmp" "$f"; }
+set_meta_kv() { set_meta "$1" ".[$(jq -n --arg k "$2" '$k')] = $(jq -n --arg v "$3" '$v')"; } # <id> <key> <string value>
 live_of() { cr status --json | jq -r --arg i "$1" '.[] | select(.id == $i) | .live'; }
 state_of() { cr status --json | jq -r --arg i "$1" '.[] | select(.id == $i) | .state'; }
 watch_after() { # `watch --once` in the background; runs <change> once it has taken its first look
@@ -61,9 +61,7 @@ worker() { # <kind> <text>
 }
 ago() { date -u -v-"$1"M "+$2" 2>/dev/null || date -u -d "$1 minutes ago" "+$2"; } # <minutes> <format>
 at_rest_long() { # <id>: its history 90 minutes old, its agent at rest for 80 (a waiting window is still open)
-  local f="$CHARTROOM_HOME/tasks/$1/events.log"
-  sed -E "s/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z/$(ago 90 %Y-%m-%dT%H:%M:%SZ)/" "$f" >"$f.tmp" && mv "$f.tmp" "$f"
-  touch -t "$(date -v-90M +%Y%m%d%H%M 2>/dev/null || date -d '90 minutes ago' +%Y%m%d%H%M)" "$f"
+  age_events "$1" "$(ago 90 %Y-%m-%dT%H:%M:%SZ)"
   set_term "$(meta_of "$1" hc_terminal)" --argjson ms "$(( ($(date +%s) - 4800) * 1000 ))" '.status_ms = $ms'
 }
 
@@ -74,16 +72,16 @@ at_rest_long() { # <id>: its history 90 minutes old, its agent at rest for 80 (a
   sid="$(meta_of "$id" session_id)"
   [[ "$sid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]
   grep -q -- "--session-id $sid " "$CHARTROOM_HOME/tasks/$id/launch.sh"
-  refute grep -q "session id is now" "$CHARTROOM_HOME/tasks/$id/events.log"
+  refute grep -q "session id is now" <(events "$id")
   # Claude's word wins, with a note
   jq -cn '{prompt: "x", session_id: "11111111-1111-4111-8111-111111111111"}' | cr hook "$id" prompt-submit
   [ "$(meta_of "$id" session_id)" = 11111111-1111-4111-8111-111111111111 ]
   events "$id" | grep -q "note: session id is now 11111111-1111-4111-8111-111111111111 (was $sid)"
   # a worker started before chartroom chose ids gets its id at its next prompt
-  set_meta "$id" session_id ""
+  set_meta_kv "$id" session_id ""
   jq -cn '{prompt: "y", session_id: "22222222-2222-4222-8222-222222222222"}' | cr hook "$id" prompt-submit
   [ "$(meta_of "$id" session_id)" = 22222222-2222-4222-8222-222222222222 ]
-  [ "$(grep -c 'session id is now' "$CHARTROOM_HOME/tasks/$id/events.log")" -eq 1 ]
+  [ "$(grep -c 'session id is now' <(events "$id"))" -eq 1 ]
 }
 
 @test "park: a worker at rest parks: screen kept, terminal ended and removed, live parked, no wake" {
@@ -98,8 +96,8 @@ at_rest_long() { # <id>: its history 90 minutes old, its agent at rest for 80 (a
   grep -q "the worker's last screen" "$CHARTROOM_HOME/tasks/$id/pane.log"
   [ -n "$(meta_of "$id" parked)" ]
   # the park is on record before the launcher's exited line
-  p="$(grep -n "note: parked (session $sid; review" "$CHARTROOM_HOME/tasks/$id/events.log" | cut -d: -f1)"
-  e="$(grep -n "exited: agent session ended" "$CHARTROOM_HOME/tasks/$id/events.log" | cut -d: -f1)"
+  p="$(grep -n "note: parked (session $sid; review" <(events "$id") | cut -d: -f1)"
+  e="$(grep -n "exited: agent session ended" <(events "$id") | cut -d: -f1)"
   [ -n "$p" ] && [ -n "$e" ] && [ "$p" -lt "$e" ]
   [ "$(live_of "$id")" = parked ]
   [ "$(state_of "$id")" = review ]
@@ -122,7 +120,7 @@ at_rest_long() { # <id>: its history 90 minutes old, its agent at rest for 80 (a
   set_term "$t" '.status.state = "idle"'
   # a prompt that went in after its turn ended
   at_rest_long "$id"
-  printf '%s steered: one more thing\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$CHARTROOM_HOME/tasks/$id/events.log"
+  printf '%s steered: one more thing\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$(log_of "$id")"
   run cr park "$id"; [[ "$output" == *"not parked: a prompt went in after its turn ended"* ]]
   set_term "$t" --argjson ms "$(( ($(date +%s) + 5) * 1000 ))" '.status_ms = $ms'
   # a tool command still running under the agent (a dev server in the background), or any shell
@@ -138,7 +136,7 @@ at_rest_long() { # <id>: its history 90 minutes old, its agent at rest for 80 (a
   run cr park "$id"; [[ "$output" == *"not parked: no transcript for its session $sid"* ]]
   mv "$BATS_TEST_TMPDIR/tr" "$(transcript "$id")"
   # no recorded id, and no record of Claude Code's own that is this task's
-  set_meta "$id" session_id ""
+  set_meta_kv "$id" session_id ""
   run cr park "$id"; [[ "$output" == *"not parked: no session id is recorded for it"* ]]
   mkdir -p "$HOME/.claude/sessions"; other=33333333-3333-4333-8333-333333333333
   jq -cn --arg s "$other" '{sessionId: $s}' >"$HOME/.claude/sessions/$claude_pid.json"
@@ -175,10 +173,10 @@ at_rest_long() { # <id>: its history 90 minutes old, its agent at rest for 80 (a
   [ "$(state_of "$a")" = waiting ]
   # b's log is old but its agent finished a turn 10 minutes ago: refused once, noted once
   [ -z "$(meta_of "$b" parked)" ]
-  [ "$(grep -c 'note: not parked: at rest less than 60m' "$CHARTROOM_HOME/tasks/$b/events.log")" -eq 1 ]
+  [ "$(grep -c 'note: not parked: at rest less than 60m' <(events "$b"))" -eq 1 ]
   [ -z "$(meta_of "$c" parked)" ]
   run cr watch --once --timeout 3
-  [ "$(grep -c 'note: not parked' "$CHARTROOM_HOME/tasks/$b/events.log")" -eq 1 ]
+  [ "$(grep -c 'note: not parked' <(events "$b"))" -eq 1 ]
   # off at 0
   d="$(worker done "finished")"; at_rest_long "$d"
   CHARTROOM_PARK_AFTER_MINUTES=0 run cr watch --once --timeout 3
@@ -198,7 +196,7 @@ at_rest_long() { # <id>: its history 90 minutes old, its agent at rest for 80 (a
   hc_calls | grep -q '^events '
   [ -n "$(meta_of "$a" parked)" ]
   [ "$(live_of "$a")" = parked ]
-  refute grep -q 'park undone' "$CHARTROOM_HOME/tasks/$a/events.log"
+  refute grep -q 'park undone' <(events "$a")
   hc_calls | grep -qx "kill $t"
   hc_calls | grep -qx "rm $t"
   [ ! -f "$FAKE_HC_DIR/terms/$t.json" ]
@@ -227,13 +225,13 @@ at_rest_long() { # <id>: its history 90 minutes old, its agent at rest for 80 (a
   core_up
   id="$(worker done "finished")"; sid="$(meta_of "$id" session_id)"
   cr park "$id" >/dev/null
-  n="$(grep -c 'prompt-received' "$CHARTROOM_HOME/tasks/$id/events.log")"
+  n="$(grep -c 'prompt-received' <(events "$id"))"
   run cr attach "$id"
   [ "$status" -eq 0 ]
   [[ "$output" == *"resumed the parked session $sid (hc terminal t2)"* ]]
   [[ "$output" == *"showing $id in Herdr"* ]]
   [ "$(term t2 '.argv[-1]')" = "$CHARTROOM_HOME/tasks/$id/launch.sh" ]
-  [ "$(grep -c 'prompt-received' "$CHARTROOM_HOME/tasks/$id/events.log")" -eq "$n" ]
+  [ "$(grep -c 'prompt-received' <(events "$id"))" -eq "$n" ]
   grep -q "agent.focus --terminal t2" "$FAKE_HERDR_APP_DIR/calls.log"
   events "$id" | grep -q "note: revived (session $sid, hc terminal t2) for attach"
   [ "$(state_of "$id")" = review ]
@@ -252,7 +250,7 @@ at_rest_long() { # <id>: its history 90 minutes old, its agent at rest for 80 (a
   # one wake, from the note; the dead resume's exited line is not news
   [ "$(grep -c "^\[$id\]" "$BATS_TEST_TMPDIR/wake")" -eq 1 ]
   grep -q "^\[$id\] .*note: revive failed: claude --resume did not come up" "$BATS_TEST_TMPDIR/wake"
-  [ "$(grep -c 'exited: agent session ended (exit 1)' "$CHARTROOM_HOME/tasks/$id/events.log")" -eq 1 ]
+  [ "$(grep -c 'exited: agent session ended (exit 1)' <(events "$id"))" -eq 1 ]
   [ -n "$(meta_of "$id" parked)" ]
   [ ! -f "$FAKE_HC_DIR/terms/t2.json" ]
   [ "$(live_of "$id")" = parked ]

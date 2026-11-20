@@ -171,7 +171,8 @@ sweep_tasks_json() {
   local metas=("${TASK_METAS[@]+"${TASK_METAS[@]}"}")
   [[ ${#metas[@]} -gt 0 ]] || { echo '[]'; return 0; }
   local rows base homes ids id st live runner extra='{}' herdr='null'
-  rows="$(status_rows --all | jq -s -c 'map({key: .id, value: {state, live, last_at}}) | from_entries')"
+  # (removed tasks too: their processes are theirs, never orphans; lib/marks.sh)
+  rows="$(CR_STATUS_REMOVED=1 status_rows --all | jq -s -c 'map({key: .id, value: {state, live, last_at}}) | from_entries')"
   homes="$(sweep_forms "$CR_HOME" | jq -R -s -c 'split("\n") | map(select(length > 0))')"
   base="$(jq -n -c --argjson rows "$rows" --argjson homes "$homes" '
     def canon: {"codex": "headless:codex", "herdr-claude": "herdr:claude", "herdr-codex": "herdr:codex"}[.] // .;
@@ -389,6 +390,7 @@ cmd_sweep() {
   plan="$(sweep_plan)"
   if [[ $apply -eq 1 ]]; then
     plan="$(sweep_apply "$plan")"
+    store_upkeep
     sweep_log "sweep: $(jq -r '.summary | "freed \(.apply.processes) process(es), \(.apply.rss_kb) kB RSS; closed \(.apply.closes) task(s); needs a human: \(.human)"' <<<"$plan")"
   fi
   plan="$(jq -c --argjson load "$(sweep_load_json)" --arg home "$CR_HOME" --argjson idle "$CR_SWEEP_IDLE_HOURS" \

@@ -115,7 +115,12 @@ task_kind() { # <id>
   store_dir || return 0
   if [[ -d "$STORE_D/$1" ]]; then TASK_KIND=db; return 0; fi
   # Not rendered by this process yet (or born in the store since it listed them).
-  if [[ "$1" =~ ^[a-z][a-z0-9_-]{0,31}$ ]] && store_py render "${STORE_HOME_ARGS[@]}" --dir "$STORE_D" --meta "$1"; then TASK_KIND=db; fi
+  [[ "$1" =~ ^[a-z][a-z0-9_-]{0,31}$ ]] || return 0
+  local rc=0
+  store_py render "${STORE_HOME_ARGS[@]}" --dir "$STORE_D" --meta "$1" || rc=$?
+  # (3: not in the store. Anything else is the store failing, never "no such task": a write
+  # would land in the wrong place.)
+  case "$rc" in 0) TASK_KIND=db ;; 3) ;; *) die "could not read the store (${STORE_DB:-$CR_DB})" ;; esac
   return 0
 }
 task_exists() { task_kind "$1"; [[ -n "$TASK_KIND" ]]; } # <id>
@@ -234,6 +239,19 @@ store_event() { # <id> <kind> <text>
     warn "the store did not take this event; it waits in tasks/$1/events.spool"
   fi
   store_forget_events "$1"; store_stamp
+}
+
+# sweep --apply's part (lib/sweep.sh): what removes no longer need (lib/store.py purge: an inbox
+# item removed past the 30 days, a mark on a file item that is gone), and one backup of the
+# database a day beside it (backups/, the newest 14 kept). Each logged to sweep.log.
+store_upkeep() {
+  store_uid_of; [[ -n "$STORE_UID" ]] || return 0
+  local db="${STORE_DB:-$CR_DB}" out
+  [[ -f "$db" ]] || return 0
+  out="$(store_py purge "${STORE_HOME_ARGS[@]}" 2>&1)" && [[ "$out" != '{"inbox": 0, "marks": 0}' ]] && sweep_log "store purge: $out"
+  out="$(store_py backup "${STORE_HOME_ARGS[@]}" --dir "${db%/*}/backups" --keep 14 2>&1)" || { sweep_log "store backup failed: $out"; return 0; }
+  jq -e '.made' <<<"$out" >/dev/null 2>&1 && sweep_log "store backup: $(jq -r .backup <<<"$out")"
+  return 0
 }
 
 # ---------------------------------------------------------------- chartroom store

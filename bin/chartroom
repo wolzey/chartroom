@@ -113,6 +113,8 @@ source "$CR_ROOT/lib/ticket.sh"
 source "$CR_ROOT/lib/request.sh"
 # shellcheck source=../lib/initiative.sh
 source "$CR_ROOT/lib/initiative.sh"
+# shellcheck source=../lib/marks.sh
+source "$CR_ROOT/lib/marks.sh"
 for _f in "$CR_ROOT"/lib/backends/*.sh; do
   # shellcheck source=/dev/null
   source "$_f"
@@ -784,6 +786,11 @@ status_rows() { # [--all] [--id ID] [--since EPOCH]
   local metas=("${TASK_METAS[@]+"${TASK_METAS[@]}"}") m
   # Open store tasks' events, rendered at once for what their liveness reads (lib/store.sh).
   if [[ -z "$only" ]]; then store_render_events open; fi
+  # Removed tasks (lib/marks.sh) are left out, but for sweep (CR_STATUS_REMOVED=1) and one asked by id.
+  local -A removed=()
+  if [[ -z "$only" && "${CR_STATUS_REMOVED:-}" != 1 && -n "$STORE_D" && -s "$STORE_D/.marks.json" ]]; then
+    while IFS= read -r k; do [[ -n "$k" ]] && removed[$k]=1; done < <(jq -r '.task | to_entries[] | select(.value.removed != null) | .key' "$STORE_D/.marks.json")
+  fi
   # One jq over every meta.json: the open tasks' ids (the pool `mentions` looks for), and each
   # closed task by its directory, so the rows below skip one without a fork of its own: always
   # without --all, and with --since when it closed before then. A record this jq does not reach
@@ -817,6 +824,7 @@ status_file_rows() {
     [[ -z "$STORE_D" || "$m" != "$STORE_D"/* ]] || continue
     id="${m%/meta.json}"; id="${id##*/}"; d="$CR_HOME/tasks/$id"
     [[ -z "$only" || "$id" == "$only" ]] || continue
+    [[ -z "${removed[$id]+x}" ]] || continue
     [[ -z "${skip[$id]+x}" ]] || continue
     st="$(state_of "$id")"
     [[ $all -eq 1 || "$st" != closed ]] || continue
@@ -856,6 +864,7 @@ status_store_rows() {
   [[ $all -eq 1 ]] && a+=(--all)
   [[ -n "$only" ]] && a+=(--id "$only")
   [[ -n "$since" ]] && a+=(--since "$since")
+  [[ -n "$only" || "${CR_STATUS_REMOVED:-}" == 1 ]] && a+=(--with-removed)
   raw="$(printf '%s\n' "$open_ids" | store_py rows "${STORE_HOME_ARGS[@]}" --pool-stdin --grace "$CR_WAITING_GRACE" --max "$CR_WAITING_MAX" "${a[@]+"${a[@]}"}")" ||
     die "could not read the store (${STORE_DB:-$CR_DB})"
   [[ -n "$raw" ]] || return 0
@@ -909,6 +918,14 @@ cmd_status() {
 # "(none)" excluded); prints nothing when there are none.
 inbox_line() {
   local f="$CR_HOME/inbox.md"
+  # A home with a store: its items, inbox.md's and the store's less the marked ones (lib/marks.sh).
+  if store_load; then
+    dashboard_inbox | jq -r --arg f "$f" '(.waiting | length) as $w | (.approvals | length) as $a | select($w + $a > 0)
+      | "inbox: " + ([if $w > 0 then "\($w) waiting on the commander" else empty end,
+                      if $a > 0 then "\($a) \(if $a == 1 then "approval" else "approvals" end) not yet in a brief" else empty end] | join(", "))
+      + " (\($f))"'
+    return 0
+  fi
   [[ -f "$f" ]] || return 0
   awk -v f="$f" '
     /^## / { s = $0; next }
@@ -985,6 +1002,13 @@ cmd_inbox() {
       if [[ "$focus" != null && -z "$mark" ]] && ! focus_has "$focus" "$(jq -cn --arg p "$project" --arg t "${words[*]}" '{project: $p, text: $t}')"; then
         warn "held: focus is on $(jq -r "$FOCUS_JQ"' focus_name' <<<"$focus"); the commander sees it after focus off"
       fi
+      # The switch on: a store item (lib/store.sh), and inbox.md is left as it is.
+      if store_on; then
+        store_home_ensure
+        store_py inbox-add "${STORE_HOME_ARGS[@]}" --project "$project" --text "$mark${words[*]}" || exit 1
+        store_reset; store_stamp; stamp_changed
+        return 0
+      fi
       local out; out="$(mktemp)"
       INBOX_TEXT="${project:+[$project] }$mark${words[*]}" inbox_rewrite '
         function put() { if (!done) { t = newtag(); print "- [" t "] " date " — " ENVIRON["INBOX_TEXT"]; print t > out; done = 1 } }
@@ -1003,6 +1027,13 @@ cmd_inbox() {
       tag="$(tr '[:upper:]' '[:lower:]' <<<"$1" | sed -E 's/^\[//; s/\]$//')"
       [[ "$tag" =~ ^i-[0-9a-f]{4,}$ ]] || die "inbox project: '$1' is not an inbox id (i-xxxx)"
       project="$(inbox_project "$2")" || exit 1
+      # An item born in the store is relabelled there.
+      if store_load && jq -e --arg t "$tag" 'any(.[]; .id == $t)' "$STORE_D/.inbox.json" >/dev/null 2>&1; then
+        store_py inbox-project "${STORE_HOME_ARGS[@]}" --id "$tag" --project "$project" || exit 1
+        store_reset; store_stamp; stamp_changed
+        dashboard_inbox | jq -r --arg t "$tag" '.waiting[] | select(.short_id == $t) | "- [\(.short_id)] \(.date) — [\(.project)] \(.text)"'
+        return 0
+      fi
       out="$(mktemp)"
       INBOX_PROJECT="$project" inbox_rewrite '
         /^## / { w = ($0 ~ /^## Waiting/) }
@@ -1161,7 +1192,17 @@ cmd_attach() {
 }
 
 cmd_close() {
-  local id="${1:-}" discard=0; [[ -n "$id" ]] || die "usage: chartroom close <id> [--discard]"; need_task "$id"
+  # Several ids: each closed on its own (its worktree's own checks), the failures said by id.
+  if [[ $# -gt 1 && "${2:-}" != --discard ]]; then
+    local a rc=0 r
+    for a in "$@"; do [[ "$a" != --discard ]] || die "close --discard takes one task, on the commander's explicit word"; done
+    for a in "$@"; do
+      r=0; ( cmd_close "$(cmd_resolve "$a" 2>/dev/null || printf '%s' "$a")" ) || r=$?
+      (( r == 0 )) || { rc=1; echo "chartroom: $a: not closed (above)" >&2; }
+    done
+    return "$rc"
+  fi
+  local id="${1:-}" discard=0; [[ -n "$id" ]] || die "usage: chartroom close <id>... [--discard]"; need_task "$id"
   [[ "${2:-}" == --discard ]] && discard=1
   local wt project branch base_sha r
   wt="$(meta "$id" worktree)"; project="$(meta "$id" project)"; branch="$(meta "$id" branch)"; base_sha="$(meta "$id" base_sha)"
@@ -1195,7 +1236,8 @@ cmd_close() {
 # The commander's word that finished work is done, without closing it: the worktree, branch
 # and session stay as they are (close, or sweep --apply once it is landed, removes them).
 cmd_accept() {
-  local id st; [[ $# -eq 1 ]] || die "usage: chartroom accept <id>"
+  [[ $# -gt 1 ]] && { accept_many "$@"; return; }
+  local id st; [[ $# -eq 1 ]] || die "usage: chartroom accept <id>..."
   id="$(cmd_resolve "$1")" || exit 1; need_task "$id"
   st="$(state_of "$id")"
   [[ "$st" == review ]] || die "$id is $st, not awaiting review: accept marks a worker's finished work done"
@@ -1207,6 +1249,28 @@ cmd_accept() {
     else echo "its worker stays live: $PARK_WHY"; fi
   fi
   return 0
+}
+
+# Several ids: each checked (in review), then every store task's "accepted" in one transaction
+# and each file task's appended; the failures said by id (exit 1 when any failed).
+accept_many() {
+  local a id st accepted=() lines="" rc=0
+  for a in "$@"; do
+    if ! id="$(cmd_resolve "$a" 2>/dev/null)" || ! task_exists "$id"; then echo "chartroom: $a: no such task" >&2; rc=1; continue; fi
+    st="$(state_of "$id")"
+    [[ "$st" == review ]] || { echo "chartroom: $a: $id is $st, not awaiting review" >&2; rc=1; continue; }
+    accepted+=("$id")
+    if is_store_task "$id"; then lines+="$id"$'\t'note$'\t'accepted$'\n'; else log_event "$id" note "accepted"; fi
+  done
+  if [[ -n "$lines" ]]; then
+    printf '%s' "$lines" | store_py events-add "${STORE_HOME_ARGS[@]}" || die "the store did not take the accepts: none of the store tasks were accepted"
+    store_reset; store_stamp; stamp_changed; bell_ring "" watch
+  fi
+  for id in "${accepted[@]+"${accepted[@]}"}"; do
+    echo "accepted $id: done (chartroom close $id removes its worktree)"
+    if park_supported "$id" && ! is_parked "$id"; then park_task "$id" now >/dev/null 2>&1 || true; fi
+  done
+  return "$rc"
 }
 
 # ---------------------------------------------------------------- watch
@@ -1239,10 +1303,13 @@ ensure_cursor() {
   [[ -f "$CURSOR_FILE" ]] && return 0
   local d r m id
   shopt -s nullglob
-  task_meta_files; store_render_events all
+  task_meta_files; store_render_events open # (a closed task never wakes: its log is not read)
   {
     for m in "${TASK_METAS[@]+"${TASK_METAS[@]}"}"; do
-      id="${m%/meta.json}"; id="${id##*/}"; events_path "$id"; d="$EVENTS_PATH"
+      id="${m%/meta.json}"; id="${id##*/}"
+      # (a closed store task is not read: it never wakes, and its history is not rendered)
+      [[ -n "$STORE_D" && "$m" == "$STORE_D"/* && -n "$(jq -r '.closed // empty' "$m")" ]] && continue
+      events_path "$id"; d="$EVENTS_PATH"
       [[ -f "$d" ]] && printf '%s\t%s\n' "$id" "$(($(wc -c <"$d")))"
     done
     r="$(relay_dir)/inbox.ndjson"
@@ -1256,6 +1323,8 @@ WATCH_FOCUS=null # the focus in force, re-read each round
 # task out of focus reads "[<id>] [<project>] [held] <what>": the XO still does the routine
 # machinery, and holds what would go to the commander. A breaking report is never held.
 wake() {
+  # A removed task (lib/marks.sh) wakes no one: its events are still kept.
+  task_removed "$1" && return 0
   local p held=""; p="$(project_label "$1")"
   if [[ "$WATCH_FOCUS" != null && "$2" != *": [breaking] "* ]] && ! focus_has_task "$WATCH_FOCUS" "$1"; then held="[held] "; fi
   printf '[%s] %s%s%s\n' "$1" "${p:+[$p] }" "$held" "$2"; WOKE=1
@@ -1411,9 +1480,11 @@ cmd_watch() {
   WATCH_SIG=""
   trap 'watch_sig 129' HUP; trap 'watch_sig 130' INT; trap 'watch_sig 143' TERM
   meta_cache_load
-  store_render_events all
+  store_render_events open
   for m in "${TASK_METAS[@]+"${TASK_METAS[@]}"}"; do
-    id="${m%/meta.json}"; id="${id##*/}"; events_path "$id"; f="$EVENTS_PATH"
+    id="${m%/meta.json}"; id="${id##*/}"
+    [[ -n "$STORE_D" && "$m" == "$STORE_D"/* ]] && is_closed "$id" && continue # (never read: lib/store.sh)
+    events_path "$id"; f="$EVENTS_PATH"
     unseen=0; [[ $fresh -eq 0 && -z "${OFF[$id]+x}" ]] && unseen=1
     # Streaming without a cursor starts at EOF (status covers anything older).
     [[ $fresh -eq 1 && -f "$f" && -z "${OFF[$id]+x}" ]] && OFF[$id]=$(($(wc -c <"$f")))
@@ -1458,9 +1529,10 @@ cmd_watch() {
       meta_cache_load
       store_render_events open
       for m in "${TASK_METAS[@]+"${TASK_METAS[@]}"}"; do
-        id="${m%/meta.json}"; id="${id##*/}"; events_path "$id"; f="$EVENTS_PATH"
-        [[ -f "$f" ]] || continue
+        id="${m%/meta.json}"; id="${id##*/}"
         is_closed "$id" && continue
+        events_path "$id"; f="$EVENTS_PATH"
+        [[ -f "$f" ]] || continue
         size=$(($(wc -c <"$f")))
         if (( size > ${OFF[$id]:-0} )); then
           watch_scan_lines "$id" "${OFF[$id]:-0}" "$size"
@@ -1701,6 +1773,14 @@ chartroom - run a crew of coding agents from one agent session (the XO)
   chartroom stop <id>                     interrupt a worker
   chartroom set <id> key=value...         a task's settings before dispatch: model, effort,
                                           sandbox, permission (for a file or a store task)
+  chartroom remove <ref>... [--why T] [--stop] [--json]
+                                          take tasks, inbox items (i-xxxx) and artifacts
+                                          (<id>/<slug>) out of every view at once, touching no
+                                          file, worktree or branch; a live worker refuses unless
+                                          --stop; each ref applies or fails on its own (exit 1
+                                          when any failed). restore <ref>... undoes it for 30
+                                          days; removed lists them
+  chartroom done <ref>... [--json]        mark inbox items and artifacts done, in bulk
   chartroom attach <id>                   open a session worker's terminal (hc/herdr/cmux/tmux;
                                           a parked worker is resumed first)
   chartroom park <id> | --due             end an hc:claude worker at rest, keeping its session
@@ -1950,7 +2030,7 @@ if [[ "$cmd" =~ ^(status|ls|board|todo|inbox|relay)$ ]]; then
   done
 fi
 case "$cmd" in
-  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|steer|stop|attach|park|accept|close|sweep|watch|dashboard|radar|node|nodes|doctor|homes|brain|tell|ask|snooze|app|attachment|link|brief|set|request|initiative|version|help|store) "cmd_$cmd" "$@" ;;
+  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|steer|stop|attach|park|accept|close|sweep|watch|dashboard|radar|node|nodes|doctor|homes|brain|tell|ask|snooze|app|attachment|link|brief|set|request|initiative|version|help|store|remove|restore|done|removed) "cmd_$cmd" "$@" ;;
   install-skills) cmd_install_skills "$@" ;;
   ls) cmd_status "$@" ;;
   show) cmd_show "$@" ;;

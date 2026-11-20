@@ -119,6 +119,26 @@ c.commit()
 PY
 }
 
+# Every event of a task at one time <ts>, as if its history were that old, wherever it lives (a
+# file task's events.log is rewritten and its mtime set; a store task's rows are).
+age_events() { # <id> <ts>
+  local f="$CHARTROOM_HOME/tasks/$1/events.log"
+  if [[ -f "$CHARTROOM_HOME/tasks/$1/meta.json" ]]; then
+    sed -E "s/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z/$2/" "$f" >"$f.tmp" && mv "$f.tmp" "$f"
+    perl -e 'utime $ARGV[0], $ARGV[0], $ARGV[1]' "$(jq -rn --arg t "$2" '$t | fromdateiso8601')" "$f"
+    return
+  fi
+  python3 - "$CHARTROOM_HOME" "$1" "$2" <<'PY'
+import os, sqlite3, sys
+home, tid, ts = sys.argv[1:4]
+with open(os.path.join(home, ".home-id")) as f:
+    uid, db = (f.read().split("\n") + ["", ""])[:2]
+c = sqlite3.connect(os.environ.get("CHARTROOM_DB") or db)
+c.execute("UPDATE events SET ts = ? WHERE task = ? AND hid = (SELECT hid FROM homes WHERE uid = ?)", (ts, tid, uid))
+c.commit()
+PY
+}
+
 # Wait (default ~10s, or <secs>) until the task's events.log matches a regex.
 wait_event() {
   local id="$1" re="$2" i n=$(( ${3:-10} * 4 ))

@@ -48,11 +48,27 @@ def focus_line($held):
   + (if .until then ", \((.until | fromdateiso8601) - now | focus_dur) left" else "" end) + ")";'
 
 focus_file() { printf '%s/focus.json' "$CR_HOME"; }
+# The focus to read: the store's (lib/store.sh) when the home has one there, else focus.json.
+focus_read_file() {
+  if store_load && [[ -s "$STORE_D/.focus.json" ]]; then printf '%s/.focus.json' "$STORE_D"; else focus_file; fi
+}
+# Write the focus (its JSON), or clear it (""): in the store while the switch is on, where a
+# focus.json from before is removed on the first write; else focus.json, as always.
+focus_write() { # <json or "">
+  local f; f="$(focus_file)"
+  if store_on; then
+    store_home_ensure
+    store_py focus-set "${STORE_HOME_ARGS[@]}" --json "${1:-null}" || exit 1
+    rm -f "$f"; store_reset; store_stamp; stamp_changed; return 0
+  fi
+  if [[ -n "$1" ]]; then printf '%s\n' "$1" >"$f.tmp" && mv "$f.tmp" "$f" && stamp_changed
+  elif [[ -e "$f" ]]; then rm -f "$f"; stamp_changed; fi
+}
 
 # The focus in force as {projects, scope, since, until}, or null: no file, an unreadable one, or
 # one past its until.
 focus_json() {
-  local f; f="$(focus_file)"
+  local f; f="$(focus_read_file)"
   [[ -f "$f" ]] || { echo null; return 0; }
   jq -c 'if (.projects | type) == "array" and (.projects | length) > 0 and (.since | type) == "string"
            and (.until == null or (.until | fromdateiso8601) > now) then {projects, scope: (.scope // []), since, until} else null end' "$f" 2>/dev/null ||
@@ -61,7 +77,7 @@ focus_json() {
 
 # A focus file whose until has passed: its JSON, else nothing.
 focus_ran_out() {
-  local f; f="$(focus_file)"
+  local f; f="$(focus_read_file)"
   [[ -f "$f" ]] || return 0
   jq -c 'select(.until != null and (.until | fromdateiso8601) <= now)' "$f" 2>/dev/null || true
 }
@@ -146,13 +162,14 @@ focus_off() {
   f="$(focus_file)"; focus="$(focus_json)"
   if [[ "$focus" == null ]]; then
     out="$(focus_ran_out)"
-    [[ ! -e "$f" ]] || { rm -f "$f"; stamp_changed; }
+    if store_on; then [[ -z "$out" && ! -e "$f" ]] || focus_write ""
+    else [[ ! -e "$f" ]] || { rm -f "$f"; stamp_changed; }; fi
     if [[ -n "$out" ]]; then jq -r "$FOCUS_JQ"' "focus: off (\(focus_name) had run out at \(.until))"' <<<"$out"
     else echo "focus: already off"; fi
     return 0
   fi
   board="$(dashboard_json)" # before the file goes, so the held marks are this focus's
-  rm -f "$f"; stamp_changed
+  focus_write ""
   n="$(jq '.focus.held' <<<"$board")"
   jq -r --argjson n "$n" "$FOCUS_JQ"' "focus off: \(focus_name), on for \(now - (.since | fromdateiso8601) | focus_dur). "
     + (if $n == 0 then "Nothing was held." else "\($n) held, now back in view:" end)' <<<"$focus"
@@ -182,7 +199,7 @@ focus_on() { # <duration or ""> <scope words, comma-separated, or ""> <name...>
   mkdir -p "$CR_HOME"
   focus="$(jq -n -c --arg names "${names[*]}" --arg scope "${scope[*]-}" --arg since "$(now)" --argjson until "$until" \
     '{schema: 1, projects: ($names | split(" ")), scope: ($scope | split(" ") | map(select(length > 0))), since: $since, until: $until}')"
-  printf '%s\n' "$focus" >"$(focus_file).tmp" && mv "$(focus_file).tmp" "$(focus_file)" && stamp_changed
+  focus_write "$focus"
   # What it covers now (the open tasks' projects and items, and inbox items), so the rules are seen
   # when it is set; a focus that covers nothing is kept (a project may have no work yet).
   task_meta_files

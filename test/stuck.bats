@@ -158,11 +158,11 @@ EOF
 @test "codex notify: its title-generator thread is no turn of the worker's, and not its thread" {
   id="$(TITLE=t new_task --command 'true' --backend command)"
   cr hook "$id" codex-notify '{"type":"agent-turn-complete","thread-id":"th-title","input-messages":["Generate a concise, single-line task title of at most 36 characters.\n\nUser prompt:\nRead the brief"],"last-assistant-message":"{\"title\":\"Read brief\"}"}'
-  refute grep -q 'agent: turn-ended' "$CHARTROOM_HOME/tasks/$id/events.log"
+  refute grep -q 'agent: turn-ended' <(events "$id")
   [ -z "$(meta_of "$id" thread_id)" ]
   grep -q 'th-title' "$CHARTROOM_HOME/tasks/$id/hooks.log" # the raw record keeps it
   cr hook "$id" codex-notify '{"type":"agent-turn-complete","thread-id":"th-real","input-messages":["Read the brief"]}'
-  grep -q 'agent: turn-ended' "$CHARTROOM_HOME/tasks/$id/events.log"
+  grep -q 'agent: turn-ended' <(events "$id")
   [ "$(meta_of "$id" thread_id)" = th-real ]
 }
 
@@ -225,7 +225,7 @@ EOF
   answered() { echo 'Working (9s • esc to interrupt)' >"$FAKE_HC_DIR/screen"; title_event t1 '⠋ Review brief | repo'; }
   watch_after answered
   refute grep -q '^\[' "$BATS_TEST_TMPDIR/wake"
-  grep -q 'agent: prompt-cleared' "$CHARTROOM_HOME/tasks/$id/events.log"
+  grep -q 'agent: prompt-cleared' <(events "$id")
   [ "$(state_of_task "$id")" = working ]
   # the next approval is news of its own
   second() { codex_approval | sed 's/\.probe/.again/' >"$FAKE_HC_DIR/screen"; title_event t1 '[ . ] Action Required | Review brief | repo'; }
@@ -248,7 +248,7 @@ EOF
   [ "$(cr status --json | jq -r '.[0].live')" = blocked ]
   run cr watch --once --timeout 2
   [ "$status" -eq 124 ]
-  [ "$(grep -c 'awaiting-input' "$CHARTROOM_HOME/tasks/$id/events.log")" -eq 1 ]
+  [ "$(grep -c 'awaiting-input' <(events "$id"))" -eq 1 ]
 }
 
 @test "hc:codex with its title turned off (tui.terminal_title): the screen alone raises the prompt, and its end" {
@@ -282,7 +282,7 @@ EOF
   local w=$!; sleep 4; kill "$w" 2>/dev/null; wait "$w" || true
   grep -q 'agent: awaiting-input: Codex approval prompt: \$ touch \$HOME/\.probe$' "$BATS_TEST_TMPDIR/wake"
   [ "$(wakes)" -eq 1 ]
-  [ "$(grep -c 'awaiting-input' "$CHARTROOM_HOME/tasks/$id/events.log")" -eq 1 ]
+  [ "$(grep -c 'awaiting-input' <(events "$id"))" -eq 1 ]
 }
 
 @test "hc:codex: a second approval while the title never went off is news of its own, at the next look" {
@@ -385,7 +385,7 @@ EOF
   [ "$status" -ne 0 ]
   [[ "$output" == *"blocked at a dialog"*"chartroom attach $id"* ]]
   refute grep -qE '^(send|keys)' "$FAKE_HC_DIR/calls.log"
-  refute grep -q 'steered: carry on' "$CHARTROOM_HOME/tasks/$id/events.log"
+  refute grep -q 'steered: carry on' <(events "$id")
   # by its screen alone (a dialog sets no title)
   set_term t1 '.title = "repo"'
   codex_hooks_dialog >"$FAKE_HC_DIR/screen"
@@ -425,7 +425,7 @@ tmux_codex() {
   rm "$FAKE_TMUX_DIR/title"
   run cr watch --once --timeout 2
   [ "$status" -eq 124 ]
-  grep -q 'agent: prompt-cleared' "$CHARTROOM_HOME/tasks/$id/events.log"
+  grep -q 'agent: prompt-cleared' <(events "$id")
   [ "$(cr status --json | jq -r '.[0].live')" = working ]
   # by the screen
   codex_approval >"$FAKE_TMUX_DIR/screen"
@@ -516,12 +516,12 @@ tmux_codex() {
   hc_calls | grep -qx "keys t1 esc"
   refute grep -qE '^keys t1 (enter|down)' "$FAKE_HC_DIR/calls.log"
   events "$id" | grep -q "note: continued past Codex's \"Hooks need review\" dialog without those hooks"
-  refute grep -q 'awaiting-input' "$CHARTROOM_HOME/tasks/$id/events.log"
+  refute grep -q 'awaiting-input' <(events "$id")
   # a folder chartroom did not create is not its to answer
   codex_hooks_dialog >"$FAKE_HC_DIR/screen"
   id2="$(new_task --backend hc:codex)"
   cr worktree "$id2" >/dev/null
-  jq '.worktree_created="0"' "$CHARTROOM_HOME/tasks/$id2/meta.json" >"$BATS_TEST_TMPDIR/m" && mv "$BATS_TEST_TMPDIR/m" "$CHARTROOM_HOME/tasks/$id2/meta.json"
+  set_meta "$id2" '.worktree_created="0"'
   : >"$FAKE_HC_DIR/calls.log"
   run cr dispatch "$id2"
   [ "$status" -eq 0 ]
@@ -685,13 +685,13 @@ stall_fast() { export CHARTROOM_STALL_MINUTES=0.05 CHARTROOM_LOOK_INTERVAL=1; } 
   # once per stall, restarts included
   run cr watch --once --timeout 6
   [ "$status" -eq 124 ]
-  [ "$(grep -c 'note: stalled' "$CHARTROOM_HOME/tasks/$id/events.log")" -eq 1 ]
+  [ "$(grep -c 'note: stalled' <(events "$id"))" -eq 1 ]
   # new output is a new chance to stall
   echo "more" >>"$CHARTROOM_HOME/tasks/$id/output.log"
   run cr watch --once --timeout 10
   [ "$status" -eq 0 ]
   [[ "$output" == *"stalled: no output or events for"*"more" ]]
-  [ "$(grep -c 'note: stalled' "$CHARTROOM_HOME/tasks/$id/events.log")" -eq 2 ]
+  [ "$(grep -c 'note: stalled' <(events "$id"))" -eq 2 ]
   stop_worker "$id"
 }
 
@@ -738,7 +738,7 @@ stall_fast() { export CHARTROOM_STALL_MINUTES=0.05 CHARTROOM_LOOK_INTERVAL=1; } 
   run cr watch --once --timeout 2
   run cr watch --once --timeout 6
   [ "$status" -eq 124 ]
-  refute grep -l 'note: stalled' "$CHARTROOM_HOME/tasks/$a/events.log" "$CHARTROOM_HOME/tasks/$b/events.log" "$CHARTROOM_HOME/tasks/$c/events.log"
+  refute grep -q 'note: stalled' <(events "$a"; events "$b"; events "$c")
   for t in "$a" "$b" "$c"; do stop_worker "$t"; done
 }
 
@@ -765,8 +765,8 @@ stall_fast() { export CHARTROOM_STALL_MINUTES=0.05 CHARTROOM_LOOK_INTERVAL=1; } 
   [[ "$output" == *"agent: awaiting-input"* ]]
   run cr watch --once --timeout 6
   [ "$status" -eq 124 ]
-  refute grep -q 'note: stalled' "$CHARTROOM_HOME/tasks/$e/events.log"
-  jq --arg t "$(date -u +%FT%TZ)" '.parked = $t' "$CHARTROOM_HOME/tasks/$e/meta.json" >"$BATS_TEST_TMPDIR/m" && mv "$BATS_TEST_TMPDIR/m" "$CHARTROOM_HOME/tasks/$e/meta.json"
+  refute grep -q 'note: stalled' <(events "$e")
+  set_meta "$e" ".parked = \"$(date -u +%FT%TZ)\""
   rm -f "$CHARTROOM_HOME/tasks/$e/.stall"
   run cr watch --once --timeout 3
   [ ! -e "$CHARTROOM_HOME/tasks/$e/.stall" ]

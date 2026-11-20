@@ -6,6 +6,7 @@ load test_helper
 
 setup() {
   common_setup
+  unset CHARTROOM_STORE # (these tests turn the switch on and off in the home's own config)
   command -v python3 >/dev/null && python3 -c 'import sqlite3' 2>/dev/null || skip "no python3 with sqlite3"
   export CHARTROOM_DB="$BATS_TEST_TMPDIR/state/chartroom/chartroom.db"
   cr init >/dev/null

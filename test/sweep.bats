@@ -340,3 +340,29 @@ closed_record() { # <id> [extra-json]
     [ "$(item_for "$json" "$ear" | jq -r '.action + ": " + .reason')" = "human: orphaned listener for a task this home does not have" ]
   fi
 }
+
+@test "sweep keeps a removed task's processes as its own, never orphans (lib/marks.sh)" {
+  command -v python3 >/dev/null && python3 -c 'import sqlite3' 2>/dev/null || skip "no python3 with sqlite3"
+  export CHARTROOM_DB="$BATS_TEST_TMPDIR/state/chartroom/chartroom.db"
+  TASK_ENV="STUB_MODE=decision" id="$(finished_task)"
+  wt="$(meta_of "$id" worktree)"
+  dev="$(spawn "$wt" bash "$TOOLS/vite")"
+  cr remove "$id" >/dev/null
+  json="$(sweep_json --idle-hours 0)"
+  [ -z "$(item_for "$json" "$dev")" ]
+  run cr sweep --apply --idle-hours 0
+  [ "$status" -eq 0 ]
+  alive "$dev"
+  [ -z "$(meta_of "$id" closed)" ]
+}
+
+@test "sweep closes a removed task that is done and clean, by the rules for any task" {
+  command -v python3 >/dev/null && python3 -c 'import sqlite3' 2>/dev/null || skip "no python3 with sqlite3"
+  export CHARTROOM_DB="$BATS_TEST_TMPDIR/state/chartroom/chartroom.db"
+  id="$(finished_task --kind scout)"
+  cr accept "$id" >/dev/null
+  cr remove "$id" >/dev/null
+  run cr sweep --apply --idle-hours 0
+  [ "$status" -eq 0 ]
+  [ -n "$(meta_of "$id" closed)" ]
+}

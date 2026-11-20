@@ -328,8 +328,17 @@ others read between steps. `close` only marks it closed; its directory is never 
   hand-editing that section, run `chartroom inbox tag`, and `chartroom inbox project <i-id>
   <project>` labels an item that has none). When the commander approves something in chat that is not yet written into a
   task brief, add a dated line under "Approvals given in chat, not yet in a brief". Remove the
-  line once it is answered or recorded in a brief (`chartroom todo done <i-id>` removes a
-  Waiting line).
+  line once it is answered or recorded in a brief (`chartroom todo done <i-id>` takes a
+  Waiting item off). In a home with the store on (`CHARTROOM_STORE=sqlite`), a new item lives in
+  the store, not in `inbox.md`: read the inbox with `chartroom inbox list`, never by hand, and
+  never hand-edit a line in for it.
+- **Removing work.** When the commander says something is no longer relevant, take it out of
+  every view at once with `chartroom remove <ref>... [--why "<text>"]`: tasks, inbox items
+  (`i-xxxx`) and artifacts (`<id>/<slug>`), old or new, many in one call. It touches no file,
+  worktree, branch or session, so nothing is lost (`chartroom restore <ref>...` undoes it for 30
+  days; `chartroom removed` lists them). A task whose worker is still live is refused; `--stop`
+  ends the worker first, only on the commander's word. `chartroom done <ref>...` marks inbox
+  items and artifacts done in bulk. Each ref succeeds or fails on its own; say which failed.
 - **Questions in the app.** The commander answers in the chartroom app as often as in this
   session. Every multiple-choice question you ask them, and every grilling round, also goes there
   as a card: `chartroom ask --title "<question>" --option "<a>" --option "<b>" --recommend 1
@@ -398,8 +407,8 @@ others read between steps. `close` only marks it closed; its directory is never 
   remember something for them ("remind me to…", "add to my list"), `chartroom todo add --project
   <project> "<text>"`; a date in the text orders it (`renew the cert by 2026-10-22`). The
   commander can tick items off themselves (`d` in the pane, `chartroom todo done`), which
-  removes the inbox line or closes the artifact: re-read `inbox.md` before you treat a question
-  as still open. A task's decision never comes off the list until you relay the answer.
+  takes the inbox item off or closes the artifact: check `chartroom inbox list` before you treat
+  a question as still open. A task's decision never comes off the list until you relay the answer.
 
 ## Focus mode
 

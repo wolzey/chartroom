@@ -44,8 +44,11 @@ sid_of() { # <address>: the session id its launcher gives claude
 }
 exited_line() { # <address> <rc>: what the task's launcher appends when its agent ends
   local task; task="$(jq -r '.labels["chartroom.task"] // empty' "$(tf "$1")")"
-  [[ -n "$task" && -n "${CHARTROOM_HOME:-}" && -f "$CHARTROOM_HOME/tasks/$task/events.log" ]] || return 0
-  printf '%s exited: agent session ended (exit %s)\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$2" >>"$CHARTROOM_HOME/tasks/$task/events.log"
+  [[ -n "$task" && -n "${CHARTROOM_HOME:-}" && -d "$CHARTROOM_HOME/tasks/$task" ]] || return 0
+  # (as the launcher does: a file task's events.log, a store task's events.spool, lib/store.sh)
+  local f="$CHARTROOM_HOME/tasks/$task/events.log"
+  [[ -f "$CHARTROOM_HOME/tasks/$task/meta.json" ]] || f="$CHARTROOM_HOME/tasks/$task/events.spool"
+  printf '%s exited: agent session ended (exit %s)\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$2" >>"$f"
 }
 trust_up() { grep -qiE 'trust this folder|do you trust' "$S/screen" 2>/dev/null; }
 take() { # <address> <prompt>

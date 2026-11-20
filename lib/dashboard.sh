@@ -42,20 +42,28 @@ python_missing() { echo "the dashboard needs python3 (standard library only); 'c
 #   - [i-7f3a] 2026-01-02 — [webapp] which region for staging?
 # Waiting items carry focus mode's in_focus/held marks (lib/focus.sh); a text starting with
 # "[breaking] " (inbox add --breaking) is never held.
+# Inbox items born in the store (lib/store.sh) come after inbox.md's, and an item marked removed
+# or done (lib/marks.sh) is left out.
 dashboard_inbox() {
-  local f="$CR_HOME/inbox.md"
-  [[ -f "$f" ]] || { echo '{"waiting":[],"approvals":[]}'; return 0; }
-  awk '
+  local f="$CR_HOME/inbox.md" store='[]' marks='{}'
+  if store_load; then
+    [[ -s "$STORE_D/.inbox.json" ]] && store="$(cat "$STORE_D/.inbox.json")"
+    [[ -s "$STORE_D/.marks.json" ]] && marks="$(jq -c '.inbox' "$STORE_D/.marks.json")"
+  fi
+  [[ -f "$f" || "$store" != '[]' ]] || { echo '{"waiting":[],"approvals":[]}'; return 0; }
+  { [[ ! -f "$f" ]] || awk '
     /^## / { s = ($0 ~ /^## Waiting/) ? "waiting" : ($0 ~ /^## Approvals/) ? "approvals" : ""; next }
-    s != "" && /^- / && $0 !~ /^- \(none\)/ { sub(/^- /, ""); print s "\t" $0 }' "$f" |
-    jq -R -s --argjson focus "$(focus_json)" "$FOCUS_JQ"'
-      [split("\n")[] | select(length > 0) | split("\t") | {section: .[0], text: (.[1:] | join("\t"))}
+    s != "" && /^- / && $0 !~ /^- \(none\)/ { sub(/^- /, ""); print s "\t" $0 }' "$f"; } |
+    jq -R -s --argjson focus "$(focus_json)" --argjson store "$store" --argjson marks "$marks" "$FOCUS_JQ"'
+      [(split("\n")[] | select(length > 0) | split("\t") | {section: .[0], text: (.[1:] | join("\t"))}
        | ([.text | capture("^\\[(?<id>i-[0-9a-f]{4,})\\] +(?<rest>.*)$")] | first) as $tag
        | if $tag then .short_id = $tag.id | .text = $tag.rest else .short_id = null end
        | . + (if (.text | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}"))
               then {date: .text[0:10], text: (.text[10:] | sub("^[\\s—–:-]+"; ""))} else {date: null} end)
        | ([.text | capture("^\\[(?<p>[^\\]]+)\\] +(?<rest>.*)$")] | first) as $proj
-       | if $proj and $proj.p != "breaking" then .project = $proj.p | .text = $proj.rest else .project = null end]
+       | if $proj and $proj.p != "breaking" then .project = $proj.p | .text = $proj.rest else .project = null end),
+       ($store[] | {section, text, short_id: .id, date, project})
+       | select(.short_id == null or ($marks[.short_id] // {}) as $m | ($m.removed == null and $m.done == null))]
       | {waiting: map(select(.section == "waiting") | del(.section) | . + focus_marks($focus; "inbox"; .text | startswith("[breaking] "))),
          approvals: map(select(.section == "approvals") | del(.section))}'
 }
@@ -66,6 +74,8 @@ dashboard_task_extra() { # <id>
   local d f files=() prs report=""
   d="$(tdir "$1")"; events_path "$1"
   for f in $CR_DASHBOARD_FILES; do [[ -s "$d/$f" ]] && files+=("$f"); done
+  # A store task's events.log is its rendering (lib/store.sh); the server serves it from the store.
+  [[ "$EVENTS_PATH" == "$d/events.log" || ! -s "$EVENTS_PATH" ]] || files+=(events.log)
   prs="$(cat "$EVENTS_PATH" "$d/report.md" 2>/dev/null |
     grep -oE 'https?://[^][ <>()"'"'"'`]+/(pull|pulls|merge_requests|pullrequest)/[0-9]+' | awk '!seen[$0]++' || true)"
   report="$(grep -E '^[^ ]+ (progress|waiting|decision|blocked|done|failed|steered): ' "$EVENTS_PATH" 2>/dev/null | tail -1 || true)"

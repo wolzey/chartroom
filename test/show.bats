@@ -13,7 +13,7 @@ dispatched_task() {
   local id d
   id="$(TITLE="Fix login" new_task --backend herdr:claude)"
   d="$CHARTROOM_HOME/tasks/$id"
-  jq '. + {dispatched: "2026-01-02T10:00:00Z", herdr_workspace: "w1", herdr_tab: "w1:t2", herdr_pane: "w1:p2", worktree: "/srv/wt/fix-login"}' "$d/meta.json" >"$d/m" && mv "$d/m" "$d/meta.json"
+  set_meta "$id" '. + {dispatched: "2026-01-02T10:00:00Z", herdr_workspace: "w1", herdr_tab: "w1:t2", herdr_pane: "w1:p2", worktree: "/srv/wt/fix-login"}'
   cr event "$id" progress "parser rewritten" >/dev/null
   cr event "$id" decision "pick A or B (recommend A), see https://github.com/acme/todo-cli/pull/7" >/dev/null
   cr event "$id" done "PR ready" >/dev/null
@@ -72,7 +72,7 @@ EOF
   # closed long ago: on no lane, still shown from its record
   local id d
   id="$(new_task)"; d="$CHARTROOM_HOME/tasks/$id"
-  jq '. + {dispatched: "2025-01-01T00:00:00Z", closed: "2025-01-02T00:00:00Z"}' "$d/meta.json" >"$d/m" && mv "$d/m" "$d/meta.json"
+  set_meta "$id" '. + {dispatched: "2025-01-01T00:00:00Z", closed: "2025-01-02T00:00:00Z"}'
   [ "$(cr show "$id" --json | jq -c '[.state, .lane, .attach.where, .attach.command]')" = '["closed",null,"closed",null]' ]
   run cr show nope-zzzz
   [ "$status" -ne 0 ]

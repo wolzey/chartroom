@@ -6,6 +6,7 @@ load test_helper
 
 setup() {
   common_setup
+  unset CHARTROOM_STORE # (these tests turn the switch on and off in the home's own config)
   command -v python3 >/dev/null && python3 -c 'import sqlite3' 2>/dev/null || skip "no python3 with sqlite3"
   export CHARTROOM_DB="$BATS_TEST_TMPDIR/state/chartroom/chartroom.db"
   cr init >/dev/null
@@ -205,7 +206,7 @@ db() { python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); [print("|
   run cr store doctor
   [ "$status" -eq 0 ]
   [[ "$output" == *"store: sqlite for new work in this home"* ]]
-  [[ "$output" == *"schema 1, wal, ok"* ]]
+  [[ "$output" == *"schema 2, wal, ok"* ]]
   [[ "$output" == *"this home: 1 task(s) in the store, 1 open"* ]]
   run cr store check
   [ "$output" = "store: no problems" ]
@@ -238,4 +239,39 @@ db() { python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); [print("|
   XDG_STATE_HOME="$BATS_TEST_TMPDIR/elsewhere" cr event "$id" progress "from elsewhere" >/dev/null
   events "$id" | grep -q 'progress: from elsewhere'
   [ ! -e "$BATS_TEST_TMPDIR/elsewhere/chartroom/chartroom.db" ]
+}
+
+@test "seams: no code outside lib/store.sh names a task's meta.json or events.log, but the known places" {
+  # A read of tasks/<id>/meta.json or events.log of its own misses every store task: it must go
+  # through meta_path, events_path or task_meta_files (lib/store.sh). The places allowed are the
+  # seams' own file halves, names in lists, and the file-task loops the watch keeps.
+  cat >"$BATS_TEST_TMPDIR/allowed" <<'PATTERNS'
+^[^:]+:[0-9]+:[[:space:]]*#
+^lib/store\.sh:
+\$\{m%/meta\.json\}
+CR_(DASHBOARD|RADAR)_FILES=
+TASK_FILES = \(
+# <id> .*<events\.log offset
+\|tasks/\*/meta\.json\|tasks/\*/events\.log\|
+files\+=\(events\.log\)
+"\$file" == events\.log
+name == "events\.log"
+parts\[3\] == "events\.log"
+has no events\.log of its own
+^lib/core\.sh:.*\$\{META_PATH:-\$CR_HOME/tasks/\$1/meta\.json\}
+^lib/core\.sh:.*meta_cache_load\(\) \{ # \[meta\.json files
+^lib/core\.sh:.*f="\$\(tdir "\$1"\)/meta\.json"
+^lib/core\.sh:.*>>"\$\(tdir "\$1"\)/events\.log"; fi
+^bin/chartroom:.*for f in "\$CR_HOME"/tasks/\*/events\.log; do
+^bin/chartroom:.*d="\$\{f%/events\.log\}"
+^bin/chartroom:.*\[\[ -f "\$d/meta\.json" \]\] \|\| continue
+^bin/chartroom:.*for f in "\$CR_HOME"/tasks/\*/meta\.json; do \[\[ "\$f" -ot
+^lib/dashboard/server\.py:.*glob\.glob\(os\.path\.join\(base, "events\.log"\)\)
+PATTERNS
+  cd "$REPO_ROOT"
+  shopt -s nullglob
+  # (every sh, jq and python file chartroom runs: the app's too, once it lands)
+  out="$(grep -nE 'meta\.json|events\.log' bin/chartroom lib/*.sh lib/*/*.sh lib/*.jq lib/*/*.jq lib/*/*.py |
+    grep -vE -f "$BATS_TEST_TMPDIR/allowed" || true)"
+  if [ -n "$out" ]; then printf 'outside the seams:\n%s\n' "$out" >&2; return 1; fi
 }

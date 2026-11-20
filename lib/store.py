@@ -12,7 +12,7 @@ Stdlib only, Python 3.8 or later (macOS's /usr/bin/python3 included).
 A home is known by its uid (<home>/.home-id, written once), never by its path, so a renamed or
 moved home keeps its records; its name and path are refreshed on each write.
 
-Tables (PRAGMA user_version 1):
+Tables (PRAGMA user_version 2; each version is a forward-only migration in MIGRATIONS):
   homes   one row per home: hid, uid, name, path, store_since
   tasks   one row per task born in the store: the meta.json keys chartroom reads by name as
           columns, every other key in `extra` (JSON), plus spool_offset (bytes of the task's
@@ -20,6 +20,10 @@ Tables (PRAGMA user_version 1):
           type it was given ("1" stays a string, 1 a number), as in a meta.json.
   events  append-only, never updated or deleted: seq (one counter for the machine), the task, the
           time and kind and text as the worker wrote them, and where it came from (src: cli, spool).
+  marks   (2) done and removed marks on any item, file-born or store-born: (kind, ref) -> when, by
+          whom, why. The item itself is never written (lib/marks.sh).
+  inbox   (2) inbox items born in the store, read beside inbox.md's lines
+  focus   (2) the home's focus while the switch is on (lib/focus.sh), one row
 
 The task's events render as the exact lines an events.log holds, "<ts> <kind>: <text>\\n", in seq
 order. Rendering is deterministic and append-only, so a byte offset into the rendered text stays
@@ -34,7 +38,7 @@ import sqlite3
 import sys
 import time
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # meta.json keys kept as columns (the rest go in `extra`). The order is the one `chartroom new`
 # writes a meta.json in, which the rendered file keeps; later columns follow the extra keys.
@@ -73,6 +77,29 @@ CREATE TABLE events (
 );
 CREATE INDEX events_task ON events(hid, task, seq);
 CREATE INDEX events_home ON events(hid, seq);
+""",
+    2: """
+CREATE TABLE marks (
+  hid INTEGER NOT NULL REFERENCES homes(hid),
+  kind TEXT NOT NULL,
+  ref TEXT NOT NULL,
+  removed_at TEXT, removed_by TEXT, removed_why TEXT,
+  done_at TEXT, done_by TEXT,
+  PRIMARY KEY (hid, kind, ref)
+);
+CREATE TABLE inbox (
+  hid INTEGER NOT NULL REFERENCES homes(hid),
+  id TEXT NOT NULL,
+  section TEXT NOT NULL,
+  created TEXT NOT NULL,
+  project TEXT,
+  text TEXT NOT NULL,
+  PRIMARY KEY (hid, id)
+);
+CREATE TABLE focus (
+  hid INTEGER PRIMARY KEY REFERENCES homes(hid),
+  doc TEXT NOT NULL
+);
 """,
 }
 
@@ -303,6 +330,18 @@ def add_event(conn, home, tid, kind, text, src):
                      (hid, tid, now(), kind, text.replace("\n", " "), src))
 
 
+def add_events(conn, home, items, src):
+    """Several tasks' events in one transaction: [(id, kind, text)]; every task must be in the store."""
+    with Tx(conn):
+        hid = home.hid(conn, create=True)
+        for tid, kind, text in items:
+            if not re.match(r"^[a-z]+$", kind or "") or not conn.execute("SELECT 1 FROM tasks WHERE hid = ? AND id = ?", (hid, tid)).fetchone():
+                raise Fail("events: no such task %s (nothing was written)" % tid, 3)
+            ingest_spool(conn, home, hid, tid)
+            conn.execute("INSERT INTO events(hid, task, ts, kind, text, src) VALUES (?, ?, ?, ?, ?, ?)",
+                         (hid, tid, now(), kind, text.replace("\n", " "), src))
+
+
 def event_lines(conn, hid, tid):
     for ts, kind, text in conn.execute("SELECT ts, kind, text FROM events WHERE hid = ? AND task = ? ORDER BY seq", (hid, tid)):
         yield "%s %s: %s\n" % (ts, kind, text)
@@ -403,6 +442,11 @@ def render(conn, home, outdir, meta_all, events_which, ids):
         # Each rendered log's size, for the watch (no `wc -c` per task).
         write_atomic(os.path.join(outdir, ".sizes"), "".join(sizes))
     if meta_all:
+        # The home's marks, store inbox items and focus, read with the records (lib/store.sh).
+        write_atomic(os.path.join(outdir, ".marks.json"), json.dumps(marks_doc(conn, hid)) + "\n")
+        write_atomic(os.path.join(outdir, ".inbox.json"), json.dumps(inbox_rows(conn, hid)) + "\n")
+        f = conn.execute("SELECT doc FROM focus WHERE hid = ?", (hid,)).fetchone()
+        write_atomic(os.path.join(outdir, ".focus.json"), (f[0] + "\n") if f else "")
         out = sys.stdout
         for t, row in rows.items():
             out.write("%s\t%s\t%s\n" % (t, "closed" if (row.get("closed") or "") != "" else "open", row.get("updated") or ""))
@@ -506,7 +550,7 @@ def mentions(home, tid, lines, pool):
     return sorted(found)
 
 
-def status_rows(conn, home, which, only, since, pool, grace, wmax):
+def status_rows(conn, home, which, only, since, pool, grace, wmax, with_removed=False):
     """One JSON object per store task, for status_rows to finish (live, focus marks, short id)."""
     hid = home.hid(conn)
     if hid is None:
@@ -514,6 +558,9 @@ def status_rows(conn, home, which, only, since, pool, grace, wmax):
     now_s = time.time()
     rows = [task_row(conn, hid, only)] if only else list(iter_rows(conn, hid))
     rows = [r for r in rows if r is not None]
+    if not with_removed:
+        gone = {r[0] for r in conn.execute("SELECT ref FROM marks WHERE hid = ? AND kind = 'task' AND removed_at IS NOT NULL", (hid,))}
+        rows = [r for r in rows if r["id"] not in gone]
     pool = set(pool) | {r["id"] for r in rows if (r.get("closed") or "") == ""}
     spooled = spooled_ids(home, [r["id"] for r in rows])
     if spooled:
@@ -554,6 +601,186 @@ def status_rows(conn, home, which, only, since, pool, grace, wmax):
                       "mentions": mentions(home, row["id"], lines, pool) if st != "closed" else [],
                       "has_report": has_report}
         out.write(json.dumps(doc) + "\n")
+
+
+# ------------------------------------------------------------------ marks: done and removed
+# A mark says an item is done or removed, without touching the item: a task (by id), an inbox item
+# (i-xxxx) or an artifact (<owner>/<slug>, the owner a task id or an inbox tag), born as files or in
+# the store alike. Readers leave a removed item out and take a done mark as done. A remove can be
+# undone for RESTORE_DAYS; after that the mark stays (the item stays hidden) and restore refuses.
+
+RESTORE_DAYS = 30
+MARK_KINDS = ("task", "inbox", "artifact")
+
+
+def apply_marks(conn, home, op, by, why, items):
+    """remove | restore | done on [(kind, ref)], in one transaction: each ref applies or fails on
+    its own. Returns (applied, failed)."""
+    applied, failed = [], []
+    stamp = now()
+    window = time.time() - RESTORE_DAYS * 86400
+    with Tx(conn):
+        hid = home.hid(conn, create=True)
+        for kind, ref in items:
+            if kind not in MARK_KINDS or not ref:
+                failed.append({"ref": ref, "why": "not a task, inbox item or artifact"})
+                continue
+            row = conn.execute("SELECT removed_at, done_at FROM marks WHERE hid = ? AND kind = ? AND ref = ?", (hid, kind, ref)).fetchone()
+            removed, done = row if row else (None, None)
+            if op == "remove":
+                if removed:
+                    failed.append({"ref": ref, "why": "already removed (%s)" % removed})
+                    continue
+                conn.execute("INSERT INTO marks(hid, kind, ref, removed_at, removed_by, removed_why) VALUES (?, ?, ?, ?, ?, ?) "
+                             "ON CONFLICT(hid, kind, ref) DO UPDATE SET removed_at = excluded.removed_at, "
+                             "removed_by = excluded.removed_by, removed_why = excluded.removed_why",
+                             (hid, kind, ref, stamp, by, why or None))
+            elif op == "restore":
+                if not removed:
+                    failed.append({"ref": ref, "why": "not removed"})
+                    continue
+                e = iso_epoch(removed)
+                if e is not None and e < window:
+                    failed.append({"ref": ref, "why": "removed %s, past the %d days a remove can be undone" % (removed, RESTORE_DAYS)})
+                    continue
+                conn.execute("UPDATE marks SET removed_at = NULL, removed_by = NULL, removed_why = NULL WHERE hid = ? AND kind = ? AND ref = ?",
+                             (hid, kind, ref))
+            elif op == "done":
+                if removed:
+                    failed.append({"ref": ref, "why": "removed (restore it first)"})
+                    continue
+                if done:
+                    failed.append({"ref": ref, "why": "already done (%s)" % done})
+                    continue
+                conn.execute("INSERT INTO marks(hid, kind, ref, done_at, done_by) VALUES (?, ?, ?, ?, ?) "
+                             "ON CONFLICT(hid, kind, ref) DO UPDATE SET done_at = excluded.done_at, done_by = excluded.done_by",
+                             (hid, kind, ref, stamp, by))
+            else:
+                raise Fail("mark: unknown op %s" % op)
+            applied.append({"kind": kind, "ref": ref})
+        conn.execute("DELETE FROM marks WHERE hid = ? AND removed_at IS NULL AND done_at IS NULL", (hid,))
+    return applied, failed
+
+
+def marks_doc(conn, hid):
+    """{task: {ref: mark}, inbox: {...}, artifact: {...}}; a mark is {removed, by, why, done}."""
+    out = {k: {} for k in MARK_KINDS}
+    for kind, ref, ra, rb, rw, da in conn.execute(
+            "SELECT kind, ref, removed_at, removed_by, removed_why, done_at FROM marks WHERE hid = ?", (hid,)):
+        out.setdefault(kind, {})[ref] = {"removed": ra, "by": rb, "why": rw, "done": da}
+    return out
+
+
+# ------------------------------------------------------------------ inbox items and focus
+# An inbox item born in the store: {id, section (waiting), created (date), project, text}, read
+# beside inbox.md's lines (lib/dashboard.sh dashboard_inbox). Its id is unique across both.
+
+INBOX_TAG = re.compile(r"^- \[(i-[0-9a-f]{4,})\] ", re.M)
+
+
+def inbox_add(conn, home, project, text):
+    import random
+    try:
+        with open(os.path.join(home.path, "inbox.md"), encoding="utf-8", errors="replace") as f:
+            taken = set(INBOX_TAG.findall(f.read()))
+    except OSError:
+        taken = set()
+    with Tx(conn):
+        hid = home.hid(conn, create=True)
+        taken |= {r[0] for r in conn.execute("SELECT id FROM inbox WHERE hid = ?", (hid,))}
+        for _ in range(1000):
+            tag = "i-%04x" % random.randrange(65536)
+            if tag not in taken:
+                break
+        else:
+            raise Fail("inbox: no free id")
+        conn.execute("INSERT INTO inbox(hid, id, section, created, project, text) VALUES (?, ?, 'waiting', ?, ?, ?)",
+                     (hid, tag, time.strftime("%Y-%m-%d", time.localtime()), project or None, text))
+    return tag
+
+
+def inbox_project(conn, home, tag, project):
+    with Tx(conn):
+        hid = home.hid(conn, create=True)
+        cur = conn.execute("UPDATE inbox SET project = ? WHERE hid = ? AND id = ?", (project, hid, tag))
+        if cur.rowcount == 0:
+            raise Fail("no open inbox item %s" % tag, 3)
+
+
+def inbox_rows(conn, hid):
+    return [{"id": i, "section": s, "date": c, "project": p, "text": t}
+            for i, s, c, p, t in conn.execute("SELECT id, section, created, project, text FROM inbox WHERE hid = ? ORDER BY created, id", (hid,))]
+
+
+def focus_set(conn, home, doc):
+    with Tx(conn):
+        hid = home.hid(conn, create=True)
+        if doc is None:
+            conn.execute("DELETE FROM focus WHERE hid = ?", (hid,))
+        else:
+            conn.execute("INSERT INTO focus(hid, doc) VALUES (?, ?) ON CONFLICT(hid) DO UPDATE SET doc = excluded.doc", (hid, json.dumps(doc)))
+
+
+# ------------------------------------------------------------------ upkeep (sweep --apply)
+
+
+def purge(conn, home):
+    """What a remove leaves that nothing needs any more: a store inbox item removed past the window
+    (row and mark), and a mark on a file-born item whose file is gone (the commander's own clean-out). A task's row
+    and its events are never deleted. Prints the counts."""
+    hid = home.hid(conn)
+    if hid is None:
+        print(json.dumps({"inbox": 0, "marks": 0}))
+        return
+    window = time.time() - RESTORE_DAYS * 86400
+    try:
+        with open(os.path.join(home.path, "inbox.md"), encoding="utf-8", errors="replace") as f:
+            tags = set(INBOX_TAG.findall(f.read()))
+    except OSError:
+        tags = set()
+    n_inbox = n_marks = 0
+    with Tx(conn):
+        store_inbox = {r[0] for r in conn.execute("SELECT id FROM inbox WHERE hid = ?", (hid,))}
+        for kind, ref, removed in list(conn.execute("SELECT kind, ref, removed_at FROM marks WHERE hid = ?", (hid,))):
+            gone = False
+            if kind == "inbox" and ref in store_inbox:
+                e = iso_epoch(removed) if removed else None
+                if e is not None and e < window:
+                    conn.execute("DELETE FROM inbox WHERE hid = ? AND id = ?", (hid, ref))
+                    n_inbox += 1
+                    gone = True
+            elif kind == "inbox":
+                gone = ref not in tags
+            elif kind == "task":
+                gone = not os.path.exists(os.path.join(home.task_dir(ref), "meta.json")) and \
+                    conn.execute("SELECT 1 FROM tasks WHERE hid = ? AND id = ?", (hid, ref)).fetchone() is None
+            elif kind == "artifact":
+                owner, _, slug = ref.partition("/")
+                base = home.task_dir(owner) if not owner.startswith("i-") else os.path.join(home.path, "inbox", owner)
+                gone = not os.path.exists(os.path.join(base, "artifacts", slug + ".json"))
+            if gone:
+                conn.execute("DELETE FROM marks WHERE hid = ? AND kind = ? AND ref = ?", (hid, kind, ref))
+                n_marks += 1
+    print(json.dumps({"inbox": n_inbox, "marks": n_marks}))
+
+
+def backup(conn, outdir, keep):
+    """One copy a day of the whole database (SQLite's online backup: safe while workers write)."""
+    os.makedirs(outdir, mode=0o700, exist_ok=True)
+    path = os.path.join(outdir, "chartroom-%s.db" % time.strftime("%Y-%m-%d", time.gmtime()))
+    made = False
+    if not os.path.exists(path):
+        tmp = path + ".tmp"
+        dest = sqlite3.connect(tmp)
+        with dest:
+            conn.backup(dest)
+        dest.close()
+        os.replace(tmp, path)
+        made = True
+    old = sorted(f for f in os.listdir(outdir) if re.match(r"^chartroom-\d{4}-\d{2}-\d{2}\.db$", f))
+    for f in old[:-keep] if keep > 0 else []:
+        os.remove(os.path.join(outdir, f))
+    print(json.dumps({"backup": path, "made": made}))
 
 
 # ------------------------------------------------------------------ doctor / check / legacy
@@ -616,7 +843,7 @@ def legacy(home):
 def parse(argv):
     """--key value pairs (repeatable --events), and bare flags."""
     opts = {"events": [], "meta": []}
-    flags = {"--meta-all", "--events-open", "--events-all", "--all", "--pool-stdin"}
+    flags = {"--meta-all", "--events-open", "--events-all", "--all", "--pool-stdin", "--with-removed"}
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -694,7 +921,34 @@ def main(argv):
         pool = [l.strip() for l in sys.stdin if l.strip()] if opts.get("pool-stdin") else []
         status_rows(conn, home, "all" if opts.get("all") else "open", opts.get("id", ""),
                     int(opts["since"]) if opts.get("since") else None, pool,
-                    int(opts.get("grace", "15")), int(opts.get("max", "120")))
+                    int(opts.get("grace", "15")), int(opts.get("max", "120")), bool(opts.get("with-removed")))
+        return 0
+    if cmd == "events-add":
+        items = [tuple(l.rstrip("\n").split("\t", 2)) for l in sys.stdin if l.count("\t") >= 2]
+        add_events(connect(True), home, items, opts.get("src", "cli"))
+        return 0
+    if cmd == "mark":
+        items = [tuple(l.rstrip("\n").split("\t", 1)) for l in sys.stdin if "\t" in l]
+        applied, failed = apply_marks(connect(True), home, opts.get("op", ""), opts.get("by", ""), opts.get("why", ""), items)
+        print(json.dumps({"applied": applied, "failed": failed}))
+        return 0
+    if cmd == "inbox-add":
+        print(inbox_add(connect(True), home, opts.get("project", ""), opts.get("text", "")))
+        return 0
+    if cmd == "inbox-project":
+        inbox_project(connect(True), home, opts.get("id", ""), opts.get("project", ""))
+        return 0
+    if cmd == "focus-set":
+        doc = json.loads(opts.get("json", "null"))
+        focus_set(connect(True), home, doc)
+        return 0
+    if cmd == "purge":
+        if conn is not None:
+            purge(conn, home)
+        return 0
+    if cmd == "backup":
+        if conn is not None:
+            backup(conn, opts["dir"], int(opts.get("keep", "14")))
         return 0
     if cmd == "check":
         return 1 if check(conn, home) else 0

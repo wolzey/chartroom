@@ -53,6 +53,13 @@ todo_done() { # <ref>
   item="$(cmd_resolve "$1" --json)" || exit 1
   IFS=$'\t' read -r type id st sid < <(jq -r '[.type, .id, (.state // ""), (.short_id // .id)] | @tsv' <<<"$item")
   if [[ "$type" == inbox ]]; then
+    # A home with a store marks it done there (lib/marks.sh): inbox.md is never edited.
+    if marks_in_store; then
+      text="$(jq -r .text <<<"$item")"
+      marks_apply "done" "$id" >/dev/null || exit 1
+      echo "done $id: $text"
+      return
+    fi
     text="$(inbox_remove "$id")" || exit 1
     echo "done $id: ${text#* — }"
     return

@@ -29,7 +29,7 @@ in_b() { CHARTROOM_HOME="$B" cr "$@"; }
   [ "$(find "$B/relays" -type f | wc -l | tr -d ' ')" -eq 1 ]
   [ "$(cat "$A/relays/outbox.ndjson")" = "$rec" ]
   [ "$(snapshot "$A" | grep -vF " $A/relays/outbox.ndjson")" = "$before_a" ]
-  [ "$(cat "$B/tasks/$task/events.log" | grep -c relay)" -eq 0 ]
+  [ "$(CHARTROOM_HOME="$B" events "$task" | grep -c relay)" -eq 0 ]
   # a project path is reduced to its name; - reads the message from stdin
   run bash -c 'printf "from stdin\nline two" | CHARTROOM_HOME="$1" "$2" relay globex --project "$3" -' _ "$A" "$CHARTROOM" "$PROJECT"
   [ "$status" -eq 0 ]

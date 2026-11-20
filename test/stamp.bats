@@ -43,7 +43,7 @@ still() {
   moves "$A" cr focus shop
   moves "$A" cr focus off
   local d="$A/tasks/$id"
-  jq '. + {dispatched: "2026-01-02T10:00:00Z"}' "$d/meta.json" >"$d/m" && mv "$d/m" "$d/meta.json"
+  CHARTROOM_HOME="$A" set_meta "$id" '. + {dispatched: "2026-01-02T10:00:00Z"}'
   moves "$A" cr event "$id" done "finished"
   moves "$A" cr accept "$id"
   moves "$A" cr close "$id"

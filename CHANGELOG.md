@@ -132,6 +132,14 @@ are stable from 0.1.0.
     differs between a terminal and an ssh session or GUI launcher never splits a home's records.
   - Store writes rewrite `tasks/.store-stamp`, and the Herdr panel counts that and a spool line
     as changes.
+- `chartroom remove|restore|done <ref>...` and `chartroom removed`: take tasks, inbox items and
+  artifacts out of every view at once, or mark them done, by a mark in the store, for items born
+  as files or in the store, with no file, worktree, branch or session touched. Many refs per
+  call: each is checked on its own and the rest are applied in one transaction; failures are
+  reported by ref. 30 days to restore. A live worker is refused unless `--stop`.
+- `accept` and `close` take several ids. With the store on, new inbox items and the focus are
+  store rows, and `todo done` and `artifact done` mark instead of editing files.
+- `sweep --apply` purges what removes no longer need and keeps a daily backup of the store.
 - Client homes (one brain, step 1): `chartroom brain link <target>` makes an empty home a client
   of another machine's home of the same name. Every chartroom command in it then runs there over
   one fixed ssh gate (`chartroom brain gate`: the arguments as JSON on stdin, registered homes

@@ -92,8 +92,10 @@ artifacts_json() { # [--open] [--owner task|inbox <id>]
          description: (if ($m.description // "") == "" then null else $m.description end), project: ($m.project // null),
          created: ($m.created // null), updated: ($m.updated // $m.created // null),
          done: (if ($m.done // "") == "" then null else $m.done end), path: ($base + (if $m.kind == "page" then ".html" else ".md" end))}' "$f" 2>/dev/null || true
-  done | jq -s -c --argjson shorts "$(short_ids_json)" --argjson open "$open" '
-    map({ref: ((if .owner_type == "task" then ($shorts[.owner] // .owner) else .owner end) + "/" + .slug)} + .
+  done | jq -s -c --argjson shorts "$(short_ids_json)" --argjson open "$open" --argjson marks "$(marks_json | jq -c .artifact)" '
+    # (a removed one is left out; a done mark is its done: lib/marks.sh)
+    map(($marks[.owner + "/" + .slug] // {}) as $m | select($m.removed == null) | .done = (.done // $m.done)
+        | {ref: ((if .owner_type == "task" then ($shorts[.owner] // .owner) else .owner end) + "/" + .slug)} + .
         | select($open == 0 or .done == null))
     | sort_by(.updated // "") | reverse'
 }
@@ -261,9 +263,11 @@ artifact_done() { # <ref>
   [[ $# -eq 1 ]] || die "usage: chartroom artifact done <ref>"
   artifact_resolve "$1"
   local m="${AR_FILE%.*}.json" was
-  was="$(jq -r '.done // empty' "$m")"
+  was="$(artifacts_json --owner "$AR_TYPE" "$AR_OWNER" | jq -r --arg s "$AR_SLUG" '.[] | select(.slug == $s) | .done // empty')"
   if [[ -n "$was" ]]; then echo "$AR_REF was already done ($was)"; return 0; fi
-  jq --arg now "$(now)" '.done = $now' "$m" >"$m.tmp" && mv "$m.tmp" "$m" && stamp_changed
+  # A home with a store marks it there (lib/marks.sh); the sidecar is never written.
+  if marks_in_store; then marks_apply "done" "$AR_OWNER/$AR_SLUG" >/dev/null || exit 1
+  else jq --arg now "$(now)" '.done = $now' "$m" >"$m.tmp" && mv "$m.tmp" "$m" && stamp_changed; fi
   if [[ "$AR_TYPE" == task ]]; then log_event "$AR_OWNER" note "artifact $AR_SLUG done: $AR_TITLE"; fi
   echo "done $AR_REF: $AR_TITLE"
 }
