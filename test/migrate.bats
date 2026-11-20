@@ -447,8 +447,10 @@ teardown() {
   awk '{print} /^## Waiting on the commander$/ {print "- [i-c002] 2026-01-09 — [proj] a later client question"}' "$CH/inbox.md" >"$CH/inbox.md.t" && mv "$CH/inbox.md.t" "$CH/inbox.md"
   echo '2026-01-09T00:00:00Z [r-0009] topic=late supersedes=- src=chat :: a ruling made after the move' >>"$CH/rulings.log"
   # The brain changed the closed task Z since the move (its log grew here): it must be left alone.
-  printf '%s note: touched on the brain\n' "2026-01-09T00:00:00Z" >>"$BH/tasks/$Z/events.log"
+  printf '%s steered: touched on the brain\n' "2026-01-09T00:00:00Z" >>"$BH/tasks/$Z/events.log"
   printf '%s note: and on the client\n' "2026-01-09T00:00:00Z" >>"$CH/tasks/$Z/events.log"
+  # The brain's watch noted A's overdue wait meanwhile: a chartroom note, no change of substance.
+  printf '%s note: waiting overdue: the client'"'"'s wait\n' "2026-01-09T00:00:01Z" >>"$BH/tasks/$A/events.log"
   run mh resync
   [ "$status" -eq 0 ]
   grep -q 'one more thing on the client' "$BH/tasks/$A/events.log"

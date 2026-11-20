@@ -56,7 +56,7 @@ mig_usage() {
   cat <<'EOF'
 usage: chartroom migrate-home <verb> --from <ssh target|local> --home <name> [options]
   verbs: triage | snapshot [--all] | freeze | settle [--decisions FILE] | move | verify |
-         resync | finish --brain <target> | rollback | status | reap --apply
+         resync [--task ID] | finish --brain <target> | rollback | status | reap --apply
          materialize <id> | restore <id>          (in this home: no --from)
   options: --client-home PATH  --brain-home PATH  --dry-run  --prs FILE  --no-prs  --clone-missing
            --unguarded (freeze: a client chartroom without the freeze guard, on the commander's word)
@@ -66,7 +66,7 @@ EOF
 # Parses the shared options into MIG_*; the rest stay in MIG_ARGS.
 mig_opts() {
   MIG_FROM="" MIG_HOME="" MIG_CHOME="" MIG_BHOME="" MIG_DRY=0 MIG_PRS="" MIG_NOPRS=0 MIG_DECISIONS=""
-  MIG_BRAIN="" MIG_ALL=0 MIG_APPLY=0 MIG_CLONE=0 MIG_UNGUARDED=0 MIG_ARGS=()
+  MIG_BRAIN="" MIG_ALL=0 MIG_APPLY=0 MIG_CLONE=0 MIG_UNGUARDED=0 MIG_ARGS=() MIG_TASKS=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --from) MIG_FROM="${2:-}"; shift 2 ;;
@@ -82,6 +82,7 @@ mig_opts() {
       --apply) MIG_APPLY=1; shift ;;
       --clone-missing) MIG_CLONE=1; shift ;;
       --unguarded) MIG_UNGUARDED=1; shift ;;
+      --task) [[ "${2:-}" =~ ^[A-Za-z0-9._-]+$ ]] || die "migrate-home: --task needs a task id"; MIG_TASKS+=" $2 "; shift 2 ;;
       -h|--help) mig_usage; exit 0 ;;
       *) MIG_ARGS+=("$1"); shift ;;
     esac
@@ -935,6 +936,8 @@ mig_resync() {
   while IFS= read -r rel; do
     case "$rel" in tasks/*/*) id="${rel#tasks/}"; id="${id%%/*}"; [[ "$tids" == *" $id "* ]] || tids+=" $id " ;; esac
   done <"$r/changed.txt"
+  # --task <id>: copied again whatever the diff says (one a resync kept, say).
+  for id in $MIG_TASKS; do [[ "$tids" == *" $id "* ]] || tids+=" $id "; done
   echo "changed on the client since the move: $(grep -c . "$r/changed.txt") file(s), $(wc -w <<<"$tids" | tr -d ' ') task(s):$tids"
   if [[ $MIG_DRY -eq 1 ]]; then sed 's/^/  /' "$r/changed.txt"; return 0; fi
   mig_lock
@@ -943,7 +946,12 @@ mig_resync() {
   for id in $tids; do
     [[ -d "$MIG_BHOME/tasks/$id" ]] || continue
     sz="$(awk -F'\t' -v i="$id" '$1 == i { s = $2 } END { print s }' "$MIG_S/moved-sizes.tsv" 2>/dev/null)"
-    if [[ "$(jq -r '.migrated_from // ""' "$MIG_BHOME/tasks/$id/meta.json")" != "$(mig_label)" || -z "$sz" || "$(wc -c <"$MIG_BHOME/tasks/$id/events.log" | tr -d ' ')" != "$sz" ]]; then
+    # Lines the brain added that are all chartroom's own notes (the watch's "waiting overdue", say)
+    # are no change of substance: they are about the client's state, which the copy brings anyway.
+    local grown=""
+    [[ -n "$sz" ]] && grown="$(tail -c +"$((sz + 1))" "$MIG_BHOME/tasks/$id/events.log" | grep -vE '^[0-9T:Z-]+ note: ' || true)"
+    if [[ "$(jq -r '.migrated_from // ""' "$MIG_BHOME/tasks/$id/meta.json")" != "$(mig_label)" || -z "$sz" ||
+          ( "$(wc -c <"$MIG_BHOME/tasks/$id/events.log" | tr -d ' ')" -lt "$sz" ) || -n "$grown" ]]; then
       mig_ledger "$id" resync-conflict "changed on the brain since the move: left as it is"; keep+=" $id "; continue
     fi
     # A worktree the move rebuilt goes too, to be rebuilt from the client's new state, but only while
