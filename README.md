@@ -434,7 +434,7 @@ chartroom migrate-home rollback --from laptop --home acme   # undoes move (and f
   - **(b)** waiting on the commander (review, done, decision, blocked, failed, drafted, a scout
     report unread): accept, close or keep;
   - **(c)** stale (waiting overdue or idle a week) with unlanded work: bundled and closed;
-  - **(d)** live or recently active: moved with its worktree.
+  - **(d)** live or recently active: a live worker moves with its worktree; a recently active one is kept, and its worktree is rebuilt on first use.
 
   `records/migrate/<from>-<home>/decisions.tsv` holds one prefilled line per task; edit its action
   column (`accept`, `close`, `keep`, `bundle`, `move`). Git facts it cannot read count as work, so

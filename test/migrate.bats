@@ -89,6 +89,7 @@ EOF
   local now; now="$(date +%s)"
   run jq -c --argjson now "$now" -f "$REPO_ROOT/lib/migrate_triage.jq" <<EOF
 [{"id":"live","state":"working","live":"working","wst":"own","dirty":0,"unpushed":0,"ahead":1,"prs":[]},
+ {"id":"active","state":"stopped-silent","live":"parked","wst":"own","dirty":0,"unpushed":0,"ahead":1,"prs":[],"last_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"},
  {"id":"merged","state":"review","live":"done","wst":"own","dirty":0,"unpushed":0,"ahead":3,"head":"abc","prs":[{"state":"MERGED","head":"abc"}]},
  {"id":"merged-later","state":"review","live":"done","wst":"own","dirty":0,"unpushed":0,"ahead":4,"head":"def","prs":[{"state":"MERGED","head":"abc"}],"last_at":"2020-01-01T00:00:00Z"},
  {"id":"unknown","state":"waiting-overdue","live":"gone","wst":"own","dirty":null,"unpushed":null,"ahead":null,"prs":[],"last_at":"2020-01-01T00:00:00Z"},
@@ -101,6 +102,7 @@ EOF
   [ "$status" -eq 0 ]
   b() { jq -r --arg i "$1" '.[] | select(.id == $i) | "\(.bucket) \(.action)"' <<<"$output"; }
   [ "$(b live)" = "d move" ]
+  [ "$(b active)" = "d keep" ]                  # recently active but not live: kept, its worktree rebuilt on first use
   [ "$(b merged)" = "a close" ]
   [ "$(b merged-later)" = "b keep" ]            # merged, but the worktree moved on: never closed as landed
   [ "$(b unknown)" = "c bundle" ]               # unreadable git counts as work

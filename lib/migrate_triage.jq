@@ -4,7 +4,8 @@
 # of its branch (prs: [{state, number, title, url, head}]), and studio_wt (a worktree the brain
 # already holds for it, or ""). $now: epoch seconds.
 # Output: each row plus bucket (a|b|c|d), why, exc (a list) and action (the decision prefilled:
-# close, accept, keep, bundle or move). Unknown git facts fail closed: they count as work.
+# close, accept, keep, bundle or move; only a live worker moves with its worktree now, and a recently
+# active one is kept, its worktree rebuilt on first use). Unknown git facts fail closed: they count as work.
 def num0: if . == null then 0 else . end;
 map(
   . as $r
@@ -49,7 +50,7 @@ map(
        (if $r.state == "awaiting-input" then "blocked at a prompt: answer it before the freeze" else empty end)
      ]) as $exc
   | (if $b == "a" then "close"
-     elif $b == "d" then "move"
+     elif $b == "d" then (if $live then "move" else "keep" end)
      elif $b == "c" then (if any($exc[]; startswith("overdue but recent")) then "keep" else "bundle" end)
      elif ($r.state | IN("review", "done")) and $idle > 7 and $dirty == 0 and $unp == 0 and ($exc | length) == 0 then "accept"
      else "keep" end) as $action
