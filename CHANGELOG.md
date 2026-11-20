@@ -173,6 +173,15 @@ are stable from 0.1.0.
   share, battery, priority, project roots) in `~/.config/chartroom/node`, defaults from its own
   probe. It makes no home. `chartroom node probe [--json]` prints what `nodes` reads, and
   `doctor` says whether this machine is a node.
+- A Bash guard for Claude workers: a pattern kill is refused. A worker's `pkill -f` stopped the
+  commander's dev server and other workers' servers, since theirs match the same pattern. Every
+  Claude worker chartroom launches with `--settings` (hc, herdr, tmux, cmux) now gets a `PreToolUse`
+  hook on `Bash`, `chartroom hook <id> pre-bash`. It denies `pkill`, `killall`, and a `kill` fed by
+  `pgrep`, `pidof` or `ps | grep`. The agent is told to stop only processes it started, by their
+  PID, or its own port's listener (`lsof -ti tcp:<port> -sTCP:LISTEN`). `kill <pid>` still runs.
+  Each refusal logs `note: blocked a pattern kill: <command>`. The deny holds under
+  `bypassPermissions` (verified on Claude Code 2.1.329). headless:claude and Codex workers are not
+  guarded yet.
 - A stall watchdog: a task in flight (not `waiting`, not parked, not at a prompt already raised)
   whose output and events have not changed for `CHARTROOM_STALL_MINUTES` (default 10; `0` turns it
   off) wakes once as `stalled: no output or events for N min ... Last output: ...`, on hc, herdr,

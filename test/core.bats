@@ -317,6 +317,23 @@ EOF
   [ "$status" -eq 0 ]
 }
 
+@test "hooks: pre-bash refuses a pattern kill and lets a kill by PID or port listener through" {
+  id="$(new_task --backend command --command "$STUB {id}")"
+  verdict() { jq -n --arg c "$1" '{tool_name:"Bash",tool_input:{command:$c}}' | cr hook "$id" pre-bash | jq -rn '(input? // {}).hookSpecificOutput.permissionDecision // "allow"'; }
+  local c
+  for c in 'pkill -f "next dev"' 'cd app && pkill node; npm run dev' 'sudo killall node' 'kill -9 "$(pgrep -f next)"' \
+    "kill \$(ps aux | grep next | awk '{print \$2}')" 'pgrep -f next | xargs kill' "bash -c 'pkill -f next'" \
+    'for p in $(pgrep -f next); do kill $p; done'; do
+    [ "$(verdict "$c")" = deny ] || { echo "allowed: $c"; false; }
+  done
+  for c in 'kill 1234' 'kill -TERM "$(cat server.pid)"' 'kill $(lsof -ti tcp:3000 -sTCP:LISTEN)' 'pgrep -fl next' \
+    'grep -rn pkill lib' 'git commit -m "block pkill -f"'; do
+    [ "$(verdict "$c")" = allow ] || { echo "denied: $c"; false; }
+  done
+  jq -n '{tool_name:"Bash",tool_input:{command:"pkill -f vite"}}' | cr hook "$id" pre-bash | jq -e '.hookSpecificOutput.permissionDecisionReason | test("by their PID.*lsof -ti tcp:<port> -sTCP:LISTEN")'
+  events "$id" | grep -qF "note: blocked a pattern kill: pkill -f vite"
+}
+
 @test "close refuses a dirty worktree (exit 2) and --discard removes it" {
   id="$(new_task --backend command --command "$STUB {id}")"
   wt="$(cr worktree "$id")"

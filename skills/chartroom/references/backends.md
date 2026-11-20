@@ -71,6 +71,19 @@ one, because hooks run outside the sandbox. By default it raises `agent: awaitin
 `CHARTROOM_CODEX_HOOKS_DIALOG=skip` takes Esc instead, in a worktree chartroom created (the agent
 starts without those hooks; the log says so).
 
+## The Bash guard
+
+A pattern kill stops every process that matches, so one worker's `pkill -f "next dev"` stops the
+commander's dev server and other workers' too. Every Claude worker chartroom launches with
+`--settings` (hc, herdr, tmux, cmux; both hook modes) gets a `PreToolUse` hook on `Bash` that runs
+`chartroom hook <id> pre-bash`. It denies `pkill`, `killall`, and a `kill` fed by `pgrep`, `pidof`
+or `ps | grep` (`$(...)`, backticks, `xargs`, also behind `sudo`, `env`, `timeout` or a quoted
+`sh -c` script), and tells the agent to stop only processes it started, by their PID, or its own
+port's listener (`lsof -ti tcp:<port> -sTCP:LISTEN`). `kill <pid>` and that `lsof` form pass. Each
+refusal logs `note: blocked a pattern kill: <command>`. It reads the command line, not a script it
+runs. Verified on Claude Code 2.1.329: the deny holds under `bypassPermissions`. Not guarded:
+headless:claude (no `--settings`), Codex workers, subagents and joined sessions.
+
 **The brief is never typed at a dialog.** The text is dropped and Enter answers the dialog
 (verified on tmux, codex-cli 0.158.0). Dispatch exits 0 and says the worker is waiting. hc passes
 the brief as the agent's first prompt, which waits behind the dialog (verified: a skipped dialog,
@@ -276,8 +289,8 @@ program from the `herdr` CLI/server below; workers on `herdr:*` never appear in 
   screen, or the log once the window is gone.
 - Turn ends and prompts come from the agent, not the screen: Claude is launched with
   `--settings tasks/<id>/claude-settings.json` adding `Stop`, `Notification` and
-  `UserPromptSubmit` hooks that run `chartroom hook`; Codex gets
-  `-c notify=[chartroom, hook, <id>, codex-notify]`.
+  `UserPromptSubmit` hooks that run `chartroom hook`, and the Bash guard (see "The Bash guard");
+  Codex gets `-c notify=[chartroom, hook, <id>, codex-notify]`.
 - Delivery to Claude (tmux and cmux) is confirmed against the text actually submitted: the
   `UserPromptSubmit` hook logs `agent: prompt-received sig=<12 hex> len=<n>` (sha256 of the
   prompt, whitespace collapsed), and `steer` says `delivered` only when that matches what it

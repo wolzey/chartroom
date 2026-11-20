@@ -45,15 +45,46 @@ codex_notify_args() { # <id>
 # prompts and prompt receipt become events. Written per task, loaded with --settings.
 # "prompt" mode (herdr, which tracks turn state itself) adds only UserPromptSubmit, so
 # delivery can be checked against the submitted text without doubling herdr's wakes.
+# Both modes guard the Bash tool against pattern kills (pattern_kill, `hook <id> pre-bash`).
 claude_settings_file() { # <id> [all|prompt] -> path
   local id="$1" mode="${2:-all}" f h
   f="$(tdir "$id")/claude-settings.json"
   h="CHARTROOM_HOME=$(printf '%q' "$CR_HOME") $(printf '%q' "$CR_BIN") hook $id"
-  jq -n --arg stop "$h stop" --arg notif "$h notification" --arg sub "$h prompt-submit" --arg mode "$mode" '{hooks:(
+  jq -n --arg stop "$h stop" --arg notif "$h notification" --arg sub "$h prompt-submit" --arg bash "$h pre-bash" --arg mode "$mode" '{hooks:(
     (if $mode == "all" then {Stop:[{hooks:[{type:"command",command:$stop}]}],
       Notification:[{hooks:[{type:"command",command:$notif}]}]} else {} end)
-    + {UserPromptSubmit:[{hooks:[{type:"command",command:$sub}]}]})}' >"$f"
+    + {UserPromptSubmit:[{hooks:[{type:"command",command:$sub}]}],
+       PreToolUse:[{matcher:"Bash",hooks:[{type:"command",command:$bash}]}]})}' >"$f"
   printf '%s' "$f"
+}
+
+# A worker that stops processes by name or pattern stops the commander's and other workers'
+# too (their dev servers match the same pattern), so the Bash tool refuses it: pkill, killall,
+# or a kill fed by pgrep, pidof or ps | grep ($(...), backticks, xargs). kill <pid> is fine.
+PATTERN_KILL_ADVICE="chartroom blocked this: pkill, killall and a kill fed by pgrep or ps | grep stop every process that matches, the commander's and other workers' too. Stop only processes you started, by their PID, or your own port's listener (lsof -ti tcp:<port> -sTCP:LISTEN)."
+
+# 0 when <command line> runs a pattern kill. It reads the line as commands split at ; & | ( ) { }
+# backticks and newlines (a quoted script after `-c` or `eval` too), each named by its first word
+# past VAR=value, or by any later word after sudo, env, xargs, do, then and the like. A quoted
+# mention (grep pkill, a commit message) is not a command. Not a shell parser: a script file is
+# not read, and a quoted mention after a ; or a newline (a heredoc's line) can read as a command.
+pattern_kill() { # <command line>
+  local seg runs=" " w i
+  local -a words
+  while IFS= read -r seg; do
+    read -ra words <<<"$seg"
+    i=0
+    while [[ $i -lt ${#words[@]} && "${words[i]}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do i=$((i + 1)); done
+    [[ $i -lt ${#words[@]} ]] || continue
+    if [[ "${words[i]##*/}" =~ ^(sudo|doas|exec|command|builtin|env|nohup|nice|time|timeout|setsid|watch|xargs|do|then|else|!)$ ]]; then
+      for w in "${words[@]:i+1}"; do runs+="${w##*/} "; done
+    else
+      runs+="${words[i]##*/} "
+    fi
+  done < <(sed -E "s/(^|[[:space:]])(-[[:alpha:]]*c|eval)[[:space:]]+[\"']/\\1;/g" <<<"$1" | tr ';&|(){}`' '\n\n\n\n\n\n\n\n')
+  [[ "$runs" == *" pkill "* || "$runs" == *" killall "* ]] && return 0
+  [[ "$runs" == *" kill "* ]] || return 1
+  [[ "$runs" == *" pgrep "* || "$runs" == *" pidof "* || ( "$runs" == *" ps "* && "$runs" == *" grep "* ) ]]
 }
 
 claude_common_args() { # <id> <permission-mode or "">
