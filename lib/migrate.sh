@@ -336,13 +336,17 @@ mig_fetch_branch() { # <facts json>
     ref="refs/chartroom/migrate/$id"; git -C "$proot" update-ref "$ref" "$head"; printf '%s' "$ref"; return 0
   fi
   if [[ -n "$br" ]]; then
+    # One fetch per repo brought every branch in already (mig_prefetch): the copy is then local.
+    local src="refs/heads/$br" url
+    url="$(mig_git_url "$root")"
+    if git -C "$proot" rev-parse -q --verify "refs/chartroom/incoming/$id" >/dev/null 2>&1; then url="."; src="refs/chartroom/incoming/$id"; fi
     cur="$(git -C "$proot" rev-parse -q --verify "refs/heads/$br" 2>/dev/null || true)"
     if [[ -z "$cur" || "$cur" == "$head" ]] && ! mig_checked_out "$proot" "$br"; then
-      git -C "$proot" fetch --quiet --no-tags "$(mig_git_url "$root")" "+refs/heads/$br:refs/heads/$br" >&2 || true
+      git -C "$proot" fetch --quiet --no-tags "$url" "+$src:refs/heads/$br" >&2 || true
       ref="refs/heads/$br"
     elif [[ "$cur" == "$head" ]]; then ref="refs/heads/$br"
     else
-      git -C "$proot" fetch --quiet --no-tags "$(mig_git_url "$root")" "+refs/heads/$br:refs/chartroom/migrate/$id" >&2 || true
+      git -C "$proot" fetch --quiet --no-tags "$url" "+$src:refs/chartroom/migrate/$id" >&2 || true
       ref="refs/chartroom/migrate/$id"
     fi
   else
@@ -597,9 +601,26 @@ mig_move_conversations() {
   fi
 }
 
+# Every open task's branch, one git fetch per repo, into refs/chartroom/incoming/<id> (a fetch from
+# a big checkout costs a minute or more, so one per task would take an hour on a big home).
+mig_prefetch() {
+  local root proot specs
+  while IFS= read -r root; do
+    proot="$(mig_map "$root")"
+    git -C "$proot" rev-parse --git-dir >/dev/null 2>&1 || continue
+    specs=()
+    while IFS=$'\t' read -r id br; do specs+=("+refs/heads/$br:refs/chartroom/incoming/$id"); done < <(
+      jq -r --arg r "$root" 'select((.closed | not) and .root == $r and .branch != "") | [.id, .branch] | @tsv' "$MIG_S/facts.jsonl")
+    (( ${#specs[@]} > 0 )) || continue
+    echo "fetching ${#specs[@]} branch(es) from $root" >&2
+    git -C "$proot" fetch --quiet --no-tags "$(mig_git_url "$root")" "${specs[@]}" >&2 || warn "the batched fetch from $root failed; each branch is fetched on its own"
+  done < <(jq -r 'select((.closed | not) and .root != "" and .branch != "") | .root' "$MIG_S/facts.jsonl" | sort -u)
+}
+
 # Branches and uncommitted changes of the open tasks that move; a worktree for each `move` task.
 mig_move_git() {
   local f id dec ref dir
+  mig_prefetch
   # Every task still open on the client after settle, whatever its decision said: a close the client
   # refused (uncommitted work) or a bundle that failed leaves it open, and its work comes too.
   while IFS= read -r f; do
@@ -615,6 +636,12 @@ mig_move_git() {
       ( CR_HOME="$MIG_BHOME"; migrate_materialize "$id" ) || mig_ledger "$id" materialize-failed "see the task's events"
     fi
   done < <(jq -c 'select((.closed | not) and .head != "")' "$MIG_S/facts.jsonl")
+  # The batched fetch's refs have served: each task's branch now has its own ref.
+  local root proot r
+  while IFS= read -r root; do
+    proot="$(mig_map "$root")"
+    while IFS= read -r r; do git -C "$proot" update-ref -d "$r"; done < <(git -C "$proot" for-each-ref --format='%(refname)' refs/chartroom/incoming/ 2>/dev/null)
+  done < <(jq -r 'select(.root != "") | .root' "$MIG_S/facts.jsonl" | sort -u)
 }
 
 # ---------------------------------------------------------------- the merge of the home's files
