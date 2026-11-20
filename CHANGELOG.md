@@ -6,24 +6,6 @@ are stable from 0.1.0.
 
 ## [Unreleased]
 
-### Added
-- `chartroom nodes`: the machines that can take crew work, this one first, with what each has
-  room for and what it can run (stage 1 of [multi-machine dispatch](docs/multi-machine.md), read
-  only). Per machine: ssh contact (`ok`, `unreachable`, `auth`, `timeout`, `incompatible`), whether
-  it is a node and its budgets, cores (performance and efficiency), load, memory, power and
-  battery, keyboard idle time, live agents, logins (claude, codex, gh), tools that work (a docker
-  whose daemon does not answer is `down`), project checkouts, and UTIL, its projected use with
-  one more worker against its own budgets. `--project PATH` shows which machines have a checkout of
-  that project, by its canonical remote. Machines come from `CHARTROOM_NODES`, else the radar's
-  list. The only thing run on another machine is the probe script itself, over
-  `ssh -o BatchMode=yes <target> 'bash -s'`: nothing needs installing there, and it never starts an
-  hc core. On a Mac it checks logins inside the hc core, since an ssh session cannot read the login
-  keychain (claude reads `loggedIn: false` there even when logged in).
-- `chartroom node init` makes this machine a node: its own budgets (max workers, cpu and memory
-  share, battery, priority, project roots) in `~/.config/chartroom/node`, defaults from its own
-  probe. It makes no home. `chartroom node probe [--json]` prints what `nodes` reads, and
-  `doctor` says whether this machine is a node.
-
 ### Fixed
 - A Codex worker at an approval prompt no longer sits unnoticed. hc reports no state for Codex and
   its notify fires only at a turn's end, so nothing woke the XO (one sat 45 minutes). Its terminal
@@ -49,6 +31,22 @@ are stable from 0.1.0.
   logged like every other prompt, not as a bare `hc: ...` line.
 
 ### Added
+- `chartroom nodes`: the machines that can take crew work, this one first, with what each has
+  room for and what it can run (stage 1 of [multi-machine dispatch](docs/multi-machine.md), read
+  only). Per machine: ssh contact (`ok`, `unreachable`, `auth`, `timeout`, `incompatible`), whether
+  it is a node and its budgets, cores (performance and efficiency), load, memory, power and
+  battery, keyboard idle time, live agents, logins (claude, codex, gh), tools that work (a docker
+  whose daemon does not answer is `down`), project checkouts, and UTIL, its projected use with
+  one more worker against its own budgets. `--project PATH` shows which machines have a checkout of
+  that project, by its canonical remote. Machines come from `CHARTROOM_NODES`, else the radar's
+  list. The only thing run on another machine is the probe script itself, over
+  `ssh -o BatchMode=yes <target> 'bash -s'`: nothing needs installing there, and it never starts an
+  hc core. On a Mac it checks logins inside the hc core, since an ssh session cannot read the login
+  keychain (claude reads `loggedIn: false` there even when logged in).
+- `chartroom node init` makes this machine a node: its own budgets (max workers, cpu and memory
+  share, battery, priority, project roots) in `~/.config/chartroom/node`, defaults from its own
+  probe. It makes no home. `chartroom node probe [--json]` prints what `nodes` reads, and
+  `doctor` says whether this machine is a node.
 - A stall watchdog: a task in flight (not `waiting`, not parked, not at a prompt already raised)
   whose output and events have not changed for `CHARTROOM_STALL_MINUTES` (default 10; `0` turns it
   off) wakes once as `stalled: no output or events for N min ... Last output: ...`, on hc, herdr,
