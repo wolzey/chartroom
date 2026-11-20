@@ -31,6 +31,25 @@ are stable from 0.1.0.
   logged like every other prompt, not as a bare `hc: ...` line.
 
 ### Added
+- The chartroom app, slice 1: Needs me across every home on the brain, in a React PWA (`app/`,
+  no build step: React 18.3.1 and htm 3.1.1 vendored) served by `chartroom app serve`
+  (`lib/app/server.py`, stdlib Python) on 127.0.0.1:4516 for Tailscale Serve. Only
+  `CHARTROOM_APP_USER` (a Tailscale login) gets in; `--no-auth` is for this machine's own browser.
+  - Needs me: decisions, plan approvals, blockers, reviews, inbox questions and drafts, grouped
+    Decide / Approve / Unblock / Read, with a quick view to answer in place, a round page for a
+    card of several questions, a details page (brief, plan, report, events), filters by home and
+    project, a command palette, `j`/`k` and dark and light, in the approved direction-A design.
+  - Writes are chartroom verbs only, run on the brain: `tell`, `ask answer`, `accept`, `close`,
+    `snooze`, `todo done`, `artifact done`. Every write needs the app's own header, and refuses
+    cross-site requests.
+- `chartroom tell`: the commander's words to the XO from outside its session. One record in the
+  home's mailbox, and a `[commander <cm-id>] ...` wake for its `watch`; `tell ack` marks it read.
+- `chartroom ask`: question cards. The XO posts a question or a grilling round as a card;
+  `ask answer` answers it, a worker's decision (`ev-<task>-<offset>`) or an inbox item. The first
+  answer wins, from the app or the terminal, and an answer from the app is told to the XO.
+- `chartroom snooze`: keep an item out of Needs me until a time.
+- `chartroom app snapshot --json`: one home as the app reads it (lib/app/snapshot.jq maps every
+  task onto the design's seven statuses, and builds Needs me).
 - Client homes (one brain, step 1): `chartroom brain link <target>` makes an empty home a client
   of another machine's home of the same name. Every chartroom command in it then runs there over
   one fixed ssh gate (`chartroom brain gate`: the arguments as JSON on stdin, registered homes

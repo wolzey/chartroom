@@ -1,0 +1,84 @@
+/* chartroom app: what the real app adds to the approved prototype styles (tokens, base, layout
+   come from the direction-A prototypes as they are). Reads only tokens.css variables. */
+
+.boot-note { padding: var(--s-8); }
+#app { min-height: 100vh; }
+
+/* the sidebar's home rows: a home whose last read failed shows a rose dot */
+.nav-i .home-err { width: 6px; height: 6px; border-radius: 50%; background: var(--rose); flex: none; }
+.a-side-foot .sync { display: flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--text-3); }
+.a-side-foot .sync i { width: 6px; height: 6px; border-radius: 50%; background: var(--green); flex: none; }
+.a-side-foot .sync.off i { background: var(--amber); }
+.nav-i[aria-disabled="true"] { opacity: .55; }
+
+/* a quiet notice above the list: a home that could not be read, the first read still running */
+.notice { display: flex; align-items: flex-start; gap: var(--s-3); margin: var(--s-3) max(var(--page-pad), calc((100% - var(--w-list)) / 2)) 0;
+  padding: 8px 12px; border-radius: var(--r-md); background: var(--sunken); font-size: var(--fs-sm); color: var(--text-2); }
+.notice.warn { background: var(--amber-soft); color: var(--amber); }
+.notice b { color: var(--text); font-weight: 600; }
+
+/* a row the commander just acted on fades out until the next snapshot drops it */
+.a-row.pending { opacity: .45; }
+.a-row .sent-st { font-size: var(--fs-xs); color: var(--text-3); white-space: nowrap; }
+.a-row .sent-st.read { color: var(--green); }
+
+/* quick view */
+.a-detail > * { min-width: 0; max-width: 100%; }
+.a-detail .qv-close { display: none; }
+.qv-blocks { display: grid; gap: var(--s-3); font-size: var(--fs-sm); color: var(--text-2); }
+.qv-blocks b { color: var(--text); font-weight: 600; }
+.qv-ask { white-space: pre-wrap; overflow-wrap: anywhere; }
+.qv-sent { display: grid; gap: var(--s-2); padding: 10px 12px; border-radius: var(--r-md); background: var(--sunken); font-size: var(--fs-sm); color: var(--text-2); }
+.qv-sent b { color: var(--text); }
+.qv-sent .words { white-space: pre-wrap; overflow-wrap: anywhere; }
+.qv-confirm { color: var(--rose); }
+.a-ctx dd.intent { white-space: pre-wrap; color: var(--text-2); display: -webkit-box; -webkit-line-clamp: 10; -webkit-box-orient: vertical; overflow: hidden; }
+.a-ctx a { overflow-wrap: anywhere; }
+.err-t { color: var(--rose); font-size: var(--fs-sm); }
+
+/* the snooze menu opens from a button inside the quick view */
+.menu { position: fixed; z-index: 60; }
+
+/* below the quick view's breakpoint it opens as a sheet over the list */
+@media (max-width: 1180px) {
+  .a-detail.open { display: flex; position: fixed; z-index: 40; top: 0; right: 0; bottom: 0; width: min(420px, 100vw); height: auto;
+    box-shadow: var(--shadow-2); }
+  .a-detail.open .qv-close { display: inline-flex; }
+  .qv-scrim { position: fixed; inset: 0; z-index: 39; background: var(--scrim); }
+}
+@media (min-width: 1181px) { .qv-scrim { display: none; } }
+@media (max-width: 860px) {
+  .a-head .tabs { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .a-head .tabs::-webkit-scrollbar { display: none; }
+  .a-detail.open { top: auto; left: 0; width: auto; max-height: 86vh; border-left: 0; border-top: 1px solid var(--border);
+    border-radius: 14px 14px 0 0; padding: var(--s-5) var(--s-5) calc(var(--s-7) + env(safe-area-inset-bottom)); }
+}
+
+/* the round page without a design tree: the round's questions as the outline */
+.r-tree .tree .node { cursor: pointer; }
+
+/* the details page (slice 1: brief, plan, report and events; the full ticket comes next) */
+.dt { padding-bottom: var(--s-10); }
+.dt-head { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; margin-bottom: var(--s-3); }
+.dt-title { font-size: var(--fs-2xl); font-weight: 600; line-height: 1.25; max-width: var(--w-text); }
+.dt-sub { margin-top: var(--s-2); font-size: var(--fs-sm); color: var(--text-3); }
+.dt .tabs { margin: var(--s-6) 0 var(--s-5); }
+.dt-doc { max-width: var(--w-text); }
+.dt-doc .md-h { margin: var(--s-6) 0 var(--s-3); }
+.dt-doc h1.md-h { font-size: var(--fs-xl); } .dt-doc h2.md-h { font-size: var(--fs-lg); } .dt-doc h3.md-h { font-size: var(--fs-md); }
+.dt-doc p, .dt-doc ul, .dt-doc ol, .dt-doc blockquote, .dt-doc pre, .dt-doc table { margin: 0 0 var(--s-4); }
+.dt-doc ul, .dt-doc ol { padding-left: 1.4em; }
+.dt-doc li + li { margin-top: 2px; }
+.dt-doc code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; padding: 1px 4px; border-radius: 4px; background: var(--sunken); }
+.dt-doc pre { padding: var(--s-4); border-radius: var(--r-md); background: var(--sunken); overflow: auto; }
+.dt-doc pre code { padding: 0; background: none; }
+.dt-doc blockquote { padding-left: var(--s-4); border-left: 2px solid var(--border-strong); color: var(--text-2); }
+.dt-doc table { border-collapse: collapse; font-size: var(--fs-sm); display: block; overflow-x: auto; }
+.dt-doc th, .dt-doc td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; vertical-align: top; }
+.dt-events { list-style: none; margin: 0; padding: 0; max-width: var(--w-text); }
+.dt-events li { display: grid; grid-template-columns: 92px 1fr; gap: var(--s-4); padding: 8px 0; border-top: 1px solid var(--border); font-size: var(--fs-sm); }
+.dt-events .k { color: var(--text-3); font-size: var(--fs-xs); }
+.dt-events .t { overflow-wrap: anywhere; }
+.dt-events li.ask .t { color: var(--text); font-weight: 500; }
+.dt-empty { color: var(--text-3); }
+@media (max-width: 860px) { .dt-events li { grid-template-columns: 1fr; gap: 2px; } }

@@ -1,0 +1,111 @@
+/* chartroom app prototypes: design tokens.
+   One system, two skins. <html data-dir="a|b" data-theme="light|dark">.
+   A leans dense and crisp (cool neutrals, 13px base, small radii).
+   B leans airy and warm (paper neutrals, 15px base, soft radii, a serif for titles).
+   Everything else (components, layouts) reads only these variables. */
+
+:root {
+  /* spacing: a 4px grid */
+  --s-1: 2px; --s-2: 4px; --s-3: 8px; --s-4: 12px; --s-5: 16px;
+  --s-6: 20px; --s-7: 24px; --s-8: 32px; --s-9: 40px; --s-10: 56px;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, "Helvetica Neue", Arial, sans-serif;
+  --font-serif: "Iowan Old Style", "Charter", "Source Serif Pro", Georgia, "Times New Roman", serif;
+  --font-title: var(--font-sans);
+
+  --ease: cubic-bezier(.2, .7, .2, 1);
+  --dur: 140ms;
+}
+
+/* ---------- A: Linear-leaning ---------- */
+[data-dir="a"] {
+  --fs-xs: 11px; --fs-sm: 12px; --fs-md: 13px; --fs-lg: 14px;
+  --fs-xl: 16px; --fs-2xl: 20px; --fs-3xl: 24px;
+  --lh-tight: 1.25; --lh: 1.45;
+  --fw-title: 600; --tracking-title: -0.01em;
+
+  --r-sm: 4px; --r-md: 6px; --r-lg: 8px; --r-pill: 999px;
+  --row-h: 36px; --gutter: var(--s-5); --page-pad: var(--s-6);
+  --card-pad: var(--s-5);
+  --sidebar-w: 224px;
+
+  --bg: #fbfbfc; --surface: #ffffff; --sunken: #f4f5f7; --hover: #f1f2f5; --selected: #eceefb;
+  --border: #e7e8ec; --border-strong: #d6d8de;
+  --text: #1c1d21; --text-2: #5c5f68; --text-3: #8b8e97;
+  --accent: #5a5fd0; --accent-text: #4a4fc0; --accent-soft: #eef0fc; --on-accent: #ffffff;
+  --amber: #a8660f; --amber-soft: #fbf1e1;
+  --rose: #b8443b; --rose-soft: #fbeceb;
+  --green: #2e7f55; --green-soft: #e7f4ec;
+  --blue: #3a6fb8; --blue-soft: #e9f0fa;
+  --gray-soft: #f0f1f4;
+  --purple: #7d4fd1; --purple-soft: #f1ebfb;
+  --shadow-1: 0 1px 2px rgba(20, 22, 30, .05);
+  --shadow-2: 0 8px 28px rgba(20, 22, 30, .12), 0 1px 3px rgba(20, 22, 30, .06);
+  --scrim: rgba(18, 19, 24, .28);
+}
+[data-dir="a"][data-theme="dark"] {
+  --bg: #0f1013; --surface: #15161a; --sunken: #1a1b20; --hover: #1c1d23; --selected: #1f2130;
+  --border: #24262c; --border-strong: #31333b;
+  --text: #e5e6ea; --text-2: #a1a4ac; --text-3: #6e717a;
+  --accent: #8a8ef0; --accent-text: #a5a8f5; --accent-soft: rgba(138, 142, 240, .14); --on-accent: #0f1013;
+  --amber: #e0a24d; --amber-soft: rgba(224, 162, 77, .13);
+  --rose: #ea7b70; --rose-soft: rgba(234, 123, 112, .13);
+  --green: #63c08c; --green-soft: rgba(99, 192, 140, .13);
+  --blue: #79a7ea; --blue-soft: rgba(121, 167, 234, .13);
+  --gray-soft: #1e1f25;
+  --purple: #b195f2; --purple-soft: rgba(177, 149, 242, .14);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .3);
+  --shadow-2: 0 12px 36px rgba(0, 0, 0, .5), 0 1px 3px rgba(0, 0, 0, .4);
+  --scrim: rgba(0, 0, 0, .5);
+}
+
+/* ---------- B: Sunsama-leaning ---------- */
+[data-dir="b"] {
+  --fs-xs: 12px; --fs-sm: 13px; --fs-md: 15px; --fs-lg: 16px;
+  --fs-xl: 19px; --fs-2xl: 26px; --fs-3xl: 34px;
+  --lh-tight: 1.25; --lh: 1.55;
+  --fw-title: 500; --tracking-title: -0.005em;
+  --font-title: var(--font-serif);
+
+  --r-sm: 8px; --r-md: 12px; --r-lg: 16px; --r-pill: 999px;
+  --row-h: 48px; --gutter: var(--s-7); --page-pad: var(--s-8);
+  --card-pad: var(--s-6);
+  --sidebar-w: 248px;
+
+  --bg: #f6f4ef; --surface: #fffefb; --sunken: #efebe4; --hover: #f2eee7; --selected: #e9f1ed;
+  --border: #e6e0d6; --border-strong: #d8d0c3;
+  --text: #2b2824; --text-2: #6a645b; --text-3: #9b948a;
+  --accent: #3d7868; --accent-text: #336a5b; --accent-soft: #e5efea; --on-accent: #ffffff;
+  --amber: #a5651d; --amber-soft: #f6ead9;
+  --rose: #ad5141; --rose-soft: #f6e5e0;
+  --green: #4b8558; --green-soft: #e6f0e6;
+  --blue: #4d6f9a; --blue-soft: #e7edf4;
+  --gray-soft: #efebe4;
+  --purple: #7a5aa8; --purple-soft: #efe8f6;
+  --shadow-1: 0 1px 2px rgba(60, 45, 25, .05), 0 2px 8px rgba(60, 45, 25, .04);
+  --shadow-2: 0 18px 48px rgba(60, 45, 25, .14), 0 2px 6px rgba(60, 45, 25, .06);
+  --scrim: rgba(43, 40, 36, .22);
+}
+[data-dir="b"][data-theme="dark"] {
+  --bg: #191816; --surface: #21201d; --sunken: #262421; --hover: #2a2825; --selected: #24302b;
+  --border: #33302b; --border-strong: #423e37;
+  --text: #ece7de; --text-2: #b2aa9e; --text-3: #81796e;
+  --accent: #82bba9; --accent-text: #98c9b9; --accent-soft: rgba(130, 187, 169, .14); --on-accent: #191816;
+  --amber: #dba35c; --amber-soft: rgba(219, 163, 92, .13);
+  --rose: #e08d7c; --rose-soft: rgba(224, 141, 124, .13);
+  --green: #8fc39a; --green-soft: rgba(143, 195, 154, .13);
+  --blue: #93b2d8; --blue-soft: rgba(147, 178, 216, .13);
+  --gray-soft: #2a2825;
+  --purple: #b9a1dc; --purple-soft: rgba(185, 161, 220, .14);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .3);
+  --shadow-2: 0 18px 48px rgba(0, 0, 0, .5), 0 2px 6px rgba(0, 0, 0, .35);
+  --scrim: rgba(0, 0, 0, .45);
+}
+
+/* home hues: soft, never saturated. A home's dot and avatar use one. */
+:root {
+  --hue-1: #6c7bd9; --hue-2: #c08a3e; --hue-3: #4f9a7f; --hue-4: #b46a8a; --hue-5: #7a8a99;
+}
+[data-dir="b"] {
+  --hue-1: #6f86b8; --hue-2: #c4904a; --hue-3: #5c9a7f; --hue-4: #b77a8a; --hue-5: #8a8a7a;
+}

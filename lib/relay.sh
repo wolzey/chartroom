@@ -20,6 +20,26 @@ CR_RELAY_ID_RE='^rl-[0-9a-f]{4,}$'
 
 relay_dir() { printf '%s/relays' "${1:-$CR_HOME}"; }
 
+# One record appended to a mailbox file under its lock (<file>.lock, a directory holding the
+# writer's pid), so two writers never interleave: a relay from another home and the commander's
+# words (lib/tell.sh, up to 16 KB, more than one write() can promise to keep whole) land in the
+# same file. A lock whose writer is gone is taken over; a live one is waited for, up to 5 s.
+mailbox_append() { # <file> <record>
+  local f="$1" lock="$1.lock" i owner rc
+  for i in $(seq 1 100); do
+    if mkdir "$lock" 2>/dev/null; then
+      echo $$ >"$lock/pid"
+      printf '%s\n' "$2" >>"$f"; rc=$?
+      rm -rf "$lock"
+      return "$rc"
+    fi
+    owner="$(cat "$lock/pid" 2>/dev/null || true)"
+    if [[ -n "$owner" ]] && ! pid_alive "$owner"; then rm -rf "$lock"; continue; fi
+    sleep 0.05
+  done
+  die "could not append to $f: another writer has held $lock for 5 s"
+}
+
 # The valid records of one mailbox file, one JSON object per line, each with its direction; a
 # line that is not a record (hand-edited, cut short) is skipped.
 relay_records() { # <file> <in|out>
@@ -163,7 +183,7 @@ relay_send() {
   (( rbytes <= CR_RELAY_RECORD_MAX )) || die "relay: the message takes $rbytes bytes once written (quotes, backslashes and line breaks count twice); a relay record holds at most $CR_RELAY_RECORD_MAX. Shorten it, or put it in a file $to's XO can read and relay its path"
   # The relay itself, the one write in the target home; then this home's own copy.
   mkdir -p "$theirs"
-  printf '%s\n' "$rec" >>"$theirs/inbox.ndjson"
+  mailbox_append "$theirs/inbox.ndjson" "$rec"
   stamp_changed "$path" # its board shows the relay
   bell_ring "$path" watch # its watches wake now (a dead one's FIFO is that home's to remove)
   if ! { mkdir -p "$mine" && printf '%s\n' "$rec" >>"$mine/outbox.ndjson"; }; then
@@ -184,7 +204,7 @@ relay_ack() {
       none) die "relay ack: no relay $q received in this home (chartroom relay list --all)" ;;
       acked) echo "$q was already acked" ;;
       open)
-        jq -n -c --arg id "$q" --arg at "$(now)" '{schema: 1, kind: "ack", id: $id, at: $at}' >>"$f" && stamp_changed
+        mailbox_append "$f" "$(jq -n -c --arg id "$q" --arg at "$(now)" '{schema: 1, kind: "ack", id: $id, at: $at}')" && stamp_changed
         rows="$(jq -c --arg id "$q" 'map(if .id == $id and .direction == "in" then .acked = true else . end)' <<<"$rows")"
         echo "acked $q" ;;
     esac
@@ -217,7 +237,7 @@ cmd_relay() {
 
 # ---------------------------------------------------------------- watch
 
-# The watch's round over this home's mailbox (cmd_watch): one wake line per relay that arrived
+# The watch's round over this home's mailbox (cmd_watch): one wake line per relay (or told message, lib/tell.sh) that arrived
 # past the cursor and is not acked yet. Whole lines only: a record still being written is read
 # next round. A mailbox that shrank (rewritten by hand) is taken from its end, never replayed.
 # The cursor moves by the bytes on disk (counted by od, so a NUL byte a foreign writer left can
@@ -234,17 +254,24 @@ watch_relays() {
     awk 'NF { n++; if ($1 == 10) last = n } END { print last + 0 }')"
   (( upto > 0 )) || return 0
   chunk="$(head -c "$((off + upto))" "$f" | tail -c +"$((off + 1))" | LC_ALL=C tr -d '\000')"
-  out="$(head -c "$size" "$f" | LC_ALL=C tr -d '\000' | jq -R -s -r --arg new "$chunk" --arg re "$CR_RELAY_ID_RE" '
+  out="$(head -c "$size" "$f" | LC_ALL=C tr -d '\000' | jq -R -s -r --arg new "$chunk" --arg re "$CR_RELAY_ID_RE" --arg cm "$CR_TELL_ID_RE" '
     def recs: split("\n")[] | fromjson? | select(type == "object");
     def one: gsub("[[:cntrl:]]+"; " ");
     ([recs | select(.kind == "ack") | .id] | map({key: tostring, value: true}) | from_entries) as $acked
     | $new | recs
-    | select(.kind == "relay" and (.id | type) == "string" and (.id | test($re)) and ($acked[.id] | not)
-             and (.from | type) == "string" and (.text | type) == "string")
-    | "[relay \(.id)] [from \(.from | one)]"
-      + (if (.project | type) == "string" then " [\(.project | one)]" else "" end)
-      + (if (.re | type) == "string" then " [re \(.re | one)]" else "" end)
-      + " " + (.text | one)')"
+    | select((.id | type) == "string" and ($acked[.id] | not) and (.text | type) == "string")
+    | if .kind == "relay" and (.id | test($re)) and (.from | type) == "string" then
+        "[relay \(.id)] [from \(.from | one)]"
+        + (if (.project | type) == "string" then " [\(.project | one)]" else "" end)
+        + (if (.re | type) == "string" then " [re \(.re | one)]" else "" end)
+        + " " + (.text | one)
+      # the commander speaking from the app (lib/tell.sh)
+      elif .kind == "commander" and (.id | test($cm)) then
+        "[commander \(.id)] [via \((.via // "app") | tostring | one)]"
+        + (if (.project | type) == "string" then " [\(.project | one)]" else "" end)
+        + (if (.re | type) == "string" then " [re \(.re | one)]" else "" end)
+        + " " + (.text | one)
+      else empty end')"
   OFF[@relays]=$((off + upto))
   if [[ -n "$out" ]]; then printf '%s\n' "$out"; WOKE=1; fi
   return 0

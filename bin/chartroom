@@ -17,6 +17,9 @@
 #   config                  this home's own settings, over the config file (lib/core.sh)
 #   relays/inbox.ndjson     relays from other homes' XOs, and their acks (lib/relay.sh)
 #   relays/outbox.ndjson    the relays this home sent
+#                           (and the commander's words from the app, `tell`: lib/tell.sh)
+#   questions/              the XO's question cards and every card's answer (lib/ask.sh)
+#   snoozes.ndjson          items of Needs me the commander snoozed (lib/snooze.sh)
 #
 # Usage: chartroom <command> [args]   (chartroom help for the list)
 
@@ -95,6 +98,14 @@ source "$CR_ROOT/lib/nodes.sh"
 source "$CR_ROOT/lib/stuck.sh"
 # shellcheck source=../lib/brain.sh
 source "$CR_ROOT/lib/brain.sh"
+# shellcheck source=../lib/tell.sh
+source "$CR_ROOT/lib/tell.sh"
+# shellcheck source=../lib/ask.sh
+source "$CR_ROOT/lib/ask.sh"
+# shellcheck source=../lib/snooze.sh
+source "$CR_ROOT/lib/snooze.sh"
+# shellcheck source=../lib/app.sh
+source "$CR_ROOT/lib/app.sh"
 for _f in "$CR_ROOT"/lib/backends/*.sh; do
   # shellcheck source=/dev/null
   source "$_f"
@@ -1641,6 +1652,34 @@ chartroom - run a crew of coding agents from one agent session (the XO)
   chartroom relay ack <rl-id>...          mark relays received here as handled
   chartroom relay list [--all] [--json]   the open relays received here (--all: acked and sent
                                           ones too)
+  chartroom tell [--re <ref>] [--project P] [--via app|terminal] <text|->
+                                          the commander's own words to this home's XO (from the
+                                          app, or any place outside the XO's session): one record
+                                          in relays/inbox.ndjson; its watch wakes with
+                                          "[commander <cm-id>] [via app] [<project>] [re <ref>]
+                                          <text>". tell ack <cm-id> marks one read; tell list
+                                          [--all] [--json] shows them
+  chartroom ask <card.json|-> | ask --title T [--context C] [--option O]... [--recommend N]
+                                          post a question card for the commander (a grilling
+                                          round, or one multiple-choice question) to the app's
+                                          Needs me, and still ask it in the terminal; prints its
+                                          q-id. ask answer <id> [--via app|terminal] (<json|-> |
+                                          --pick N [--note T]) answers a card, a worker's ask
+                                          (ev-<task>-<offset>) or an inbox item: the first answer
+                                          wins; from the app it is also told to the XO. ask
+                                          withdraw <q-id>, ask list [--all] [--json], ask show
+  chartroom snooze <ref> --for 30m|4h|2d | --until <UTC>
+                                          keep an item out of Needs me until then (snooze off
+                                          <ref>; snooze list [--json])
+  chartroom app serve [--port N] [--daemon] [--no-auth] | open | stop | status | doctor
+                                          the chartroom app: every home on this machine (the
+                                          brain) in one PWA, on 127.0.0.1:CHARTROOM_APP_PORT
+                                          (4516), for Tailscale Serve to put on the tailnet. Only
+                                          CHARTROOM_APP_USER (a Tailscale login) gets in;
+                                          --no-auth: this machine's own browser, straight to
+                                          127.0.0.1 only. doctor prints the Serve command
+  chartroom app snapshot --json           one home as the app reads it: Needs me and the tasks
+                                          with their app status
   chartroom artifact add <id> --kind message|runbook|note|page --title T [--description D]
                          [--slug S] [--no-secret-check] <file|->
                                           keep text drafted for the commander (a message to
@@ -1809,7 +1848,7 @@ if [[ "$cmd" =~ ^(status|ls|board|todo|inbox|relay)$ ]]; then
   done
 fi
 case "$cmd" in
-  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|steer|stop|attach|park|accept|close|sweep|watch|dashboard|radar|node|nodes|doctor|homes|brain|version|help) "cmd_$cmd" "$@" ;;
+  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|steer|stop|attach|park|accept|close|sweep|watch|dashboard|radar|node|nodes|doctor|homes|brain|tell|ask|snooze|app|version|help) "cmd_$cmd" "$@" ;;
   install-skills) cmd_install_skills "$@" ;;
   ls) cmd_status "$@" ;;
   show) cmd_show "$@" ;;

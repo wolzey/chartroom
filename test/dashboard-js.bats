@@ -25,3 +25,4 @@ js() { # <suite>
 @test "stacks: related tasks stack deterministically; the archive cutoffs" { js stacks; }
 @test "herdr-xo: the Tasks panel finds a home's XO and what to type into it" { js herdr-xo; }
 @test "herdr-schedule: the Tasks panel reads the radar only while shown, after a change" { js herdr-schedule; }
+@test "app-model: the app's Needs me across homes, a card's questions, Enter, an answer's body" { js app-model; }

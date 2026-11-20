@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en" data-dir="a">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Chartroom</title>
+<link rel="icon" href="/app/icon.svg" type="image/svg+xml">
+<script src="/app/src/boot.js"></script>
+<link rel="stylesheet" href="/app/styles/tokens.css">
+<link rel="stylesheet" href="/app/styles/base.css">
+<link rel="stylesheet" href="/app/styles/layout.css">
+<link rel="stylesheet" href="/app/styles/app.css">
+</head>
+<body data-screen="needs">
+<div id="app"><p class="boot-note faint">Opening the chartroom…</p></div>
+<noscript><p style="padding:24px">The chartroom app needs JavaScript.</p></noscript>
+<script src="/app/vendor/react.production.min.js"></script>
+<script src="/app/vendor/react-dom.production.min.js"></script>
+<script src="/shared/eventfmt.js"></script>
+<script src="/shared/markdown.js"></script>
+<script src="/app/src/model.js"></script>
+<script type="module" src="/app/src/main.js"></script>
+</body>
+</html>

@@ -186,6 +186,12 @@ wake, as `[<id>] [<project>] <event>`; keep the project when you relay it:
 - `[relay <id>] [from <home>] [<project>] [re <id>] <text>`: another home's XO relayed a note
   or a request (`[re <id>]`: a reply to one of yours). See Several homes. Focus mode never holds
   one.
+- `[commander <cm-id>] [via app] [<project>] [re <ref>] <text>`: the commander spoke from the
+  app (or answered a card there). Treat it exactly as if they had typed it in this session, then
+  `chartroom tell ack <cm-id>` so the app shows it was read. `[re <ref>]` names what it answers: a
+  task (relay a worker's answer with `chartroom steer <id>`, in their words), a card (`q-xxxx`),
+  or an inbox item (`i-xxxx`: record the answer, then `chartroom todo done <i-id>`). Focus mode
+  never holds one.
 
 On a wake:
 
@@ -321,6 +327,16 @@ others read between steps. `close` only marks it closed; its directory is never 
   task brief, add a dated line under "Approvals given in chat, not yet in a brief". Remove the
   line once it is answered or recorded in a brief (`chartroom todo done <i-id>` removes a
   Waiting line).
+- **Questions in the app.** The commander answers in the chartroom app as often as in this
+  session. Every multiple-choice question you ask them, and every grilling round, also goes there
+  as a card: `chartroom ask --title "<question>" --option "<a>" --option "<b>" --recommend 1
+  --project <project>` for one question, or `chartroom ask <card.json>` for a round (its format is
+  in `chartroom ask --help`); then ask it here too. The first answer wins, wherever it comes
+  from: when they answer in this session, record it with `chartroom ask answer <q-id> --pick N
+  [--note "..."]` (or an answer file) so the app's card closes; if that says it was already
+  answered, the app's answer stands and has reached you as a `[commander ...]` wake. A worker's
+  `decision` and an inbox question are cards already; nothing to post. `chartroom ask withdraw
+  <q-id>` takes back a card you no longer need.
 - **Artifacts.** Text for the commander to send or run (a message, a reply, commands, a
   checklist), yours or a worker's, is saved before you show it, never left in chat alone:
   `chartroom artifact add <task-or-inbox-id> --kind message|runbook|note --title "<one line>" <file|->`.
