@@ -398,6 +398,9 @@ mig_bundle() { # <facts json> <ref> <dir>
   [[ -n "$ref" ]] || return 1
   if [[ -n "$(git -C "$proot" rev-list --max-count=1 "$ref" --not --remotes 2>/dev/null)" ]]; then
     git -C "$proot" bundle create --quiet "$d/branch.bundle" "$ref" --not --remotes >&2 || return 1
+    # It must verify, and hold the client's head, before the task may be closed on the client.
+    git -C "$proot" bundle verify --quiet "$d/branch.bundle" >/dev/null 2>&1 || { rm -f "$d/branch.bundle"; return 1; }
+    git bundle list-heads "$d/branch.bundle" | awk -v h="$(jq -r .head <<<"$f")" '$1 == h { ok = 1 } END { exit !ok }' || { rm -f "$d/branch.bundle"; return 1; }
   fi
   return 0
 }
