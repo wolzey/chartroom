@@ -59,13 +59,14 @@ usage: chartroom migrate-home <verb> --from <ssh target|local> --home <name> [op
          finish --brain <target> | rollback | status | reap --apply
          materialize <id> | restore <id>          (in this home: no --from)
   options: --client-home PATH  --brain-home PATH  --dry-run  --prs FILE  --no-prs  --clone-missing
+           --unguarded (freeze: a client chartroom without the freeze guard, on the commander's word)
 EOF
 }
 
 # Parses the shared options into MIG_*; the rest stay in MIG_ARGS.
 mig_opts() {
   MIG_FROM="" MIG_HOME="" MIG_CHOME="" MIG_BHOME="" MIG_DRY=0 MIG_PRS="" MIG_NOPRS=0 MIG_DECISIONS=""
-  MIG_BRAIN="" MIG_ALL=0 MIG_APPLY=0 MIG_CLONE=0 MIG_ARGS=()
+  MIG_BRAIN="" MIG_ALL=0 MIG_APPLY=0 MIG_CLONE=0 MIG_UNGUARDED=0 MIG_ARGS=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --from) MIG_FROM="${2:-}"; shift 2 ;;
@@ -80,6 +81,7 @@ mig_opts() {
       --all) MIG_ALL=1; shift ;;
       --apply) MIG_APPLY=1; shift ;;
       --clone-missing) MIG_CLONE=1; shift ;;
+      --unguarded) MIG_UNGUARDED=1; shift ;;
       -h|--help) mig_usage; exit 0 ;;
       *) MIG_ARGS+=("$1"); shift ;;
     esac
@@ -285,7 +287,13 @@ mig_snapshot_brain() { # <home> <dir>
 
 mig_freeze() {
   [[ $MIG_DRY -eq 1 ]] || mig_step_done snapshot || die "migrate-home: snapshot first (migrate-home snapshot)"
-  mig_client capable "$MIG_CBIN" >/dev/null || die "migrate-home: the client's chartroom ($MIG_CBIN) has no migrate-home, so it would not honour a freeze: update its install first"
+  if ! mig_client capable "$MIG_CBIN" >/dev/null; then
+    # --unguarded: the commander's word that nobody uses the client home meanwhile; the marker is
+    # still written, but that chartroom will not refuse new, dispatch, steer or attach.
+    [[ $MIG_UNGUARDED -eq 1 ]] || die "migrate-home: the client's chartroom ($MIG_CBIN) has no migrate-home, so it would not honour a freeze: update its install first (or --unguarded, on the commander's word that nobody uses that home meanwhile)"
+    echo "warning: the client's chartroom does not honour the freeze: nothing there refuses new, dispatch, steer or attach while it lasts"
+    mig_ledger '*' freeze-unguarded "the client's chartroom ($MIG_CBIN) has no migrate-home"
+  fi
   mig_client freeze "$MIG_CHOME" "$MIG_CBIN" "$(hostname -s 2>/dev/null || echo brain)" >/dev/null
   # Park every live worker that can be (lib/park.sh decides; one not at rest is reported).
   local live
