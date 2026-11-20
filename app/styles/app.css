@@ -110,6 +110,25 @@
 .dt-empty { color: var(--text-3); }
 @media (max-width: 860px) { .dt-events li { grid-template-columns: 1fr; gap: 2px; } }
 
+/* the ticket (slice 2) */
+.task-body .ticket-banner { max-width: var(--w-text); margin-top: var(--s-4); }
+.task-body .t-sec { margin-top: var(--s-8); }
+.task-body .t-sec > .dt-doc, .task-body .desc, .task-body .feed, .task-body .composer, .task-body .pr-list, .task-body .att-grid, .task-body .drop { max-width: var(--w-text); }
+.desc-s + .desc-s { margin-top: var(--s-4); }
+.desc-s .d-h, .desc-f .d-h { margin: 0 0 var(--s-2); }
+.desc-f { display: grid; gap: 4px; margin-bottom: var(--s-4); }
+.desc-f textarea { font-size: 14px; line-height: 1.55; }
+.desc-more { margin-top: var(--s-3); font-size: var(--fs-sm); }
+.pr-list { display: grid; gap: var(--s-3); margin-top: var(--s-3); }
+.att-t { color: inherit; text-decoration: none; }
+.att-t:hover { text-decoration: none; }
+.att-failed { border-color: var(--rose); }
+.feed li.pending { opacity: .6; }
+.feed .ev .grow { overflow-wrap: anywhere; }
+.labels-f { display: grid; gap: var(--s-2); }
+.qv-cmd { display: block; padding: 6px 8px; border-radius: var(--r-sm); background: var(--surface); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--fs-sm); color: var(--text); user-select: all; }
+.a-row-title .pr-badges { margin-left: var(--s-2); flex: none; }
+
 /* bulk selection (the commander's feedback 4): a row's glyph turns into a checkbox on hover, and
    while anything is selected; a bar at the bottom acts on the selection */
 .pick-cell { position: relative; display: inline-flex; width: 14px; height: 14px; align-items: center; justify-content: center; }

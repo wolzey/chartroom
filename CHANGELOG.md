@@ -52,8 +52,20 @@ are stable from 0.1.0.
     questions is a grilling round on its own page. A `--detail` written into a headline is read
     as its detail.
   - Text measures at least 4.5:1 in light and dark (`test/js/app-contrast.test.js`). Every URL is
-    a link, and a GitHub PR or issue reads `repo#123`. The details page keeps the events below
-    the documents.
+    a link, and a GitHub PR or issue reads `repo#123`.
+- The chartroom app, slice 2: a task is a ticket.
+  - Its open question is answered in place.
+  - Its PRs show as Linear-style cards, with state, checks, reviewers and branch from `gh`; rows
+    in Needs me carry PR badges.
+  - The description (the brief's intent and spec) is edited in place and steered to the worker.
+  - The plan and the report are on the page.
+  - Attachments come by drop, paste or browse (25 MB each) and steer the worker unless you
+    untick the box.
+  - The activity sits at the bottom, with a composer: a comment steers the worker, and `@xo`
+    asks the XO.
+  - Properties are in a slim column: status (Accept or Close), priority and labels.
+  - A worker stopped at a prompt nothing can read says so, with the command that opens its
+    terminal.
 - `chartroom tell`: the commander's words to the XO from outside its session. One record in the
   home's mailbox, and a `[commander <cm-id>] ...` wake for its `watch`; `tell ack` marks it read.
 - `chartroom ask`: question cards. The XO posts a question or a grilling round as a card;

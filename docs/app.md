@@ -74,7 +74,8 @@ app/src/model.js        what is shown, pure (test/js/app-model.test.js)
 app/src/main.js         routes, data, actions, keyboard
 app/src/needs.js        the list and the quick view
 app/src/round.js        a card of several questions
-app/src/details.js      a task's brief, plan, report and events (until the ticket view)
+app/src/ticket.js       a task as a ticket: its question, PRs, description, plan, report, attachments, activity
+app/src/outbox.js       every action queued, sent in the background, retried (pure)
 app/src/palette.js      ⌘K
 app/styles/             tokens, base and layout from the approved prototypes; app.css adds to them
 app/vendor/             react 18.3.1, react-dom 18.3.1, htm 3.1.1 (LICENSES.md)

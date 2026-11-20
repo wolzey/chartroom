@@ -29,6 +29,48 @@ export function linkifyDom(root) {
   }
 }
 
+// Pull requests, the way Linear shows them. <pr> is the server's gh lookup ({state, num, repo,
+// title, checks, reviewers, branch, base, automerge}), or nothing yet: then the URL alone, with
+// "No check data".
+const PR_STATE = { draft: "Draft", open: "Open", approved: "Approved", changes: "Changes requested", merged: "Merged", closed: "Closed" };
+function prName(url, pr) {
+  if (pr && pr.repo) return pr.repo.split("/").pop() + pr.num;
+  const m = /github\.com\/[^/]+\/([^/]+)\/pull\/(\d+)/.exec(url || "");
+  return m ? m[1] + "#" + m[2] : url;
+}
+export function PrIcon({ state }) {
+  return html`<span class=${"pr-ic pr-" + (PR_STATE[state] ? state : "open")} aria-hidden="true"><i></i></span>`;
+}
+export function PrBadges({ urls, prs, max }) {
+  if (!urls || !urls.length) return null;
+  const shown = max ? urls.slice(0, max) : urls, more = urls.length - shown.length;
+  return html`<span class="pr-badges">${shown.map((u) => {
+    const p = (prs || {})[u], c = p && p.checks;
+    const dot = !c ? "" : c.fail ? " ck-fail" : c.run ? " ck-run" : "";
+    return html`<a key=${u} class=${"pr-badge pr-b-" + ((p && p.state) || "open") + dot} href=${u} target="_blank" rel="noopener noreferrer"
+      title=${prName(u, p) + (p ? " · " + PR_STATE[p.state] : "")} onClick=${(e) => e.stopPropagation()}>
+      <${PrIcon} state=${p && p.state} />${prName(u, p).replace(/^.*#/, "#")}</a>`;
+  })}${more > 0 ? html`<span class="pr-badge pr-more">+${more}</span>` : null}</span>`;
+}
+function checks(c) {
+  if (!c) return html`<span class="ck-sum none">No check data</span>`;
+  if (c.fail) return html`<span class="ck-sum fail"><b>✕</b> ${c.fail} failing · ${c.pass} of ${c.total} passed</span>`;
+  if (c.run) return html`<span class="ck-sum run"><b>◌</b> ${c.run} running · ${c.pass} of ${c.total} passed</span>`;
+  return html`<span class="ck-sum pass"><b>✓</b> ${c.pass === c.total ? "All checks passed" : c.pass + " of " + c.total + " checks passed"}</span>`;
+}
+export function PrCard({ url, pr, compact }) {
+  const st = (pr && pr.state) || "open";
+  return html`<div class=${"pr-card pr-c-" + st + (compact ? " compact" : "")}>
+    <div class="pr-top"><${PrIcon} state=${st} /><span class="pr-title grow">${pr && pr.title ? pr.title : prName(url, pr)}</span>
+      <a class="btn ghost sm gh" href=${url} target="_blank" rel="noopener noreferrer" title="Open on GitHub">GitHub ↗</a></div>
+    <div class="pr-sub"><span class="pr-repo">${prName(url, pr)}</span>${pr ? html`<span class="pr-state">${PR_STATE[st]}</span>` : null}
+      ${pr && pr.automerge ? html`<span class="pr-am">Auto-merge on</span>` : null}
+      ${pr && pr.branch ? html`<span class="pr-branch truncate" title=${pr.branch + " → " + (pr.base || "main")}>${pr.branch} <span class="faint">→ ${pr.base || "main"}</span></span>` : null}</div>
+    <div class="pr-meta">${checks(pr && pr.checks)}
+      ${((pr && pr.reviewers) || []).map((r) => html`<span key=${r.name} class=${"rv rv-" + r.state}><span class="rv-t">${r.name} · ${{ approved: "approved", changes: "changes requested" }[r.state] || "commented"}</span></span>`)}</div>
+  </div>`;
+}
+
 export function Pill({ kind, text }) {
   const k = M.kind(kind);
   const cls = { decide: "decide", round: "round", approve: "approve", blocked: "blocked", read: "read", tidy: "tidy" }[k.glyph] || "read";

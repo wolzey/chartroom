@@ -6,7 +6,7 @@ import { getState, postAction, subscribe } from "./api.js";
 import { Toasts, Menu } from "./ui.js";
 import { NeedsList, QuickView, BulkBar } from "./needs.js";
 import { RoundPage } from "./round.js";
-import { DetailsPage } from "./details.js";
+import { TicketPage } from "./ticket.js";
 import { Palette } from "./palette.js";
 
 const M = window.AppModel;
@@ -133,7 +133,6 @@ function App() {
   const cur = sel >= 0 ? list[sel] : null;
   const setSel = (i) => { const it = list[Math.max(0, Math.min(list.length - 1, i))]; setSelKey(it ? it.key : null); setSnoozeOpen(false); if (!wide()) setQvOpen(true); };
 
-  const taskOf = (home, id) => { const h = (data && data.homes || []).find((x) => x.name === home); return h && h.snapshot ? (h.snapshot.tasks || []).find((t) => t.id === id) : null; };
   const hueOf = (home) => (homes.find((h) => h.name === home) || {}).hue || 5;
   const openDetails = (it, which) => {
     if (it.kind === "round") return go("#/q/" + encodeURIComponent(it.home) + "/" + encodeURIComponent(it.card));
@@ -346,17 +345,29 @@ function App() {
       setPick=${(q, l) => pick(it.key, q, l)} setNote=${(q, t) => note(it.key, q, t)} focus=${focusQ} setFocus=${setFocusQ}
       onSubmit=${submitRound} onBack=${() => go("#/")} />`;
   } else if (route.name === "task") {
-    main = html`<${DetailsPage} home=${route.home} hue=${hueOf(route.home)} id=${route.id} task=${taskOf(route.home, route.id)} tab=${route.tab}
-      setTab=${(t) => go("#/t/" + encodeURIComponent(route.home) + "/" + encodeURIComponent(route.id) + "/" + t)} onBack=${() => go("#/")} />`;
+    // the ticket: its open question (if Needs me has one for it) is answered in place, as in the quick view
+    const raw = all.find((x) => x.home === route.home && x.task === route.id && ["open", "sent"].includes(M.standing(x, local)));
+    const it = raw && !raw.sent && local[raw.key] === "sent" ? Object.assign({}, raw, { sent: { at: new Date().toISOString(), via: "app", pending: obState[raw.key] === "pending" } }) : raw;
+    const h = (data && data.homes || []).find((x) => x.name === route.home);
+    // the ticket's own changes go through the outbox too; accept and close also clear its Needs me item
+    const ticketAct = (action, body, label) => {
+      const key = (action === "accept" || action === "close") && raw ? raw.key : null;
+      setOutbox((o) => o.concat([OB.create(route.home, action, body, key, label, Date.now())]));
+      if (action === "accept" || action === "close") toast(label);
+    };
+    main = html`<${TicketPage} home=${route.home} hue=${hueOf(route.home)} id=${route.id} version=${data && data.version} prs=${(data && data.prs) || {}}
+      item=${it} machine=${h && h.snapshot ? h.snapshot.machine : null} onAct=${ticketAct} onBack=${() => go("#/")} toast=${toast}
+      askProps=${{ picks: raw && picks[raw.key], setPick: (q, l) => raw && pick(raw.key, q, l), note: raw && (notes[raw.key] || {})[1],
+        setNote: (t) => raw && note(raw.key, 1, t), busy: false, onAct: perform, onDetails: openDetails, prs: (data && data.prs) || {} }} />`;
   } else {
     main = html`<${NeedsList} all=${all} list=${list} tab=${tab} setTab=${setTab} filters=${filters} setFilters=${setFilters} homes=${homes}
-      counts=${counts} sel=${sel} setSel=${setSel} local=${local} ob=${obState} onQuick=${quick} notices=${notices}
-      picked=${picked} onPick=${onPick} onPickAll=${onPickAll} />`;
+      counts=${counts} sel=${sel} setSel=${setSel} ob=${obState} onQuick=${quick} notices=${notices}
+      picked=${picked} onPick=${onPick} onPickAll=${onPickAll} prs=${(data && data.prs) || {}} />`;
     const shown = cur && !cur.sent && local[cur.key] === "sent" ? Object.assign({}, cur, { sent: { at: new Date().toISOString(), via: "app", pending: obState[cur.key] === "pending" } }) : cur;
     aside = html`<${QuickView} it=${shown} open=${qvOpen} onClose=${() => setQvOpen(false)}
       picks=${cur && picks[cur.key]} setPick=${(q, l) => pick(cur.key, q, l)}
       note=${cur && (notes[cur.key] || {})[1]} setNote=${(t) => note(cur.key, 1, t)} busy=${false}
-      onAct=${perform} onDetails=${openDetails} snoozeAnchorRef=${snoozeAnchor} snoozeOpen=${snoozeOpen} setSnoozeOpen=${setSnoozeOpen} />`;
+      onAct=${perform} onDetails=${openDetails} snoozeAnchorRef=${snoozeAnchor} snoozeOpen=${snoozeOpen} setSnoozeOpen=${setSnoozeOpen} prs=${(data && data.prs) || {}} />`;
   }
   return html`<div class="a-app">
     <${Sidebar} homes=${homes} filters=${filters} setFilters=${setFilters} counts=${counts} onPalette=${() => setPalette(true)} onLater=${later}

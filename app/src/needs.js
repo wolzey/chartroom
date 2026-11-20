@@ -2,7 +2,7 @@
 // quick view beside it where most items are answered without leaving the list. A row click selects
 // (never navigates); the full page opens only from Open details, o or Shift+Enter.
 import { html, useState, useRef, useEffect } from "./html.js";
-import { Pill, Glyph, HomeTag, Tabs, Empty, Options, Why, Menu, Linked } from "./ui.js";
+import { Pill, Glyph, HomeTag, Tabs, Empty, Options, Why, Menu, Linked, PrCard, PrBadges } from "./ui.js";
 
 const M = window.AppModel;
 const EF = window.EventFmt;
@@ -30,7 +30,7 @@ function sentLine(it) {
   return it.sent.via === "terminal" ? "answered in the terminal" : "sent · not read yet";
 }
 
-function Row({ it, i, sel, ob, picked, picking, onSelect, onQuick, onPick }) {
+function Row({ it, i, sel, ob, picked, picking, onSelect, onQuick, onPick, prs }) {
   const pending = ob === "pending";
   const sent = ob === "failed" ? null : pending ? "sending…" : sentLine(it) || (ob === "done" ? "sent · not read yet" : null);
   return html`<div class=${"a-row" + (sel ? " sel" : "") + (pending ? " pending" : "") + (picked ? " picked" : "") + (picking ? " picking" : "")}
@@ -40,7 +40,7 @@ function Row({ it, i, sel, ob, picked, picking, onSelect, onQuick, onPick }) {
     <span class="pick-cell"><${Glyph} kind=${it.kind} />
       <input type="checkbox" class="pick" aria-label=${"Select " + it.title} checked=${!!picked}
         onClick=${(e) => { e.stopPropagation(); onPick(it.key, e.shiftKey ? "range" : "toggle"); }} onChange=${() => {}} /></span>
-    <span class="a-row-title"><span class="truncate"><${Linked} text=${it.title} /></span></span>
+    <span class="a-row-title"><span class="truncate"><${Linked} text=${it.title} /></span><${PrBadges} urls=${it.prs} prs=${prs} max=${2} /></span>
     <span class="a-row-quick">${ob === "failed" ? html`<span class="sent-st failed">not sent · see above</span>` : sent
       ? html`<span class=${"sent-st" + (it.sent && it.sent.read_by_xo ? " read" : "")}>${sent}</span>`
       : html`<button class="btn sm" title="Enter" onClick=${(e) => { e.stopPropagation(); onQuick(it); }}>${quickLabel(it)}</button>`}</span>
@@ -72,7 +72,7 @@ function Filters({ all, filters, setFilters, homes }) {
   </div>`;
 }
 
-export function NeedsList({ all, list, tab, setTab, filters, setFilters, homes, counts, sel, setSel, local, ob, onQuick, notices, picked, onPick, onPickAll }) {
+export function NeedsList({ all, list, tab, setTab, filters, setFilters, homes, counts, sel, setSel, ob, onQuick, notices, picked, onPick, onPickAll, prs }) {
   const picking = picked.size > 0;
   const allPicked = list.length > 0 && list.every((it) => picked.has(it.key));
   const tabs = [{ id: "all", label: "All", count: counts.all }]
@@ -87,7 +87,7 @@ export function NeedsList({ all, list, tab, setTab, filters, setFilters, homes, 
           <button class="btn" onClick=${() => { setFilters({}); setTab("all"); }}>Show all</button></${Empty}>`
       : html`<${Empty} title="You're all caught up" text="Nothing needs you right now. New questions and approvals land here first." />`;
   } else if (tab === "sent" || tab === "snoozed") {
-    rows = list.map((it) => html`<${Row} key=${it.key} it=${it} i=${i} sel=${i++ === sel} ob=${ob[it.key]} picked=${picked.has(it.key)} picking=${picking} onSelect=${setSel} onQuick=${onQuick} onPick=${onPick} />`);
+    rows = list.map((it) => html`<${Row} key=${it.key} it=${it} i=${i} sel=${i++ === sel} ob=${ob[it.key]} picked=${picked.has(it.key)} picking=${picking} onSelect=${setSel} onQuick=${onQuick} onPick=${onPick} prs=${prs} />`);
   } else {
     for (const g of M.GROUPS) {
       const inG = list.filter((it) => it.group === g.id);
@@ -95,7 +95,7 @@ export function NeedsList({ all, list, tab, setTab, filters, setFilters, homes, 
       rows.push(html`<div key=${"g-" + g.id} class="a-group" title=${g.hint}><span>${g.label}</span><span class="count">${inG.length}</span></div>`);
       for (const it of inG) {
         const k = i++;
-        rows.push(html`<${Row} key=${it.key} it=${it} i=${k} sel=${k === sel} ob=${ob[it.key]} picked=${picked.has(it.key)} picking=${picking} onSelect=${setSel} onQuick=${onQuick} onPick=${onPick} />`);
+        rows.push(html`<${Row} key=${it.key} it=${it} i=${k} sel=${k === sel} ob=${ob[it.key]} picked=${picked.has(it.key)} picking=${picking} onSelect=${setSel} onQuick=${onQuick} onPick=${onPick} prs=${prs} />`);
       }
     }
   }
@@ -117,19 +117,19 @@ export function NeedsList({ all, list, tab, setTab, filters, setFilters, homes, 
   </main>`;
 }
 
-// The quick view: the selected item, answered in place.
-export function QuickView({ it, open, onClose, picks, setPick, note, setNote, busy, onAct, onDetails, snoozeAnchorRef, snoozeOpen, setSnoozeOpen }) {
+// An item's question and the controls that answer it: the quick view's body, and the ticket's
+// banner when the task waits on the commander.
+export function AskBody({ it, picks, setPick, note, setNote, busy, onAct, onDetails, snoozeAnchorRef, snoozeOpen, setSnoozeOpen, prs, hidePrs }) {
   const [confirmClose, setConfirmClose] = useState(false);
   const noteRef = useRef(null);
   useEffect(() => { setConfirmClose(false); }, [it && it.key]);
-  if (!it) return html`<aside class="a-detail"><div class="a-detail-empty faint">Select something to see it here.</div></aside>`;
   const qs = M.questions(it, EF);
   const q = qs[0];
   const blocks = M.details(it, EF);
   const sent = it.sent;
   const xo = it.home + " XO";
   const hasAnswer = (picks && picks[1] != null) || (note && note.trim());
-  const snoozeBtn = it.ref ? html`<button class="btn ghost" ref=${snoozeAnchorRef} onClick=${() => setSnoozeOpen(!snoozeOpen)} disabled=${busy}>Snooze <kbd>s</kbd></button>` : null;
+  const snoozeBtn = it.ref && setSnoozeOpen ? html`<button class="btn ghost" ref=${snoozeAnchorRef} onClick=${() => setSnoozeOpen(!snoozeOpen)} disabled=${busy}>Snooze <kbd>s</kbd></button>` : null;
   const noteBox = (placeholder) => html`<textarea class="input note" rows="2" ref=${noteRef} data-note="1" placeholder=${placeholder}
       value=${note || ""} onInput=${(e) => setNote(e.target.value)} disabled=${busy || !!sent}></textarea>`;
   let body = null;
@@ -145,7 +145,8 @@ export function QuickView({ it, open, onClose, picks, setPick, note, setNote, bu
   } else if (it.kind === "review") {
     body = html`
       <p class="a-detail-sum qv-ask"><${Linked} text=${it.summary || "The worker reported done."} /></p>
-      ${(it.prs || []).length ? html`<div class="qv-blocks">${it.prs.map((p) => html`<a key=${p.url || p} href=${p.url || p} target="_blank" rel="noopener noreferrer">${p.url || p}</a>`)}</div>` : null}
+      ${(it.prs || []).length && !hidePrs ? html`<div class="q-prs"><div class="d-h">Pull requests <span class="count">${it.prs.length}</span></div>
+        ${it.prs.map((u) => html`<${PrCard} key=${u} url=${u} pr=${(prs || {})[u]} compact=${true} />`)}</div>` : null}
       <div class="a-detail-actions">
         <button class="btn primary" disabled=${busy} onClick=${() => onAct(it, { type: "accept" })}>Accept <kbd>a</kbd></button>
         ${confirmClose
@@ -172,8 +173,13 @@ export function QuickView({ it, open, onClose, picks, setPick, note, setNote, bu
       </div>`;
   } else {
     // decide, inbox, blocked, failed, input, approval: one question, options when it has them
+    const prompt = it.kind === "input";
     body = html`
-      ${q.text && q.text !== it.title ? html`<p class="a-detail-sum qv-ask"><${Linked} text=${q.text} /></p>` : null}
+      ${prompt ? html`<div class="qv-sent"><span><b>The worker is stopped at a prompt in its terminal</b>: a permission or a question
+        chartroom cannot read, so there is nothing to choose here. Open its terminal and answer it there:</span>
+        <code class="qv-cmd">chartroom attach ${it.short_id || it.task}</code>
+        <span>Or write below, and the XO will see to it.</span></div>` : null}
+      ${q.text && q.text !== it.title && !prompt ? html`<p class="a-detail-sum qv-ask"><${Linked} text=${q.text} /></p>` : null}
       ${q.context ? html`<p class="muted"><${Linked} text=${q.context} /></p>` : null}
       ${blocks.length ? html`<div class="qv-blocks">${blocks.map((b, k) => html`<p key=${k}>${b.label ? html`<b>${b.label}: </b>` : null}<${Linked} text=${b.text} /></p>`)}</div>` : null}
       ${q.options.length ? html`<${Options} options=${q.options} picked=${picks && picks[1]} onPick=${(l) => setPick(1, l)} />` : null}
@@ -186,6 +192,13 @@ export function QuickView({ it, open, onClose, picks, setPick, note, setNote, bu
         ${snoozeBtn}
       </div>`;
   }
+  return body;
+}
+
+// The quick view: the selected item, answered in place.
+export function QuickView(props) {
+  const { it, open, onClose, onDetails } = props;
+  if (!it) return html`<aside class="a-detail"><div class="a-detail-empty faint">Select something to see it here.</div></aside>`;
   const ctx = [];
   if (it.task) ctx.push(["Task", html`<button class="link" onClick=${() => onDetails(it)}>${it.title} <span class="faint">${it.short_id}</span></button>`]);
   ctx.push(["Home", html`<${HomeTag} name=${it.home} hue=${it.hue} />`]);
@@ -202,7 +215,7 @@ export function QuickView({ it, open, onClose, picks, setPick, note, setNote, bu
     </div>
     <h2 class="a-detail-title"><${Linked} text=${it.title} /></h2>
     <div class="a-detail-meta"><span class="meta"><${HomeTag} name=${it.home} hue=${it.hue} />${it.project ? html`<span class="dot-sep">${it.project}</span>` : null}</span></div>
-    ${body}
+    <${AskBody} ...${props} />
     <dl class="a-ctx">${ctx.map(([k, v]) => html`<${React.Fragment} key=${k}><dt>${k}</dt><dd class=${k === "Intent" ? "intent" : ""}>${v}</dd></${React.Fragment}>`)}</dl>
   </aside>`;
 }
