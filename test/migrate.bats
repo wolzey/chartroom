@@ -434,3 +434,35 @@ teardown() {
   [ "$status" -ne 0 ]; [[ "$output" == *"is another worktree"* ]]
   [ "$(git -C "$BW" symbolic-ref --short HEAD)" = someone-else ]
 }
+
+@test "resync: what the client did after the move comes over; a task the brain changed is kept; verify passes" {
+  full_move
+  mh verify >/dev/null
+  # The client goes on: an event, a grown transcript, a new task, an inbox item, a ruling.
+  printf '%s progress: one more thing on the client\n' "2026-01-09T00:00:00Z" >>"$CH/tasks/$A/events.log"
+  sid="$(jq -r .session_id "$CH/tasks/$A/meta.json")"
+  printf '{"type":"assistant","sessionId":"%s"}\n' "$sid" >>"$C/claude/projects/${W//[^A-Za-z0-9]/-}/$sid.jsonl"
+  mv "$CH/.migrating" "$T/m.bak"; N="$(ctask "made during the freeze")"; mv "$T/m.bak" "$CH/.migrating"   # a client without the guard
+  awk '{print} /^## Waiting on the commander$/ {print "- [i-c002] 2026-01-09 — [proj] a later client question"}' "$CH/inbox.md" >"$CH/inbox.md.t" && mv "$CH/inbox.md.t" "$CH/inbox.md"
+  echo '2026-01-09T00:00:00Z [r-0009] topic=late supersedes=- src=chat :: a ruling made after the move' >>"$CH/rulings.log"
+  # The brain changed the closed task Z since the move (its log grew here): it must be left alone.
+  printf '%s note: touched on the brain\n' "2026-01-09T00:00:00Z" >>"$BH/tasks/$Z/events.log"
+  printf '%s note: and on the client\n' "2026-01-09T00:00:00Z" >>"$CH/tasks/$Z/events.log"
+  run mh resync
+  [ "$status" -eq 0 ]
+  grep -q 'one more thing on the client' "$BH/tasks/$A/events.log"
+  [ "$(grep -c 'note: migrated from' "$BH/tasks/$A/events.log")" -eq 1 ]
+  [ -f "$BH/tasks/$N/meta.json" ] && [ "$(bmeta "$N" .migrated_from)" = local ]
+  grep -q 'i-c002' "$BH/inbox.md" && grep -q 'i-b001' "$BH/inbox.md"
+  grep -q 'r-0009' "$BH/rulings.log"
+  t="$B/claude/projects/${W//[^A-Za-z0-9]/-}"; t="${t/$C/$B}"
+  BW="$(bmeta "$A" .worktree)"; tb="$B/claude/projects/${BW//[^A-Za-z0-9]/-}/$sid.jsonl"
+  [ "$(wc -l <"$tb")" -eq 2 ]
+  grep -q 'touched on the brain' "$BH/tasks/$Z/events.log"; ! grep -q 'and on the client' "$BH/tasks/$Z/events.log"
+  [[ "$output" == *"resynced"* ]]
+  awk -F'\t' -v z="$Z" '$2 == z && $3 == "resync-conflict"' "$(S)/ledger.tsv" | grep -q .
+  # Verify now checks the new baseline: Z's client log moved on, so its record differs, and says so.
+  run mh verify
+  [[ "$output" == *"PASS git and conversations"* ]]
+  [[ "$output" == *"$Z: events.log does not start with the client's log"* || "$output" == *"PASS records"* ]]
+}

@@ -56,7 +56,7 @@ mig_usage() {
   cat <<'EOF'
 usage: chartroom migrate-home <verb> --from <ssh target|local> --home <name> [options]
   verbs: triage | snapshot [--all] | freeze | settle [--decisions FILE] | move | verify |
-         finish --brain <target> | rollback | status | reap --apply
+         resync | finish --brain <target> | rollback | status | reap --apply
          materialize <id> | restore <id>          (in this home: no --from)
   options: --client-home PATH  --brain-home PATH  --dry-run  --prs FILE  --no-prs  --clone-missing
            --unguarded (freeze: a client chartroom without the freeze guard, on the commander's word)
@@ -341,7 +341,8 @@ mig_fetch_branch() { # <facts json>
     url="$(mig_git_url "$root")"
     if git -C "$proot" rev-parse -q --verify "refs/chartroom/incoming/$id" >/dev/null 2>&1; then url="."; src="refs/chartroom/incoming/$id"; fi
     cur="$(git -C "$proot" rev-parse -q --verify "refs/heads/$br" 2>/dev/null || true)"
-    if [[ -z "$cur" || "$cur" == "$head" ]] && ! mig_checked_out "$proot" "$br"; then
+    local prevhead; prevhead="$(mig_prev "$id" head)"
+    if [[ -z "$cur" || "$cur" == "$head" || ( -n "$prevhead" && "$cur" == "$prevhead" ) ]] && ! mig_checked_out "$proot" "$br"; then
       git -C "$proot" fetch --quiet --no-tags "$url" "+$src:refs/heads/$br" >&2 || true
       ref="refs/heads/$br"
     elif [[ "$cur" == "$head" ]]; then ref="refs/heads/$br"
@@ -483,6 +484,7 @@ mig_move() {
   mig_move_tasks
   mig_move_conversations
   mig_move_git
+  mig_record_sizes
   mig_unlock
   stamp_changed "$MIG_BHOME"
   mig_mark move
@@ -497,12 +499,18 @@ mig_lock() {
 mig_unlock() { rmdir "$MIG_BHOME/.migrate.lock" 2>/dev/null || true; }
 
 # Each task record into the brain: closed ones as they are, open ones with their handles cleared.
+# MIG_ONLY (" id id "): resync's subset of tasks; MIG_PREV_BASE: the baseline the move took, whose
+# heads and transcripts a resync may move forward (nothing on the brain changed them since).
+mig_only() { [[ -z "${MIG_ONLY:-}" || "$MIG_ONLY" == *" $1 "* ]]; } # <id>
+mig_prev() { [[ -n "${MIG_PREV_BASE:-}" ]] && jq -r --arg i "$1" --arg k "$2" 'select(.id == $i) | .[$k] // "" | tostring' "$MIG_PREV_BASE" 2>/dev/null; return 0; } # <id> <key>
+
 mig_move_tasks() {
-  local st="$MIG_S/staged/client/tasks" d id f dst dec sid be agent runner parked note log_bytes conv rollout
+  local st="${MIG_TASKS_DIR:-$MIG_S/staged/client/tasks}" d id f dst dec sid be agent runner parked note log_bytes conv rollout
   [[ -d "$st" ]] || return 0
   for d in "$st"/*/; do
     id="${d%/}"; id="${id##*/}"
     [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || continue
+    mig_only "$id" || continue
     dst="$MIG_BHOME/tasks/$id"
     if [[ -e "$dst" ]]; then
       if [[ "$(jq -r '.migrated_from // ""' "$dst/meta.json" 2>/dev/null)" == "$(mig_label)" ]]; then continue; fi
@@ -565,11 +573,21 @@ mig_move_tasks() {
   done
 }
 
+# Each moved task's log length once the move is done with it (a rebuilt worktree adds a note), so a
+# later resync or rollback can tell a record the brain has since written to.
+mig_record_sizes() {
+  local id
+  while IFS= read -r id; do
+    [[ -f "$MIG_BHOME/tasks/$id/events.log" ]] && printf '%s\t%s\n' "$id" "$(wc -c <"$MIG_BHOME/tasks/$id/events.log" | tr -d ' ')" >>"$MIG_S/moved-sizes.tsv"
+  done < <(awk -F'\t' '$3 == "moved" { print $2 }' "$MIG_S/ledger.tsv" 2>/dev/null | sort -u)
+}
+
 # Claude transcripts (with their dirs and file history) and Codex rollouts of the open tasks.
 mig_move_conversations() {
-  local args=() rolls=() sid wt t tmp p enc_c enc_b f
-  while IFS=$'\t' read -r sid wt; do args+=("$sid" "$wt"); done < <(jq -r 'select((.closed | not) and .transcript != "") | [.session_id, .worktree] | @tsv' "$MIG_S/facts.jsonl")
-  while IFS= read -r p; do rolls+=("$p"); done < <(jq -r 'select((.closed | not) and .rollout != "") | .rollout' "$MIG_S/facts.jsonl")
+  local args=() rolls=() ids=() sid wt t tmp p enc_c enc_b f
+  local only="${MIG_ONLY:-}" id
+  while IFS=$'\t' read -r sid wt id; do args+=("$sid" "$wt"); ids+=("$id"); done < <(jq -r --arg o "$only" 'select((.closed | not) and .transcript != "" and (.id as $i | $o == "" or ($o | contains(" " + $i + " ")))) | [.session_id, .worktree, .id] | @tsv' "$MIG_S/facts.jsonl")
+  while IFS= read -r p; do rolls+=("$p"); done < <(jq -r --arg o "$only" 'select((.closed | not) and .rollout != "" and (.id as $i | $o == "" or ($o | contains(" " + $i + " ")))) | .rollout' "$MIG_S/facts.jsonl")
   if (( ${#args[@]} > 0 )); then
     tmp="$(mktemp -d)"
     mig_client claude "$MIG_CCLAUDE" "${args[@]}" | tar -xf - -C "$tmp"
@@ -580,7 +598,14 @@ mig_move_conversations() {
       for t in "$enc_c/$sid.jsonl" "$enc_c/$sid"; do
         [[ -e "$tmp/projects/$t" ]] || continue
         f="$MIG_BCLAUDE/projects/$enc_b/${t#*/}"
-        if [[ -e "$f" ]]; then mig_ledger "$sid" transcript-exists "$f: left as it is"; continue; fi
+        if [[ -e "$f" ]]; then
+          # A resync moves a transcript forward only when the brain's copy is still the one the move made.
+          local pid="${ids[$((i / 2))]}" psz psh
+          psz="$(mig_prev "$pid" transcript_size)"; psh="$(mig_prev "$pid" transcript_sha)"
+          if [[ "$t" == *.jsonl && -n "$psz" && "$(wc -c <"$f" | tr -d ' ')" == "$psz" && "$(mig_sha <"$f")" == "$psh" ]]; then cp "$tmp/projects/$t" "$f"; continue; fi
+          if [[ "$t" != *.jsonl && -n "$psz" ]]; then cp -R "$tmp/projects/$t/." "$f/"; continue; fi
+          mig_ledger "$sid" transcript-exists "$f: left as it is"; continue
+        fi
         mkdir -p "$(dirname "$f")"; cp -R "$tmp/projects/$t" "$f"
       done
       if [[ -d "$tmp/file-history/$sid" && ! -e "$MIG_BCLAUDE/file-history/$sid" ]]; then
@@ -610,7 +635,7 @@ mig_prefetch() {
     git -C "$proot" rev-parse --git-dir >/dev/null 2>&1 || continue
     specs=()
     while IFS=$'\t' read -r id br; do specs+=("+refs/heads/$br:refs/chartroom/incoming/$id"); done < <(
-      jq -r --arg r "$root" 'select((.closed | not) and .root == $r and .branch != "") | [.id, .branch] | @tsv' "$MIG_S/facts.jsonl")
+      jq -r --arg r "$root" --arg o "${MIG_ONLY:-}" 'select((.closed | not) and .root == $r and .branch != "" and (.id as $i | $o == "" or ($o | contains(" " + $i + " ")))) | [.id, .branch] | @tsv' "$MIG_S/facts.jsonl")
     (( ${#specs[@]} > 0 )) || continue
     echo "fetching ${#specs[@]} branch(es) from $root" >&2
     git -C "$proot" fetch --quiet --no-tags "$(mig_git_url "$root")" "${specs[@]}" >&2 || warn "the batched fetch from $root failed; each branch is fetched on its own"
@@ -635,7 +660,7 @@ mig_move_git() {
     if [[ "$dec" == move ]]; then
       ( CR_HOME="$MIG_BHOME"; migrate_materialize "$id" ) || mig_ledger "$id" materialize-failed "see the task's events"
     fi
-  done < <(jq -c 'select((.closed | not) and .head != "")' "$MIG_S/facts.jsonl")
+  done < <(jq -c --arg o "${MIG_ONLY:-}" 'select((.closed | not) and .head != "" and (.id as $i | $o == "" or ($o | contains(" " + $i + " "))))' "$MIG_S/facts.jsonl")
   # The batched fetch's refs have served: each task's branch now has its own ref.
   local root proot r
   while IFS= read -r root; do
@@ -883,6 +908,87 @@ mig_merge_apply() {
       mkdir -p "$(dirname "$xd/$rel")"; cp "$f" "$xd/$rel"
     done < <(find "$xs" -type f -print0)
   fi
+}
+
+# ---------------------------------------------------------------- resync
+
+# After a move, what changed in the client home before its finish (a worker that ran on, a new
+# task, an XO's edits): the changed and new task records, their conversations and branches, and the
+# home's own files, merged again. A brain copy that changed on the brain since the move is never
+# replaced (listed instead). The fresh facts become the baseline that verify checks.
+mig_resync() {
+  mig_step_done move || die "migrate-home resync: nothing moved yet"
+  mig_step_done finish && die "migrate-home resync: the home was finished already"
+  local live
+  live="$(mig_client status "$MIG_CHOME" "$MIG_CBIN" | jq -r '.[] | select(.closed == null and (.live | IN("working", "idle", "done", "blocked"))) | .id')"
+  [[ -z "$live" || $MIG_DRY -eq 1 ]] || die "migrate-home resync: still live on the client (park them first): $(tr '\n' ' ' <<<"$live")"
+  local r old="$MIG_S/staged/client" new f rel id tids="" sz
+  r="$MIG_S/resync/$(date -u +%Y%m%dT%H%M%SZ)"
+  mkdir -p "$r"; new="$r/client"; mkdir -p "$new"
+  cp "$MIG_S/baseline.jsonl" "$r/baseline-before.jsonl"
+  mig_facts
+  mig_client records "$MIG_CHOME" | tar -xf - -C "$new"
+  mig_client xo "$MIG_CHOME" "$MIG_CCLAUDE" | tar -xf - -C "$r" 2>/dev/null || true
+  # What changed: every file new or different, and every task whose log moved on.
+  : >"$r/changed.txt"
+  while IFS= read -r -d '' f; do rel="${f#"$new"/}"; cmp -s "$f" "$old/$rel" 2>/dev/null || printf '%s\n' "$rel" >>"$r/changed.txt"; done < <(find "$new" -type f -print0)
+  while IFS= read -r rel; do
+    case "$rel" in tasks/*/*) id="${rel#tasks/}"; id="${id%%/*}"; [[ "$tids" == *" $id "* ]] || tids+=" $id " ;; esac
+  done <"$r/changed.txt"
+  echo "changed on the client since the move: $(grep -c . "$r/changed.txt") file(s), $(wc -w <<<"$tids" | tr -d ' ') task(s):$tids"
+  if [[ $MIG_DRY -eq 1 ]]; then sed 's/^/  /' "$r/changed.txt"; return 0; fi
+  mig_lock
+  # The tasks: a brain copy still as the move left it is replaced; one the brain changed is kept.
+  local keep=""
+  for id in $tids; do
+    [[ -d "$MIG_BHOME/tasks/$id" ]] || continue
+    sz="$(awk -F'\t' -v i="$id" '$1 == i { s = $2 } END { print s }' "$MIG_S/moved-sizes.tsv" 2>/dev/null)"
+    if [[ "$(jq -r '.migrated_from // ""' "$MIG_BHOME/tasks/$id/meta.json")" != "$(mig_label)" || -z "$sz" || "$(wc -c <"$MIG_BHOME/tasks/$id/events.log" | tr -d ' ')" != "$sz" ]]; then
+      mig_ledger "$id" resync-conflict "changed on the brain since the move: left as it is"; keep+=" $id "; continue
+    fi
+    mkdir -p "$r/replaced"; mv "$MIG_BHOME/tasks/$id" "$r/replaced/$id"
+    [[ -f "$MIG_BHOME/.watch-cursor" ]] && { grep -v "^$id"$'\t' "$MIG_BHOME/.watch-cursor" >"$MIG_BHOME/.watch-cursor.tmp" || true; mv "$MIG_BHOME/.watch-cursor.tmp" "$MIG_BHOME/.watch-cursor"; }
+  done
+  local only=""; for id in $tids; do [[ "$keep" == *" $id "* ]] || only+=" $id "; done
+  MIG_ONLY="$only " MIG_PREV_BASE="$r/baseline-before.jsonl" MIG_TASKS_DIR="$new/tasks" mig_move_tasks
+  MIG_ONLY="$only " MIG_PREV_BASE="$r/baseline-before.jsonl" mig_move_conversations
+  MIG_ONLY="$only " MIG_PREV_BASE="$r/baseline-before.jsonl" mig_move_git
+  mig_record_sizes
+  # The home's own files: merged again from the client's new copy (the unions are idempotent).
+  local m="$r/merged"; mkdir -p "$m"
+  while IFS= read -r rel; do
+    case "$rel" in
+      tasks/*) ;;
+      rulings.log) mig_merge_rulings "$new/rulings.log" "$MIG_BHOME/rulings.log" "$m/rulings.log" ;;
+      inbox.md|inbox/*) [[ -f "$m/.inbox-done" ]] || { mig_merge_inbox "$new" "$MIG_BHOME" "$m"; : >"$m/.inbox-done"; } ;;
+      relays/*) [[ -f "$m/.relays-done" ]] || { mig_merge_relays "$new/relays" "$MIG_BHOME/relays" "$m/relays"; : >"$m/.relays-done"; } ;;
+      projects.md) mig_merge_lines "$new/projects.md" "$MIG_BHOME/projects.md" "$m/projects.md" projects.md ;;
+      config) mig_merge_config "$new/config" "$MIG_BHOME/config" "$m/config" ;;
+      commander.md|captain.md)
+        # The client's new lines (not in its copy at the move, nor here), appended for review.
+        local add
+        add="$(awk 'FNR == 1 { src++ } src < 3 { have[$0] = 1; next } !($0 in have) && $0 !~ /^[[:space:]]*$/' \
+          "$old/$rel" "$MIG_BHOME/commander.md" "$new/$rel" 2>/dev/null | grep -v '^<!-- ' | grep -v '^- .*; r-[0-9a-f]*, ' || true)"
+        [[ -n "$add" ]] && { cp "$MIG_BHOME/commander.md" "$m/commander.md"; printf '\n## From the client after the move (%s): lines for review\n\n%s\n' "$(now)" "$add" >>"$m/commander.md"; } ;;
+      *) if [[ ! -e "$MIG_BHOME/$rel" ]] || cmp -s "$MIG_BHOME/$rel" "$old/$rel"; then mkdir -p "$m/$(dirname "$rel")"; cp "$new/$rel" "$m/$rel"
+         else local alt; alt="$(mig_alt_name "$rel")"; mkdir -p "$m/$(dirname "$alt")"; cp "$new/$rel" "$m/$alt"; fi ;;
+    esac
+  done <"$r/changed.txt" >"$r/merge-plan.txt"
+  rm -f "$m/.inbox-done" "$m/.relays-done"
+  local bk="$r/backup"
+  while IFS= read -r -d '' f; do
+    rel="${f#"$m"/}"; case "$rel" in *.remap) continue ;; esac
+    if [[ -e "$MIG_BHOME/$rel" ]]; then mkdir -p "$bk/$(dirname "$rel")"; cp -p "$MIG_BHOME/$rel" "$bk/$rel"; fi
+    mkdir -p "$MIG_BHOME/$(dirname "$rel")"; cp "$f" "$MIG_BHOME/$rel.migrate-tmp" && mv "$MIG_BHOME/$rel.migrate-tmp" "$MIG_BHOME/$rel"
+  done < <(find "$m" -type f -print0)
+  ( CR_HOME="$MIG_BHOME"; rules_render ) >/dev/null 2>&1 || true
+  # The client's copy as of now is what verify compares the merged files with; the new facts its baseline.
+  rm -rf "$old"; cp -R "$new" "$old"; cp "$MIG_S/facts.jsonl" "$MIG_S/baseline.jsonl"
+  mig_unlock; stamp_changed "$MIG_BHOME"
+  mig_ledger '*' resync "$(grep -c . "$r/changed.txt") file(s); tasks:$only${keep:+; kept (changed on the brain):$keep}"
+  jq '.steps.verify = false' "$MIG_S/state.json" >"$MIG_S/state.json.tmp" && mv "$MIG_S/state.json.tmp" "$MIG_S/state.json"
+  cat "$r/merge-plan.txt"
+  echo "resynced: tasks$only; next: chartroom migrate-home verify --from $MIG_FROM --home $MIG_HOME"
 }
 
 # ---------------------------------------------------------------- materialize and restore
@@ -1141,6 +1247,7 @@ cmd_migrate_home() {
     finish) mig_finish ;;
     rollback) mig_rollback ;;
     reap) mig_reap ;;
+    resync) mig_resync ;;
     status) mig_status ;;
     *) mig_usage >&2; exit 2 ;;
   esac
