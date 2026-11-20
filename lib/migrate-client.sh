@@ -6,7 +6,8 @@
 # and no Homebrew on PATH. It needs bash, git, jq, tar and find, as the probe does.
 #
 # Read-only subcommands print to stdout and write nothing:
-#   whoami                        HOME, user, and whether this client's chartroom can freeze
+#   whoami                        HOME and user
+#   capable <bin>                 exit 0 when that chartroom has migrate-home (it honours a freeze)
 #   homes                         this machine's registered homes, "name<TAB>path"
 #   status <home> <bin>           `chartroom status --json --all` in that home
 #   facts <home> <claude> <codex> <awk>  one JSON object per task: its record, its worktree's
@@ -18,6 +19,7 @@
 #   codex <codex> <path>...       a tar of Codex rollouts (paths under <codex>/sessions)
 #   xo <home> <claude>            a tar of the home's own Claude project dir (XO sessions, memory)
 #   dirty <wt>                    a tar of staged.patch, unstaged.patch and untracked.tar
+#   ignored <wt>                  a tar of the worktree's small ignored files (.env.local and the like)
 # Subcommands that write (each prints "+ <command>" before it runs it; DRY=1 prints only):
 #   snapshot <home> <dir>         tar.gz of the home without worktrees/ or node_modules
 #   freeze <home> <bin> <to>      the .migrating marker, the dashboard stopped
@@ -62,6 +64,8 @@ case "$sub" in
     grep -vE '^[[:space:]]*(#|$)' "$f" | sed "s|^\([^=]*\)=~|\1=$HOME|; s|=|	|" ;;
   status)
     CHARTROOM_HOME="$1" "$2" status --json --all ;;
+  capable)
+    "$1" help 2>/dev/null | grep -q 'chartroom migrate-home' ;;
   facts)
     h="$1"; claude="$2"; codex="$3"; awkp="$4"
     for m in "$h"/tasks/*/meta.json; do
@@ -151,6 +155,14 @@ case "$sub" in
     ( cd "$wt" && $G ls-files -o --exclude-standard -z | tar -cf "$t/untracked.tar" --null -T - )
     ( cd "$t" && tar -cf - staged.patch unstaged.patch untracked.tar )
     rm -rf "$t" ;;
+  ignored)
+    # Small ignored files a worker may need that git cannot rebuild (.env.local and the like): at
+    # most 1 MB each, never under node_modules, build output or vendored dependencies.
+    wt="$1"
+    ( cd "$wt" && $G ls-files -o -i --exclude-standard --directory 2>/dev/null | while IFS= read -r f; do
+        case "$f" in */|*node_modules*|*.next/*|dist/*|build/*|target/*|vendor/*|coverage/*|*.log) continue ;; esac
+        [ -f "$f" ] && [ "$(wc -c <"$f" | tr -d ' ')" -le 1048576 ] && printf '%s\0' "$f"
+      done | tar -cf - --null -T - ) ;;
   snapshot)
     h="$1"; dir="$2"; name="${h##*/}"
     run mkdir -p "$dir"
@@ -200,15 +212,21 @@ case "$sub" in
     run rm -f "$1/.migrating" ;;
   reap)
     h="$1"; stamp="$2"; shift 2
+    arch="${h%/*}/.migrated/${h##*/}-$stamp"; keep_arch=""
     for w in "$@"; do
+      # A worktree inside the home moved with it into the archive: checked there, never removed
+      # with the archive while it holds uncommitted work.
+      case "$w" in "$h"/*) a="$arch/${w#"$h"/}"
+        if [ -e "$a" ] && [ -n "$($G -C "$a" status --porcelain 2>/dev/null)" ]; then printf 'kept-dirty\t%s\n' "$a"; keep_arch=1; fi
+        continue ;; esac
       [ -e "$w" ] || continue
       if [ -n "$($G -C "$w" status --porcelain 2>/dev/null)" ]; then printf 'kept-dirty\t%s\n' "$w"; continue; fi
       r=$($G -C "$w" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); r="${r%/.git}"
       run git -C "$r" worktree unlock "$w" 2>/dev/null
       if run git -C "$r" worktree remove "$w"; then printf 'removed\t%s\n' "$w"; else printf 'kept\t%s\n' "$w"; fi
     done
-    arch="${h%/*}/.migrated/${h##*/}-$stamp"
-    [ -d "$arch" ] && run rm -rf "$arch" && printf 'removed\t%s\n' "$arch"
+    if [ -n "$keep_arch" ]; then printf 'kept\t%s\t(a worktree in it has uncommitted work)\n' "$arch"
+    elif [ -d "$arch" ]; then run rm -rf "$arch" && printf 'removed\t%s\n' "$arch"; fi
     true ;;
   *) echo "migrate-client: unknown subcommand '$sub'" >&2; exit 2 ;;
 esac

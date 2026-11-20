@@ -284,6 +284,8 @@ mig_snapshot_brain() { # <home> <dir>
 }
 
 mig_freeze() {
+  [[ $MIG_DRY -eq 1 ]] || mig_step_done snapshot || die "migrate-home: snapshot first (migrate-home snapshot)"
+  mig_client capable "$MIG_CBIN" >/dev/null || die "migrate-home: the client's chartroom ($MIG_CBIN) has no migrate-home, so it would not honour a freeze: update its install first"
   mig_client freeze "$MIG_CHOME" "$MIG_CBIN" "$(hostname -s 2>/dev/null || echo brain)" >/dev/null
   # Park every live worker that can be (lib/park.sh decides; one not at rest is reported).
   local live
@@ -293,10 +295,10 @@ mig_freeze() {
     mig_client park "$MIG_CHOME" "$MIG_CBIN" $live | tee -a "$MIG_S/freeze.tsv"
   fi
   local still
-  still="$(mig_client status "$MIG_CHOME" "$MIG_CBIN" | jq -r '.[] | select(.closed == null and (.live | IN("working", "blocked"))) | "\(.id) \(.live)"')"
+  still="$(mig_client status "$MIG_CHOME" "$MIG_CBIN" | jq -r '.[] | select(.closed == null and (.live | IN("working", "idle", "done", "blocked"))) | "\(.id) \(.live)"')"
   [[ $MIG_DRY -eq 1 ]] && return 0
   if [[ -n "$still" ]]; then
-    printf 'still live (not at rest; wait, or answer its prompt, then freeze again):\n%s\n' "$still"
+    printf 'still live (park refused it: wait for its turn to end, or answer its prompt, then freeze again):\n%s\n' "$still"
     return 1
   fi
   mig_mark freeze
@@ -351,6 +353,7 @@ mig_capture_dirty() { # <facts json> <dir>
 
 mig_settle() {
   mig_step_done triage || die "migrate-home: run triage first"
+  [[ $MIG_DRY -eq 1 ]] || mig_step_done freeze || die "migrate-home: freeze the client home first (migrate-home freeze)"
   mig_decisions >"$MIG_S/decided.tsv"
   local id a f out="" ref d
   while IFS=$'\t' read -r id a; do
@@ -358,6 +361,14 @@ mig_settle() {
     [[ -n "$f" ]] || { warn "decision for $id: no such open task on the client"; continue; }
     case "$a" in
       close|accept)
+        # Commits pushed nowhere (or unreadable) never stay behind: bundled here before the close.
+        if [[ "$(jq -r 'if .unpushed == null and (.wst == "own" or .wst == "shared") then 1 else (.unpushed // 0) end' <<<"$f")" -gt 0 ]]; then
+          d="$MIG_S/bundles/$id"; mkdir -p "$d"; ref=""
+          if [[ $MIG_DRY -eq 0 ]]; then
+            ref="$(mig_fetch_branch "$f")"
+            if ! mig_bundle "$f" "$ref" "$d"; then mig_ledger "$id" bundle-failed "unpushed commits could not be fetched here: kept, not closed"; continue; fi
+          fi
+        fi
         out="$(mig_client settle "$MIG_CHOME" "$MIG_CBIN" "$a" "$id")"
         mig_ledger "$id" "settle-$a" "$out" ;;
       bundle)
@@ -411,17 +422,26 @@ mig_move() {
     mig_step_done freeze || die "migrate-home: the client home is not frozen (migrate-home freeze)"
   fi
   [[ -f "$MIG_S/decided.tsv" ]] || mig_decisions >"$MIG_S/decided.tsv"
-  # The baseline: the client after freeze and settle, when nothing there writes any more.
+  # The baseline: the client after freeze and settle, when nothing there writes any more. Kept as
+  # baseline.jsonl once (verify, finish, rollback and reap read it; a later triage cannot change it).
   mig_facts
+  if [[ $MIG_DRY -eq 0 ]]; then
+    if [[ -f "$MIG_S/baseline.jsonl" ]]; then cp "$MIG_S/baseline.jsonl" "$MIG_S/facts.jsonl"; else cp "$MIG_S/facts.jsonl" "$MIG_S/baseline.jsonl"; fi
+  fi
   local nmove kb
   nmove="$(awk -F'\t' '$2 == "move"' "$MIG_S/decided.tsv" | wc -l | tr -d ' ')"
   kb=$(( nmove * ${CHARTROOM_MIGRATE_WORKTREE_KB:-5242880} + $(jq -s '[.[].transcript_size // 0] | add // 0' "$MIG_S/facts.jsonl") / 1024 + 1048576 ))
   mig_disk_check "$kb"
   local st="$MIG_S/staged"
-  rm -rf "$st"; mkdir -p "$st/home" "$st/merged"
-  mig_client records "$MIG_CHOME" | tar -xf - -C "$st/home"
+  rm -rf "$st"; mkdir -p "$st/client" "$st/merged"
+  mig_client records "$MIG_CHOME" | tar -xf - -C "$st/client"
   mig_client skipped "$MIG_CHOME" >"$MIG_S/skipped.tsv" || true
   mig_client xo "$MIG_CHOME" "$MIG_CCLAUDE" | tar -xf - -C "$st" 2>/dev/null || true
+  if [[ ! -d "$MIG_BHOME/tasks" && $MIG_DRY -eq 0 ]]; then
+    # A home only the client had: made here, registered, with its own workspace and port.
+    CHARTROOM_HOME="$MIG_BHOME" "$CR_BIN" init --name "$MIG_HOME" >/dev/null || die "migrate-home: could not make the home $MIG_BHOME"
+    printf '%s\n' "$MIG_BHOME" >"$MIG_S/created-home.txt"
+  fi
   mkdir -p "$MIG_BHOME/tasks"
   # The brain's own tasks before the move: each log's length and checksum (verify's prefix check).
   local d id
@@ -459,7 +479,7 @@ mig_unlock() { rmdir "$MIG_BHOME/.migrate.lock" 2>/dev/null || true; }
 
 # Each task record into the brain: closed ones as they are, open ones with their handles cleared.
 mig_move_tasks() {
-  local st="$MIG_S/staged/home/tasks" d id f dst dec sid be agent runner parked note log_bytes conv rollout
+  local st="$MIG_S/staged/client/tasks" d id f dst dec sid be agent runner parked note log_bytes conv rollout
   [[ -d "$st" ]] || return 0
   for d in "$st"/*/; do
     id="${d%/}"; id="${id##*/}"
@@ -558,14 +578,17 @@ mig_move_conversations() {
 # Branches and uncommitted changes of the open tasks that move; a worktree for each `move` task.
 mig_move_git() {
   local f id dec ref dir
+  # Every task still open on the client after settle, whatever its decision said: a close the client
+  # refused (uncommitted work) or a bundle that failed leaves it open, and its work comes too.
   while IFS= read -r f; do
     id="$(jq -r .id <<<"$f")"; dec="$(mig_decision_of "$id")"
-    [[ "$dec" == keep || "$dec" == move || -z "$dec" ]] || continue
     [[ -d "$MIG_BHOME/tasks/$id" ]] || continue
     ref="$(mig_fetch_branch "$f")"
     dir="$MIG_BHOME/tasks/$id/migrate"; mkdir -p "$dir"
     jq -n --argjson f "$f" --arg ref "$ref" '{branch: $f.branch, head: $f.head, ref: $ref, root: $f.root, porcelain_sha: $f.porcelain_sha, diff_sha: $f.diff_sha}' >"$dir/branch.json"
     if [[ "$(jq -r '.dirty // 0' <<<"$f")" -gt 0 ]]; then mig_capture_dirty "$f" "$dir"; fi
+    mig_client ignored "$(jq -r .worktree <<<"$f")" >"$dir/ignored.tar" 2>/dev/null || true
+    if [[ -z "$(tar -tf "$dir/ignored.tar" 2>/dev/null)" ]]; then rm -f "$dir/ignored.tar"; else tar -tf "$dir/ignored.tar" >"$dir/ignored.txt"; fi
     if [[ "$dec" == move ]]; then
       ( CR_HOME="$MIG_BHOME"; migrate_materialize "$id" ) || mig_ledger "$id" materialize-failed "see the task's events"
     fi
@@ -576,7 +599,7 @@ mig_move_git() {
 
 # Writes $MIG_S/merged/<path> for each brain file the merge changes, and merge-plan.txt.
 mig_merge_plan() {
-  local c="$MIG_S/staged/home" b="$MIG_BHOME" m="$MIG_S/staged/merged" plan="$MIG_S/merge-plan.txt" f rel
+  local c="$MIG_S/staged/client" b="$MIG_BHOME" m="$MIG_S/staged/merged" plan="$MIG_S/merge-plan.txt" f rel
   : >"$plan"
   mig_merge_rulings "$c/rulings.log" "$b/rulings.log" "$m/rulings.log" >>"$plan"
   mig_merge_prefs "$c" "$b" "$m" >>"$plan"
@@ -597,6 +620,9 @@ mig_merge_plan() {
     fi
   done < <(find "$c" -type f -print0)
   mig_merge_xo >>"$plan"
+  # What the brain's files were when this merge was staged: the apply refuses if one changed since.
+  ( cd "$b" && for f in rulings.log commander.md captain.md inbox.md projects.md config focus.json relays/inbox.ndjson relays/outbox.ndjson; do
+      if [[ -f "$f" ]]; then printf '%s\t%s\n' "$f" "$(mig_sha <"$f")"; fi; done ) >"$MIG_S/brain-sums.tsv"
   printf 'tasks: %s from the client (%s open)\n' "$(jq -s length "$MIG_S/facts.jsonl")" "$(jq -s '[.[] | select(.closed | not)] | length' "$MIG_S/facts.jsonl")" >>"$plan"
 }
 mig_alt_name() { # <rel path> -> <dir/base>.from-<label><.ext>
@@ -766,7 +792,10 @@ mig_merge_xo() {
 
 # Installs the staged merge: each brain file it replaces is backed up once, under the state dir.
 mig_merge_apply() {
-  local m="$MIG_S/staged/merged" bk="$MIG_S/backup" f rel
+  local m="$MIG_S/staged/merged" bk="$MIG_S/backup" f rel sum
+  while IFS=$'\t' read -r rel sum; do
+    [[ "$(mig_sha <"$MIG_BHOME/$rel" 2>/dev/null)" == "$sum" ]] || { mig_unlock; die "migrate-home: $MIG_BHOME/$rel changed while the merge was staged: nothing was applied; run move again"; }
+  done <"$MIG_S/brain-sums.tsv"
   mkdir -p "$bk"
   if [[ -d "$m" ]]; then
     while IFS= read -r -d '' f; do
@@ -817,9 +846,15 @@ migrate_materialize() { # <id>
   [[ -n "$(meta_file "$id" migrated_from)" ]] || die "$id was not migrated (no migrated_from in its record)"
   wt="$(meta_file "$id" worktree)"; proj="$(meta_file "$id" project)"; dir="$(tdir "$id")/migrate"
   [[ -n "$wt" ]] || die "$id records no worktree"
-  [[ -e "$wt" ]] && { echo "$wt"; return 0; }
-  [[ -f "$dir/branch.json" ]] || die "$id has no migrated branch record ($dir/branch.json)"
-  ref="$(jq -r '.ref // ""' "$dir/branch.json")"; br="$(jq -r '.branch // ""' "$dir/branch.json")"
+  [[ -f "$dir/branch.json" || -e "$wt" ]] || die "$id has no migrated branch record ($dir/branch.json)"
+  ref="$(jq -r '.ref // ""' "$dir/branch.json" 2>/dev/null)"; br="$(jq -r '.branch // ""' "$dir/branch.json" 2>/dev/null)"
+  if [[ -e "$wt" ]]; then
+    # Something is already at the path: it is this task's only if it is on the client's branch or head.
+    local h b2
+    h="$(git -C "$wt" rev-parse HEAD 2>/dev/null || true)"; b2="$(git -C "$wt" symbolic-ref --short -q HEAD 2>/dev/null || true)"
+    if [[ ! -f "$dir/branch.json" || ( -n "$br" && "$b2" == "$br" ) || "$h" == "$(jq -r '.head // ""' "$dir/branch.json")" ]]; then echo "$wt"; return 0; fi
+    die "$id: $wt is another worktree (branch ${b2:-detached} at ${h:0:12}), not this task's ${br:-head}: left as it is"
+  fi
   [[ -n "$proj" ]] || proj="$(mig_map "$(jq -r '.root // ""' "$dir/branch.json")")"
   git -C "$proj" rev-parse --git-dir >/dev/null 2>&1 || die "no checkout of $id's project at $proj"
   if [[ -z "$ref" && -f "$dir/branch.bundle" ]]; then
@@ -827,6 +862,13 @@ migrate_materialize() { # <id>
     git -C "$proj" fetch --quiet "$dir/branch.bundle" "+$(git bundle list-heads "$dir/branch.bundle" | awk 'NR == 1 { print $2 }'):$ref" >&2
   fi
   [[ -n "$ref" ]] && git -C "$proj" rev-parse -q --verify "$ref" >/dev/null || die "$id: its branch is not in $proj (ref ${ref:-none})"
+  # A worktree with its dependencies costs CHARTROOM_MIGRATE_WORKTREE_KB (5 GB): never under 15% free.
+  local total avail need="${CHARTROOM_MIGRATE_WORKTREE_KB:-5242880}"
+  if [[ -n "${CHARTROOM_MIGRATE_DF:-}" ]]; then read -r total avail <<<"$CHARTROOM_MIGRATE_DF"
+  else read -r total avail < <(df -Pk "$proj" 2>/dev/null | awk 'NR == 2 { print $2, $4 }'); fi
+  if [[ -n "$total" && -n "$avail" ]] && (( (avail - need) * 100 < total * 15 )); then
+    die "$id: rebuilding its worktree would leave the disk under 15% free ($(( avail / 1048576 )) GB free): free space first"
+  fi
   mkdir -p "$(dirname "$wt")"
   if [[ "$ref" == "refs/heads/$br" && -n "$br" ]] && ! mig_checked_out "$proj" "$br"; then
     git -C "$proj" worktree add --quiet "$wt" "$br" >&2
@@ -836,6 +878,7 @@ migrate_materialize() { # <id>
   [[ -s "$dir/staged.patch" ]] && git -C "$wt" apply --index --binary "$dir/staged.patch"
   [[ -s "$dir/unstaged.patch" ]] && git -C "$wt" apply --binary "$dir/unstaged.patch"
   [[ -s "$dir/untracked.tar" ]] && tar -xf "$dir/untracked.tar" -C "$wt"
+  [[ -s "$dir/ignored.tar" ]] && tar -xf "$dir/ignored.tar" -C "$wt"
   printf '%s\n' "$wt" >"$dir/materialized"
   log_event "$id" note "worktree $wt rebuilt from $ref after the migration$([[ -s "$dir/staged.patch" || -s "$dir/unstaged.patch" || -s "$dir/untracked.tar" ]] && echo ', with its uncommitted changes')"
   echo "$wt"
@@ -860,7 +903,8 @@ migrate_restore() { # <id>: a bundled task's branch, and its worktree
 
 mig_verify() {
   mig_step_done move || die "migrate-home: nothing moved yet"
-  local out="$MIG_S/verify.txt" fails=0 f id d lb ls want got
+  local out="$MIG_S/verify.txt" fails=0 f id d lb ls want got base
+  base="$(mig_baseline)"
   : >"$out"
   pass() { printf 'PASS %s\n' "$*" >>"$out"; }
   fail() { printf 'FAIL %s\n' "$*" >>"$out"; fails=$((fails + 1)); }
@@ -878,8 +922,8 @@ mig_verify() {
     elif [[ -z "$(jq -r '.dispatched // ""' "$d/meta.json")" ]]; then got=drafting
     else got="$(awk "$CR_STATE_AWK" "$d/events.log")"; fi
     [[ "$want" == "$got" ]] || { fail "$id: state $got here, $want on the client"; continue; }
-  done < <(jq -c . "$MIG_S/facts.jsonl")
-  (( fails == 0 )) && pass "records: all $(jq -s length "$MIG_S/facts.jsonl") client tasks here, logs and states equal"
+  done < <(jq -c . "$base")
+  (( fails == 0 )) && pass "records: all $(jq -s length "$base") client tasks here, logs and states equal"
   # 2. branches, worktrees and transcripts of the open tasks that moved.
   local nf0=$fails ref proj head porc diffsha wt
   while IFS= read -r f; do
@@ -895,12 +939,12 @@ mig_verify() {
       [[ "$(printf '%s' "$porc" | mig_sha)" == "$(jq -r .porcelain_sha <<<"$f")" ]] || fail "$id: git status in $wt differs from the client's"
       [[ "$diffsha" == "$(jq -r .diff_sha <<<"$f")" ]] || fail "$id: the diff in $wt differs from the client's"
     fi
-  done < <(jq -c 'select(.closed | not)' "$MIG_S/facts.jsonl")
+  done < <(jq -c 'select(.closed | not)' "$base")
   while IFS= read -r f; do
     local t; t="$MIG_BCLAUDE/projects/$(mig_enc "$(mig_map "$(jq -r .worktree <<<"$f")")")/$(jq -r .session_id <<<"$f").jsonl"
     [[ -f "$t" && "$(mig_sha_prefix "$t" "$(jq -r .transcript_size <<<"$f")")" == "$(jq -r .transcript_sha <<<"$f")" ]] ||
       fail "$(jq -r .id <<<"$f"): transcript $t missing or not the client's"
-  done < <(jq -c 'select((.closed | not) and .transcript != "")' "$MIG_S/facts.jsonl")
+  done < <(jq -c 'select((.closed | not) and .transcript != "")' "$base")
   (( fails == nf0 )) && pass "git and conversations: branch heads, worktrees and transcripts equal the client's"
   # 3. the brain's own tasks: each log still starts with its bytes from before the move.
   nf0=$fails
@@ -912,9 +956,9 @@ mig_verify() {
   (( fails == nf0 )) && pass "the brain's own tasks: untouched (append-only prefix)"
   # 4. the merged files hold both sides.
   nf0=$fails
-  mig_verify_union "$MIG_S/staged/home/rulings.log" "$MIG_BHOME/rulings.log" '\[r-[0-9a-f]+\]' rulings
+  mig_verify_union "$MIG_S/staged/client/rulings.log" "$MIG_BHOME/rulings.log" '\[r-[0-9a-f]+\]' rulings
   [[ -f "$MIG_S/backup/rulings.log" ]] && mig_verify_union "$MIG_S/backup/rulings.log" "$MIG_BHOME/rulings.log" '\[r-[0-9a-f]+\]' rulings
-  mig_verify_union "$MIG_S/staged/home/inbox.md" "$MIG_BHOME/inbox.md" '^- \[i-[0-9a-f]+\]' inbox
+  mig_verify_union "$MIG_S/staged/client/inbox.md" "$MIG_BHOME/inbox.md" '^- \[i-[0-9a-f]+\]' inbox
   [[ -f "$MIG_S/backup/inbox.md" ]] && mig_verify_union "$MIG_S/backup/inbox.md" "$MIG_BHOME/inbox.md" '^- \[i-[0-9a-f]+\]' inbox
   if [[ -f "$MIG_BHOME/rulings.log" ]]; then
     ( CR_HOME="$MIG_BHOME"; rules_json ) >/dev/null 2>&1 || fail "rulings.log: malformed after the merge"
@@ -942,7 +986,8 @@ mig_verify_union() { # <source> <merged> <id regex> <name>: every id of the sour
 
 # ---------------------------------------------------------------- finish, rollback, reap, status
 
-mig_open_worktrees() { jq -r 'select((.closed | not) and (.wst == "own" or .wst == "shared")) | .worktree' "$MIG_S/facts.jsonl"; }
+mig_baseline() { if [[ -f "$MIG_S/baseline.jsonl" ]]; then printf '%s' "$MIG_S/baseline.jsonl"; else printf '%s' "$MIG_S/facts.jsonl"; fi; }
+mig_open_worktrees() { jq -r 'select((.closed | not) and (.wst == "own" or .wst == "shared")) | .worktree' "$(mig_baseline)"; }
 
 mig_finish() {
   mig_step_done verify || die "migrate-home: verify has not passed (migrate-home verify)"

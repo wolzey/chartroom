@@ -25,6 +25,7 @@ setup() {
 }
 
 mh() { CHARTROOM_HOME="$BH" cr migrate-home "$1" --from local --home app --client-home "$CH" --brain-home "$BH" --no-prs "${@:2}"; }
+frz() { mh snapshot >/dev/null && mh freeze "$@"; } # a freeze needs a snapshot first
 on_c() { CHARTROOM_HOME="$CH" cr "$@"; }
 on_b() { CHARTROOM_HOME="$BH" cr "$@"; }
 cmeta() { local f="$CH/tasks/$1/meta.json"; jq "${@:2}" "$f" >"$f.tmp" && mv "$f.tmp" "$f"; }
@@ -59,6 +60,7 @@ fixture() {
   echo staged >"$W/b.txt"; git -C "$W" add b.txt
   echo unstaged >>"$W/README"
   echo new >"$W/untracked.txt"
+  echo '.env.local' >>"$C/work/proj/.git/info/exclude"; echo '.env.local' >>"$B/work/proj/.git/info/exclude"; echo 'TOKEN=dev-only' >"$W/.env.local"
   printf '%s done: widget added\n' "2026-01-02T00:00:00Z" >>"$CH/tasks/$A/events.log"
   ctranscript "$A"
   Z="$(ctask "an old closed one")"; cmeta "$Z" '.closed = "2026-01-03T00:00:00Z"'
@@ -137,7 +139,7 @@ full_move() {
   fixture
   mh triage >/dev/null
   awk -F'\t' -v OFS='\t' -v a="$A" '$1 == a { $2 = "move" } { print }' "$(S)/decisions.tsv" >"$T/dec.tsv"
-  mh freeze >/dev/null
+  frz >/dev/null
   mh settle --decisions "$T/dec.tsv" >/dev/null
   mh move >"$T/move.out"
 }
@@ -161,6 +163,7 @@ full_move() {
   [ "$(git -C "$BW" status --porcelain | sort)" = "$(git -C "$W" status --porcelain | sort)" ]
   [ "$(git -C "$BW" diff --cached)" = "$(git -C "$W" diff --cached)" ]
   [ "$(cat "$BW/untracked.txt")" = new ]
+  [ "$(cat "$BW/.env.local")" = TOKEN=dev-only ]   # a small ignored file comes too
   # The session: transcript, its dir and its file history, under the brain's path.
   sid="$(bmeta "$A" .session_id)"
   t="$B/claude/projects/${BW//[^A-Za-z0-9]/-}/$sid.jsonl"
@@ -200,7 +203,7 @@ full_move() {
   fixture
   # The brain's watch has looked before the move (its cursor exists), as a running XO's has.
   CHARTROOM_HOME="$BH" "$CHARTROOM" watch --once --timeout 1 >/dev/null 2>&1 || true
-  mh triage >/dev/null; mh freeze >/dev/null; mh settle >/dev/null; mh move >/dev/null
+  mh triage >/dev/null; frz >/dev/null; mh settle >/dev/null; mh move >/dev/null
   grep -q "^$A"$'\t' "$BH/.watch-cursor"
   # A watch that has no offset for it (one streaming since before the move) starts where the client left off.
   grep -v "^$A"$'\t' "$BH/.watch-cursor" >"$BH/.watch-cursor.t" && mv "$BH/.watch-cursor.t" "$BH/.watch-cursor"
@@ -231,13 +234,16 @@ full_move() {
   [ "$(snapshot "$BH/tasks" "$B/work" "$B/claude"; cksum <"$BH/rulings.log"; cksum <"$BH/inbox.md")" = "$before" ]
 }
 
-@test "move refuses without a freeze, and when the disk would drop under 15% free" {
+@test "each step needs the one before: freeze a snapshot, settle a freeze, move a disk that stays over 15% free" {
   fixture
   mh triage >/dev/null
-  mh settle >/dev/null
+  run mh freeze
+  [ "$status" -ne 0 ]; [[ "$output" == *"snapshot first"* ]]; [ ! -f "$CH/.migrating" ]
+  run mh settle
+  [ "$status" -ne 0 ]; [[ "$output" == *"freeze the client home first"* ]]
   run mh move
-  [ "$status" -ne 0 ]; [[ "$output" == *"not frozen"* ]]
-  mh freeze >/dev/null
+  [ "$status" -ne 0 ]; [[ "$output" == *"run settle first"* ]]
+  frz >/dev/null; mh settle >/dev/null
   CHARTROOM_MIGRATE_DF="100000000 15500000" run mh move
   [ "$status" -ne 0 ]; [[ "$output" == *"under 15% free"* ]]
   [ ! -d "$BH/tasks/$A" ]
@@ -246,7 +252,7 @@ full_move() {
 @test "rollback: the brain's files back byte for byte, the moved records gone, the client thawed" {
   fixture
   r="$(cksum <"$BH/rulings.log")"; c="$(cksum <"$BH/commander.md")"; i="$(cksum <"$BH/inbox.md")"; k="$(cksum <"$BH/config")"
-  mh triage >/dev/null; mh freeze >/dev/null; mh settle >/dev/null; mh move >/dev/null
+  mh triage >/dev/null; frz >/dev/null; mh settle >/dev/null; mh move >/dev/null
   [ -d "$BH/tasks/$A" ]
   run mh rollback
   [ "$status" -eq 0 ]
@@ -266,7 +272,7 @@ full_move() {
   head="$(git -C "$WE" rev-parse HEAD)"
   mh triage >/dev/null
   { printf '%s\tclose\n' "$A"; printf '%s\tbundle\n' "$E"; } >"$T/dec.tsv"
-  mh freeze >/dev/null
+  frz >/dev/null
   mh settle --decisions "$T/dec.tsv" >/dev/null
   # A: dirty, so close refused it; never --discard: it stays open and moves as kept.
   [ -z "$(jq -r '.closed // ""' "$CH/tasks/$A/meta.json")" ]
@@ -275,6 +281,9 @@ full_move() {
   [ -n "$(jq -r '.closed // ""' "$CH/tasks/$E/meta.json")" ]
   mh move >/dev/null
   [ -f "$BH/tasks/$E/migrate/branch.bundle" ]
+  # A, still open after its refused close, brings its branch and its uncommitted work.
+  [ "$(jq -r .head "$BH/tasks/$A/migrate/branch.json")" = "$(git -C "$W" rev-parse HEAD)" ]
+  [ -s "$BH/tasks/$A/migrate/staged.patch" ] && [ -s "$BH/tasks/$A/migrate/unstaged.patch" ] && [ -s "$BH/tasks/$A/migrate/untracked.tar" ]
   # The commit gone from the brain's checkout, so only the bundle can bring it back.
   br="$(jq -r .branch "$BH/tasks/$E/migrate/branch.json")"
   git -C "$B/work/proj" update-ref -d "refs/chartroom/migrate/$E" 2>/dev/null || true
@@ -290,7 +299,7 @@ full_move() {
   fixture
   mh triage >/dev/null
   awk -F'\t' -v OFS='\t' -v a="$A" '$1 == a { $2 = "keep" } { print }' "$(S)/decisions.tsv" >"$T/dec.tsv"
-  mh freeze >/dev/null; mh settle --decisions "$T/dec.tsv" >/dev/null; mh move >/dev/null
+  frz >/dev/null; mh settle --decisions "$T/dec.tsv" >/dev/null; mh move >/dev/null
   BW="$(bmeta "$A" .worktree)"
   [ ! -e "$BW" ]
   run on_b migrate-home materialize "$A"
@@ -343,7 +352,7 @@ teardown() {
   fixture
   mh triage >/dev/null
   awk -F'\t' -v OFS='\t' -v a="$A" '$1 == a { $2 = "keep" } { print }' "$(S)/decisions.tsv" >"$T/dec.tsv"
-  mh freeze >/dev/null; mh settle --decisions "$T/dec.tsv" >/dev/null; mh move >/dev/null
+  frz >/dev/null; mh settle --decisions "$T/dec.tsv" >/dev/null; mh move >/dev/null
   BW="$(bmeta "$A" .worktree)"; sid="$(bmeta "$A" .session_id)"
   [ ! -e "$BW" ]
   use_fake hc herdr-app claude
@@ -357,4 +366,66 @@ teardown() {
   grep -q "worktree $BW rebuilt" "$BH/tasks/$A/events.log"
   grep -q "note: revived (session $sid" "$BH/tasks/$A/events.log"
   grep -q -- "--resume $sid " "$BH/tasks/$A/launch.sh"
+}
+
+@test "settle: a close of a task with commits pushed nowhere bundles them here first" {
+  fixture
+  E="$(ctask "closed with a local commit")"; on_c worktree "$E" >/dev/null
+  WE="$(jq -r .worktree "$CH/tasks/$E/meta.json")"
+  echo s >"$WE/s.txt"; git -C "$WE" add s.txt; git -C "$WE" commit -qm "local only"
+  head="$(git -C "$WE" rev-parse HEAD)"
+  printf '%s done: finished\n' "2026-01-02T00:00:00Z" >>"$CH/tasks/$E/events.log"
+  mh triage >/dev/null
+  printf '%s\taccept\n' "$E" >"$T/dec.tsv"
+  frz >/dev/null; mh settle --decisions "$T/dec.tsv" >/dev/null
+  [ -n "$(jq -r '.closed // ""' "$CH/tasks/$E/meta.json")" ]
+  grep -q 'note: accepted' "$CH/tasks/$E/events.log"
+  mh move >/dev/null
+  [ -f "$BH/tasks/$E/migrate/branch.bundle" ]
+  git -C "$B/work/proj" bundle list-heads "$BH/tasks/$E/migrate/branch.bundle" | grep -q "^$head "
+}
+
+@test "reap: only after 14 days, and a dirty worktree inside the renamed home keeps it" {
+  fixture
+  # A task whose worktree lives inside the home (its project does not ignore .worktrees/).
+  git clone -q "$T/remote.git" "$C/work/inhome"; git clone -q "$T/remote.git" "$B/work/inhome"
+  F="$(on_c new --project "$C/work/inhome" --title "in the home" --backend hc:claude | sed -n 's/^id=//p')"
+  cmeta "$F" '.dispatched = "2026-01-01T00:00:00Z"'
+  on_c worktree "$F" >/dev/null
+  WF="$(jq -r .worktree "$CH/tasks/$F/meta.json")"; [[ "$WF" == "$CH"/worktrees/* ]]
+  echo wip >"$WF/wip.txt"
+  mh triage >/dev/null; frz >/dev/null; mh settle >/dev/null; mh move >/dev/null; mh verify >/dev/null
+  mh finish --brain brainhost >/dev/null
+  arch="$(dirname "$CH")/.migrated/$(basename "$CH")-$(jq -r .stamp "$(S)/state.json")"
+  [ -f "$arch/${WF#"$CH"/}/wip.txt" ]
+  run mh reap --apply
+  [ "$status" -ne 0 ]; [[ "$output" == *"rollback window is 14 days"* ]]
+  jq '.at.finish = "2020-01-01T00:00:00Z"' "$(S)/state.json" >"$T/st" && mv "$T/st" "$(S)/state.json"
+  run mh reap --apply
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"kept-dirty"* ]]
+  [ -d "$arch" ] && [ -f "$arch/${WF#"$CH"/}/wip.txt" ]
+}
+
+@test "move: a home only the client has is made here and registered" {
+  fixture
+  NB="$B/newhome"
+  m() { CHARTROOM_HOME="$BH" cr migrate-home "$1" --from local --home app --client-home "$CH" --brain-home "$NB" --no-prs "${@:2}"; }
+  m triage >/dev/null; m snapshot >/dev/null; m freeze >/dev/null; m settle >/dev/null
+  run m move
+  [ "$status" -eq 0 ]
+  [ -f "$NB/AGENTS.md" ] && [ -f "$NB/tasks/$A/meta.json" ]
+  CHARTROOM_HOME="$BH" cr homes path app | grep -qx "$NB"
+}
+
+@test "materialize never adopts another worktree that sits at the recorded path" {
+  fixture
+  mh triage >/dev/null
+  awk -F'\t' -v OFS='\t' -v a="$A" '$1 == a { $2 = "keep" } { print }' "$(S)/decisions.tsv" >"$T/dec.tsv"
+  frz >/dev/null; mh settle --decisions "$T/dec.tsv" >/dev/null; mh move >/dev/null
+  BW="$(bmeta "$A" .worktree)"
+  git -C "$B/work/proj" worktree add -q -b someone-else "$BW" main
+  run on_b migrate-home materialize "$A"
+  [ "$status" -ne 0 ]; [[ "$output" == *"is another worktree"* ]]
+  [ "$(git -C "$BW" symbolic-ref --short HEAD)" = someone-else ]
 }
