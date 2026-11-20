@@ -89,6 +89,8 @@ source "$CR_ROOT/lib/relay.sh"
 source "$CR_ROOT/lib/radar.sh"
 # shellcheck source=../lib/park.sh
 source "$CR_ROOT/lib/park.sh"
+# shellcheck source=../lib/nodes.sh
+source "$CR_ROOT/lib/nodes.sh"
 # shellcheck source=../lib/stuck.sh
 source "$CR_ROOT/lib/stuck.sh"
 for _f in "$CR_ROOT"/lib/backends/*.sh; do
@@ -1473,6 +1475,7 @@ cmd_doctor() {
     echo "auto:     ${first_ok:-none available}"
     dashboard_doctor_json | jq -r '"dashboard: port \(.port), bind \(.bind)\(if .bind | startswith("127.") then "" else " (on the network)" end), access token \(if .token_set then "set" else "not set" end), \(if .running then "running on " + .running else "not running" end)"'
     page_doctor_json | jq -r 'if .chrome then "pdf:      \(.chrome) (chartroom artifact pdf)" else "pdf:      - \(.why)" end'
+    node_doctor_line
     echo
     printf '%s\n' "${rows[@]}" | jq -r '[.backend, (if .available then "ok" else "-" end), .steering, .reason] | @tsv' |
       { printf 'BACKEND\tOK\tSTEERING\tWHY NOT\n'; cat; } | table
@@ -1718,6 +1721,21 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           plus each home's XO from herdr. radar machines lists
                                           the machines (CHARTROOM_RADAR_MACHINES, else herdr's
                                           saved ones); CHARTROOM_MACHINE_NAME labels this one
+  chartroom nodes [--json] [--project PATH]
+                                          the machines that can take crew work, this one first:
+                                          contact, role and budgets, cores and load, memory,
+                                          power, idle time, live agents, logins, tools,
+                                          checkouts and UTIL (projected use with one more
+                                          worker). Other machines are only read: the probe
+                                          script runs there over ssh. Machines come from
+                                          CHARTROOM_NODES, else the radar's list. --project:
+                                          which of them have a checkout of that project
+  chartroom node probe [--json]           this machine's facts, as `nodes` reads them
+  chartroom node init [--max-workers N] [--cpu PCT] [--mem PCT] [--battery pause|allow]
+                      [--priority normal|nice|background] [--project-roots DIRS] [--force]
+                                          make this machine a node: writes its budgets to
+                                          ~/.config/chartroom/node (CHARTROOM_NODE_CONFIG);
+                                          makes no home
   chartroom accept <id>                   the commander's word that a task in review (a worker
                                           reported done) is done; keeps its worktree (close
                                           removes it) and parks its worker
@@ -1754,7 +1772,7 @@ if [[ "$cmd" =~ ^(status|ls|board|todo|inbox|relay)$ ]]; then
   done
 fi
 case "$cmd" in
-  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|steer|stop|attach|park|accept|close|sweep|watch|dashboard|radar|doctor|homes|version|help) "cmd_$cmd" "$@" ;;
+  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|steer|stop|attach|park|accept|close|sweep|watch|dashboard|radar|node|nodes|doctor|homes|version|help) "cmd_$cmd" "$@" ;;
   install-skills) cmd_install_skills "$@" ;;
   ls) cmd_status "$@" ;;
   show) cmd_show "$@" ;;

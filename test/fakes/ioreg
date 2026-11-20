@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# fake ioreg: prints $FAKE_NODE_DIR/ioreg (fails without it).
+[[ -n "${FAKE_NODE_DIR:-}" && -f "$FAKE_NODE_DIR/ioreg" ]] || exit 1
+cat "$FAKE_NODE_DIR/ioreg"

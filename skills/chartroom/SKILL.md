@@ -228,6 +228,12 @@ On a wake:
 When the fleet goes quiet (nothing in flight but waits), or the commander says the machine is
 hot or slow, run the `sweep` skill (`chartroom sweep --apply`, one line to relay).
 
+`chartroom nodes` lists the machines that can take crew work (this one first) with their room,
+logins, tools and checkouts, read-only over ssh. Use it to answer "which machine has room" or
+"can m3 run this". Workers still run on this machine: dispatching onto another one arrives in a
+later release (docs/multi-machine.md), and you never place work by hand on a machine the
+commander has not made a node (`chartroom node init`, run there by the commander).
+
 The dashboard shows the same fleet in a browser: `waiting` tasks under In progress, overdue
 ones under On hold. `chartroom dashboard open` (or the `dashboard` skill, `/dashboard`) opens
 it, starting it if needed; `chartroom board` prints the same lanes in the terminal, short id

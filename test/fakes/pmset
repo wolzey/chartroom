@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# fake pmset: `pmset -g batt` prints $FAKE_NODE_DIR/pmset (fails without it).
+[[ "${1:-} ${2:-}" == "-g batt" && -n "${FAKE_NODE_DIR:-}" && -f "$FAKE_NODE_DIR/pmset" ]] || exit 1
+cat "$FAKE_NODE_DIR/pmset"
