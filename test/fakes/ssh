@@ -8,19 +8,49 @@
 #   probe.tsv     what lib/nodeprobe.sh prints there (`chartroom nodes`: `bash -s` with the script
 #                 on stdin, whose cksum is logged as "<target> <stdin cksum N SIZE>")
 # Every call is logged as "<target> <remote command>" to $FAKE_SSH_DIR/calls.log.
+#
+# A loopback brain (client homes, lib/brain.sh): with $FAKE_SSH_DIR/<target>/brain holding a
+# directory, that directory is the other machine's HOME and the remote command really runs there,
+# through a real shell (zsh when there is one, as on a Mac, else bash; $FAKE_SSH_SHELL picks),
+# with that machine's own config and homes (CHARTROOM_CONFIG under it, no CHARTROOM_HOME), stdin
+# and the exit code passed through. -N -L (a tunnel) is logged as "<target> tunnel <spec>" and
+# sleeps; -O (a control command) does nothing. $FAKE_SSH_DIR/<target>/down makes the brain
+# unreachable (ssh's 255) for as long as it exists; .../drop-after-hello cuts the call after the
+# gate's hello (255).
+# (sshd hands the remote command only stdin, stdout and stderr: so does this)
+# (not bash's own fd 255, which holds this script; and no redirection on the loop, whose saved
+# copy of stderr the loop would close)
+fds=(/dev/fd/*)
+for fd in "${fds[@]}"; do fd="${fd##*/}"; if [[ "$fd" =~ ^[0-9]+$ ]] && (( fd > 2 && fd < 255 )); then eval "exec $fd>&-"; fi; done
+flags=() L=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -o|-p|-l|-i|-F) shift 2 ;;
+    -L) L="$2"; shift 2 ;;
+    -O) flags+=("-O$2"); shift 2 ;;
+    -o|-p|-l|-i|-F|-S|-R|-W|-E) shift 2 ;;
     --) shift; break ;;
-    -*) shift ;;
+    -*) flags+=("$1"); shift ;;
     *) break ;;
   esac
 done
 target="${1:-}"; shift || true
 cmd="$*"
 [[ -n "${FAKE_SSH_DIR:-}" ]] || { echo "ssh: connect to host $target port 22: Connection refused" >&2; exit 255; }
-printf '%s %s\n' "$target" "$cmd" >>"$FAKE_SSH_DIR/calls.log"
 d="$FAKE_SSH_DIR/$target"
+if [[ -f "$d/brain" ]]; then
+  case " ${flags[*]-} " in *" -O"*) exit 0 ;; esac
+  if [[ -f "$d/down" ]]; then echo "ssh: connect to host $target port 22: Operation timed out" >&2; exit 255; fi
+  case " ${flags[*]-} " in *" -N "*) printf '%s tunnel %s\n' "$target" "$L" >>"$FAKE_SSH_DIR/calls.log"; exec sleep 30 ;; esac
+  printf '%s %s\n' "$target" "$cmd" >>"$FAKE_SSH_DIR/calls.log"
+  bh="$(cat "$d/brain")"
+  sh="${FAKE_SSH_SHELL:-}"; [[ -n "$sh" ]] || sh="$(command -v zsh || command -v bash)"
+  if [[ -f "$d/drop-after-hello" ]]; then
+    env -u CHARTROOM_HOME HOME="$bh" CHARTROOM_CONFIG="$bh/.config/chartroom/config" XDG_STATE_HOME="$bh/.local/state" "$sh" -c "$cmd" >/dev/null 2>&1
+    printf '\036CRB hello 1 x\n' >&2; echo "client_loop: send disconnect: Broken pipe" >&2; exit 255
+  fi
+  exec env -u CHARTROOM_HOME HOME="$bh" CHARTROOM_CONFIG="$bh/.config/chartroom/config" XDG_STATE_HOME="$bh/.local/state" "$sh" -c "$cmd"
+fi
+printf '%s %s\n' "$target" "$cmd" >>"$FAKE_SSH_DIR/calls.log"
 [[ -d "$d" ]] || { echo "ssh: Could not resolve hostname $target: nodename nor servname provided, or not known" >&2; exit 255; }
 if [[ -f "$d/exit" ]]; then cat "$d/stderr" >&2 2>/dev/null; exit "$(cat "$d/exit")"; fi
 case "$cmd" in

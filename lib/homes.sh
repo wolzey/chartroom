@@ -66,9 +66,10 @@ homes_rows() {
     jq -cn --arg n "$name" --arg p "$p" --argjson cur "$([[ "$phys" == "$here" ]] && echo true || echo false)" \
       --argjson ex "$([[ -d "$p" ]] && echo true || echo false)" --argjson ih "$([[ -d "$p/tasks" ]] && echo true || echo false)" \
       --arg ws "$(home_setting "$p" WORKSPACE chartroom-crew)" --arg port "$(home_setting "$p" DASHBOARD_PORT "$CR_DASHBOARD_PORT_DEFAULT")" \
-      --argjson open "${open:-0}" --arg dash "$dash" \
+      --argjson open "${open:-0}" --arg dash "$dash" --arg brain "$(cfg_value_in "$p/config" CHARTROOM_BRAIN)" \
       '{name: $n, path: $p, current: $cur, registered: true, exists: $ex, is_home: $ih, workspace: $ws,
-        port: ($port | tonumber? // $port), open: $open, dashboard: (if $dash == "" then null else ($dash | tonumber? // $dash) end)}'
+        port: ($port | tonumber? // $port), open: $open, dashboard: (if $dash == "" then null else ($dash | tonumber? // $dash) end),
+        brain: (if $brain == "" then null else $brain end)}'
   done < <(homes_entries)
   if [[ $seen -eq 0 ]]; then
     open=0; dash=""
@@ -77,8 +78,10 @@ homes_rows() {
     read -r pid port _ < <(home_dashboard "$CR_HOME") && dash="$port"
     jq -cn --arg p "$CR_HOME" --arg ws "$CR_WORKSPACE" --arg port "$(cfg DASHBOARD_PORT '' "$CR_DASHBOARD_PORT_DEFAULT")" \
       --argjson ih "$([[ -d "$CR_HOME/tasks" ]] && echo true || echo false)" --argjson open "${open:-0}" --arg dash "$dash" \
+      --arg brain "${CR_HOME_CFG[CHARTROOM_BRAIN]:-}" \
       '{name: null, path: $p, current: true, registered: false, exists: true, is_home: $ih, workspace: $ws,
-        port: ($port | tonumber? // $port), open: $open, dashboard: (if $dash == "" then null else ($dash | tonumber? // $dash) end)}'
+        port: ($port | tonumber? // $port), open: $open, dashboard: (if $dash == "" then null else ($dash | tonumber? // $dash) end),
+        brain: (if $brain == "" then null else $brain end)}'
   fi
 }
 
@@ -151,6 +154,7 @@ cmd_homes() {
           (.path | if . == $home or startswith($home + "/") then "~" + ltrimstr($home) else . end), .workspace, (.port | tostring), (.open | tostring),
           (if .dashboard then "running on \(.dashboard)" elif .exists then "-" else "missing" end)] | @tsv' <<<"$rows" |
         { printf 'NAME\tPATH\tWORKSPACE\tPORT\tOPEN\tDASHBOARD\n'; cat; } | table
+      jq -r '.[] | select(.brain) | "client home: \(.name // "(this home)") lives on the brain \(.brain) (its OPEN count is this machine'"'"'s copy)"' <<<"$rows"
       jq -e 'any(.[]; .current and (.registered | not))' <<<"$rows" >/dev/null &&
         echo "this home ($CR_HOME) is not registered: chartroom homes add <name>"
       homes_warnings "$rows" | sed 's/^/warning: /'

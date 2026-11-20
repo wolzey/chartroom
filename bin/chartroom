@@ -93,6 +93,8 @@ source "$CR_ROOT/lib/park.sh"
 source "$CR_ROOT/lib/nodes.sh"
 # shellcheck source=../lib/stuck.sh
 source "$CR_ROOT/lib/stuck.sh"
+# shellcheck source=../lib/brain.sh
+source "$CR_ROOT/lib/brain.sh"
 for _f in "$CR_ROOT"/lib/backends/*.sh; do
   # shellcheck source=/dev/null
   source "$_f"
@@ -132,6 +134,15 @@ probe_backend() { # <backend>
   local b r a why
   b="$(canon_backend "$1")"; r="${b%%:*}"; a=""; [[ "$b" == *:* ]] && a="${b#*:}"
   if [[ "$r" =~ ^($SESSION_RUNNERS)$ && "${CI:-}" == true ]]; then echo "CI=true: session runners disabled"; return 1; fi
+  # A command from a client home (lib/brain.sh) runs in an ssh session here, outside the login
+  # session: a worker started from it would find a Mac's keychain locked. Only runners whose
+  # server already runs in the login session start workers then.
+  if [[ -n "${CHARTROOM_GATE:-}" ]]; then
+    case "$r" in
+      headless|command) echo "not for a command from a client: it would start in the ssh session, outside this machine's login session (a Mac's keychain is locked there)"; return 1 ;;
+      tmux) tmx list-sessions >/dev/null 2>&1 || { echo "not for a command from a client: no tmux server runs here, and one started from the ssh session would be outside the login session"; return 1; } ;;
+    esac
+  fi
   why="$("${r}_probe" "$a" 2>&1)" || { echo "$why"; return 1; }
   if [[ -n "$a" && "$r" != headless ]]; then
     [[ -n "$(agent_bin "$a")" ]] || { echo "$a not on PATH"; return 1; }
@@ -1008,6 +1019,9 @@ cmd_steer() {
   local id="$1"; shift; local msg="$*"; need_task "$id"
   [[ -n "$(meta "$id" dispatched)" ]] || die "task $id has not been dispatched"
   local r; r="$(backend_runner "$id")"
+  if [[ -n "${CHARTROOM_GATE:-}" && "$r" =~ ^(headless|command)$ ]]; then
+    die "steering a $r worker from a client would start its next run in the ssh session, outside this machine's login session: steer $id on the brain itself"
+  fi
   # A worker that can park is steered under its lock, so no park ends it mid-message; a parked
   # one is resumed with the message as its first prompt (lib/park.sh).
   if park_supported "$id"; then
@@ -1036,7 +1050,10 @@ cmd_stop() {
 }
 
 cmd_attach() {
-  local id="${1:-}"; [[ -n "$id" ]] || die "usage: chartroom attach <id>"; need_task "$id"
+  local id="${1:-}" prepare=0; [[ -n "$id" ]] || die "usage: chartroom attach <id>"; need_task "$id"
+  # --prepare (a client home's attach, lib/brain.sh): resume a parked worker and print where it
+  # runs as JSON, without showing anything on this machine's screen; the client shows it.
+  [[ "${2:-}" == --prepare ]] && prepare=1
   # A parked worker is resumed first, with no prompt; the lock is let go before the runner's
   # attach, which may hand this process to `hc attach`.
   if park_supported "$id" && is_parked "$id"; then
@@ -1046,9 +1063,15 @@ cmd_attach() {
         task_unlock "$id"
         die "could not resume the parked worker of $id: $(grep ' note: revive failed: ' "$(tdir "$id")/events.log" | tail -1 | sed 's/^.* note: revive failed: //')"
       fi
-      echo "resumed the parked session $(meta "$id" session_id) (hc terminal $(meta "$id" hc_terminal))"
+      echo "resumed the parked session $(meta "$id" session_id) (hc terminal $(meta "$id" hc_terminal))" >&$((prepare == 1 ? 2 : 1))
     fi
     task_unlock "$id"
+  fi
+  if [[ $prepare -eq 1 ]]; then
+    jq -cn --arg r "$(backend_runner "$id")" --arg t "$(meta "$id" hc_terminal)" --arg ht "$(meta "$id" herdr_tab)" \
+      --arg ts "$(meta "$id" tmux_session)" --arg tp "$(meta "$id" tmux_pane)" \
+      '{runner: $r} + ({hc_terminal: $t, herdr_tab: $ht, tmux_session: $ts, tmux_pane: $tp} | with_entries(select(.value != "")))'
+    return 0
   fi
   "$(backend_runner "$id")_attach" "$id"
 }
@@ -1736,6 +1759,17 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           make this machine a node: writes its budgets to
                                           ~/.config/chartroom/node (CHARTROOM_NODE_CONFIG);
                                           makes no home
+  chartroom brain link <target> [--as NAME]
+                                          make this (empty) home a client of the brain: every
+                                          chartroom command here then runs on <target>'s home of
+                                          the same name (or NAME) over ssh, and its records are
+                                          copied here at the same paths; edits to them are sent
+                                          to the brain before the next command
+  chartroom brain unlink|status [--json]|pull|fetch <path>|git <id> <args>
+                                          in a client home: stop forwarding (the copy stays as a
+                                          snapshot); contact, copy and tunnel; a full resync; one
+                                          file the copy leaves out; read-only git in a task's
+                                          worktree on the brain
   chartroom accept <id>                   the commander's word that a task in review (a worker
                                           reported done) is done; keeps its worktree (close
                                           removes it) and parks its worker
@@ -1760,6 +1794,9 @@ EOF
 }
 
 cmd="${1:-help}"; shift || true
+# A client home (lib/brain.sh): the command runs on the brain, and this run exits there. Local
+# commands, and every command in a home that is not a client, carry on below.
+brain_route "$cmd" "$@"
 # The read-only view across every home (lib/homes.sh): status, board, todo, inbox list, relay list.
 if [[ "$cmd" =~ ^(status|ls|board|todo|inbox|relay)$ ]]; then
   for _a in "$@"; do
@@ -1772,7 +1809,7 @@ if [[ "$cmd" =~ ^(status|ls|board|todo|inbox|relay)$ ]]; then
   done
 fi
 case "$cmd" in
-  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|steer|stop|attach|park|accept|close|sweep|watch|dashboard|radar|node|nodes|doctor|homes|version|help) "cmd_$cmd" "$@" ;;
+  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|steer|stop|attach|park|accept|close|sweep|watch|dashboard|radar|node|nodes|doctor|homes|brain|version|help) "cmd_$cmd" "$@" ;;
   install-skills) cmd_install_skills "$@" ;;
   ls) cmd_status "$@" ;;
   show) cmd_show "$@" ;;

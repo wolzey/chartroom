@@ -31,6 +31,19 @@ are stable from 0.1.0.
   logged like every other prompt, not as a bare `hc: ...` line.
 
 ### Added
+- Client homes (one brain, step 1): `chartroom brain link <target>` makes an empty home a client
+  of another machine's home of the same name. Every chartroom command in it then runs there over
+  one fixed ssh gate (`chartroom brain gate`: the arguments as JSON on stdin, registered homes
+  and client-safe commands only), and a copy of its records sits here at the same paths.
+  - Edits to the copy go to the brain as puts, applied only if unchanged there.
+  - `watch --once` is acked, so a dropped link replays wakes instead of losing them, and it wakes
+    once when the brain has been away 60 s and once when it is back.
+  - `attach` shows the brain's worker through this machine's hc link; `dashboard open` goes
+    through an ssh tunnel; `artifact copy/export/pdf` land here.
+  - An unreachable brain exits 75, "nothing was run".
+  - `brain status|pull|fetch|git|unlink` complete it. See docs/client-homes.md.
+- `attach <id> --prepare`: resume a parked worker and print where it runs, as JSON, without
+  showing it.
 - `chartroom nodes`: the machines that can take crew work, this one first, with what each has
   room for and what it can run (stage 1 of [multi-machine dispatch](docs/multi-machine.md), read
   only). Per machine: ssh contact (`ok`, `unreachable`, `auth`, `timeout`, `incompatible`), whether

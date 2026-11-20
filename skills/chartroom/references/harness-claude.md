@@ -24,6 +24,11 @@ one, the first `--once` can replay wakes already handled (everything since the c
 written, and the whole log of a task created after it). Check `chartroom status` before relaying
 anything from that first batch, and don't re-report what is already handled.
 
+In a client home (one brain) the same call runs on the brain, delivered at least once. It also
+wakes once with `[brain] <machine> unreachable since …` when the brain has been away a minute,
+and once with `[brain] <machine> back after …`. Both are lines for the commander, then start
+the next `--once` as usual.
+
 ## In-session workers (`subagent` backend)
 
 `chartroom dispatch` prints the call. Make it with the Agent tool: `name: <id>`,

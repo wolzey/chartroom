@@ -89,7 +89,8 @@ radar_machines_json() {
 # ([{home, path, current, result} | {home, path, current, error}]), the homes read side by side.
 radar_local_status() {
   local rows n i name path cur tmp rc why
-  rows="$(homes_rows | jq -s -c .)"
+  # (a client home's tasks are the brain's: the radar reads them there, not twice)
+  rows="$(homes_rows | jq -s -c 'map(select(.brain == null))')"
   n="$(jq length <<<"$rows")"
   tmp="$(mktemp -d)"
   for ((i = 0; i < n; i++)); do

@@ -17,6 +17,9 @@ opens it in the default browser. Reply with one line: the URL it printed. If it 
 "open it yourself", say the browser could not be opened and give the URL. If it failed, give
 its error in one line; do not retry, stop, or restart anything on your own.
 
+In a client home (one brain) it opens the brain's dashboard here through an ssh tunnel. The
+URL it prints is this machine's: give that one.
+
 When the commander asks to see every agent across machines, or the radar, give the same URL
 with `radar` appended to its path (`http://127.0.0.1:4517/radar`). For one task on a page of
 its own (its intent, events, report and pane, printable), append `task/<home>/<id>` instead,

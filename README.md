@@ -451,6 +451,45 @@ m3             ok       node: 6w cpu100% mem75%  16 (12P+4E) load 1.2  48G 92% f
 - **On macOS, budgets are admission control,** not hard caps: there are no cgroups. A worker's own
   builds can still push a node past its share; placement then sends new work elsewhere.
 
+### Client homes: one brain
+
+A home can live on another machine, the **brain** (an always-on desktop), while you keep talking
+to an XO on your laptop. Its every chartroom command then runs on the brain over ssh, its workers
+run there, and a copy of its records sits in the laptop's home at the same paths, so briefs,
+plans and reports open as before. At the brain itself the same home is just a home.
+
+```bash
+cd ~/chartroom/acme && chartroom brain link studio   # this (empty) home now lives on "studio"
+chartroom brain status                               # contact, the copy, pending edits, the tunnel
+chartroom brain fetch tasks/<id>/pane.log            # one file the copy leaves out
+chartroom brain git <id> log --oneline main..HEAD    # read-only git in a task's worktree there
+chartroom brain unlink                               # local again
+```
+
+- **The marker** is `CHARTROOM_BRAIN=<ssh target>` in that home's own `config`. The brain finds
+  the home by its registered name (`CHARTROOM_BRAIN_HOME`), never by a path the client sends.
+  `brain link` refuses a home that already has tasks: moving them is a migration of its own.
+- **Edits to the copy** (a brief, `inbox.md`, `commander.md`) go to the brain before the next
+  command. The brain applies one only if its own file is unchanged since it was copied;
+  otherwise the edit is kept as `<file>.client-conflict-<time>` and the command does not run.
+  The records chartroom owns (`meta.json`, `events.log`, rulings, relays, artifacts) are never
+  taken from a client.
+- **`watch --once`** is delivered at least once: the brain moves its cursor only after the
+  laptop has the wakes. While the brain is away it waits quietly, then wakes once
+  (`[brain] studio unreachable since …`) and once more when the brain is back. Every other command
+  exits 75 and says nothing was run.
+- **`attach`** resumes the worker on the brain and shows it here, through this machine's hc link
+  to the brain (`hc machine ls`). **`dashboard open`** opens the brain's dashboard through an
+  ssh tunnel, so nothing new listens on the network. **`artifact copy`** uses this machine's
+  clipboard.
+- **What runs on the brain is fixed:** one constant ssh command line (`chartroom brain gate`),
+  the arguments as JSON on stdin, and only registered homes and client-safe commands. Workers
+  never start from the ssh session (no headless or command runner from a client), because a
+  Mac's keychain is locked there.
+
+The protocol, the copy's filter, the failure table and an optional forced-command key are in
+[docs/client-homes.md](docs/client-homes.md).
+
 ### Readable events and a page per task
 
 A worker's event is one line in `events.log`, often a long one. The radar's panel and the task

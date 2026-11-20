@@ -28,6 +28,9 @@ goes quiet; and whenever the commander says the machine is hot, slow or loud.
    once the work has landed or they say to drop it, `chartroom steer`, and never
    `close --discard` without their explicit word for that task.
 
+In a client home (one brain) the sweep runs on the brain, over its crew, and adds a line when
+this machine keeps a dashboard tunnel to it. Relay it the same way.
+
 Use `--verbose` (the safe set item by item) or `--json` only when the commander asks for detail.
 
 Never add a daemon for this. A harness that can schedule may run `chartroom sweep --apply`

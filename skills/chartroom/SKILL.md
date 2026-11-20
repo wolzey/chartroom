@@ -234,6 +234,22 @@ logins, tools and checkouts, read-only over ssh. Use it to answer "which machine
 later release (docs/multi-machine.md), and you never place work by hand on a machine the
 commander has not made a node (`chartroom node init`, run there by the commander).
 
+**On a client home.** When `chartroom doctor` starts with `client: this home lives on the
+brain: <machine>`, this home's records and workers live on another machine (docs/client-homes.md).
+Work exactly as usual: every chartroom command runs there.
+
+- **Files.** The home's files here are a synced copy at the same paths: read briefs, plans and
+  reports, and edit a brief or `inbox.md`, as usual. Your edits reach the brain before your next
+  chartroom command.
+  - A `<file>.client-conflict-<time>` means the brain changed that file first. Merge your text
+    into the file and run the command again.
+  - A file missing from the copy (a worker's scratch, `pane.log`): `chartroom brain fetch <path>`.
+- **Verify a worktree** with `chartroom brain git <id> log --oneline <base>..HEAD` (and `diff
+  --stat`), not `git -C`, because the worktree is on the brain.
+- **A `[brain] … unreachable` wake** is news for the commander: until the `[brain] … back` wake,
+  nothing runs (each command exits 75, "nothing was run").
+- **Never ssh to the brain yourself.**
+
 The dashboard shows the same fleet in a browser: `waiting` tasks under In progress, overdue
 ones under On hold. `chartroom dashboard open` (or the `dashboard` skill, `/dashboard`) opens
 it, starting it if needed; `chartroom board` prints the same lanes in the terminal, short id
