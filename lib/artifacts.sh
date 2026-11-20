@@ -46,7 +46,7 @@ artifact_slug() { # <title>
 artifact_owner() { # <id> [--open]
   local q out
   if out="$(cmd_resolve "$1" 2>&1)"; then
-    if [[ "$out" =~ ^i-[0-9a-f]{4,}$ && ! -f "$(tdir "$out")/meta.json" ]]; then echo "inbox $out"; else echo "task $out"; fi
+    if [[ "$out" =~ ^i-[0-9a-f]{4,}$ ]] && ! task_exists "$out"; then echo "inbox $out"; else echo "task $out"; fi
     return 0
   fi
   q="$(tr '[:upper:]' '[:lower:]' <<<"$1" | sed -E 's/^[[:space:]]*\[?//; s/\]?[[:space:]]*$//')"

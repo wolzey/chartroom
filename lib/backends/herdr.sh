@@ -61,16 +61,16 @@ herdr_keys() { local id="$1" k; shift; for k in "$@"; do herdr agent send-keys "
 # ("working") or the text's start on screen only shows that a prompt was taken.
 herdr_deliver() { # <id> <text>
   local name="$1" text="$2" f i t st before new got="" want="" mismatches=0 n
-  f="$(tdir "$name")/events.log"
   [[ "$(backend_agent "$name")" == claude ]] && jq -e '.hooks.UserPromptSubmit' "$(tdir "$name")/claude-settings.json" >/dev/null 2>&1 &&
     want="$(printf '%s' "$text" | text_sig)"
   for i in 1 2 3 4 5 6; do
-    before="$(wc -c <"$f")"
+    events_path_fresh "$name"; f="$EVENTS_PATH"; before="$(wc -c <"$f")"
     herdr agent prompt "$name" "$text" >/dev/null 2>&1 || true
     if [[ -n "$want" ]]; then
       got=""
       for t in $(seq 1 "$CR_DELIVER_WAIT"); do
         sleep 1
+        events_path_fresh "$name"; f="$EVENTS_PATH"
         new="$(tail -c +"$((before + 1))" "$f")"
         grep -q " agent: prompt-received sig=$want " <<<"$new" && return 0
         got="$(grep -oE ' agent: prompt-received sig=[0-9a-f]+ len=[0-9]+' <<<"$new" | tail -1 || true)"

@@ -59,7 +59,7 @@ homes_rows() {
     phys="$(phys_dir "$p")"; open=0; dash=""
     [[ "$phys" == "$here" ]] && seen=1
     if [[ -d "$p/tasks" ]]; then
-      local metas=("$p"/tasks/*/meta.json)
+      local metas=(); mapfile -d '' -t metas < <(task_meta_files_of "$p")
       [[ -e "${metas[0]-}" ]] && open="$(jq -r 'select((.closed // "") == "") | .id' "${metas[@]}" | grep -c . || true)"
     fi
     read -r pid port _ < <(home_dashboard "$p") && dash="$port"
@@ -73,7 +73,7 @@ homes_rows() {
   done < <(homes_entries)
   if [[ $seen -eq 0 ]]; then
     open=0; dash=""
-    local metas=("$CR_HOME"/tasks/*/meta.json)
+    task_meta_files; local metas=("${TASK_METAS[@]+"${TASK_METAS[@]}"}")
     [[ -e "${metas[0]-}" ]] && open="$(jq -r 'select((.closed // "") == "") | .id' "${metas[@]}" | grep -c . || true)"
     read -r pid port _ < <(home_dashboard "$CR_HOME") && dash="$port"
     jq -cn --arg p "$CR_HOME" --arg ws "$CR_WORKSPACE" --arg port "$(cfg DASHBOARD_PORT '' "$CR_DASHBOARD_PORT_DEFAULT")" \

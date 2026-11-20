@@ -32,8 +32,8 @@ launch_codex() { # <id> <wt> <prompt> [resume-thread]
   args=(exec --json -C "$wt" "${sb[@]}" "${mo[@]}" -o "$d/final.md")
   if [[ -n "$thread" ]]; then args+=(resume "$thread" "$prompt"); else args+=("$prompt"); fi
   # Detached on purpose: the worker must outlive the XO's session.
-  CR_T="$d" nohup bash -c 'codex "$@" </dev/null >>"$CR_T/codex.jsonl" 2>>"$CR_T/codex.err"; rc=$?
-    printf "%s exited: codex process ended (exit %s)\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$rc" >>"$CR_T/events.log"' \
+  CR_T="$d" CR_E="$(events_append_path "$id")" nohup bash -c 'codex "$@" </dev/null >>"$CR_T/codex.jsonl" 2>>"$CR_T/codex.err"; rc=$?
+    printf "%s exited: codex process ended (exit %s)\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$rc" >>"$CR_E"' \
     _ "${args[@]}" >/dev/null 2>&1 &
   local pid=$!; disown || true
   meta_set "$id" pid "$pid"
@@ -70,7 +70,7 @@ launch_claude_headless() { # <id> <wt> <prompt> [resume]
   # The wrapper holds the FIFO open (fd 9) so steer can write more user turns, and closes
   # it once the stream ends on a `result` with nothing new for 3s, then ends claude.
   (cd "$wt" || exit 1
-  CR_T="$d" CR_CLAUDE="$b" nohup bash -c '
+  CR_T="$d" CR_E="$(events_append_path "$id")" CR_CLAUDE="$b" nohup bash -c '
     "$CR_CLAUDE" "$@" <"$CR_T/stdin.fifo" >>"$CR_T/claude.jsonl" 2>>"$CR_T/claude.err" &
     cpid=$!
     exec 9>"$CR_T/stdin.fifo"
@@ -94,7 +94,7 @@ launch_claude_headless() { # <id> <wt> <prompt> [resume]
     wait "$cpid"; rc=$?
     jq -r "select(.type==\"result\") | .result // empty" "$CR_T/claude.jsonl" 2>/dev/null | tail -n 1 >"$CR_T/final.md"
     rm -f "$CR_T/stdin.fifo"
-    printf "%s exited: claude process ended (exit %s%s)\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$rc" "$why" >>"$CR_T/events.log"' \
+    printf "%s exited: claude process ended (exit %s%s)\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$rc" "$why" >>"$CR_E"' \
     _ "${args[@]}" >/dev/null 2>&1 &
     echo $! >"$d/pid.tmp"; disown || true)
   local pid; pid="$(cat "$d/pid.tmp")"; rm -f "$d/pid.tmp"
@@ -175,9 +175,10 @@ headless_watch() { pid_watch "$1"; }
 # --once watch does not repeat it, and a later run (a steer, a dispatch) can still be lost.
 pid_watch() { # <id>
   local id="$1" pid f msg="lost: worker process vanished without an exit record"
-  pid="$(meta "$id" pid)"; f="$(tdir "$id")/events.log"
+  pid="$(meta "$id" pid)"; events_path "$id"; f="$EVENTS_PATH"
   if [[ -n "$pid" ]] && ! pid_alive "$pid" && ! tail -n 3 "$f" | grep -q ' exited: ' && ! grep -qF " note: $msg (pid $pid)" "$f"; then
     sleep 1 # the wrapper writes `exited` right after the process ends
+    events_path_fresh "$id"; f="$EVENTS_PATH"
     tail -n 3 "$f" | grep -q ' exited: ' && return 0
     [[ "$(meta_file "$id" pid)" == "$pid" ]] || return 0 # a new run (a steer) started meanwhile
     log_event "$id" note "$msg (pid $pid)"

@@ -38,7 +38,7 @@ brain_class() { # <command>
     version|help|-h|--help|-v|--version|homes|node|install-skills|brain) echo local ;;
     join|hook) echo refuse ;;
     watch|attach|dashboard|doctor|artifact|init|sweep|rule|new|project) echo hybrid ;;
-    worktree|dispatch|event|listen|status|ls|board|resolve|show|todo|inbox|relay|focus|peek|steer|stop|park|accept|close|radar|nodes|tell|ask|snooze|link|brief|set|request|initiative) echo forward ;;
+    worktree|dispatch|event|listen|status|ls|board|resolve|show|todo|inbox|relay|focus|peek|steer|stop|park|accept|close|radar|nodes|tell|ask|snooze|link|brief|set|request|initiative|store) echo forward ;;
     app|attachment) echo local ;; # each refuses in a client home itself: the app runs on the brain; a file to attach must be there
     *) echo local ;; # an unknown command dies here as anywhere
   esac
@@ -419,7 +419,7 @@ brain_put_refusal() { # <relative path>
   [[ -n "$p" && "$p" != /* && "$p" != */ ]] || { echo "not a path inside the home"; return; }
   local IFS=/; for c in $p; do [[ -n "$c" && "$c" != .* ]] || { echo "no dot or empty path parts"; return; }; done
   case "$p" in
-    config|rulings.log|focus.json|worktrees/*|relays/*|tasks/*/meta.json|tasks/*/events.log|tasks/*/artifacts/*|tasks/*/messages/*|inbox/*/artifacts/*)
+    config|rulings.log|focus.json|worktrees/*|relays/*|tasks/*/meta.json|tasks/*/events.log|tasks/*/events.spool|tasks/*/artifacts/*|tasks/*/messages/*|inbox/*/artifacts/*)
       echo "a record chartroom owns (change it with its command)"; return ;;
   esac
   case "$n" in pane.log|hooks.log|launch.sh|claude-settings.json|*.lock) echo "a file chartroom owns"; return ;; esac
@@ -642,8 +642,10 @@ gate_cat() { # <header>
 gate_git() { # <header>
   local id args=() wt sub a
   id="$(jq -r '.id // empty' <<<"$1")"
-  [[ "$id" =~ $CR_RADAR_ID_RE && -f "$GATE_HOME/tasks/$id/meta.json" ]] || gate_die "no such task: $id"
-  wt="$(jq -r '.worktree // empty' "$GATE_HOME/tasks/$id/meta.json")"
+  [[ "$id" =~ $CR_RADAR_ID_RE ]] || gate_die "no such task: $id"
+  CR_HOME="$GATE_HOME"; STORE_UID_FOR=""; meta_path "$id"
+  [[ -n "$META_PATH" ]] || gate_die "no such task: $id"
+  wt="$(jq -r '.worktree // empty' "$META_PATH")"
   [[ -n "$wt" && -d "$wt" ]] || gate_die "task $id has no worktree here"
   mapfile -d '' -t args < <(jq -j '.args[]? | (tostring, "\u0000")' <<<"$1")
   sub="${args[0]:-}"

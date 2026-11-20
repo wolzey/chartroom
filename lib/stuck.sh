@@ -62,7 +62,8 @@ prompt_sync() { # <id> <what or "">
     [[ "$st" != blocked ]] || log_event "$id" agent prompt-cleared
     return 0
   fi
-  last="$(grep ' agent: awaiting-input' "$(tdir "$id")/events.log" | tail -n 1 || true)"
+  events_path "$id"
+  last="$(grep ' agent: awaiting-input' "$EVENTS_PATH" | tail -n 1 || true)"
   [[ "$st" == blocked && "$last" == *" agent: awaiting-input: $what" ]] || log_event "$id" agent "awaiting-input: $what"
 }
 
@@ -229,7 +230,8 @@ stall_look() { # <id> <runner> <agent> <live> <screen>
     command) out="$(wc -c <"$d/output.log" 2>/dev/null || echo 0)" ;;
     *) out="$(screen_norm <<<"$scr" | cksum)" ;;
   esac
-  n="$(grep -vc ' note: ' "$d/events.log" || true)"
+  events_path "$id"
+  n="$(grep -vc ' note: ' "$EVENTS_PATH" || true)"
   sig="${out//[[:space:]]/}:$n"
   local now_s; printf -v now_s '%(%s)T' -1
   if [[ -f "$f" ]]; then IFS=$'\t' read -r osig since fired cpu at <"$f" || true; fi

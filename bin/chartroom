@@ -329,20 +329,19 @@ cmd_new() {
   [[ -n "$id" ]] || id="$(slugify "$title")-$(rand_hex4)"
   [[ "$id" =~ ^[a-z][a-z0-9_-]{0,31}$ ]] || die "id '$id' must match [a-z][a-z0-9_-]{0,31}"
   local d; d="$(tdir "$id")"
-  [[ ! -e "$d" ]] || die "task $id already exists"
-  mkdir -p "$d"
+  [[ ! -e "$d" ]] && ! task_exists "$id" || die "task $id already exists"
 
-  local branch=""
+  local branch="" doc
   [[ "$kind" == ship ]] && branch="$CR_BRANCH_PREFIX$id"
-  jq -n --argjson schema "$CR_SCHEMA" --arg id "$id" --arg title "$title" --arg kind "$kind" --arg backend "$backend" \
+  doc="$(jq -n --argjson schema "$CR_SCHEMA" --arg id "$id" --arg title "$title" --arg kind "$kind" --arg backend "$backend" \
     --arg source "$source" --arg project "$project" --arg base "$base" --arg base_sha "$base_sha" --arg branch "$branch" \
     --argjson plan_gate "$plan_gate" --arg command "$command" --arg permission "$permission" --arg model "$model" \
     '{schema:$schema,id:$id,title:$title,kind:$kind,backend:$backend,backend_source:$source,project:$project,base:$base,
       base_sha:$base_sha,branch:$branch,plan_gate:$plan_gate,worktree:"",created:(now|todate),updated:(now|todate)}
      + (if $command != "" then {command:$command} else {} end)
      + (if $permission != "" then {permission:$permission} else {} end)
-     + (if $model != "" then {model:$model} else {} end)' >"$d/meta.json"
-  : >"$d/events.log"
+     + (if $model != "" then {model:$model} else {} end)')"
+  task_record_new "$id" "$doc"
   log_event "$id" note "created ($kind via ${backend:-auto})"
   write_brief "$id"
   printf 'id=%s\nbrief=%s\n' "$id" "$d/brief.md"
@@ -350,12 +349,12 @@ cmd_new() {
 
 # Protocol steps 2-3 (events, report): shared by every brief, launched or joined.
 brief_report_steps() { # <id>
-  local id="$1" d; d="$(tdir "$1")"
+  local id="$1" d spool; d="$(tdir "$1")"; spool="$(events_append_path "$1")"
   cat <<EOF
 2. Report status by appending events. Prefer the helper (\`chartroom\` if it is on your PATH):
      CHARTROOM_HOME=$CR_HOME $CR_BIN event $id <kind> "<one line>"
    Fallback if the helper fails:
-     printf '%s <kind>: <text>\n' "\$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $d/events.log
+     printf '%s <kind>: <text>\n' "\$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $spool
    Kinds: \`progress\` (sparingly, milestones only), \`decision\` (a choice only the human can make:
    state the options and your recommendation, then STOP), \`blocked\` (cannot proceed: say exactly
    what is needed, then STOP), \`done\` (one-line outcome), \`failed\` (could not do it, why),
@@ -449,7 +448,7 @@ cmd_join() {
   done
   [[ "$kind" =~ ^(ship|scout)$ ]] || die "kind must be ship or scout (got $kind)"
   [[ -d "$CR_HOME/tasks" ]] || die "no chartroom home at $CR_HOME ($CR_HOME_SOURCE); pass the right one as CHARTROOM_HOME=<path>, or create it with 'chartroom init'"
-  if [[ -n "${CHARTROOM_TASK:-}" && -f "$(tdir "$CHARTROOM_TASK")/meta.json" ]] && ! is_joined "$CHARTROOM_TASK"; then
+  if [[ -n "${CHARTROOM_TASK:-}" ]] && task_exists "$CHARTROOM_TASK" && ! is_joined "$CHARTROOM_TASK"; then
     die "this session is already chartroom task $CHARTROOM_TASK (the XO launched it); follow its brief at $(tdir "$CHARTROOM_TASK")/brief.md"
   fi
   local proc pid="" sid="" key cwd
@@ -463,11 +462,10 @@ cmd_join() {
   key="${sid:+session:$sid}"; key="${key:-${pid:+pid:$pid}}"; key="${key:-cwd:$cwd}"
 
   # Same session again: reuse its open task.
-  local d existing=""
-  shopt -s nullglob
-  for d in "$CR_HOME"/tasks/*/; do
-    [[ -f "$d/meta.json" ]] || continue
-    if jq -e --arg k "$key" '.joined == "1" and (.closed // "") == "" and .join_key == $k' "$d/meta.json" >/dev/null; then existing="$(basename "$d")"; break; fi
+  local d m existing=""
+  task_meta_files
+  for m in "${TASK_METAS[@]+"${TASK_METAS[@]}"}"; do
+    if jq -e --arg k "$key" '.joined == "1" and (.closed // "") == "" and .join_key == $k' "$m" >/dev/null; then existing="$(jq -r .id "$m")"; break; fi
   done
 
   if [[ -z "$existing" ]]; then
@@ -481,16 +479,17 @@ cmd_join() {
     [[ -n "$title" ]] || title="joined: $(basename "$wt")${branch:+ ($branch)}"
     [[ -n "$id" ]] || id="$(slugify "$title")-$(rand_hex4)"
     [[ "$id" =~ ^[a-z][a-z0-9_-]{0,31}$ ]] || die "id '$id' must match [a-z][a-z0-9_-]{0,31}"
-    d="$(tdir "$id")"; [[ ! -e "$d" ]] || die "task $id already exists"
+    d="$(tdir "$id")"; [[ ! -e "$d" ]] && ! task_exists "$id" || die "task $id already exists"
     ensure_cursor
-    mkdir -p "$d/mail"
-    jq -n --argjson schema "$CR_SCHEMA" --arg id "$id" --arg title "$title" --arg kind "$kind" --arg backend "joined:$agent" \
+    local doc
+    doc="$(jq -n --argjson schema "$CR_SCHEMA" --arg id "$id" --arg title "$title" --arg kind "$kind" --arg backend "joined:$agent" \
       --arg project "$project" --arg base "${branch:-HEAD}" --arg base_sha "$base_sha" --arg branch "$branch" --arg wt "$wt" \
       --arg cwd "$cwd" --arg key "$key" \
       '{schema:$schema,id:$id,title:$title,kind:$kind,backend:$backend,backend_source:"joined",project:$project,base:$base,
         base_sha:$base_sha,branch:$branch,plan_gate:0,worktree:$wt,cwd:$cwd,joined:"1",join_key:$key,
-        created:(now|todate),updated:(now|todate),dispatched:(now|todate)}' >"$d/meta.json"
-    : >"$d/events.log"
+        created:(now|todate),updated:(now|todate),dispatched:(now|todate)}')"
+    task_record_new "$id" "$doc"
+    mkdir -p "$d/mail"
     log_event "$id" note "created ($kind, joined from a running $agent session)"
     write_join_brief "$id"
   else
@@ -690,7 +689,7 @@ cmd_hook() {
     IFS=$'\t' read -r CR_HOME id _ <"$reg"
     [[ -n "$(meta "$id" closed 2>/dev/null)" ]] && exit 0
   fi
-  [[ -n "$id" && -f "$(tdir "$id")/meta.json" ]] || exit 0
+  [[ -n "$id" ]] && task_exists "$id" || exit 0
   case "$what" in
     stop) log_event "$id" agent "turn-ended" ;;
     prompt-submit)
@@ -757,7 +756,7 @@ state_of() { # derived from the last wake-worthy event; a restart re-derives the
     $2 ~ /^(decision|blocked|failed):$/ { k=$2; sub(/:$/, "", k); s=k }
     $2=="done:" { s="review" }
     $2=="note:" && $3=="accepted" && s=="review" { s="done" }
-    END { print (s=="" ? "working" : s) }' "$(tdir "$id")/events.log"
+    END { print (s=="" ? "working" : s) }' "$(events_path "$id"; printf '%s' "$EVENTS_PATH")"
 }
 
 # One JSON object per line per task: the fleet view that `status` and `dashboard` share.
@@ -781,7 +780,10 @@ status_rows() { # [--all] [--id ID] [--since EPOCH]
   [[ -z "$since" || "$since" =~ ^-?[0-9]+$ ]] || die "status_rows --since takes epoch seconds (got $since)"
   shorts="$(short_ids_json)"; focus="$(focus_json)"
   shopt -s nullglob
-  local metas=("$CR_HOME"/tasks/*/meta.json)
+  if [[ -n "$only" ]]; then meta_path "$only"; TASK_METAS=(${META_PATH:+"$META_PATH"}); else task_meta_files; fi
+  local metas=("${TASK_METAS[@]+"${TASK_METAS[@]}"}") m
+  # Store tasks' events, rendered at once (lib/store.sh) instead of one read per task below.
+  if [[ -z "$only" ]]; then store_render_events "$([[ $all -eq 1 ]] && echo all || echo open)"; fi
   # One jq over every meta.json: the open tasks' ids (the pool `mentions` looks for), and each
   # closed task by its directory, so the rows below skip one without a fork of its own: always
   # without --all, and with --since when it closed before then. A record this jq does not reach
@@ -800,10 +802,9 @@ status_rows() { # [--all] [--id ID] [--since EPOCH]
       | @tsv' "${metas[@]}" 2>/dev/null || true)
     open_ids="${open_ids%$'\n'}"
   fi
-  dirs=("$CR_HOME"/tasks/*/)
-  [[ -n "$only" ]] && dirs=("$CR_HOME/tasks/$only/") # one task (resolve, show): read only its record
-  for d in "${dirs[@]}"; do
-    id="${d%/}"; id="${id##*/}"; [[ -f "$d/meta.json" ]] || continue
+  # (one task, for resolve and show: only its record)
+  for m in "${metas[@]+"${metas[@]}"}"; do
+    id="${m%/meta.json}"; id="${id##*/}"; d="$CR_HOME/tasks/$id"
     [[ -z "$only" || "$id" == "$only" ]] || continue
     [[ -z "${skip[$id]+x}" ]] || continue
     st="$(state_of "$id")"
@@ -817,11 +818,12 @@ status_rows() { # [--all] [--id ID] [--since EPOCH]
     fi
     [[ "$st" == working && "$live" =~ ^(stopped|gone|idle|done|parked)$ ]] && st="stopped-silent"
     [[ "$st" == working && "$live" == blocked ]] && st="awaiting-input"
-    lastline="$(grep -vE ' note: ' "$d/events.log" 2>/dev/null | tail -1 || true)"
+    events_path "$id"
+    lastline="$(grep -vE ' note: ' "$EVENTS_PATH" 2>/dev/null | tail -1 || true)"
     brk=false; breaking_of "$id" "$st" && brk=true
     ment=""
     [[ "$st" != closed && -n "$open_ids" ]] &&
-      ment="$(cat "$d/brief.md" "$d/events.log" 2>/dev/null | grep -owF -f <(printf '%s\n' "$open_ids") | grep -vxF -- "$id" | sort -u || true)"
+      ment="$(cat "$d/brief.md" "$EVENTS_PATH" 2>/dev/null | grep -owF -f <(printf '%s\n' "$open_ids") | grep -vxF -- "$id" | sort -u || true)"
     jq -c --arg st "$st" --arg live "$live" --arg last "${lastline:21}" --arg last_at "${lastline:0:20}" \
       --argjson wait "${wait:-null}" --argjson shorts "$shorts" --argjson focus "$focus" --argjson brk "$brk" --arg ment "$ment" \
       --argjson has_report "$([[ -s "$d/report.md" ]] && echo true || echo false)" \
@@ -830,7 +832,7 @@ status_rows() { # [--all] [--id ID] [--since EPOCH]
         updated,dispatched,closed,branch,base:(.base // null),mentions:($ment | split("\n") | map(select(length > 0))),has_report:$has_report,
         waiting_on:($wait.on // null),waiting_until:($wait.until // null),waiting_since:($wait.since // null),
         short_id:($shorts[.id] // .id),breaking:$brk}
-       | . + focus_marks($focus; "task"; $brk)' "$d/meta.json"
+       | . + focus_marks($focus; "task"; $brk)' "$m"
   done
 }
 
@@ -998,7 +1000,7 @@ cmd_resolve() {
     item="$(dashboard_inbox | jq -c --arg q "$q" '.waiting[] | select(.short_id == $q) | {type: "inbox", id: .short_id, short_id, section: "waiting", date, project, text}' | head -1)"
   fi
   shorts="$(short_ids_json)"
-  if [[ -f "$(tdir "$q")/meta.json" ]]; then task="$q"
+  if task_exists "$q"; then task="$q"
   else
     task="$(jq -r --arg q "$q" '[to_entries[] | select(.value == $q) | .key] | if length == 1 then .[0] else empty end' <<<"$shorts")"
     if [[ -z "$task" && ${#q} -ge 4 ]]; then
@@ -1021,10 +1023,24 @@ cmd_resolve() {
 
 table() { if command -v column >/dev/null 2>&1; then column -t -s $'\t'; else cat; fi; }
 
+# A task's settings, before dispatch: what the skill once had the XO edit in meta.json by hand.
+CR_SET_KEYS='model|effort|sandbox|permission'
+cmd_set() {
+  [[ $# -ge 2 ]] || die "usage: chartroom set <id> key=value... (keys: ${CR_SET_KEYS//|/, })"
+  local id="$1" a k; shift
+  need_task "$id"
+  for a in "$@"; do
+    [[ "$a" == *=* ]] || die "set: '$a' is not key=value"
+    k="${a%%=*}"
+    [[ "$k" =~ ^($CR_SET_KEYS)$ ]] || die "set: '$k' is not a setting (keys: ${CR_SET_KEYS//|/, })"
+  done
+  for a in "$@"; do meta_set "$id" "${a%%=*}" "${a#*=}"; echo "$id: ${a%%=*}=${a#*=}"; done
+}
+
 cmd_peek() {
   local id="${1:-}" n="${2:-15}"; [[ -n "$id" ]] || die "usage: chartroom peek <id> [n]"; need_task "$id"
   local d r; d="$(tdir "$id")"; r="$(backend_runner "$id")"
-  echo "== events"; tail -n "$n" "$d/events.log"
+  events_path "$id"; echo "== events"; tail -n "$n" "$EVENTS_PATH"
   [[ -z "$(meta "$id" parked)" ]] || echo "== parked since $(meta "$id" parked) (session $(meta "$id" session_id)): steer or attach resumes it; its last screen:"
   [[ -n "$r" && -n "$(meta "$id" dispatched)" ]] && "${r}_peek" "$id" "$n"
   [[ -f "$d/report.md" ]] && echo "== report: $d/report.md"
@@ -1058,7 +1074,7 @@ steer_parked() { # <id> <msg>
   log_event "$id" steered "$msg"
   text="$(steer_text "$id" "$msg")"
   revive_task "$id" "$text" || rc=$?
-  [[ $rc -eq 1 ]] && die "could not resume the parked worker of $id: $(grep ' note: revive failed: ' "$(tdir "$id")/events.log" | tail -1 | sed 's/^.* note: revive failed: //')"
+  [[ $rc -eq 1 ]] && die "could not resume the parked worker of $id: $(task_events "$id" | grep ' note: revive failed: ' | tail -1 | sed 's/^.* note: revive failed: //')"
   echo "resumed the parked session $(meta "$id" session_id) (hc terminal $(meta "$id" hc_terminal))"
   steer_result "$id" "$msg" "$text" "$rc"
 }
@@ -1082,7 +1098,7 @@ cmd_attach() {
     if is_parked "$id"; then
       if ! revive_task "$id"; then
         task_unlock "$id"
-        die "could not resume the parked worker of $id: $(grep ' note: revive failed: ' "$(tdir "$id")/events.log" | tail -1 | sed 's/^.* note: revive failed: //')"
+        die "could not resume the parked worker of $id: $(task_events "$id" | grep ' note: revive failed: ' | tail -1 | sed 's/^.* note: revive failed: //')"
       fi
       echo "resumed the parked session $(meta "$id" session_id) (hc terminal $(meta "$id" hc_terminal))" >&$((prepare == 1 ? 2 : 1))
     fi
@@ -1174,11 +1190,13 @@ WATCH_IVL_MS=3000 WATCH_SLOW_MS=60000 # cmd_watch's two intervals, from the sett
 # hc/herdr agent's last state under @state:<id> (watch_baseline).
 ensure_cursor() {
   [[ -f "$CURSOR_FILE" ]] && return 0
-  local d r
+  local d r m id
   shopt -s nullglob
+  task_meta_files; store_render_events all
   {
-    for d in "$CR_HOME"/tasks/*/; do
-      [[ -f "$d/events.log" ]] && printf '%s\t%s\n' "$(basename "$d")" "$(($(wc -c <"$d/events.log")))"
+    for m in "${TASK_METAS[@]+"${TASK_METAS[@]}"}"; do
+      id="${m%/meta.json}"; id="${id##*/}"; events_path "$id"; d="$EVENTS_PATH"
+      [[ -f "$d" ]] && printf '%s\t%s\n' "$id" "$(($(wc -c <"$d")))"
     done
     r="$(relay_dir)/inbox.ndjson"
     if [[ -f "$r" ]]; then printf '@relays\t%s\n' "$(($(wc -c <"$r")))"; fi
@@ -1198,7 +1216,7 @@ wake() {
 
 watch_scan_lines() { # <id> <from-offset> <to-offset>
   local id="$1" from="$2" to="$3" line kind f pos n
-  f="$(tdir "$id")/events.log"; pos="$from"
+  events_path "$id"; f="$EVENTS_PATH"; pos="$from"
   while IFS= read -r line; do
     n="$(LC_ALL=C; printf '%s' "${#line}")"; pos=$((pos + n + 1))
     kind="$(line_kind "$line")"
@@ -1223,7 +1241,7 @@ watch_scan_lines() { # <id> <from-offset> <to-offset>
 
 # reported_since_dispatch, within the first <bytes> of the log.
 reported_upto() { # <id> <bytes>
-  head -c "$2" "$(tdir "$1")/events.log" | reported_awk
+  events_path "$1"; head -c "$2" "$EVENTS_PATH" | reported_awk
 }
 
 # A stopped worker whose waiting window has run out wakes once: the wake is recorded as
@@ -1321,7 +1339,7 @@ cmd_watch() {
   watch_ms CHARTROOM_STALL_MINUTES "$CR_STALL_MINUTES" STALL_SECS; STALL_SECS=$((STALL_SECS * 60 / 1000))
   watch_ms CHARTROOM_STALL_BUSY_MAX_MINUTES "$CR_STALL_BUSY_MAX" STALL_BUSY_SECS; STALL_BUSY_SECS=$((STALL_BUSY_SECS * 60 / 1000))
   shopt -s nullglob
-  local d id f size start fresh=1 unseen b i hc_ids=() hc_unseen=() new_cursor=0; clock_ms; start=$NOW_MS
+  local d m id f size start fresh=1 unseen b i hc_ids=() hc_unseen=() new_cursor=0 ids_was ids_now; clock_ms; start=$NOW_MS
   mkdir -p "$CR_HOME/tasks"
   if [[ $once -eq 1 && -z "$cursor" ]]; then cursor="$CURSOR_FILE"; [[ -f "$CURSOR_FILE" ]] || new_cursor=1; ensure_cursor; fi
   if [[ -n "$cursor" && -f "$cursor" ]]; then
@@ -1346,12 +1364,13 @@ cmd_watch() {
   WATCH_SIG=""
   trap 'watch_sig 129' HUP; trap 'watch_sig 130' INT; trap 'watch_sig 143' TERM
   meta_cache_load
-  for d in "$CR_HOME"/tasks/*/; do
-    id="${d%/}"; id="${id##*/}"; f="$d/events.log"
+  store_render_events all
+  for m in "${TASK_METAS[@]+"${TASK_METAS[@]}"}"; do
+    id="${m%/meta.json}"; id="${id##*/}"; events_path "$id"; f="$EVENTS_PATH"
     unseen=0; [[ $fresh -eq 0 && -z "${OFF[$id]+x}" ]] && unseen=1
     # Streaming without a cursor starts at EOF (status covers anything older).
     [[ $fresh -eq 1 && -f "$f" && -z "${OFF[$id]+x}" ]] && OFF[$id]=$(($(wc -c <"$f")))
-    if [[ -f "$d/meta.json" ]] && ! is_closed "$id"; then
+    if ! is_closed "$id"; then
       case "$(backend_runner "$id" 2>/dev/null)" in
         herdr) watch_baseline "$id" herdr "$unseen" ;;
         hc) if [[ -n "$(meta "$id" dispatched)" ]]; then hc_ids+=("$id"); hc_unseen+=("$unseen"); fi ;;
@@ -1388,10 +1407,12 @@ cmd_watch() {
       verify=0
       if [[ -n "$HCS_UP" ]] && (( NOW_MS >= vnext )); then verify=1; vnext=$((NOW_MS + WATCH_SLOW_MS)); fi
       HC_HIT=(); herdr_round_reset; covered=1; hc_open=0; LOOK_ANY=0
+      store_reset # (store tasks are read again each round: lib/store.sh)
       meta_cache_load
-      for d in "$CR_HOME"/tasks/*/; do
-        id="${d%/}"; id="${id##*/}"; f="$d/events.log"
-        [[ -f "$d/meta.json" && -f "$f" ]] || continue
+      store_render_events open
+      for m in "${TASK_METAS[@]+"${TASK_METAS[@]}"}"; do
+        id="${m%/meta.json}"; id="${id##*/}"; events_path "$id"; f="$EVENTS_PATH"
+        [[ -f "$f" ]] || continue
         is_closed "$id" && continue
         size=$(($(wc -c <"$f")))
         if (( size > ${OFF[$id]:-0} )); then
@@ -1436,6 +1457,20 @@ cmd_watch() {
       done
       if [[ -n "$BELL_PREV" ]]; then
         for f in "$CR_HOME"/tasks/*/meta.json; do [[ "$f" -ot "$BELL_PREV" ]] || next=0; done
+      fi
+      # Store tasks (lib/store.sh): after any write in the home (the change stamp), or a line
+      # appended to a spool, they are read again; a changed record brings the full round forward.
+      if store_dir && { [[ ! "$CR_HOME/$CR_STAMP" -ot "$BELL_PREV" ]] || store_spools_newer "$BELL_PREV"; }; then
+        ids_was=""; [[ -f "$STORE_D/.ids" ]] && { read -r -d '' ids_was <"$STORE_D/.ids" || true; }
+        store_reset; store_render_events open
+        ids_now=""; [[ -f "$STORE_D/.ids" ]] && { read -r -d '' ids_now <"$STORE_D/.ids" || true; }
+        [[ "$ids_now" == "$ids_was" ]] || next=0
+        for f in "$STORE_D"/*/events.log; do
+          d="${f%/events.log}"; id="${d##*/}"
+          is_closed "$id" && continue
+          size=$(($(wc -c <"$f")))
+          if (( size > ${OFF[$id]:-0} )); then watch_scan_lines "$id" "${OFF[$id]:-0}" "$size"; OFF[$id]=$size; watch_overdue "$id"; fi
+        done
       fi
       f="$(relay_dir)/inbox.ndjson"
       [[ "$f" -ot "$BELL_PREV" ]] || watch_relays
@@ -1616,6 +1651,8 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           to its mailbox; "delivered" only once it is read;
                                           a parked worker is resumed with it)
   chartroom stop <id>                     interrupt a worker
+  chartroom set <id> key=value...         a task's settings before dispatch: model, effort,
+                                          sandbox, permission (for a file or a store task)
   chartroom attach <id>                   open a session worker's terminal (hc/herdr/cmux/tmux;
                                           a parked worker is resumed first)
   chartroom park <id> | --due             end an hc:claude worker at rest, keeping its session
@@ -1629,6 +1666,11 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           focus mode. --detail keeps <text> a headline and adds the
                                           rest as its "Details:" part, on the same line
   chartroom status [--json] [--all]       fleet view, derived from disk + live backends
+  chartroom store doctor|check|legacy|events <id>
+                                          the store (CHARTROOM_STORE=sqlite in a home's config:
+                                          new tasks live in one SQLite database, lib/store.sh):
+                                          its database and python, problems, what the home still
+                                          keeps as files from before, a task's event lines
   chartroom status|board|todo|inbox list|relay list ... --all-homes
                                           the same, read-only, in every home on this machine,
                                           one "== <home>" section each (--json: an array of
@@ -1860,7 +1902,7 @@ if [[ "$cmd" =~ ^(status|ls|board|todo|inbox|relay)$ ]]; then
   done
 fi
 case "$cmd" in
-  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|steer|stop|attach|park|accept|close|sweep|watch|dashboard|radar|node|nodes|doctor|homes|brain|tell|ask|snooze|app|attachment|link|brief|set|request|initiative|version|help) "cmd_$cmd" "$@" ;;
+  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|steer|stop|attach|park|accept|close|sweep|watch|dashboard|radar|node|nodes|doctor|homes|brain|tell|ask|snooze|app|attachment|link|brief|set|request|initiative|version|help|store) "cmd_$cmd" "$@" ;;
   install-skills) cmd_install_skills "$@" ;;
   ls) cmd_status "$@" ;;
   show) cmd_show "$@" ;;

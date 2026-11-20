@@ -78,8 +78,8 @@ sweep_cwds() {
 sweep_root_prefixes() {
   local f p
   while IFS= read -r f; do printf '%s/worktrees/\thome\n' "$f"; done < <(sweep_forms "$CR_HOME")
-  shopt -s nullglob
-  local metas=("$CR_HOME"/tasks/*/meta.json)
+  task_meta_files
+  local metas=("${TASK_METAS[@]+"${TASK_METAS[@]}"}")
   [[ ${#metas[@]} -gt 0 ]] || return 0
   while IFS= read -r p; do
     while IFS= read -r f; do printf '%s/.worktrees/\tproject\n' "$f"; done < <(sweep_forms "$p")
@@ -154,7 +154,8 @@ sweep_close_check() { # <id> <live>
     n="$(git -C "$project" rev-list --count "${tips[@]}" --not "$base" 2>/dev/null || echo "?")"
     if [[ "$n" != 0 ]]; then sweep_check_out false "$n commit(s) not in $base (unpushed or unmerged)"; return; fi
   fi
-  done_at="$(awk '$2 == "done:" { t = $1 } END { print t }' "$(tdir "$id")/events.log")"
+  events_path "$id"
+  done_at="$(awk '$2 == "done:" { t = $1 } END { print t }' "$EVENTS_PATH")"
   age="$(jq -n --arg t "$done_at" '($t | fromdateiso8601? // 0) as $d | if $d == 0 then 0 else (now - $d | floor) end')"
   local settle; settle="$(cfg SWEEP_SETTLE_MINUTES '' 60)"
   if (( age < settle * 60 )); then sweep_check_out true "reported done $((age / 60))m ago; sweep waits ${settle}m so its report is seen first" true; return; fi
@@ -166,8 +167,8 @@ sweep_close_check() { # <id> <live>
 # session's own directory), how long it has been idle, herdr's view of its agent, and for a
 # done task the close check.
 sweep_tasks_json() {
-  shopt -s nullglob
-  local metas=("$CR_HOME"/tasks/*/meta.json)
+  task_meta_files
+  local metas=("${TASK_METAS[@]+"${TASK_METAS[@]}"}")
   [[ ${#metas[@]} -gt 0 ]] || { echo '[]'; return 0; }
   local rows base homes ids id st live runner extra='{}' herdr='null'
   rows="$(status_rows --all | jq -s -c 'map({key: .id, value: {state, live, last_at}}) | from_entries')"
@@ -218,7 +219,7 @@ sweep_others_json() {
   shopt -s nullglob
   while IFS=$'\t' read -r name p; do
     [[ -d "$p" && "$(phys_dir "$p")" != "$here" ]] || continue
-    metas=("$p"/tasks/*/meta.json); tasks='[]'
+    mapfile -d '' -t metas < <(task_meta_files_of "$p"); tasks='[]'
     [[ ${#metas[@]} -gt 0 ]] && tasks="$(jq -s -c 'map({id, wt: ((.worktree // "") | rtrimstr("/"))})' "${metas[@]}")"
     out="$(jq -c --argjson forms "$(sweep_forms "$p" | jq -R -s -c 'split("\n") | map(select(length > 0))')" --argjson t "$tasks" \
       '.homes += $forms | .ids += [$t[].id] | .wts += [$t[].wt | select(. != "")]' <<<"$out")"

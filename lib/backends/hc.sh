@@ -171,7 +171,8 @@ hc_clear_stale() { # <id>
 hc_took_prompt() { # <id> <events.log offset> <turn before>
   local new scr
   [[ "$HC_STATUS" == working || "$HC_TURN" -gt "$3" ]] && return 0
-  new="$(tail -c +"$(($2 + 1))" "$(tdir "$1")/events.log")"
+  events_path_fresh "$1"
+  new="$(tail -c +"$(($2 + 1))" "$EVENTS_PATH")"
   grep -qE ' agent: (prompt-received|turn-ended)| (progress|waiting|decision|blocked|done|failed): ' <<<"$new" && return 0
   scr="$(hc_screen "$1" 2>/dev/null || true)"
   grep -qiE 'esc to interrupt|working \(' <<<"$scr"
@@ -187,7 +188,8 @@ hc_confirm_brief() { # <id> <text> <events.log offset before launch>
   hc_has_prompt_hook "$id" && want="$(printf '%s' "$text" | text_sig)"
   for i in $(seq 1 $((CR_DELIVER_WAIT * 4))); do
     if [[ -n "$want" ]]; then
-      new="$(tail -c +"$((before + 1))" "$(tdir "$id")/events.log")"
+      events_path_fresh "$id"
+      new="$(tail -c +"$((before + 1))" "$EVENTS_PATH")"
       grep -q " agent: prompt-received sig=$want " <<<"$new" && return 0
     fi
     hc_info "$id"
@@ -220,7 +222,7 @@ hc_launch() { # <id> <wt> <agent>
   launcher="$(write_launcher "$id" "$wt" --forward "${argv[@]}")"
   task="$(task_prompt "$id")"
   hc_space; tab="tb$(new_uuid | tr -d -)"
-  before="$(wc -c <"$(tdir "$id")/events.log")"
+  events_path_fresh "$id"; before="$(wc -c <"$EVENTS_PATH")"
   out="$(hcx run --bg --json --no-parent --no-notify --name "$id" --cwd "$wt" \
     --label "herdr.space=$HC_SPACE" --label "herdr.tab=$tab" \
     --label "chartroom.workspace=$CR_WORKSPACE" --label "chartroom.task=$id" \
@@ -271,10 +273,10 @@ hc_live() {
 # question dialog) is never typed into: hc refuses without --force, and so does this.
 hc_deliver() { # <id> <text>
   local id="$1" text="$2" t f i k before out rc want="" got="" new mismatches=0 n started tb scr resend=1
-  t="$(meta "$id" hc_terminal)"; f="$(tdir "$id")/events.log"
+  t="$(meta "$id" hc_terminal)"
   hc_has_prompt_hook "$id" && want="$(printf '%s' "$text" | text_sig)"
   for i in 1 2 3 4 5; do
-    before="$(wc -c <"$f")"; hc_info "$id"; tb="$HC_TURN"
+    events_path_fresh "$id"; f="$EVENTS_PATH"; before="$(wc -c <"$f")"; hc_info "$id"; tb="$HC_TURN"
     if [[ $resend -eq 0 ]]; then hcx keys "$t" enter >/dev/null 2>&1 || true; out='{}'; rc=0
     else rc=0; out="$(hcx send "$t" --json "$text" 2>&1)" || rc=$?; fi
     case "$rc" in
@@ -288,6 +290,7 @@ hc_deliver() { # <id> <text>
       got=""
       for k in $(seq 1 "$CR_DELIVER_WAIT"); do
         sleep 1
+        events_path_fresh "$id"; f="$EVENTS_PATH"
         new="$(tail -c +"$((before + 1))" "$f")"
         grep -q " agent: prompt-received sig=$want " <<<"$new" && return 0
         got="$(grep -oE ' agent: prompt-received sig=[0-9a-f]+ len=[0-9]+' <<<"$new" | tail -1 || true)"
@@ -421,7 +424,8 @@ hc_watch() { # <id>
 }
 # (A revive starts a new run as a dispatch does: the launcher's `exited` of the parked one is history.)
 exited_since_dispatch() { # <id>
-  awk '($2=="note:" && ($3=="dispatched" || $3=="revived")) { e=0 } $2=="exited:" { e=1 } END { exit e ? 0 : 1 }' "$(tdir "$1")/events.log"
+  events_path "$1"
+  awk '($2=="note:" && ($3=="dispatched" || $3=="revived")) { e=0 } $2=="exited:" { e=1 } END { exit e ? 0 : 1 }' "$EVENTS_PATH"
 }
 
 # ---------------------------------------------------------------- park / revive (lib/park.sh)
@@ -481,7 +485,7 @@ hc_revive() { # <id> [text]
   launcher="$(write_launcher "$id" "$wt" --forward "${argv[@]}")"
   HC_SPACE="$(meta "$id" hc_space)"; [[ -n "$HC_SPACE" ]] || hc_space
   tab="$(meta "$id" hc_tab)"; [[ -n "$tab" ]] || tab="tb$(new_uuid | tr -d -)"
-  before="$(wc -c <"$(tdir "$id")/events.log")"
+  events_path_fresh "$id"; before="$(wc -c <"$EVENTS_PATH")"
   [[ -n "$text" ]] && args=("$text")
   out="$(hcx run --bg --json --no-parent --no-notify --name "$id" --cwd "$wt" \
     --label "herdr.space=$HC_SPACE" --label "herdr.tab=$tab" \
@@ -676,7 +680,7 @@ hc_stream_wakes() {
   (( ${#HC_HIT[@]} > 0 )) || return 0
   for a in "${!HC_HIT[@]}"; do
     id="${HC_ADDR_TASK[$a]:-${HCT_NAME[$a]:-}}"
-    if [[ -n "$id" && "$id" != */* && -f "$CR_HOME/tasks/$id/meta.json" ]]; then ids[$id]=1; metas+=("$CR_HOME/tasks/$id/meta.json"); fi
+    if [[ -n "$id" && "$id" != */* ]]; then meta_path "$id"; [[ -z "$META_PATH" ]] || { ids[$id]=1; metas+=("$META_PATH"); }; fi
   done
   HC_HIT=()
   (( ${#metas[@]} > 0 )) || return 0

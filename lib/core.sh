@@ -176,6 +176,7 @@ load_config() {
   load_file_config
   resolve_home
   load_home_config
+  store_settings
   cfg_set CR_PROJECT_ROOTS PROJECT_ROOTS CAP_PROJECT_ROOTS ''
   CR_PROJECT_ROOTS="${CR_PROJECT_ROOTS//\~/$HOME}"
   cfg_set CR_WORKSPACE WORKSPACE CAP_CREW_WORKSPACE chartroom-crew
@@ -220,20 +221,24 @@ kill_tree() { # <pid>
 # ---------------------------------------------------------------- task records
 
 tdir() { printf '%s/tasks/%s' "$CR_HOME" "$1"; }
-need_task() { [[ -f "$(tdir "$1")/meta.json" ]] || die "no such task: $1"; }
+# A task is a file task (tasks/<id>/meta.json) or a store task (lib/store.sh): every record read
+# and write below goes through meta_path / events_path, never a path of its own.
+need_task() { task_exists "$1" || die "no such task: $1"; }
 # The watch's full round reads every task's meta.json with one jq (meta_cache_load) instead of
 # several per task. While MC holds a task ("<id>/" is open; a closed one keeps only that mark,
 # "closed"), meta answers from it; meta_set drops the task. MC is empty outside a round.
 declare -A MC=()
 meta() {
   if [[ "${MC["$1/"]:-}" == open ]]; then [[ -z "${MC["$1/$2"]+x}" ]] || printf '%s\n' "${MC["$1/$2"]}"; return 0; fi
-  meta_file "$@"
+  meta_path "$1"; jq -r --arg k "$2" '.[$k] // empty | tostring' "${META_PATH:-$CR_HOME/tasks/$1/meta.json}"
 }
-meta_file() { jq -r --arg k "$2" '.[$k] // empty | tostring' "$(tdir "$1")/meta.json"; } # never cached
+# Never cached: a store task's record is read from the store again (another process may have
+# written it since this one read it).
+meta_file() { meta_path_fresh "$1"; jq -r --arg k "$2" '.[$k] // empty | tostring' "${META_PATH:-$CR_HOME/tasks/$1/meta.json}"; }
 meta_cache_load() { # [meta.json files: these tasks only; default every task]
   MC=()
   local metas=("$@") line id rest k v
-  (( $# > 0 )) || metas=("$CR_HOME"/tasks/*/meta.json)
+  if (( $# == 0 )); then task_meta_files; metas=("${TASK_METAS[@]+"${TASK_METAS[@]}"}"); fi
   [[ -e "${metas[0]-}" ]] || return 0
   # (A malformed file ends jq there: the tasks after it are left out and read one by one.)
   while IFS= read -r line; do
@@ -251,10 +256,15 @@ project_label() { local p; p="$(meta "$1" project 2>/dev/null || true)"; p="${p%
 meta_set() { # meta_set <id> <key> <string-value>
   local f; f="$(tdir "$1")/meta.json"
   unset "MC[$1/]"
+  if is_store_task "$1"; then store_meta_set "$@"; stamp_changed; return; fi
   jq --arg k "$2" --arg v "$3" '.[$k]=$v | .updated=(now|todate)' "$f" >"$f.tmp" && mv "$f.tmp" "$f" && stamp_changed
 }
 # One line per event, always: newlines in the text become spaces. Rings the home's watches.
-log_event() { printf '%s %s: %s\n' "$(now)" "$2" "${3//$'\n'/ }" >>"$(tdir "$1")/events.log"; stamp_changed; bell_ring "" watch; }
+log_event() {
+  if is_store_task "$1"; then store_event "$1" "$2" "${3//$'\n'/ }"
+  else printf '%s %s: %s\n' "$(now)" "$2" "${3//$'\n'/ }" >>"$(tdir "$1")/events.log"; fi
+  stamp_changed; bell_ring "" watch
+}
 pid_alive() { [[ -n "${1:-}" ]] && kill -0 "$1" 2>/dev/null; }
 
 # ---------------------------------------------------------------- change stamp
@@ -401,7 +411,7 @@ reported_awk() {
     $2=="progress:" { w=0 }
     END { exit (t || w || p) ? 0 : 1 }'
 }
-reported_since_dispatch() { reported_awk <"$(tdir "$1")/events.log"; }
+reported_since_dispatch() { events_path "$1"; reported_awk <"$EVENTS_PATH"; }
 
 # The worker's open `waiting` event, when it is the newest thing the worker said (a later
 # report, steer or dispatch closes it) and no decision/blocked/failed/done came since the
@@ -411,7 +421,8 @@ reported_since_dispatch() { reported_awk <"$(tdir "$1")/events.log"; }
 # CHARTROOM_WAITING_GRACE_MINUTES, or, without one, CHARTROOM_WAITING_MAX_MINUTES past
 # the event. announced: watch already logged "note: waiting overdue" for this event.
 waiting_info() { # <id>
-  grep -q ' waiting: ' "$(tdir "$1")/events.log" 2>/dev/null || return 0
+  events_path "$1"
+  grep -q ' waiting: ' "$EVENTS_PATH" 2>/dev/null || return 0
   jq -R -s -c --argjson grace "$CR_WAITING_GRACE" --argjson max "$CR_WAITING_MAX" '
     def epoch: try (sub("\\.[0-9]+Z$"; "Z") | sub("T(?<hm>[0-9]{2}:[0-9]{2})Z$"; "T\(.hm):00Z") | fromdateiso8601) catch null;
     [split("\n")[] | capture("^(?<ts>[^ ]+) (?<kind>[a-z]+): ?(?<text>.*)$")?] as $ev
@@ -428,7 +439,7 @@ waiting_info() { # <id>
     | {on: $w.text, since: $w.ts, until: (if $until != null then ($until | todate) else null end),
        deadline: ($deadline | todate), overdue: (now > $deadline),
        announced: ($ev[$i + 1:] | any(.kind == "note" and (.text | startswith("waiting overdue"))))}
-  ' "$(tdir "$1")/events.log"
+  ' "$EVENTS_PATH"
 }
 
 # ---------------------------------------------------------------- short ids
@@ -440,7 +451,8 @@ waiting_info() { # <id>
 # An open task's pool is the open tasks, so history never changes it; a closed task's pool
 # is every task, so no two short ids are ever equal. Prints {"<id>": "<short>", ...}.
 short_ids_json() {
-  local metas=("$CR_HOME"/tasks/*/meta.json)
+  task_meta_files
+  local metas=("${TASK_METAS[@]+"${TASK_METAS[@]}"}")
   [[ -e "${metas[0]-}" ]] || { echo '{}'; return 0; } # (empty under nullglob)
   jq -n -c '
     def short($pool): . as $id
@@ -452,3 +464,7 @@ short_ids_json() {
     | ($t | map(.id)) as $all
     | [$t[] | (if .closed then $all else $open end) as $pool | {key: .id, value: (.id | short($pool))}] | from_entries' "${metas[@]}"
 }
+
+# Where a task's record lives, and the seams every record read and write goes through.
+# shellcheck source=store.sh
+source "${BASH_SOURCE[0]%/*}/store.sh"

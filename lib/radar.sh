@@ -190,7 +190,7 @@ radar_peek() { # --machine L [--ssh T] [--home P] (<id> [n] | --pane PANE)
   fi
   [[ "$id" =~ $CR_RADAR_ID_RE ]] || die "radar peek: not a task id: ${id:-(none)}"
   if [[ -z "$target" ]]; then
-    [[ -n "$home" && -f "$home/tasks/$id/meta.json" ]] || die "radar peek: no task $id in ${home:-(no home)}"
+    [[ -n "$home" ]] && ( CR_HOME="$home"; STORE_UID_FOR=""; task_exists "$id" ) || die "radar peek: no task $id in ${home:-(no home)}"
     CHARTROOM_HOME="$home" "$CR_BIN" peek "$id" "$n" </dev/null
   else
     radar_ssh "$target" "PATH=\"$(radar_remote_path):\$PATH\" ${home:+CHARTROOM_HOME='$home' }chartroom peek '$id' $n"
@@ -214,7 +214,10 @@ radar_file() { # --machine L --ssh T [--home P] <id> <file>
   [[ " $CR_RADAR_FILES " == *" $file "* ]] || die "radar file: only $CR_RADAR_FILES"
   [[ -z "$home" || "$home" =~ $CR_RADAR_PATH_RE ]] || die "radar file: not a home path: $home"
   if [[ -n "$home" ]]; then
-    radar_ssh "$target" "cat '$home/tasks/$id/$file'"
+    # (A store task has no events.log of its own: that machine's chartroom prints its events.)
+    if [[ "$file" == events.log ]]; then
+      radar_ssh "$target" "cat '$home/tasks/$id/$file' 2>/dev/null || PATH=\"$(radar_remote_path):\$PATH\" CHARTROOM_HOME='$home' chartroom store events '$id'"
+    else radar_ssh "$target" "cat '$home/tasks/$id/$file'"; fi
   else
     [[ "$file" == report.md ]] || die "radar file: $machine runs an older chartroom that reports no home path; only report.md can be read"
     radar_ssh "$target" "p=\$(PATH=\"$(radar_remote_path):\$PATH\" chartroom peek '$id' 1 | sed -n 's/^== report: //p' | tail -1); case \"\$p\" in */tasks/$id/report.md) cat \"\$p\" ;; *) echo 'no report.md for $id' >&2; exit 1 ;; esac"

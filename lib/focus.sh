@@ -71,14 +71,15 @@ focus_has() { # <focus json> <item json: {project, title, id} or {project, text}
 }
 focus_has_task() { # <focus json> <id>
   jq -e --argjson f "$1" "$FOCUS_JQ"' {project: ((.project // "") | rtrimstr("/") | split("/") | last), title, id} | focus_item($f)' \
-    "$(tdir "$2")/meta.json" >/dev/null
+    "$(meta_path "$2"; printf '%s' "$META_PATH")" >/dev/null
 }
 
 # Is the task's state set by a breaking report: its newest decision/blocked/failed/done event
 # starts with "[breaking] "? (Only a decision, blocked or failed state can be.)
 breaking_of() { # <id> <state>
   [[ "$2" =~ ^(decision|blocked|failed)$ ]] || return 1
-  grep -E '^[^ ]+ (decision|blocked|done|failed): ' "$(tdir "$1")/events.log" 2>/dev/null | tail -1 | grep -qE '^[^ ]+ [a-z]+: \[breaking\] '
+  events_path "$1"
+  grep -E '^[^ ]+ (decision|blocked|done|failed): ' "$EVENTS_PATH" 2>/dev/null | tail -1 | grep -qE '^[^ ]+ [a-z]+: \[breaking\] '
 }
 
 focus_line() { # <focus json> <held count>
@@ -184,8 +185,8 @@ focus_on() { # <duration or ""> <scope words, comma-separated, or ""> <name...>
   printf '%s\n' "$focus" >"$(focus_file).tmp" && mv "$(focus_file).tmp" "$(focus_file)" && stamp_changed
   # What it covers now (the open tasks' projects and items, and inbox items), so the rules are seen
   # when it is set; a focus that covers nothing is kept (a project may have no work yet).
-  shopt -s nullglob
-  local metas=("$CR_HOME"/tasks/*/meta.json)
+  task_meta_files
+  local metas=("${TASK_METAS[@]+"${TASK_METAS[@]}"}")
   matches="$(jq -n -c --argjson f "$focus" --argjson inbox "$(dashboard_inbox)" "$FOCUS_JQ"'
     [inputs | select((.closed // "") == "") | {project: ((.project // "") | rtrimstr("/") | split("/") | last), title, id}] as $open
     | ([$open[].project | select(. != "")] | unique) as $projects

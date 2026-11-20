@@ -76,7 +76,8 @@ show_json() { # <task|inbox> <id>
   fi
   where="$(show_where "$id")"
   if [[ -s "$d/report.md" ]]; then report="$d/report.md"; summary="$(show_report_summary "$report")"; fi
-  events="$(grep -E '^[^ ]+ (progress|waiting|decision|blocked|done|failed|steered): ' "$d/events.log" 2>/dev/null || true)"
+  events_path "$id"
+  events="$(grep -E '^[^ ]+ (progress|waiting|decision|blocked|done|failed|steered): ' "$EVENTS_PATH" 2>/dev/null || true)"
   outcome="$(grep -E '^[^ ]+ (done|failed): ' <<<"$events" | tail -n 1 || true)"
   jq -c --arg intent "$(show_intent "$d/brief.md")" --arg events "$(tail -n "$SHOW_EVENTS" <<<"$events")" \
     --arg outcome "$outcome" --arg report "$report" --arg summary "$summary" \

@@ -64,11 +64,11 @@ dashboard_inbox() {
 # newest worker-meaningful event, and which task files exist.
 dashboard_task_extra() { # <id>
   local d f files=() prs report=""
-  d="$(tdir "$1")"
+  d="$(tdir "$1")"; events_path "$1"
   for f in $CR_DASHBOARD_FILES; do [[ -s "$d/$f" ]] && files+=("$f"); done
-  prs="$(cat "$d/events.log" "$d/report.md" 2>/dev/null |
+  prs="$(cat "$EVENTS_PATH" "$d/report.md" 2>/dev/null |
     grep -oE 'https?://[^][ <>()"'"'"'`]+/(pull|pulls|merge_requests|pullrequest)/[0-9]+' | awk '!seen[$0]++' || true)"
-  report="$(grep -E '^[^ ]+ (progress|waiting|decision|blocked|done|failed|steered): ' "$d/events.log" 2>/dev/null | tail -1 || true)"
+  report="$(grep -E '^[^ ]+ (progress|waiting|decision|blocked|done|failed|steered): ' "$EVENTS_PATH" 2>/dev/null | tail -1 || true)"
   jq -n --arg prs "$prs" --arg files "${files[*]-}" --arg report "$report" '{
     prs: ($prs | split("\n") | map(select(length > 0))),
     files: ($files | split(" ") | map(select(length > 0))),

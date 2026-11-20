@@ -123,14 +123,15 @@ session_registry() { printf '%s/chartroom/sessions' "${XDG_STATE_HOME:-$HOME/.lo
 joined_live() { # listening (its listener is armed) | working | idle | blocked | running | stopped
   local id="$1" pid st=""
   pid="$(meta "$id" pid)"
-  grep -q ' exited: ' "$(tdir "$id")/events.log" && { echo stopped; return; }
+  events_path "$id"
+  grep -q ' exited: ' "$EVENTS_PATH" && { echo stopped; return; }
   if [[ -n "$pid" ]] && ! pid_alive "$pid"; then echo stopped; return; fi
   if [[ "$(joined_pane "$id")" == herdr ]]; then
     st="$(herdr pane get "$(meta "$id" herdr_pane)" 2>/dev/null | jq -r '.result.pane.agent_status // empty' 2>/dev/null || true)"
     [[ "$st" == unknown ]] && st=""
   fi
   # Hook-derived state only once a hook has fired: without hooks it would read "working" forever.
-  [[ -z "$st" ]] && grep -qE ' agent: (turn-ended|awaiting-input)' "$(tdir "$id")/events.log" && st="$(hook_state "$id")"
+  [[ -z "$st" ]] && grep -qE ' agent: (turn-ended|awaiting-input)' "$EVENTS_PATH" && st="$(hook_state "$id")"
   [[ "$st" == blocked ]] && { echo blocked; return; }
   if listener_alive "$id" && [[ "$st" != working ]]; then echo listening; return; fi
   echo "${st:-running}"
@@ -196,7 +197,7 @@ joined_attach() {
 joined_watch() { # <id>
   local id="$1" pid; pid="$(meta "$id" pid)"
   [[ -n "$pid" ]] || return 0
-  if ! pid_alive "$pid" && ! grep -q ' exited: ' "$(tdir "$id")/events.log"; then
+  if ! pid_alive "$pid" && ! task_events "$id" | grep -q ' exited: '; then
     log_event "$id" exited "joined agent session ended (pid $pid gone)"
   fi
   return 0

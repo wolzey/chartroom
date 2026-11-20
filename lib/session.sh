@@ -20,7 +20,7 @@ write_launcher() { # <id> <wt> [--forward] <argv...>
     printf 'export CHARTROOM_HOME=%q CHARTROOM_TASK=%q PATH=%q\n' "$CR_HOME" "$id" "$PATH"
     printf '%q ' "$@"; [[ -z "$fwd" ]] || printf '"$@"'; printf '\n'
     printf 'rc=$?\n'
-    printf 'printf "%%s exited: agent session ended (exit %%s)\\n" "$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)" "$rc" >>%q\n' "$d/events.log"
+    printf 'printf "%%s exited: agent session ended (exit %%s)\\n" "$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)" "$rc" >>%q\n' "$(events_append_path "$id")"
   } >"$f"
   chmod +x "$f"
   printf '%s' "$f"
@@ -33,14 +33,14 @@ hook_state() { # <id>
     ($2=="note:" && $3=="dispatched") || $2=="steered:" || ($2=="agent:" && ($3=="prompt-received" || $3=="prompt-cleared")) { s="working" }
     $2=="agent:" && $3=="turn-ended" { s="idle" }
     $2=="agent:" && $3 ~ /^awaiting-input/ { s="blocked" }
-    END { print (s=="" ? "working" : s) }' "$(tdir "$1")/events.log"
+    END { print (s=="" ? "working" : s) }' "$(events_path "$1"; printf '%s' "$EVENTS_PATH")"
 }
 
 session_live() { # <runner> <id>
   local r="$1" id="$2"
   "${r}_handle_set" "$id" || { echo not-started; return; }
   if "${r}_alive" "$id"; then hook_state "$id"
-  elif grep -q ' exited: ' "$(tdir "$id")/events.log"; then echo stopped
+  elif task_events "$id" | grep -q ' exited: '; then echo stopped
   else echo gone; fi
 }
 
@@ -66,15 +66,16 @@ session_wait_ready() { # <runner> <id>
 # Retries without re-typing when the text is still sitting in the input box.
 session_deliver() { # <runner> <id> <agent> <text>
   local r="$1" id="$2" agent="$3" text="$4" f before i t scr new retype=1 want="" got="" seen=0 mismatches=0
-  f="$(tdir "$id")/events.log"
   [[ "$agent" == claude ]] && want="$(printf '%s' "$text" | text_sig)"
   for i in 1 2 3 4 5 6; do
+    events_path_fresh "$id"; f="$EVENTS_PATH"
     before="$(wc -c <"$f")"
     if [[ $retype -eq 1 ]]; then "${r}_type" "$id" "$text"; sleep 0.5; fi
     "${r}_keys" "$id" enter
     got=""
     for t in $(seq 1 "$CR_DELIVER_WAIT"); do
       sleep 1
+      events_path_fresh "$id"; f="$EVENTS_PATH"
       new="$(tail -c +"$((before + 1))" "$f")"
       if [[ "$agent" == claude ]]; then
         grep -q " agent: prompt-received sig=$want " <<<"$new" && return 0

@@ -1232,6 +1232,29 @@ Any later report, steer or dispatch closes the wait. `status --json` rows carry 
 `waiting_until` and `waiting_since` (null without an open wait), and focus mode's `breaking`,
 `in_focus` and `held` (in focus and not held while focus is off); so do the lanes JSON's cards.
 
+### The store (stage 1, off by default)
+
+With `CHARTROOM_STORE=sqlite` in a home's own `config`, every task born after that lives in one
+SQLite database per machine, `${XDG_STATE_HOME:-~/.local/state}/chartroom/chartroom.db`
+(`CHARTROOM_DB` moves it), which only `lib/store.py` opens (Python's own `sqlite3`: WAL, a 10 s
+busy timeout, one short transaction per write). A task's place is fixed at birth:
+
+- **Tasks born before the switch** stay `meta.json` and `events.log`, read and written as above,
+  to the end. Nothing is moved or rewritten.
+- **Store tasks** have a row and their events in the database. `tasks/<id>/` still holds what
+  stays a file (`brief.md`, `plan.md`, `report.md`, `final.md`, `artifacts/`, `messages/`), but
+  no `meta.json` and no `events.log`. Read them with `chartroom store meta|events <id>`, `show` or
+  `status`. A process outside chartroom appends event lines to `tasks/<id>/events.spool` (the
+  brief's fallback, a launch wrapper's `exited`), in the same line format; the store takes each
+  whole line in once, keeping its time. An event the store cannot take waits there too.
+- The home gets `.home-id`, its uid in the store, written once. Records follow the uid, not the
+  path, so a renamed or moved home keeps them.
+- Every write still moves `.changed`; a reader that stats `meta.json` or `events.log` should stat
+  `.changed` too, since a store task has neither.
+
+`chartroom store doctor` shows the database and the Python it runs on; `store check` reports an
+id found in both places; `store legacy` counts what the home still keeps as files from before.
+
 The event line format, the brief protocol and `meta.json`'s `schema` field are stable from 0.1;
 the change stamp's path and meaning are stable from the release that adds it. CLI flags may
 change before 1.0.
@@ -1310,6 +1333,9 @@ machine), then `~/.config/chartroom/config` (`KEY=VALUE`, no shell evaluation;
 | `CHARTROOM_CODEX_HOOKS_DIALOG` | `ask` | Codex's "Hooks need review" dialog at startup: `ask` wakes the XO; `skip` takes Esc in a worktree chartroom created, so those hooks do not run for that worker. Never trusts a hook |
 | `CHARTROOM_BASH_SEARCH` | see Install | environment only: colon-separated dirs searched for a bash ≥ 4 when started under an older one (PATH is always searched first) |
 | `CHARTROOM_PATH_APPEND` | `/opt/homebrew/bin:/usr/local/bin` on macOS, else empty | environment only: dirs appended to PATH when they exist and are missing; empty turns it off |
+| `CHARTROOM_STORE` | `files` | `sqlite`: tasks born from now on live in the store ([The store](#the-store-stage-1-off-by-default)); set it in the home's own `config` |
+| `CHARTROOM_DB` | `${XDG_STATE_HOME:-~/.local/state}/chartroom/chartroom.db` | environment only: the store's database |
+| `CHARTROOM_PYTHON` | `python3` on PATH | environment only: the Python (with its `sqlite3` module) the store runs on |
 | `CHARTROOM_RUNTIME_DIR` | `/tmp` | environment only: where `watch` and `listen` keep their doorbell FIFOs (`chartroom-<uid>/bells/`); every process of every home on the machine must agree on it |
 
 `CAP_PROJECT_ROOTS`, `CAP_CREW_WORKSPACE` and `CAP_WATCH_INTERVAL` are read as legacy fallbacks.

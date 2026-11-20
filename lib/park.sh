@@ -133,7 +133,8 @@ park_check() { # <id> <mode>
   [[ "$ms" =~ ^[0-9]+$ ]] || ms=0
   printf -v now_s '%(%s)T' -1
   # A prompt taken after its turn ended (a steer that just went in) means its turn is not over.
-  last="$(grep -E ' (steered: |agent: prompt-received)' "$(tdir "$id")/events.log" | tail -1 | cut -c1-20 || true)"
+  events_path "$id"
+  last="$(grep -E ' (steered: |agent: prompt-received)' "$EVENTS_PATH" | tail -1 | cut -c1-20 || true)"
   lp="$(jq -rn --arg t "$last" '$t | fromdateiso8601? // 0')"
   if (( ms > 0 && lp * 1000 > ms )); then PARK_WHY="a prompt went in after its turn ended"; return 1; fi
   if [[ "$mode" == auto ]] && (( ms == 0 || now_s - ms / 1000 < CR_PARK_AFTER * 60 )); then
@@ -228,9 +229,12 @@ park_candidates() {
   PARK_CANDIDATES=()
   park_ref || return 0
   local d id chk
-  for d in "$CR_HOME"/tasks/*/; do
-    id="${d%/}"; id="${id##*/}"; chk="$d.park-check"
-    [[ -f "$d/meta.json" && "$d/events.log" -ot "$PARK_REF" ]] || continue
+  local m
+  task_meta_files
+  for m in "${TASK_METAS[@]+"${TASK_METAS[@]}"}"; do
+    id="${m%/meta.json}"; id="${id##*/}"; d="$CR_HOME/tasks/$id/"; chk="$d.park-check"
+    events_path "$id"
+    [[ -f "$EVENTS_PATH" && "$EVENTS_PATH" -ot "$PARK_REF" ]] || continue
     [[ ! -e "$chk" || "$chk" -ot "$PARK_REF" ]] || continue
     is_closed "$id" && continue
     # (From the watch round's meta cache when it holds the task: no fork per parked task.)

@@ -113,6 +113,18 @@ are stable from 0.1.0.
 - `chartroom snooze`: keep an item out of Needs me until a time.
 - `chartroom app snapshot --json`: one home as the app reads it (lib/app/snapshot.jq maps every
   task onto the design's seven statuses, and builds Needs me).
+- The store, stage 1 (off by default). `CHARTROOM_STORE=sqlite` in a home's own `config` makes
+  every task born after it a row in one SQLite database per machine
+  (`${XDG_STATE_HOME:-~/.local/state}/chartroom/chartroom.db`, `CHARTROOM_DB` moves it), read and
+  written by `lib/store.py` (Python's own `sqlite3`, WAL, a busy timeout, one short transaction per
+  write). Tasks born before stay files and are read as files: nothing is moved or rewritten.
+  - A store task's directory keeps brief, plan, report, artifacts and messages, with no
+    `meta.json` or `events.log`. A process outside chartroom (a launch wrapper's `exited:`, the
+    brief's fallback) appends to `tasks/<id>/events.spool`, which the store takes in once.
+  - An event the store cannot take (locked past 10 s, a damaged database) waits in the spool.
+  - `chartroom store doctor|check|legacy|events|meta`, and `chartroom set <id> key=value` for the
+    settings the skill had the XO edit in `meta.json` (model, effort, sandbox, permission).
+  - The dashboard refreshes on the home's change stamp and shows a store task's events.
 - Client homes (one brain, step 1): `chartroom brain link <target>` makes an empty home a client
   of another machine's home of the same name. Every chartroom command in it then runs there over
   one fixed ssh gate (`chartroom brain gate`: the arguments as JSON on stdin, registered homes

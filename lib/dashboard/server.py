@@ -230,6 +230,15 @@ def run_cli(argv, timeout):
     return proc.returncode, out, err
 
 
+def store_events(cli, home, tid):
+    """A store task's events (it has no events.log of its own: lib/store.sh), or None."""
+    try:
+        rc, out, _ = run_cli(["env", "CHARTROOM_HOME=" + home] + cli + ["store", "events", tid], 30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return out if rc == 0 else None
+
+
 def last_line(b):
     lines = [x.strip() for x in b.decode("utf-8", "replace").splitlines() if x.strip()]
     return lines[-1] if lines else ""
@@ -316,7 +325,8 @@ class Radar:
             if not p:
                 continue
             base = os.path.join(glob.escape(p), "tasks", "*")
-            for f in sorted(glob.glob(os.path.join(base, "events.log")) + glob.glob(os.path.join(base, "meta.json"))):
+            # (+ the home's change stamp, which every write moves: a store task has neither file)
+            for f in sorted(glob.glob(os.path.join(base, "events.log")) + glob.glob(os.path.join(base, "meta.json"))) + [os.path.join(p, ".changed")]:
                 try:
                     st = os.stat(f)
                 except OSError:
@@ -475,7 +485,8 @@ class Radar:
                 with open(os.path.join(rec["home_path"], "tasks", tid, name), "rb") as fh:
                     return 200, fh.read()
             except (OSError, TypeError):
-                return 404, "%s has no %s\n" % (tid, name)
+                out = store_events(self.cli, rec["home_path"], tid) if name == "events.log" and rec.get("home_path") else None
+                return (200, out) if out is not None else (404, "%s has no %s\n" % (tid, name))
 
         def fetch():
             args = ["radar", "file", "--machine", machine, "--ssh", src.spec["target"]]
@@ -723,6 +734,10 @@ def make_handler(board, port, page, viewer, host, use_token, home):
                     return self.send(500, "could not print the PDF: %s\n" % exc, "text/plain; charset=utf-8")
                 return self.send(200, pdf, "application/pdf",
                                  extra=[("Content-Disposition", 'attachment; filename="%s.pdf"' % art.group(1))])
+            if f and not art and parts[3] == "events.log" and not os.path.isfile(f):
+                out = store_events(board.cli, board.home, parts[2])
+                if out is not None:
+                    return self.send(200, out, "text/plain; charset=utf-8")
             if f and os.path.isfile(f):
                 if art and art.group(2) == "html":
                     if not page_sidecar(f):

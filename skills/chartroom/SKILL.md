@@ -482,15 +482,15 @@ the XO of its own home only.
 - Permissions are decided before dispatch. Headless workers have no prompt UI:
   - Codex: scouts run `workspace-write` (network on, writes confined to the worktree and task
     record). Ship tasks default to full access, because current Codex refuses git commits inside
-    its sandbox (`CHARTROOM_CODEX_SHIP_SANDBOX` changes the default). Per task, set `sandbox` in
-    `meta.json` before dispatch.
+    its sandbox (`CHARTROOM_CODEX_SHIP_SANDBOX` changes the default). Per task:
+    `chartroom set <id> sandbox=<mode>` before dispatch.
   - Claude headless: `--permission-mode acceptEdits` plus `CHARTROOM_CLAUDE_ALLOWED_TOOLS`
     (default includes Bash). Per task: `chartroom new --permission <mode>`.
   - Interactive sessions use the agent's own settings unless `--permission` is given.
   Never widen a scout's permissions without the commander's word, and record a lasting
   posture preference as a ruling (`chartroom rule add`).
-- Per-task model or effort: `chartroom new --model <m>`, or set `model` / `effort` in `meta.json`
-  before dispatch. Never downgrade the intelligence on a task to save quota without the
+- Per-task model or effort: `chartroom new --model <m>`, or `chartroom set <id> model=<m> effort=<e>`
+  before dispatch (a task in the store has no `meta.json` to edit). Never downgrade the intelligence on a task to save quota without the
   commander's standing permission.
 - Session workers live in one workspace or session named `$CHARTROOM_WORKSPACE` (default
   `chartroom-crew`), one tab or window per task, never focused. Tell the commander where to look

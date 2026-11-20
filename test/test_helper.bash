@@ -77,12 +77,19 @@ new_task() {
 # it should).
 snapshot() { find "$@" -type f -exec cksum {} + | sort; }
 
-events() { cat "$CHARTROOM_HOME/tasks/$1/events.log"; }
-meta_of() { jq -r --arg k "$2" '.[$k] // empty' "$CHARTROOM_HOME/tasks/$1/meta.json"; }
+# A task's events and record, wherever it lives (a store task has no events.log or meta.json).
+events() {
+  if [[ -f "$CHARTROOM_HOME/tasks/$1/meta.json" ]]; then cat "$CHARTROOM_HOME/tasks/$1/events.log"
+  else "$CHARTROOM" store events "$1" 3>&-; fi
+}
+meta_of() {
+  if [[ -f "$CHARTROOM_HOME/tasks/$1/meta.json" ]]; then jq -r --arg k "$2" '.[$k] // empty' "$CHARTROOM_HOME/tasks/$1/meta.json"
+  else "$CHARTROOM" store meta "$1" 3>&- | jq -r --arg k "$2" '.[$k] // empty'; fi
+}
 
 # Wait (default ~10s, or <secs>) until the task's events.log matches a regex.
 wait_event() {
   local id="$1" re="$2" i n=$(( ${3:-10} * 4 ))
-  for i in $(seq 1 "$n"); do grep -qE "$re" "$CHARTROOM_HOME/tasks/$id/events.log" && return 0; sleep 0.25; done
+  for i in $(seq 1 "$n"); do events "$id" 2>/dev/null | grep -qE "$re" && return 0; sleep 0.25; done
   echo "timed out waiting for /$re/ in:" >&2; events "$id" >&2; return 1
 }
