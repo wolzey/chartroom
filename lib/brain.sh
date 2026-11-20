@@ -329,6 +329,13 @@ find({ no_chdir => 1, wanted => sub {
   my @s = lstat($_); print "$p\t$s[9]\t$s[7]\n";
 } }, ".");'
 brain_walk() { perl -e "$BRAIN_WALK_PL" "$CR_HOME"; }
+# Files edited here and not yet on the brain (the walk against the manifest): "<path>\t<mtime>\t<size>"
+# of the version pulled, or "<path>\t\t" for a file made here.
+brain_dirty() {
+  [[ -f "$BRAIN_SD/manifest" ]] || return 0
+  awk -F'\t' 'NR == FNR { m[$1] = $2 "\t" $3; next } !($1 in m) || m[$1] != $2 "\t" $3 { print $1 "\t" (($1 in m) ? m[$1] : "\t") }' \
+    "$BRAIN_SD/manifest" <(brain_walk)
+}
 
 # One client process at a time touches the copy (a pull, a push, the manifest).
 BRAIN_LOCKS=0
@@ -359,18 +366,28 @@ brain_pull() { # --full | --home | <task id>...
   path="$(cat "$BRAIN_SD/path" 2>/dev/null || true)"
   [[ "$path" =~ ^/[A-Za-z0-9_./-]+$ ]] || { warn "the brain has not said where this home lives there yet (chartroom brain status)"; return 1; }
   : >"$f"
+  brain_lock
+  # An edit here that has not reached the brain yet is never overwritten, nor deleted, by a pull
+  # (a wake, a crew view's board, another command): it stays out of the pull and keeps its old
+  # manifest line, so the next command still sends it.
+  local dirty; dirty="$(brain_dirty)" || true
+  if [[ -n "$dirty" ]]; then
+    cut -f1 <<<"$dirty" | sed -E 's/([][*?\\])/\\\1/g; s#^#- /#' >>"$f"
+  fi
   if [[ $full -eq 0 ]]; then
     for id in "$@"; do [[ "$id" =~ $CR_RADAR_ID_RE ]] && printf '+ /tasks/%s/\n' "$id" >>"$f"; done
     printf -- '- /tasks/*/\n' >>"$f"
   fi
   brain_filter >>"$f"
-  brain_lock
   local del=(); [[ $full -eq 1 ]] && del=(--delete)
   rsync -rt "${del[@]+"${del[@]}"}" --max-size=4m --exclude-from="$f" \
     -e "ssh ${BRAIN_SSH_O[*]}" --rsync-path="$(brain_remote_line rsync)" \
     "$BRAIN_TARGET:${path%/}/" "$CR_HOME/" >>"$BRAIN_SD/rsync.log" 2>&1 || rc=$?
   if [[ $rc -eq 0 || $rc -eq 23 || $rc -eq 24 ]]; then
-    brain_walk >"$BRAIN_SD/manifest.tmp" && mv "$BRAIN_SD/manifest.tmp" "$BRAIN_SD/manifest"
+    # (the dirty files keep the line of the version pulled; one made here gets none)
+    brain_walk | awk -F'\t' 'NR == FNR { if ($1 != "") d[$1] = ($2 == "" ? "" : $1 "\t" $2 "\t" $3); next }
+      ($1 in d) { if (d[$1] != "") print d[$1]; next } { print }' <(printf '%s\n' "$dirty") - >"$BRAIN_SD/manifest.tmp" &&
+      mv "$BRAIN_SD/manifest.tmp" "$BRAIN_SD/manifest"
     [[ $full -eq 1 ]] && date +%s >"$BRAIN_SD/pulled"
     rc=0
   else
@@ -415,8 +432,7 @@ brain_put_refusal() { # <relative path>
 brain_push() {
   [[ -f "$BRAIN_SD/manifest" ]] || return 0
   local rel bm bs why size ts fail=0 changed x ids=() pulled=0
-  changed="$(awk -F'\t' 'NR == FNR { m[$1] = $2 "\t" $3; next } !($1 in m) || m[$1] != $2 "\t" $3 { print $1 "\t" (($1 in m) ? m[$1] : "\t") }' \
-    "$BRAIN_SD/manifest" <(brain_walk))" || true
+  changed="$(brain_dirty)" || true
   [[ -n "$changed" ]] || return 0
   ts="$(date -u +%Y%m%dT%H%M%SZ)"
   brain_lock
@@ -431,10 +447,10 @@ brain_push() {
     size=$(($(wc -c <"$CR_HOME/$rel")))
     (( size <= BRAIN_MAX_FILE )) || { warn "$rel is over 4 MB: not sent to the brain"; continue; }
     x="$(jq -cn --arg p "$rel" --arg m "$bm" --arg s "$bs" '{path: $p, base: (if $m == "" then null else {mtime: ($m | tonumber), size: ($s | tonumber)} end)}')"
-    brain_call --file "$CR_HOME/$rel" --out /dev/null put "$x"
+    brain_call --file "$CR_HOME/$rel" --out "$BRAIN_TMP/put" put "$x"
     [[ "$rel" == tasks/*/* ]] && { local i="${rel#tasks/}"; ids+=("${i%%/*}"); }
     case "$BRAIN_RC" in
-      0) pulled=1 ;;
+      0) brain_put_done "$rel" "$BRAIN_TMP/put"; pulled=1 ;;
       3) mv -- "$CR_HOME/$rel" "$CR_HOME/$rel.client-conflict-$ts"; pulled=1; fail=1
          warn "$rel changed on the brain before your edit reached it: your edit is now $rel.client-conflict-$ts and the brain's version is back in its place" ;;
       "$BRAIN_EX_UNREACHABLE") fail=$BRAIN_EX_UNREACHABLE; break ;;
@@ -445,6 +461,17 @@ brain_push() {
   [[ $pulled -eq 1 ]] && { brain_pull "${ids[@]+"${ids[@]}"}" || true; }
   [[ $fail -eq 1 ]] && die "nothing was run: an edit of yours conflicted with the brain's copy (above); merge it and run the command again"
   return $fail
+}
+
+# After a put the brain said which version it now holds: this copy takes that mtime and the
+# manifest that line, so the file is no longer an edit to send.
+brain_put_done() { # <relative path> <the gate's answer>
+  local m sz
+  m="$(jq -r '.mtime // empty' "$2" 2>/dev/null || true)"; sz="$(jq -r '.size // empty' "$2" 2>/dev/null || true)"
+  [[ "$m" =~ ^[0-9]+$ && "$sz" =~ ^[0-9]+$ ]] || return 0
+  perl -e 'utime $ARGV[0], $ARGV[0], $ARGV[1]' "$m" "$CR_HOME/$1" || return 0
+  awk -F'\t' -v p="$1" -v l="$1"$'\t'"$m"$'\t'"$sz" '$1 == p { next } { print } END { print l }' "$BRAIN_SD/manifest" >"$BRAIN_SD/manifest.tmp" &&
+    mv "$BRAIN_SD/manifest.tmp" "$BRAIN_SD/manifest"
 }
 
 # ---------------------------------------------------------------- the gate (on the brain)
@@ -515,7 +542,8 @@ brain_gate() {
   CR_HOME="$GATE_HOME"
   local tok; tok="$(jq -r '.token // empty' <<<"$header")"
   case "$verb" in
-    hello) jq -cn --argjson p "$BRAIN_PROTOCOL" --arg v "$CR_VERSION" --arg h "$GATE_HOME" '{protocol: $p, version: $v, path: $h}'; gate_trailer "$start" "$tok" ;;
+    hello) jq -cn --argjson p "$BRAIN_PROTOCOL" --arg v "$CR_VERSION" --arg h "$GATE_HOME" --arg lp "$(gate_login_path)" \
+             '{protocol: $p, version: $v, path: $h, login_path: (if $lp == "" then null else $lp end)}'; gate_trailer "$start" "$tok" ;;
     exec) gate_exec "$header" "$start" "$tok" ;;
     put) gate_put "$header"; local rc=$?; gate_trailer "$start" "$tok"; return $rc ;;
     cat) gate_cat "$header" ;;
@@ -596,7 +624,8 @@ gate_put() { # <header>
   (( $(wc -c <"$tmp") <= BRAIN_MAX_FILE )) || { rm -f "$tmp"; gate_die "put $rel refused: over 4 MB"; }
   mv -- "$tmp" "$f"
   stamp_changed "$GATE_HOME"
-  echo "put $rel"
+  jq -cn --arg p "$rel" --arg m "$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f")" --arg s "$(($(wc -c <"$f")))" \
+    '{put: $p, mtime: ($m | tonumber), size: ($s | tonumber)}'
 }
 
 # A file of the home, read-only (brain fetch, the artifact verbs). Never config or a dashboard file.
@@ -652,11 +681,30 @@ brain_gate_rsync() { # <rsync server args...>
 # The environment a command from a client runs in here: this home, marked as run for a client
 # (no forwarding, no browser opened on this screen, no runner that would start in the ssh session).
 gate_env() { # <header> -> sets GATE_ENV
-  local harness
+  local harness lp
   GATE_ENV=("CHARTROOM_HOME=$GATE_HOME" CHARTROOM_GATE=1 "CHARTROOM_CLIENT=$(jq -r '.client.machine // "a client"' <<<"$1")" CHARTROOM_OPENER=true)
+  lp="$(gate_login_path)"; [[ -n "$lp" ]] && GATE_ENV+=("PATH=$lp")
   harness="$(jq -r '.env.CHARTROOM_HARNESS // empty' <<<"$1")"
   if [[ -n "$harness" && "$harness" =~ ^[a-z]{1,16}$ ]]; then GATE_ENV+=("CHARTROOM_HARNESS=$harness"); fi
   return 0
+}
+
+# An ssh session's PATH is the thin one of a non-interactive shell, and a worker dispatched or
+# revived from it would carry it in its launcher (no version managers' shims, no package
+# managers' bins). So what the gate runs gets the PATH of this user's interactive login shell
+# ($SHELL -lic, or CHARTROOM_BRAIN_LOGIN_SHELL), read at most every 10 minutes and kept in the
+# state dir; with none to read, the session's own.
+gate_login_path() {
+  local f="${XDG_STATE_HOME:-$HOME/.local/state}/chartroom/gate-login-path" sh out p
+  if [[ -f "$f" && -n "$(find "$f" -mmin -10 2>/dev/null)" ]]; then cat "$f"; return 0; fi
+  sh="$(cfg BRAIN_LOGIN_SHELL '' "${SHELL:-}")"
+  [[ -n "$sh" && -x "$sh" ]] || return 0
+  out="$(perl -e 'alarm 10; exec @ARGV' "$sh" -lic 'printf "\036%s\036" "$PATH"' </dev/null 2>/dev/null || true)"
+  p="${out#*$'\036'}"; [[ "$p" != "$out" ]] || return 0
+  p="${p%%$'\036'*}"
+  [[ "$p" == /* && "$p" != *$'\n'* ]] || return 0
+  mkdir -p "${f%/*}" 2>/dev/null && printf '%s' "$p" >"$f.$$" && mv "$f.$$" "$f"
+  printf '%s' "$p"
 }
 
 # ---------------------------------------------------------------- watch
@@ -1113,6 +1161,21 @@ brain_link() {
   [[ -z "${CR_HOME_CFG[CHARTROOM_BRAIN]:-}" ]] || die "this home is already a client of ${CR_HOME_CFG[CHARTROOM_BRAIN]} (chartroom brain unlink first)"
   shopt -s nullglob; n=("$CR_HOME"/tasks/*); shopt -u nullglob
   [[ ${#n[@]} -eq 0 ]] || die "this home has ${#n[@]} task(s): moving them to the brain is the migration (one brain, step 2). brain link only makes an empty home a client, and changed nothing"
+  # Nothing of the home's own may be overwritten or pruned by the first pull: only the files
+  # chartroom init makes, unchanged, are allowed (rulings, relays, notes are the migration's).
+  local own=() rel _m _s tpl
+  if [[ -d "$CR_HOME" ]]; then
+    while IFS=$'\t' read -r rel _m _s; do
+      case "$rel" in
+        commander.md|projects.md|inbox.md) tpl="$CR_ROOT/templates/$rel" ;;
+        CLAUDE.md|AGENTS.md) tpl="$CR_ROOT/templates/home-AGENTS.md" ;;
+        *) tpl="" ;;
+      esac
+      [[ -n "$tpl" ]] && cmp -s "$CR_HOME/$rel" "$tpl" && continue
+      own+=("$rel")
+    done < <(brain_walk)
+  fi
+  [[ ${#own[@]} -eq 0 ]] || die "this home holds ${#own[@]} file(s) of its own (${own[*]:0:5}): linking would replace them with the brain's. Moving a home's records is the migration (one brain, step 2); brain link only makes an empty home a client, and changed nothing"
   mkdir -p "$CR_HOME"
   CR_HOME_CFG[CHARTROOM_BRAIN]="$target"; [[ -n "$as" ]] && CR_HOME_CFG[CHARTROOM_BRAIN_HOME]="$as"
   brain_setup

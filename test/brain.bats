@@ -16,6 +16,10 @@ setup() {
   echo "$BH" >"$FAKE_SSH_DIR/studio/brain"
   # The brain's PATH: only this test's bin (never the real machine's hc or herdr).
   export CHARTROOM_RADAR_REMOTE_PATH="$BIN" CHARTROOM_BRAIN_BIN="$CHARTROOM"
+  # The brain's login shell, whose PATH what the gate runs gets: this test's PATH plus a marker
+  # (never the real machine's shell and rc files).
+  printf '#!/bin/sh\nprintf "\\036%%s:/login-shell-bin\\036" "$PATH"\n' >"$BIN/loginsh"; chmod +x "$BIN/loginsh"
+  export CHARTROOM_BRAIN_LOGIN_SHELL="$BIN/loginsh"
   BRAIN="$BH/chartroom/acme"
   brain_cr init --name acme >/dev/null
   cr brain link studio --as acme >/dev/null 2>&1
@@ -96,7 +100,7 @@ new_remote() { # a task made through the client; prints its id
 @test "arguments reach the brain exactly, whatever they hold, through zsh or bash" {
   local sh hostile big
   hostile=$'it\'s "quoted" $(touch /tmp/pwned-cr) `id` ; | & * ?[a] \\ ~ \n second line\ttab é → ✓'
-  big="$(head -c 200000 /dev/zero | tr '\0' 'x')"
+  big="$(head -c 100000 /dev/zero | tr '\0' 'x')" # (Linux caps one argument at 128 KB)
   brain_cr init --name other >/dev/null 2>&1 || on_brain env CHARTROOM_HOME="$BH/chartroom/other" "$CHARTROOM" init --name other >/dev/null
   for sh in bash zsh; do
     command -v "$sh" >/dev/null 2>&1 || continue
@@ -108,7 +112,7 @@ new_remote() { # a task made through the client; prints its id
     [ "$(jq -r .title "$BRAIN/tasks/$id/meta.json")" = "--title -x '\$HOME'" ]
     run cr event "$id" progress "$big"
     [ "$status" -eq 0 ]
-    [ "$(tail -1 "$BRAIN/tasks/$id/events.log" | wc -c)" -gt 200000 ]
+    [ "$(tail -1 "$BRAIN/tasks/$id/events.log" | wc -c)" -gt 100000 ]
     run cr event "$id" progress ""
   done
   [ ! -e /tmp/pwned-cr ]
@@ -145,6 +149,60 @@ new_remote() { # a task made through the client; prints its id
   grep -q "client's line" "$CHARTROOM_HOME/tasks/$id/brief.md".client-conflict-*
   grep -q "brain's line" "$CHARTROOM_HOME/tasks/$id/brief.md"
   ! grep -q "client's line" "$BRAIN/tasks/$id/brief.md"
+}
+
+@test "an edit not yet sent survives a pull a wake makes, and goes up with the next command" {
+  local id; id="$(new_remote)"
+  echo "- an approval given in chat" >>"$CHARTROOM_HOME/inbox.md"
+  mkdir -p "$CHARTROOM_HOME/drafts"; echo "a note" >"$CHARTROOM_HOME/drafts/x.md"
+  "$CHARTROOM" watch --once >"$BATS_TEST_TMPDIR/w.out" 2>&1 3>&- &
+  local wpid=$!
+  sleep 2
+  echo "brain line" >>"$BRAIN/inbox.md"     # the brain changes the same file meanwhile
+  brain_cr event "$id" decision "look" >/dev/null
+  wait "$wpid"
+  grep -q 'decision: look' "$BATS_TEST_TMPDIR/w.out"
+  grep -q 'an approval given in chat' "$CHARTROOM_HOME/inbox.md"   # not overwritten by the pull
+  [ -f "$CHARTROOM_HOME/drafts/x.md" ]
+  run cr status   # the next command sends them: the new file goes up, the crossed one conflicts
+  [ "$status" -eq 1 ]; [[ "$output" == *"inbox.md changed on the brain"* ]]
+  [ "$(cat "$BRAIN/drafts/x.md")" = "a note" ]
+  grep -q 'an approval given in chat' "$CHARTROOM_HOME"/inbox.md.client-conflict-*
+  run cr status
+  [ "$status" -eq 0 ]
+}
+
+@test "a put leaves the copy clean: the same edit is never sent twice, nor taken for a conflict" {
+  local id; id="$(new_remote)"
+  echo "more intent" >>"$CHARTROOM_HOME/tasks/$id/brief.md"
+  run cr status; [ "$status" -eq 0 ]
+  grep -q 'more intent' "$BRAIN/tasks/$id/brief.md"
+  local before; before="$(ls -lT "$BRAIN/tasks/$id/brief.md" 2>/dev/null || stat -c '%y %s' "$BRAIN/tasks/$id/brief.md")"
+  sleep 1
+  run cr status; [ "$status" -eq 0 ]; [[ "$output" != *conflict* ]]
+  [ "$(ls -lT "$BRAIN/tasks/$id/brief.md" 2>/dev/null || stat -c '%y %s' "$BRAIN/tasks/$id/brief.md")" = "$before" ] # no second put
+  echo "and more" >>"$CHARTROOM_HOME/tasks/$id/brief.md"
+  run cr status; [ "$status" -eq 0 ]
+  grep -q 'and more' "$BRAIN/tasks/$id/brief.md"
+}
+
+@test "brain link refuses a home with files of its own, and takes one made by init alone" {
+  local h="$BATS_TEST_TMPDIR/notes"
+  mkdir -p "$h"; echo "r-1 topic x" >"$h/rulings.log"
+  run env CHARTROOM_HOME="$h" "$CHARTROOM" brain link studio --as acme
+  [ "$status" -ne 0 ]; [[ "$output" == *"holds 1 file(s) of its own (rulings.log)"* ]]
+  [ ! -f "$h/config" ] && [ "$(cat "$h/rulings.log")" = "r-1 topic x" ]
+  h="$BATS_TEST_TMPDIR/fresh"
+  CHARTROOM_HOME="$h" cr init >/dev/null
+  rmdir "$h/tasks" "$h/worktrees"
+  run env CHARTROOM_HOME="$h" "$CHARTROOM" brain link studio --as acme
+  [ "$status" -eq 0 ]
+}
+
+@test "what the gate runs has the brain's login PATH, not the ssh session's" {
+  run bash -c "printf '%s\n' \"\$1\" | HOME='$BH' CHARTROOM_CONFIG='$BH/.config/chartroom/config' CHARTROOM_HOME= '$CHARTROOM' brain gate 2>/dev/null" _ "$(header hello)"
+  [ "$status" -eq 0 ]
+  [[ "$(jq -r .login_path <<<"$output")" == *":/login-shell-bin" ]]
 }
 
 @test "records chartroom owns are never taken from the copy" {
