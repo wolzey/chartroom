@@ -540,6 +540,13 @@ mig_move_tasks() {
         mv "$MIG_BHOME/tasks/.$id.migrating/m.tmp" "$MIG_BHOME/tasks/.$id.migrating/meta.json"
       note="${note:+$note; }adopted the brain's worktree $orphan${obr:+ (branch $obr)}"
     fi
+    # The branch the worktree really has checked out wins over the record's (a worker may have moved on).
+    local fbr mbr; fbr="$(jq -r '.branch // ""' <<<"$f")"; mbr="$(jq -r '.branch // ""' "$MIG_BHOME/tasks/.$id.migrating/meta.json")"
+    if [[ -n "$fbr" && "$fbr" != "$mbr" && -z "$orphan" ]]; then
+      jq --arg b "$fbr" --arg o "$mbr" '.branch = $b | .migrated_branch_was = $o' "$MIG_BHOME/tasks/.$id.migrating/meta.json" >"$MIG_BHOME/tasks/.$id.migrating/m.tmp" &&
+        mv "$MIG_BHOME/tasks/.$id.migrating/m.tmp" "$MIG_BHOME/tasks/.$id.migrating/meta.json"
+      note="${note:+$note; }its worktree is on branch $fbr (the record said ${mbr:-none})"
+    fi
     [[ -d "$MIG_S/bundles/$id" ]] && { mkdir -p "$MIG_BHOME/tasks/.$id.migrating/migrate"; cp -R "$MIG_S/bundles/$id/." "$MIG_BHOME/tasks/.$id.migrating/migrate/"; }
     mv "$MIG_BHOME/tasks/.$id.migrating" "$dst"
     printf '%s note: migrated from %s (%s)%s\n' "$(now)" "$(mig_label)" "$MIG_CHOME" "${note:+; $note}" >>"$dst/events.log"

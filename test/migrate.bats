@@ -56,6 +56,7 @@ fixture() {
   A="$(ctask "add the widget")"
   on_c worktree "$A" >/dev/null
   W="$(jq -r .worktree "$CH/tasks/$A/meta.json")"
+  git -C "$W" checkout -q -b worker-renamed   # the worker moved its work to a branch the record does not name
   echo one >"$W/a.txt"; git -C "$W" add a.txt; git -C "$W" commit -qm "widget one"
   echo staged >"$W/b.txt"; git -C "$W" add b.txt
   echo unstaged >>"$W/README"
@@ -162,6 +163,8 @@ full_move() {
   grep -q 'note: migrated from local' "$BH/tasks/$A/events.log"
   # The worktree, rebuilt: the commit, and staged, unstaged and untracked work as on the client.
   [ "$(git -C "$BW" rev-parse HEAD)" = "$(git -C "$W" rev-parse HEAD)" ]
+  [ "$(git -C "$BW" symbolic-ref --short HEAD)" = worker-renamed ] && [ "$(bmeta "$A" .branch)" = worker-renamed ]
+  [ "$(git -C "$B/work/proj" rev-list --count main..worker-renamed)" = "$(git -C "$W" rev-list --count main..HEAD)" ]
   [ "$(git -C "$BW" status --porcelain | sort)" = "$(git -C "$W" status --porcelain | sort)" ]
   [ "$(git -C "$BW" diff --cached)" = "$(git -C "$W" diff --cached)" ]
   [ "$(cat "$BW/untracked.txt")" = new ]
