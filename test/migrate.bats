@@ -440,6 +440,7 @@ teardown() {
   mh verify >/dev/null
   # The client goes on: an event, a grown transcript, a new task, an inbox item, a ruling.
   printf '%s progress: one more thing on the client\n' "2026-01-09T00:00:00Z" >>"$CH/tasks/$A/events.log"
+  git -C "$W" add -A; git -C "$W" commit -qm "a safe point on the client"; echo later >"$W/later.txt"   # A's moved worktree must follow
   sid="$(jq -r .session_id "$CH/tasks/$A/meta.json")"
   printf '{"type":"assistant","sessionId":"%s"}\n' "$sid" >>"$C/claude/projects/${W//[^A-Za-z0-9]/-}/$sid.jsonl"
   mv "$CH/.migrating" "$T/m.bak"; N="$(ctask "made during the freeze")"; mv "$T/m.bak" "$CH/.migrating"   # a client without the guard
@@ -458,6 +459,8 @@ teardown() {
   t="$B/claude/projects/${W//[^A-Za-z0-9]/-}"; t="${t/$C/$B}"
   BW="$(bmeta "$A" .worktree)"; tb="$B/claude/projects/${BW//[^A-Za-z0-9]/-}/$sid.jsonl"
   [ "$(wc -l <"$tb")" -eq 2 ]
+  [ "$(git -C "$BW" rev-parse HEAD)" = "$(git -C "$W" rev-parse HEAD)" ]
+  [ "$(git -C "$BW" status --porcelain | sort)" = "$(git -C "$W" status --porcelain | sort)" ]
   grep -q 'touched on the brain' "$BH/tasks/$Z/events.log"; ! grep -q 'and on the client' "$BH/tasks/$Z/events.log"
   [[ "$output" == *"resynced"* ]]
   awk -F'\t' -v z="$Z" '$2 == z && $3 == "resync-conflict"' "$(S)/ledger.tsv" | grep -q .

@@ -946,6 +946,22 @@ mig_resync() {
     if [[ "$(jq -r '.migrated_from // ""' "$MIG_BHOME/tasks/$id/meta.json")" != "$(mig_label)" || -z "$sz" || "$(wc -c <"$MIG_BHOME/tasks/$id/events.log" | tr -d ' ')" != "$sz" ]]; then
       mig_ledger "$id" resync-conflict "changed on the brain since the move: left as it is"; keep+=" $id "; continue
     fi
+    # A worktree the move rebuilt goes too, to be rebuilt from the client's new state, but only while
+    # it is exactly as the move made it (its head, status and diff); one used here since is kept.
+    if [[ -f "$MIG_BHOME/tasks/$id/migrate/materialized" ]]; then
+      local mw mp ph pp pd
+      mw="$(cat "$MIG_BHOME/tasks/$id/migrate/materialized")"; mp="$(jq -r '.project // ""' "$MIG_BHOME/tasks/$id/meta.json")"
+      ph="$(jq -r --arg i "$id" 'select(.id == $i) | .head' "$r/baseline-before.jsonl")"
+      pp="$(jq -r --arg i "$id" 'select(.id == $i) | .porcelain_sha' "$r/baseline-before.jsonl")"
+      pd="$(jq -r --arg i "$id" 'select(.id == $i) | .diff_sha' "$r/baseline-before.jsonl")"
+      if [[ -d "$mw" ]]; then
+        if [[ "$(git -C "$mw" rev-parse HEAD 2>/dev/null)" == "$ph" && "$(git --no-optional-locks -C "$mw" status --porcelain | LC_ALL=C sort | { s="$(cat)"; printf '%s' "$s"; } | mig_sha)" == "$pp" && "$(git --no-optional-locks -C "$mw" diff --binary HEAD | mig_sha)" == "$pd" ]]; then
+          git -C "$mp" worktree remove --force "$mw" >&2
+        else
+          mig_ledger "$id" resync-conflict "its rebuilt worktree $mw changed on the brain since the move: left as it is"; keep+=" $id "; continue
+        fi
+      fi
+    fi
     mkdir -p "$r/replaced"; mv "$MIG_BHOME/tasks/$id" "$r/replaced/$id"
     [[ -f "$MIG_BHOME/.watch-cursor" ]] && { grep -v "^$id"$'\t' "$MIG_BHOME/.watch-cursor" >"$MIG_BHOME/.watch-cursor.tmp" || true; mv "$MIG_BHOME/.watch-cursor.tmp" "$MIG_BHOME/.watch-cursor"; }
   done
