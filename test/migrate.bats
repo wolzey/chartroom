@@ -473,3 +473,25 @@ teardown() {
   [[ "$output" == *"PASS git and conversations"* ]]
   [[ "$output" == *"$Z: events.log does not start with the client's log"* || "$output" == *"PASS records"* ]]
 }
+
+@test "dispatch never launches into an empty worktree: a moved task is rebuilt, an existing branch is reused, a failure stops it" {
+  full_move
+  BW="$(bmeta "$A" .worktree)"
+  git -C "$B/work/proj" worktree remove --force "$BW"
+  # chartroom worktree (dispatch's step) on a moved task rebuilds it from its migrated branch and changes.
+  run on_b worktree "$A"
+  [ "$status" -eq 0 ]; [ "$output" = "$BW" ]
+  [ "$(git -C "$BW" status --porcelain | sort)" = "$(git -C "$W" status --porcelain | sort)" ]
+  # A task (not moved) whose branch already exists: the worktree is added on that branch, not -b.
+  X="$(CHARTROOM_HOME="$BH" cr new --project "$B/work/proj" --title "branch exists" | sed -n 's/^id=//p')"
+  git -C "$B/work/proj" branch "$(jq -r .branch "$BH/tasks/$X/meta.json")" main
+  run on_b worktree "$X"
+  [ "$status" -eq 0 ]; [ -d "$output" ]
+  # A worktree that cannot be made stops it, and records nothing empty.
+  Y="$(CHARTROOM_HOME="$BH" cr new --project "$B/work/proj" --title "cannot add" | sed -n 's/^id=//p')"
+  jq '.base_sha = "0000000000000000000000000000000000000000"' "$BH/tasks/$Y/meta.json" >"$T/y" && mv "$T/y" "$BH/tasks/$Y/meta.json"
+  run on_b worktree "$Y"
+  [ "$status" -ne 0 ]; [[ "$output" == *"could not add a worktree"* ]]
+  [ -z "$(jq -r '.worktree // ""' "$BH/tasks/$Y/meta.json")" ]
+  ! grep -q 'note: worktree $' "$BH/tasks/$Y/events.log"
+}

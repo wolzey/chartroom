@@ -635,17 +635,26 @@ cmd_worktree() {
   local id="${1:-}"; [[ -n "$id" ]] || die "usage: chartroom worktree <id>"; need_task "$id"
   local wt; wt="$(meta "$id" worktree)"
   if [[ -n "$wt" && -d "$wt" ]]; then echo "$wt"; return; fi
+  # A task moved here from another machine (lib/migrate.sh) is rebuilt from its migrated branch and
+  # changes at its recorded path, not cut fresh from its base.
+  if [[ -n "$(meta "$id" migrated_from)" && -f "$(tdir "$id")/migrate/branch.json" ]]; then
+    migrate_materialize "$id" | tail -1; return
+  fi
   local project base_sha kind branch
   project="$(meta "$id" project)"; base_sha="$(meta "$id" base_sha)"; kind="$(meta "$id" kind)"; branch="$(meta "$id" branch)"
   wt="$(worktree_path "$id")"
   [[ ! -e "$wt" ]] || die "worktree path $wt already exists and is not recorded for $id"
   mkdir -p "$(dirname "$wt")"
-  if [[ "$kind" == ship ]]; then
-    git -C "$project" worktree add --quiet -b "$branch" "$wt" "$base_sha" >&2
+  # Run in a command substitution (dispatch), where errexit does not apply: every failure is checked.
+  if [[ "$kind" == ship ]] && git -C "$project" rev-parse -q --verify "refs/heads/$branch" >/dev/null 2>&1; then
+    git -C "$project" worktree add --quiet "$wt" "$branch" >&2 || die "could not add a worktree for $id on its existing branch $branch"
+  elif [[ "$kind" == ship ]]; then
+    git -C "$project" worktree add --quiet -b "$branch" "$wt" "$base_sha" >&2 || die "could not add a worktree for $id (branch $branch from $base_sha)"
   else
-    git -C "$project" worktree add --quiet --detach "$wt" "$base_sha" >&2
+    git -C "$project" worktree add --quiet --detach "$wt" "$base_sha" >&2 || die "could not add a worktree for $id at $base_sha"
   fi
-  wt="$(cd "$wt" && pwd -P)"
+  wt="$(cd "$wt" && pwd -P)" || die "the new worktree $wt for $id is not there"
+  [[ -n "$wt" ]] || die "no worktree for $id"
   meta_set "$id" worktree "$wt"
   # Only a worktree chartroom created itself may have its trust dialog answered automatically.
   meta_set "$id" worktree_created 1
@@ -669,7 +678,10 @@ cmd_dispatch() {
   meta_set "$id" backend "$SELECTED"
   runner="${SELECTED%%:*}"; agent=""; [[ "$SELECTED" == *:* ]] && agent="${SELECTED#*:}"
   # (a pinned task's worktree is made on its device)
-  if [[ "$runner" != node && ( "$runner" != subagent || "$kind" == ship ) ]]; then wt="$(cmd_worktree "$id")"; fi
+  if [[ "$runner" != node && ( "$runner" != subagent || "$kind" == ship ) ]]; then
+    wt="$(cmd_worktree "$id")" || exit 1
+    [[ -n "$wt" && -d "$wt" ]] || die "dispatch $id: no worktree to run in (got '${wt}')"
+  fi
   # A parked worker is not resumed by a dispatch: that starts a fresh one on the brief.
   if [[ -n "$(meta "$id" parked)" ]]; then
     log_event "$id" note "the parked session $(meta "$id" session_id) is left behind: a dispatch starts a fresh worker"
