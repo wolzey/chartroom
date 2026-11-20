@@ -30,7 +30,7 @@ on_c() { CHARTROOM_HOME="$CH" cr "$@"; }
 on_b() { CHARTROOM_HOME="$BH" cr "$@"; }
 cmeta() { local f="$CH/tasks/$1/meta.json"; jq "${@:2}" "$f" >"$f.tmp" && mv "$f.tmp" "$f"; }
 bmeta() { jq -r "$2" "$BH/tasks/$1/meta.json"; }
-S() { printf '%s/records/migrate/local-app' "$BH"; }
+S() { printf '%s/chartroom/migrate/local-app' "$XDG_STATE_HOME"; }
 
 # A client task: created, its brief given an intent, marked dispatched on hc:claude with a session.
 ctask() { # <title> [kind]

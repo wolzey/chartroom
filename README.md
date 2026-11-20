@@ -436,7 +436,7 @@ chartroom migrate-home rollback --from laptop --home acme   # undoes move (and f
   - **(c)** stale (waiting overdue or idle a week) with unlanded work: bundled and closed;
   - **(d)** live or recently active: a live worker moves with its worktree; a recently active one is kept, and its worktree is rebuilt on first use.
 
-  `records/migrate/<from>-<home>/decisions.tsv` holds one prefilled line per task; edit its action
+  `~/.local/state/chartroom/migrate/<from>-<home>/decisions.tsv` (outside the home, so a client copy never carries it) holds one prefilled line per task; edit its action
   column (`accept`, `close`, `keep`, `bundle`, `move`). Git facts it cannot read count as work, so
   nothing unread is ever closed as landed. `close` refuses a dirty worktree, and the task is kept:
   migrate-home never runs `--discard`.

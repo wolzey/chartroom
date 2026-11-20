@@ -27,7 +27,7 @@
 # writes there only in snapshot, freeze, settle, finish, rollback and reap, and --dry-run prints
 # those commands without running them. Ids, paths and branches come from the client's own records.
 #
-# State: <brain home>/records/migrate/<from>-<home>/ (state.json, triage.json, decisions.tsv,
+# State: ~/.local/state/chartroom/migrate/<from>-<home>/ (state.json, triage.json, decisions.tsv,
 # facts.jsonl, ledger.tsv, the staged merge, backups of every brain file a merge replaced).
 #
 # The merge, for a home both machines have (B: the brain's, C: the client's):
@@ -146,7 +146,10 @@ mig_setup() {
   else MIG_CBIN="${CHARTROOM_MIGRATE_CLIENT_BIN:-$MIG_CLIENT_HOME_DIR/.local/bin/chartroom}"; fi
   MIG_BCLAUDE="$(claude_config_dir)"
   MIG_BCODEX="${CODEX_HOME:-$HOME/.codex}"
-  MIG_S="$MIG_BHOME/records/migrate/$(mig_label)-$MIG_HOME"
+  # Outside the home: a client home's copy of the brain's records must not carry this (staged copies
+  # of a whole home, bundles). A state dir from an older migrate-home, inside the home, is still used.
+  MIG_S="${XDG_STATE_HOME:-$HOME/.local/state}/chartroom/migrate/$(mig_label)-$MIG_HOME"
+  [[ -f "$MIG_BHOME/records/migrate/$(mig_label)-$MIG_HOME/state.json" ]] && MIG_S="$MIG_BHOME/records/migrate/$(mig_label)-$MIG_HOME"
   mkdir -p "$MIG_S"
   [[ -f "$MIG_S/state.json" ]] || jq -n --argjson v "$CR_MIG_STATE_V" --arg from "$MIG_FROM" --arg home "$MIG_HOME" \
     --arg c "$MIG_CHOME" --arg b "$MIG_BHOME" --arg stamp "$(date -u +%Y%m%dT%H%M%SZ)" \
