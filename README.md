@@ -403,6 +403,53 @@ machine.
 - **Same lock as the board.** On the network, the radar and its peeks sit behind the same access
   token.
 
+### Several machines: nodes
+
+A **node** is a machine that can take crew work: this one, and any other you reach over ssh.
+Placing workers on them by itself is being built in stages ([docs/multi-machine.md](docs/multi-machine.md));
+today chartroom reads what each machine has room for and what it can run.
+
+```bash
+chartroom nodes                      # every node, this machine first
+chartroom nodes --project ~/src/shop # ... and which of them have a checkout of that project
+chartroom nodes --json
+chartroom node init --cpu 100 --battery allow   # on a machine: make it a node, with its own budgets
+chartroom node probe [--json]        # this machine's facts, as `nodes` reads them
+```
+
+```
+NODE           CONTACT  ROLE                    CPU                    MEM           POWER              IDLE  AGENTS  LOGINS                    TOOLS                       CHECKOUTS  UTIL
+studio (here)  ok       node: 10w cpu80% mem75%  28 (20P+8E) load 6.0  96G 79% free  AC                 2m    4/10    claude:ok codex:ok gh:ok  13 ok                       42         0.34
+m3             ok       node: 6w cpu100% mem75%  16 (12P+4E) load 1.2  48G 92% free  AC (battery 100%)  1h    0/6     claude:ok codex:ok gh:ok  11 ok missing:go down:docker  131        0.17
+```
+
+- **Which machines.** `CHARTROOM_NODES` (`label[=ssh-target] ...`, or `none`), else the radar's
+  list: `CHARTROOM_RADAR_MACHINES`, else herdr's enabled saved machines. This machine is always first.
+- **A node opts in.** `chartroom node init`, run on that machine, writes its budgets to
+  `~/.config/chartroom/node` (`CHARTROOM_NODE_CONFIG` moves it): at most N workers, a share of its
+  cores and memory, whether it may work on battery, the priority its workers will get, and where
+  its project checkouts are. It makes no home: a node has no XO. Without that file a machine is
+  listed as "not a node" and will never be given work. `CHARTROOM_NODE_ACCEPT=off` in it
+  withdraws the machine at once.
+- **Read-only, always.** The only thing that runs on another machine is the probe itself,
+  `lib/nodeprobe.sh`, sent over `ssh -o BatchMode=yes <target> 'bash -s'`: it needs nothing installed
+  there (not even chartroom), writes nothing, and runs on a Mac's own bash 3.2. Each machine is
+  probed side by side, and one that does not answer within `CHARTROOM_NODES_TIMEOUT` seconds (45) reads
+  `timeout`. ssh's own failures read `unreachable`, or `auth` when ssh would need you (a key, a
+  host key, a Tailscale check).
+- **Tools and logins are checked where a worker would run.** A tool counts when it works, not
+  when its binary is there (`docker` needs its daemon to answer). On a Mac, an ssh session cannot
+  read the login keychain, so claude, codex and gh would all read logged out: the probe runs those
+  checks inside the machine's hc core (`hc exec`), which runs in the login session, and only when
+  that core already answers (it never starts one). With no core, logins read `unknown` over ssh.
+- **UTIL** is what the node's use would be with one more worker, against its own budgets:
+  the largest of (agents + 1) / max workers, (load + `CHARTROOM_WORKER_CPU`) / (cores × cpu share),
+  and (memory in use + `CHARTROOM_WORKER_MEM_GB`) / (memory × memory share). Placement will put
+  each new task where it is lowest, so the machines fill evenly, each against its own budget.
+  Above 1 the node is full.
+- **On macOS, budgets are admission control,** not hard caps: there are no cgroups. A worker's own
+  builds can still push a node past its share; placement then sends new work elsewhere.
+
 ### Readable events and a page per task
 
 A worker's event is one line in `events.log`, often a long one. The radar's panel and the task
@@ -1142,6 +1189,10 @@ machine), then `~/.config/chartroom/config` (`KEY=VALUE`, no shell evaluation;
 | `CHARTROOM_GH` | `gh` | the gh binary the dashboard uses for PR states |
 | `CHARTROOM_MACHINE_NAME` | the host name | this machine's label on the [fleet radar](#the-fleet-radar-every-agent-on-every-machine) |
 | `CHARTROOM_RADAR_MACHINES` | herdr's saved machines | the other machines the radar reads, read-only over ssh: `label[=ssh-target] ...`, or `none` |
+| `CHARTROOM_NODES` | the radar's list | the other machines `chartroom nodes` reads: `label[=ssh-target] ...`, or `none` ([nodes](#several-machines-nodes)) |
+| `CHARTROOM_NODES_TIMEOUT` | `45` | seconds `chartroom nodes` waits for a machine's probe |
+| `CHARTROOM_WORKER_CPU` / `CHARTROOM_WORKER_MEM_GB` | `1.5` / `1.5` | a worker's assumed cost in cores and GB, in a node's UTIL |
+| `CHARTROOM_NODE_CONFIG` | `~/.config/chartroom/node` | environment only: this machine's node file (`chartroom node init`), with `CHARTROOM_NODE_MAX_WORKERS`, `_CPU_BUDGET`, `_MEM_BUDGET` (percent), `_ON_BATTERY` (`pause`/`allow`), `_PRIORITY` (`normal`/`nice`/`background`), `_PROJECT_ROOTS` and `_ACCEPT` (`on`/`off`) |
 | `CHARTROOM_RADAR_REMOTE_PATH` | `$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin` | put first on PATH on another machine (its non-interactive ssh shell lacks them) |
 | `CHARTROOM_RADAR_LOCAL_MIN_SECONDS` / `_LOCAL_MAX_SECONDS` / `_REMOTE_SECONDS` | `15` / `60` / `60` | while the radar is open: this machine is re-read on a change at most this often, and at least this often; another machine this often |
 | `CHARTROOM_RADAR_DONE_HOURS` / `_STALE_DAYS` | `24` / `3` | the radar's "active only" view archives a docked task quiet this many hours, and a task whose session is gone and quiet this many days |

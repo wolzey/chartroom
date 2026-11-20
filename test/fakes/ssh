@@ -5,6 +5,8 @@
 #   status.json   what `chartroom status --json --all-homes` prints there
 #   peek.txt      what `chartroom peek` prints there
 #   files/<name>  what `cat <home>/tasks/<id>/<name>` prints
+#   probe.tsv     what lib/nodeprobe.sh prints there (`chartroom nodes`: `bash -s` with the script
+#                 on stdin, whose cksum is logged as "<target> <stdin cksum N SIZE>")
 # Every call is logged as "<target> <remote command>" to $FAKE_SSH_DIR/calls.log.
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -24,6 +26,9 @@ if [[ -f "$d/exit" ]]; then cat "$d/stderr" >&2 2>/dev/null; exit "$(cat "$d/exi
 case "$cmd" in
   *"chartroom status --json --all-homes"*) cat "$d/status.json" ;;
   *"chartroom peek "*) cat "$d/peek.txt" ;;
+  *" bash -s") printf '%s <stdin cksum %s>\n' "$target" "$(cksum | awk '{print $1, $2}')" >>"$FAKE_SSH_DIR/calls.log"
+    [[ -f "$d/probe.tsv" ]] || { echo "bash: no probe here" >&2; exit 1; }
+    cat "$d/probe.tsv" ;;
   "cat '"*) f="${cmd%\'}"; f="${f##*/}"; [[ -f "$d/files/$f" ]] || { echo "cat: no such file" >&2; exit 1; }; cat "$d/files/$f" ;;
   *) echo "fake ssh: unexpected remote command: $cmd" >&2; exit 99 ;;
 esac
