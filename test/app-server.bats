@@ -31,6 +31,21 @@ post() { # <path> <json> [curl args...]
   local p="$1" j="$2"; shift 2
   curl -s -o "$BATS_TEST_TMPDIR/body" -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "$j" "$@" "http://127.0.0.1:$PORT$p"
 }
+# act <home> <action> <json> [action-id]: a write as the app makes it; prints the HTTP code
+act() {
+  curl -s -o "$BATS_TEST_TMPDIR/body" -w '%{http_code}' -X POST -H 'Content-Type: application/json' -H 'X-Chartroom-App: 1' \
+    ${4:+-H "X-Chartroom-Action: $4"} -d "$3" "http://127.0.0.1:$PORT/api/v1/homes/$1/$2"
+}
+# outcome <action-id>: waits for the action to finish; prints done or failed, then its error
+outcome() {
+  local i st
+  for i in $(seq 1 150); do
+    st="$(curl -s "http://127.0.0.1:$PORT/api/v1/state" | jq -r --arg id "$1" '.actions[$id] | if . == null then "unknown" else "\(.state)\t\(.error // "")" end')"
+    case "$st" in done*|failed*) printf '%s\n' "$st"; return 0 ;; esac
+    sleep 0.1
+  done
+  echo "timeout $st"; return 1
+}
 state() { # waits for both homes' first snapshot
   local i
   for i in $(seq 1 100); do
@@ -77,7 +92,7 @@ state() { # waits for both homes' first snapshot
   start --no-auth
   state
   [ "$(jq -r '[.homes[].name] | join(" ")' "$BATS_TEST_TMPDIR/state")" = "acme globex" ]
-  [ "$(jq -r '[.homes[].snapshot.counts.needs] | add' "$BATS_TEST_TMPDIR/state")" -eq 9 ]
+  [ "$(jq -r '[.homes[].snapshot.counts.needs] | add' "$BATS_TEST_TMPDIR/state")" -eq 12 ]
 }
 
 @test "writes: only from the app (its header, JSON, same origin)" {
@@ -88,7 +103,8 @@ state() { # waits for both homes' first snapshot
   [ "$(post /api/v1/homes/acme/tell '{"text":"hi"}' -H 'X-Chartroom-App: 1' -H 'Origin: http://evil.example')" = 403 ]
   [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'X-Chartroom-App: 1' -H 'Content-Type: text/plain' -d hi "http://127.0.0.1:$PORT/api/v1/homes/acme/tell")" = 403 ]
   [ ! -s "$CHARTROOM_HOME/relays/inbox.ndjson" ]
-  [ "$(post /api/v1/homes/acme/tell '{"text":"hi from the app","re":"i-1234"}' -H 'X-Chartroom-App: 1' -H "Origin: http://127.0.0.1:$PORT")" = 200 ]
+  [ "$(post /api/v1/homes/acme/tell '{"text":"hi from the app","re":"i-1234"}' -H 'X-Chartroom-App: 1' -H 'X-Chartroom-Action: a-test-0001' -H "Origin: http://127.0.0.1:$PORT")" = 202 ]
+  [ "$(outcome a-test-0001)" = "done	" ]
   [ "$(cr tell list --json | jq -r '.[0] | "\(.via) \(.re) \(.text)"')" = "app i-1234 hi from the app" ]
 }
 
@@ -96,10 +112,11 @@ state() { # waits for both homes' first snapshot
   start --no-auth
   state
   card="$(jq -r '.homes[] | select(.name == "globex") | .snapshot.needs[] | select(.title | test("Rate limits")) | .card' "$BATS_TEST_TMPDIR/state")"
-  [ "$(post /api/v1/homes/globex/answer "{\"card\":\"$card\",\"answers\":[{\"q\":1,\"choice\":\"Per partner\"}]}" -H 'X-Chartroom-App: 1')" = 200 ]
+  [ "$(act globex answer "{\"card\":\"$card\",\"answers\":[{\"q\":1,\"choice\":\"Per partner\"}]}" a-test-0002)" = 202 ]
+  [ "$(outcome a-test-0002)" = "done	" ]
   [ -f "$BATS_TEST_TMPDIR/h/globex/questions/$card.answer.json" ]
-  [ "$(post /api/v1/homes/globex/answer "{\"card\":\"$card\",\"answers\":[{\"q\":1,\"note\":\"x\"}]}" -H 'X-Chartroom-App: 1')" = 409 ]
-  [[ "$(jq -r .error "$BATS_TEST_TMPDIR/body")" == *"already answered"* ]]
+  [ "$(act globex answer "{\"card\":\"$card\",\"answers\":[{\"q\":1,\"note\":\"x\"}]}" a-test-0003)" = 202 ]
+  [[ "$(outcome a-test-0003)" == "failed	"*"already answered"* ]]
   # a card id that is not one is refused before anything runs
   [ "$(post /api/v1/homes/globex/answer '{"card":"../../etc"}' -H 'X-Chartroom-App: 1')" = 400 ]
 }
@@ -108,13 +125,16 @@ state() { # waits for both homes' first snapshot
   start --no-auth
   state
   ref="$(jq -r '.homes[0].snapshot.needs[] | select(.title | test("Gift cards")) | .ref' "$BATS_TEST_TMPDIR/state")"
-  [ "$(post /api/v1/homes/acme/snooze "{\"ref\":\"$ref\",\"for\":\"1h\"}" -H 'X-Chartroom-App: 1')" = 200 ]
+  [ "$(act acme snooze "{\"ref\":\"$ref\",\"for\":\"1h\"}" a-test-0004)" = 202 ]
+  [ "$(outcome a-test-0004)" = "done	" ]
   [ "$(cr snooze list --json | jq -r --arg r "$ref" '.[$r] != null')" = true ]
   task="$(jq -r '.homes[0].snapshot.needs[] | select(.kind == "review") | .task' "$BATS_TEST_TMPDIR/state")"
-  [ "$(post /api/v1/homes/acme/accept "{\"task\":\"$task\"}" -H 'X-Chartroom-App: 1')" = 200 ]
+  [ "$(act acme accept "{\"task\":\"$task\"}" a-test-0005)" = 202 ]
+  [ "$(outcome a-test-0005)" = "done	" ]
   grep -q ' note: accepted' "$CHARTROOM_HOME/tasks/$task/events.log"
-  inbox="$(jq -r '.homes[0].snapshot.needs[] | select(.kind == "inbox") | .ref' "$BATS_TEST_TMPDIR/state")"
-  [ "$(post /api/v1/homes/acme/done "{\"ref\":\"$inbox\"}" -H 'X-Chartroom-App: 1')" = 200 ]
+  inbox="$(jq -r '[.homes[0].snapshot.needs[] | select(.kind == "inbox") | .ref] | first' "$BATS_TEST_TMPDIR/state")"
+  [ "$(act acme "done" "{\"ref\":\"$inbox\"}" a-test-0006)" = 202 ]
+  [ "$(outcome a-test-0006)" = "done	" ]
   run grep -q "$inbox" "$CHARTROOM_HOME/inbox.md"
   [ "$status" -ne 0 ]
   [ "$(post /api/v1/homes/acme/close '{"task":"--discard"}' -H 'X-Chartroom-App: 1')" = 400 ]
@@ -180,7 +200,57 @@ state() { # waits for both homes' first snapshot
   CHARTROOM_TAILSCALE="$BIN/fake-ts" run cr app doctor
   [[ "$output" == *"tailscale serve: on: https://brain.example.ts.net"* ]]
   cr app stop >/dev/null
-  run cr app open --no-auth
+  run cr app open --no-auth --port 0
   [ "$status" -eq 0 ]
   [[ "${lines[${#lines[@]}-1]}" == "app open: http://127.0.0.1:"* ]]
+}
+
+@test "actions: accepted at once and run in the background; the same id never runs twice, even after a restart" {
+  start --no-auth
+  state
+  # accepted before the verb has run: the answer is 202 and the action is queued or running
+  [ "$(act acme tell '{"text":"one"}' a-dedupe-0001)" = 202 ]
+  [[ "$(jq -r .state "$BATS_TEST_TMPDIR/body")" =~ ^(queued|running|done)$ ]]
+  [ "$(outcome a-dedupe-0001)" = "done	" ]
+  # a retry of the same action (the page lost the answer, say) is the same action
+  [ "$(act acme tell '{"text":"one"}' a-dedupe-0001)" = 202 ]
+  [ "$(jq -r .state "$BATS_TEST_TMPDIR/body")" = "done" ]
+  [ "$(cr tell list --json | jq '[.[] | select(.text == "one")] | length')" -eq 1 ]
+  # the journal keeps it across a restart
+  cr app stop >/dev/null
+  start --no-auth
+  state
+  [ "$(act acme tell '{"text":"one"}' a-dedupe-0001)" = 202 ]
+  [ "$(jq -r .state "$BATS_TEST_TMPDIR/body")" = "done" ]
+  [ "$(cr tell list --json | jq '[.[] | select(.text == "one")] | length')" -eq 1 ]
+  # a failure is reported, not hidden
+  [ "$(act acme close '{"task":"no-such-task-0000"}' a-fail-0001)" = 202 ]
+  [[ "$(outcome a-fail-0001)" == "failed	"*"no-such-task-0000"* ]]
+}
+
+@test "actions: one accepted but never run (the server stopped first) runs when the server starts again" {
+  start --no-auth
+  state
+  cr app stop >/dev/null
+  printf '%s\n' '{"id":"a-replay-0001","home":"acme","action":"tell","argv":["tell","--via","app","-"],"stdin":"left in the journal","cleanup":null,"state":"queued","error":null,"at":"2026-01-01T00:00:00Z","done_at":null}' >>"$BATS_TEST_TMPDIR/app-actions.ndjson"
+  start --no-auth
+  state
+  [ "$(outcome a-replay-0001)" = "done	" ]
+  [ "$(cr tell list --json | jq '[.[] | select(.text == "left in the journal")] | length')" -eq 1 ]
+}
+
+@test "bulk close: one entry per item; a task with work it cannot keep refuses on its own and says why" {
+  ok_task="$(cr status --json | jq -r '.[] | select(.title | test("stock badge")) | .id')"
+  dirty="$(cr status --json | jq -r '.[] | select(.title | test("Gift cards")) | .id')"
+  wt="$(cr worktree "$dirty" | tail -1)"
+  echo "unsaved work" >"$wt/notes.txt"
+  start --no-auth
+  state
+  [ "$(act acme close "{\"task\":\"$ok_task\"}" a-bulk-0001)" = 202 ]
+  [ "$(act acme close "{\"task\":\"$dirty\"}" a-bulk-0002)" = 202 ]
+  [ "$(outcome a-bulk-0001)" = "done	" ]
+  out="$(outcome a-bulk-0002)"
+  [[ "$out" == "failed	refusing to close $dirty: uncommitted work in "* ]]
+  [ -f "$wt/notes.txt" ]
+  [ -z "$(jq -r '.closed // empty' "$CHARTROOM_HOME/tasks/$dirty/meta.json")" ]
 }

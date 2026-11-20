@@ -5,6 +5,9 @@
 // snapshot (lib/app/snapshot.jq); this file only arranges it.
 var AppModel = (function () {
   "use strict";
+  // eventfmt.js: the page loads it before this file; under node it is required beside the tests
+  const EF_HEAD = typeof EventFmt !== "undefined" ? EventFmt
+    : typeof require === "function" ? (() => { try { return require("../../lib/dashboard/eventfmt.js"); } catch (e) { return null; } })() : null;
 
   // Kinds, as the snapshot names them, onto the design's glyphs and labels.
   const KINDS = {
@@ -53,7 +56,7 @@ var AppModel = (function () {
   // Where an item stands: "open" (in Needs me), "sent" (answered, waiting on the XO), "snoozed", "held"
   // (focus mode), or "gone" (acted on here a moment ago; the next snapshot drops it).
   function standing(it, local) {
-    if (local && local[it.key]) return local[it.key];
+    if (local && local[it.key]) return local[it.key]; // "sent" or "snoozed": an action on its way from here
     if (it.sent) return "sent";
     if (it.snoozed_until && Date.parse(it.snoozed_until) > Date.now()) return "snoozed";
     if (it.held) return "held";
@@ -108,35 +111,71 @@ var AppModel = (function () {
       return it.questions.map((q) => ({ id: q.id, text: q.text, context: q.context || null, why: q.why || null,
         options: (q.options || []).map((o) => ({ label: o.label, detail: o.detail || null, rec: !!o.rec })), free: !(q.options || []).length }));
     }
-    const text = it.text || it.summary || "";
+    const text = askText(it.text || it.summary || "");
     let parsed = null;
     if (EventFmt && it.type === "task") {
       try { parsed = EventFmt.parseEvent(it.kind === "decide" || it.kind === "approve" ? "decision" : it.kind, text); } catch (e) { parsed = null; }
     }
-    const options = [];
-    let lead = text;
-    if (parsed) {
-      lead = parsed.headline || text;
-      for (const b of parsed.blocks || []) {
-        for (const p of b.parts || []) {
-          if (p.type !== "options") continue;
-          for (const o of p.items) {
-            // the mark is shown as a tag, so "per partner, recommended" reads "Per partner"
-            const label = (o.title || o.text || "").replace(/[,;:]?\s*\(?(recommended|preferred)\)?\s*$/i, "").replace(/[.\s]+$/, "");
-            if (label) options.push({ label, detail: o.title ? o.text || null : null, rec: !!o.recommended });
-          }
+    const lead = (parsed && parsed.headline) || text;
+    // Each list of options in the ask is one question: a worker or XO that asks several things at
+    // once wrote a grilling round, and it is answered as one (the round page, never the quick view).
+    const qs = [];
+    for (const b of (parsed && parsed.blocks) || []) {
+      for (const p of b.parts || []) {
+        if (p.type !== "options") continue;
+        const options = [];
+        for (const o of p.items) {
+          const label = (o.title || o.text || "").replace(/[.\s]+$/, "");
+          // Only an explicit marker recommends: "(1) RECOMMENDED: ..." (the label leading the option)
+          // or "(1, recommended)". A word in the option's text ("Not recommended; ...") never does.
+          if (label) options.push({ label, detail: o.title ? o.text || null : null, rec: !!(o.recommended && o.recword) });
         }
-        if (options.length) break;
+        // At most one recommendation per question: two marked options recommend neither.
+        if (options.filter((o) => o.rec).length > 1) options.forEach((o) => { o.rec = false; });
+        if (!options.length) continue;
+        const said = (b.parts || []).filter((x) => x.type === "p").map((x) => x.text).join(" ");
+        const label = b.label && !/^(options?|choices)$/i.test(b.label) ? b.label : null;
+        qs.push({ label, said, options });
       }
     }
-    return [{ id: 1, text: lead, context: null, why: null, options, free: options.length === 0 }];
+    if (qs.length <= 1) {
+      const options = qs.length ? qs[0].options : [];
+      return [{ id: 1, text: lead, context: null, why: null, options, free: options.length === 0 }];
+    }
+    // an unlabelled first list answers the ask's own lead; the others are named by their label
+    return qs.map((q, i) => {
+      const text = q.label || (i === 0 ? lead : q.said) || "Question " + (i + 1);
+      const context = q.said && q.said !== text ? q.said : null;
+      return { id: i + 1, text, context, why: null, options: q.options, free: false };
+    });
+  }
+
+  // An item with several questions is a round, whatever it came from: it opens on the round page.
+  function promote(it, EventFmt) {
+    if (it.kind === "round" || it.type !== "task" || !it.card || it.kind === "approve") return it;
+    const qs = questions(it, EventFmt);
+    return qs.length > 1 ? Object.assign({}, it, { kind: "round", questions: qs, asked_kind: it.kind }) : it;
+  }
+
+  // A worker's ask as it was meant: "headline --detail rest" is a `chartroom event` whose flag came
+  // after the headline, so the flag went into the text. It reads as the headline, then the detail.
+  function askText(text) {
+    return String(text || "").replace(/\s+--detail\s+/, ". Details: ");
+  }
+
+  // The headline of a worker's event text, never its detail: the first sentence or clause.
+  function headline(text) {
+    const t = askText(text);
+    if (EF_HEAD) { try { const p = EF_HEAD.parseEvent("progress", t); if (p.headline) return p.headline; } catch (e) { /* plain */ } }
+    const m = /^(.{1,200}?)(?:[.:;](?:\s|$)|\s+Details:)/.exec(t);
+    return (m ? m[1] : t.slice(0, 200)).trim();
   }
 
   // The parts of a worker's ask after its headline, as label + text pairs, for the quick view.
   function details(it, EventFmt) {
     if (!EventFmt || it.type !== "task" || !(it.text || it.summary)) return [];
     let parsed;
-    try { parsed = EventFmt.parseEvent("decision", it.text || it.summary); } catch (e) { return []; }
+    try { parsed = EventFmt.parseEvent("decision", askText(it.text || it.summary)); } catch (e) { return []; }
     const out = [];
     for (const b of parsed.blocks || []) {
       const text = (b.parts || []).filter((p) => p.type === "p").map((p) => p.text)
@@ -164,9 +203,10 @@ var AppModel = (function () {
   // The body of an answer for POST /answer.
   function answerBody(it, picks, notes, action) {
     if (action) return { card: it.card, action, note: (notes && notes[1]) || null };
-    const qs = Array.isArray(it.questions) ? it.questions.map((q) => q.id) : [1];
-    return { card: it.card, answers: qs.map((id) => ({ q: id, choice: picks && picks[id] != null ? picks[id] : null,
-      note: notes && notes[id] && notes[id].trim() ? notes[id].trim() : null })) };
+    const qs = Array.isArray(it.questions) ? it.questions : [{ id: 1 }];
+    // a worker's round has no record of its questions: each answer carries its question's words
+    return { card: it.card, answers: qs.map((q) => Object.assign({ q: q.id, choice: picks && picks[q.id] != null ? picks[q.id] : null,
+      note: notes && notes[q.id] && notes[q.id].trim() ? notes[q.id].trim() : null }, it.asked_kind && q.text ? { question: q.text } : {})) };
   }
 
   function answered(it, picks, notes) {
@@ -206,6 +246,67 @@ var AppModel = (function () {
     ];
   }
 
+  // Text with its links: [{text}] and [{href, label}] parts, in order. Any http(s) URL is a link
+  // (trailing punctuation stays text); a GitHub PR or issue reads "repo#123", its URL behind it.
+  const URL_RE = /https?:\/\/[^\s<>"'`]+/g;
+  function linkParts(text) {
+    const s = String(text == null ? "" : text), out = [];
+    let at = 0, m;
+    URL_RE.lastIndex = 0;
+    while ((m = URL_RE.exec(s))) {
+      let url = m[0];
+      // a sentence's own punctuation, or a closing bracket the URL did not open, is not the URL's
+      while (/[.,;:!?)\]}]$/.test(url)) {
+        const last = url[url.length - 1];
+        if ((last === ")" && (url.match(/\(/g) || []).length >= (url.match(/\)/g) || []).length)) break;
+        url = url.slice(0, -1);
+      }
+      if (m.index > at) out.push({ text: s.slice(at, m.index) });
+      const gh = /^https:\/\/github\.com\/[^/]+\/([^/]+)\/(pull|issues)\/(\d+)(?:[/?#].*)?$/.exec(url);
+      out.push({ href: url, label: gh ? gh[1] + "#" + gh[3] : url });
+      at = m.index + url.length;
+      URL_RE.lastIndex = at;
+    }
+    if (at < s.length) out.push({ text: s.slice(at) });
+    return out;
+  }
+
+  // Bulk actions over selected items: which chartroom action each item gets, and which it skips
+  // (and why). verb: done | accept | close | snooze. "Done" means what it means for that item:
+  // an inbox question or a draft is marked done, a finished task is accepted; a question still
+  // waiting for an answer is never "done" without one. Close is chartroom close: it never discards
+  // work, and a task with work it cannot keep refuses on its own, item by item.
+  function bulkPlan(items, verb, extra) {
+    const run = [], skip = [];
+    for (const it of items) {
+      let a = null, why = null;
+      if (verb === "done") {
+        if ((it.kind === "inbox" || it.kind === "artifact") && it.ref) a = ["done", { ref: it.ref }];
+        else if (it.kind === "review" && it.task) a = ["accept", { task: it.task }];
+        else why = "it waits for an answer";
+      } else if (verb === "accept") {
+        if (it.kind === "review" && it.task) a = ["accept", { task: it.task }];
+        else why = "only a finished task is accepted";
+      } else if (verb === "close") {
+        if (it.type === "task" && it.task) a = ["close", { task: it.task }];
+        else why = "it is not a task";
+      } else if (verb === "snooze") {
+        if (it.ref) a = ["snooze", Object.assign({ ref: it.ref }, extra || {})];
+        else why = "it cannot be snoozed";
+      }
+      if (a) run.push({ item: it, action: a[0], body: a[1] }); else skip.push({ item: it, why });
+    }
+    return { run, skip };
+  }
+
+  // The keys from one row to another, inclusive, in list order (shift-click, Shift+J/K).
+  function range(list, fromKey, toKey) {
+    const i = list.findIndex((x) => x.key === fromKey), j = list.findIndex((x) => x.key === toKey);
+    if (i < 0 || j < 0) return j >= 0 ? [toKey] : [];
+    const [a, b] = i <= j ? [i, j] : [j, i];
+    return list.slice(a, b + 1).map((x) => x.key);
+  }
+
   // Palette entries for a query: commands first, then items, best match first.
   function search(entries, q) {
     const s = String(q || "").trim().toLowerCase();
@@ -219,6 +320,6 @@ var AppModel = (function () {
   }
 
   return { KINDS, GROUPS, STATUS, kind, items, homes, standing, visible, ordered, counts, projects, questions, details,
-    primary, answerBody, answered, move, ago, agoText, snoozes, search };
+    primary, answerBody, answered, move, ago, agoText, snoozes, search, askText, headline, bulkPlan, range, promote, linkParts };
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = AppModel;

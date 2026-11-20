@@ -2,7 +2,7 @@
 // note, answered together and submitted once. The first answer wins: if the terminal answered it
 // first, the page says so and shows that answer.
 import { html, useEffect } from "./html.js";
-import { Pill, HomeTag, Options, Why } from "./ui.js";
+import { Pill, HomeTag, Options, Why, Linked } from "./ui.js";
 
 const M = window.AppModel;
 
@@ -21,7 +21,7 @@ export function RoundPage({ it, picks, notes, setPick, setNote, focus, setFocus,
   return html`<main class="a-main">
     <header class="a-head r-head">
       <div class="a-head-l"><button class="link faint" onClick=${onBack}>Needs me</button><span class="faint">/</span>
-        <span class="faint">${it.home}</span><span class="faint">/</span><h1>${it.title}</h1></div>
+        <span class="faint">${it.home}</span><span class="faint">/</span><h1 class="truncate"><${Linked} text=${it.title} /></h1></div>
       <div class="row-flex"><${Pill} kind="round" text=${it.round && it.round.n ? "Round " + it.round.n + (it.round.of ? " of about " + it.round.of : "") : total + " questions"} /></div>
     </header>
     <div class="r-a">
@@ -36,7 +36,7 @@ export function RoundPage({ it, picks, notes, setPick, setNote, focus, setFocus,
         <div class="r-meta">
           <${HomeTag} name=${it.home} hue=${it.hue} />
           <span class="faint">asked ${M.agoText(it.at)}</span>
-          ${it.context ? html`<span class="muted">${it.context}</span>` : null}
+          ${it.context ? html`<span class="muted"><${Linked} text=${it.context} /></span>` : null}
         </div>
       </aside>
       <div class="r-qs">
@@ -47,8 +47,8 @@ export function RoundPage({ it, picks, notes, setPick, setNote, focus, setFocus,
               <div class="row-flex"><button class="btn primary" onClick=${onBack}>Back to Needs me</button></div></div></div>`
           : qs.map((q, i) => html`<article key=${q.id} id=${"q" + q.id} class=${"card qcard" + ((picks[q.id] != null || (notes[q.id] || "").trim()) ? " answered" : "") + (focus === i ? " focus" : "")}
                 onClick=${() => setFocus(i)}>
-              <div class="card-h"><span class="qn">${i + 1}</span><h3 class="qtitle grow">${q.text}</h3></div>
-              ${q.context ? html`<p class="qctx">${q.context}</p>` : null}
+              <div class="card-h"><span class="qn">${i + 1}</span><h3 class="qtitle grow"><${Linked} text=${q.text} /></h3></div>
+              ${q.context ? html`<p class="qctx"><${Linked} text=${q.context} /></p>` : null}
               ${q.options.length ? html`<${Options} options=${q.options} picked=${picks[q.id]} onPick=${(l) => setPick(q.id, l)} />` : null}
               <${Why} text=${q.why} />
               <textarea class="input note" rows="1" placeholder=${q.options.length ? "Other answer or a note" : "Your answer"}

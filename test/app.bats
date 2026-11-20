@@ -110,11 +110,25 @@ item() { snap | jq -c --arg t "$1" '[.needs[] | select(.title | test($t))][0]'; 
 @test "snapshot: Needs me groups every kind, and tasks carry the seven statuses" {
   s="$(snap)"
   kinds="$(jq -r '[.needs[] | "\(.kind)/\(.group)"] | sort | join(" ")' <<<"$s")"
-  [ "$kinds" = "approve/approve blocked/unblock decide/decide inbox/decide review/read round/decide" ]
+  [ "$kinds" = "approve/approve blocked/unblock decide/decide decide/decide inbox/decide inbox/decide review/read round/decide" ]
   [ "$(jq -r '.tasks[] | select(.title | test("stock badge")) | .status' <<<"$s")" = review ]
   [ "$(jq -r '.tasks[] | select(.title | test("Pick a cache")) | .status' <<<"$s")" = needs ]
   [ "$(jq -r '.tasks[] | select(.title | test("Pick a cache")) | .intent' <<<"$s")" = "Search feels slow on big catalogues; make it fast." ]
-  [ "$(jq -r '.counts.needs' <<<"$s")" -eq 6 ]
+  [ "$(jq -r '.counts.needs' <<<"$s")" -eq 8 ]
+}
+
+@test "ask: a round a worker asked is answered whole, each answer naming its question" {
+  card="$(item "Search index" | jq -r .card)"
+  task="$(item "Search index" | jq -r .task)"
+  run cr ask answer "$card" --via app - <<<'{"answers":[{"q":1,"question":"Options","choice":"One index per store"},{"q":2,"question":"Storage","note":""}]}'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"every question needs a choice or a note"* ]]
+  run cr ask answer "$card" --via app - <<<'{"answers":[{"q":1,"question":"Options","choice":"One index per store"},{"q":2,"question":"Storage","choice":"A SQLite sidecar","note":"for now"}]}'
+  [ "$status" -eq 0 ]
+  text="$(cr tell list --json | jq -r '.[-1].text')"
+  [[ "$text" == "Answers to $task's decision ("* ]]
+  [[ "$text" == *$'\n1. Options → One index per store'* ]]
+  [[ "$text" == *$'\n2. Storage → A SQLite sidecar. Note: for now'* ]]
 }
 
 @test "snooze: an item leaves Needs me until its time; off brings it back" {

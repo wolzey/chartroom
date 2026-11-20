@@ -18,7 +18,7 @@
 # A card the XO posts (stdin or a file, JSON):
 #   {"title": "...", "kind": "grill"|"choice", "context": "...", "project": "...", "task": "<id>",
 #    "initiative": "<id>", "round": {"n": 2, "of": 4},
-#    "questions": [{"text": "...", "context": "...", "why": "...", "multi": false,
+#    "questions": [{"text": "...", "context": "...", "why": "...",
 #                   "options": ["a", {"label": "b", "detail": "..."}], "recommended": 0 | "b"}]}
 # An answer (stdin, JSON): {"answers": [{"q": 1, "choice": "<option label>"|null, "note": "..."}],
 #   "action": "approve"|"changes" (a plan approval), "note": "..."}.
@@ -99,7 +99,7 @@ ask_normalize() { # <id> <at>
          | (if $r == null then null
             elif ($r | type) == "number" then (if $r >= 0 and $r < ($opts | length) then $r else error("question \($k + 1): .recommended \($r) is not an option index (0-based)") end)
             else ([$opts | to_entries[] | select(.value.label == $r) | .key] | first // error("question \($k + 1): .recommended names no option")) end) as $ri
-         | {id: ($k + 1), text: (.text | s), context: (.context | s), why: (.why | s), multi: (.multi == true),
+         | {id: ($k + 1), text: (.text | s), context: (.context | s), why: (.why | s),
             options: [$opts | to_entries[] | .value + {rec: (.key == $ri)}]}]}' 2>&1)" ||
     die "ask: $(sed -E 's/^jq: error \(at [^)]*\): //' <<<"$out")"
   printf '%s\n' "$out"
@@ -181,6 +181,10 @@ ask_words() { # <card-json> <answer-json>
       ($c.text | line | if length > 140 then .[0:139] + "…" else . end) as $ask
       | if $a.action == "approve" then "Approved \($c.task)'"'"'s plan" + (if ($a.note // "") != "" then ". Note: " + ($a.note | line) else "" end) + " (re: \($ask))"
         elif $a.action == "changes" then "Requested changes to \($c.task)'"'"'s plan: " + ($a.note // "" | line) + " (re: \($ask))"
+        elif ($a.answers | length) > 1 then
+          # a round asked by a worker: each answer names the question it answers
+          "Answers to \($c.task)'"'"'s \($c.event_kind) (\($ask)):"
+          + ([$a.answers[] | "\n\(.q). " + (if (.question | type) == "string" then (.question | line) + " → " else "" end) + say(.)] | join(""))
         else "Answer to \($c.task)'"'"'s \($c.event_kind) (\($ask)): " + say($a.answers[0] // {note: $a.note}) end
     elif $c.kind == "inbox" then "Answer to inbox item \($c.id) (\($c.text | line)): " + say($a.answers[0] // {note: $a.note})
     else
@@ -243,7 +247,7 @@ ask_answer() {
     elif $a.action == "changes" and (($a.note // "") | gsub("\\s"; "") | length) == 0 then "requesting changes needs a note saying what to change"
     elif $a.action != null then empty
     elif ($a.answers | type) != "array" or ($a.answers | length) == 0 then "no answers"
-    elif $c.kind == "event" or $c.kind == "inbox" then (if ($a.answers[0] | has) then empty else "the answer is empty" end)
+    elif $c.kind == "event" or $c.kind == "inbox" then (if ($a.answers | all(has)) then empty else "every question needs a choice or a note" end)
     else
       ([$c.questions[] | .id as $q | select([$a.answers[] | select(.q == $q and has)] | length == 0) | $q]) as $missing
       | ([$a.answers[] | select(.choice != null) | . as $x | select([$c.questions[] | select(.id == $x.q) | .options[] | select(.label == $x.choice)] | length == 0) | .q]) as $bad

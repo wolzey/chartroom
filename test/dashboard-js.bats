@@ -26,3 +26,5 @@ js() { # <suite>
 @test "herdr-xo: the Tasks panel finds a home's XO and what to type into it" { js herdr-xo; }
 @test "herdr-schedule: the Tasks panel reads the radar only while shown, after a change" { js herdr-schedule; }
 @test "app-model: the app's Needs me across homes, a card's questions, Enter, an answer's body" { js app-model; }
+@test "app-outbox: actions are instant, sent in the background, retried, failed and kept across a reload" { js app-outbox; }
+@test "app-contrast: every text colour of the app is at least 4.5:1, light and dark" { js app-contrast; }

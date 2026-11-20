@@ -41,9 +41,17 @@ app_fixture() { # <dir> <project-repo>
   id="$(app_fixture_task "$a" "$proj" "Nightly sitemap" "Search engines should see new products the next day.")"
   app_fixture_event "$a" "$id" waiting "on the CDN purge window. Details: until 02:00 UTC"
   CHARTROOM_HOME="$a" "$CHARTROOM" inbox add --project shop "Should the summer sale start on Monday or Wednesday?" >/dev/null
+  CHARTROOM_HOME="$a" "$CHARTROOM" inbox add --project shop "Q12: merge https://github.com/acme/shop/pull/418 before the sale, or after it?" >/dev/null
+  # a worker asking two things at once: a grilling round, answered in the main area
+  id="$(app_fixture_task "$a" "$proj" "Search index: shape before building" "Decide the index's shape before any code.")"
+  app_fixture_event "$a" "$id" decision "Two calls before I build. Options: (1) RECOMMENDED: one index per store. (2) one shared index. Storage: (1) Postgres full-text. (2) RECOMMENDED: a SQLite sidecar. Need: both answers."
 
   id="$(app_fixture_task "$g" "$proj" "Rate limits for the public API" "Partners hit us too hard at month end; protect the API.")"
-  app_fixture_event "$g" "$id" decision --detail "Options: (A) per key, 100 requests a minute. (B) per partner, recommended: one bucket for all their keys. Need: which." "How should we count requests?"
+  app_fixture_event "$g" "$id" decision --detail "Options: (A) per key, 100 requests a minute. (B) RECOMMENDED: per partner: one bucket for all their keys. Need: which." "How should we count requests?"
+  # shaped like a real ask that once read badly: a label recommends option 1, option 2 says "Not
+  # recommended" in its text, and the flag went into the headline ("... --detail ...")
+  id="$(app_fixture_task "$g" "$proj" "Turn deploy-on-merge back on for demo day" "Demo day needs main to ship on merge again.")"
+  app_fixture_event "$g" "$id" decision "The switch PR is green except the slow suite, which waits for auto-merge by design; merging needs you --detail PR: restore deploys on merge. Checks: 13 pass, 0 fail. Decision for you, because finishing the slow suite also merges the PR: (1) Recommended: you turn on auto-merge. That runs the slow suite and merges when it passes. (2) An admin bypass of the slow suite. Not recommended; it needs your explicit say-so."
   id="$(app_fixture_task "$g" "$proj" "Retire the v1 webhooks" "Nobody should still be on v1 by spring.")"
   app_fixture_event "$g" "$id" failed "the migration script hit a partner with 3 endpoints; stopped before any change"
   printf '%s' '{"title":"Search: what good looks like","kind":"grill","context":"Shaping the search initiative before stories.","round":{"n":1,"of":3},

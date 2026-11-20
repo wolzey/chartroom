@@ -3,6 +3,32 @@ import { html, useEffect, useRef } from "./html.js";
 
 const M = window.AppModel;
 
+// Text with every URL a link (a new tab, no opener); GitHub PRs and issues read "repo#123". A click
+// on a link never selects the row or card it sits in.
+export function Linked({ text }) {
+  if (text == null || text === "") return null;
+  return M.linkParts(text).map((p, i) => (p.href
+    ? html`<a key=${i} href=${p.href} target="_blank" rel="noopener noreferrer" title=${p.href} onClick=${(e) => e.stopPropagation()}>${p.label}</a>`
+    : p.text));
+}
+
+// The same for text rendered outside React (markdown.js's DOM): every URL in a text node, a link.
+export function linkifyDom(root) {
+  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walk.nextNode()) if (/https?:\/\//.test(walk.currentNode.nodeValue) && !walk.currentNode.parentElement.closest("a, code, pre")) nodes.push(walk.currentNode);
+  for (const n of nodes) {
+    const frag = document.createDocumentFragment();
+    for (const p of M.linkParts(n.nodeValue)) {
+      if (!p.href) { frag.append(p.text); continue; }
+      const a = document.createElement("a");
+      a.href = p.href; a.target = "_blank"; a.rel = "noopener noreferrer"; a.title = p.href; a.textContent = p.label;
+      frag.append(a);
+    }
+    n.replaceWith(frag);
+  }
+}
+
 export function Pill({ kind, text }) {
   const k = M.kind(kind);
   const cls = { decide: "decide", round: "round", approve: "approve", blocked: "blocked", read: "read", tidy: "tidy" }[k.glyph] || "read";
@@ -39,7 +65,7 @@ export function Options({ options, picked, onPick, compact }) {
     ${options.map((o, i) => html`<button key=${i} type="button" class=${"opt" + (o.rec ? " rec" : "")} role="radio"
         aria-checked=${picked === o.label} onClick=${() => onPick(picked === o.label ? null : o.label)}>
       <span class="n">${i + 1}</span>
-      <span class="grow"><span class="t">${o.label}</span>${o.detail && !compact ? html`<span class="d">${o.detail}</span>` : null}</span>
+      <span class="grow"><span class="t"><${Linked} text=${o.label} /></span>${o.detail && !compact ? html`<span class="d"><${Linked} text=${o.detail} /></span>` : null}</span>
       ${o.rec ? html`<span class="tag"><span class="pill rec">Recommended</span></span>` : null}
     </button>`)}
   </div>`;

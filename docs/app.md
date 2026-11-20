@@ -49,6 +49,15 @@ The server never writes a record itself. Each write runs one chartroom verb in t
 | Snooze, undo | `snooze <ref> --for/--until`, `snooze off <ref>` |
 | Mark done | `todo done <i-id>`, `artifact done <ref>` |
 
+### Instant, queued, never twice
+
+The page never waits on a verb:
+
+- **In the page.** An action changes the page at once and goes into an outbox, kept in the browser's `localStorage`, so a reload or a dropped tunnel loses nothing. The outbox sends each action with an id (`X-Chartroom-Action`), retries with growing waits while the server does not answer, and marks it failed when the server refuses it.
+- **On the server.** A write is answered `202` as soon as it is checked. The verb runs in the background, in order, one queue per home. `GET /api/v1/state` carries each action's outcome (`actions`): `done`, or `failed` with the verb's own reason, shown with a Retry.
+- **No double runs.** An id seen before is the same action, never a second run. The server keeps its actions in `app-actions.ndjson` beside the pid file (0600). After a restart, an action accepted but not finished runs, and a finished one is not repeated.
+- **Bulk actions.** These are the same thing, one entry per item, so each item succeeds or fails on its own.
+
 ## Cards and answers
 
 - **Ids.** A card is a posted card (`q-xxxx`, `questions/<id>.json`), a worker's ask (`ev-<task>-<byte offset>` of its decision, blocked, failed or awaiting-input line), or an open inbox question (`i-xxxx`).

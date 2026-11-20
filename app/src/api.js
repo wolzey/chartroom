@@ -18,6 +18,21 @@ export async function act(home, action, body) {
   return j;
 }
 
+// One queued action: never throws. -> {status, error}; status 0 when the server could not be reached.
+export async function postAction(home, action, body, id) {
+  try {
+    const r = await fetch("/api/v1/homes/" + encodeURIComponent(home) + "/" + action, {
+      method: "POST", credentials: "same-origin", body: JSON.stringify(body || {}),
+      headers: Object.assign({ "X-Chartroom-Action": id }, WRITE),
+    });
+    let j = {};
+    try { j = await r.json(); } catch (e) { j = {}; }
+    return { status: r.status, error: j.error || null };
+  } catch (e) {
+    return { status: 0, error: "the server could not be reached" };
+  }
+}
+
 export async function taskFile(home, id, name) {
   const r = await fetch("/api/v1/homes/" + encodeURIComponent(home) + "/tasks/" + encodeURIComponent(id) + "/files/" + name,
     { cache: "no-store", credentials: "same-origin" });

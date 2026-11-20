@@ -42,6 +42,18 @@ are stable from 0.1.0.
   - Writes are chartroom verbs only, run on the brain: `tell`, `ask answer`, `accept`, `close`,
     `snooze`, `todo done`, `artifact done`. Every write needs the app's own header, and refuses
     cross-site requests.
+  - Every action is instant. The page moves at once, and an outbox in the browser sends the
+    action in the background with retries. The server answers `202` and runs the verb in order
+    per home, journaled, so a retry or a restart never runs it twice. A failure comes back with
+    its reason and a Retry.
+  - Bulk actions: select rows (checkbox, `x`, `Shift+J`/`K`, shift-click, `⌘A`) and Mark done,
+    Accept, Close or Snooze them all, one queued action per item. Close never discards work.
+  - Only an explicit marker recommends an option, one per question at most. An ask with several
+    questions is a grilling round on its own page. A `--detail` written into a headline is read
+    as its detail.
+  - Text measures at least 4.5:1 in light and dark (`test/js/app-contrast.test.js`). Every URL is
+    a link, and a GitHub PR or issue reads `repo#123`. The details page keeps the events below
+    the documents.
 - `chartroom tell`: the commander's words to the XO from outside its session. One record in the
   home's mailbox, and a `[commander <cm-id>] ...` wake for its `watch`; `tell ack` marks it read.
 - `chartroom ask`: question cards. The XO posts a question or a grilling round as a card;

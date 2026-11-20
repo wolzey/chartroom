@@ -1,6 +1,18 @@
 /* chartroom app: what the real app adds to the approved prototype styles (tokens, base, layout
    come from the direction-A prototypes as they are). Reads only tokens.css variables. */
 
+/* Readable text (the commander's feedback 1): every text colour at least 4.5:1 (WCAG AA) on every
+   surface it is drawn on, measured by test/js/app-contrast.test.js, not judged by eye. The
+   prototype's --text-3 measured 2.8:1 (light) and 3.3:1 (dark); a few light status colours fell
+   short on their own tinted pills. --text-2 is raised past AA for comfort in the long card bodies. */
+[data-dir="a"] {
+  --text-2: #4d5058; --text-3: #686b71;
+  --amber: #995d0e; --green: #2b7850; --blue: #386cb3;
+}
+[data-dir="a"][data-theme="dark"] {
+  --text-2: #b8bbc2; --text-3: #8f929a;
+}
+
 .boot-note { padding: var(--s-8); }
 #app { min-height: 100vh; }
 
@@ -21,9 +33,15 @@
 .a-row.pending { opacity: .45; }
 .a-row .sent-st { font-size: var(--fs-xs); color: var(--text-3); white-space: nowrap; }
 .a-row .sent-st.read { color: var(--green); }
+.a-row .sent-st.failed { color: var(--rose); }
+.notice .btn { flex: none; }
 
-/* quick view */
+/* quick view: the card's body and its options at a comfortable size */
 .a-detail > * { min-width: 0; max-width: 100%; }
+.a-detail .a-detail-sum, .a-detail .qv-blocks, .a-detail .muted { font-size: 14px; line-height: 1.6; }
+.a-detail .opt .t { font-size: 14px; line-height: 1.45; }
+.a-detail .opt .d { font-size: 13px; line-height: 1.5; color: var(--text-2); }
+.qcard .qctx, .qcard .opt .t { font-size: 14px; line-height: 1.55; }
 .a-detail .qv-close { display: none; }
 .qv-blocks { display: grid; gap: var(--s-3); font-size: var(--fs-sm); color: var(--text-2); }
 .qv-blocks b { color: var(--text); font-weight: 600; }
@@ -54,14 +72,23 @@
     border-radius: 14px 14px 0 0; padding: var(--s-5) var(--s-5) calc(var(--s-7) + env(safe-area-inset-bottom)); }
 }
 
-/* the round page without a design tree: the round's questions as the outline */
+/* the round page without a design tree: the round's questions as the outline. A grilling is
+   answered in the main area, centred at the text width with its outline beside it (feedback 6). */
 .r-tree .tree .node { cursor: pointer; }
+.r-a { grid-template-columns: 220px minmax(0, var(--w-text)); justify-content: center; }
+.r-bar-in { max-width: calc(220px + var(--w-text) + var(--s-8)); margin: 0 auto; }
+.qcard .qtitle { font-size: var(--fs-lg); line-height: 1.4; }
 
 /* the details page (slice 1: brief, plan, report and events; the full ticket comes next) */
 .dt { padding-bottom: var(--s-10); }
 .dt-head { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; margin-bottom: var(--s-3); }
 .dt-title { font-size: var(--fs-2xl); font-weight: 600; line-height: 1.25; max-width: var(--w-text); }
-.dt-sub { margin-top: var(--s-2); font-size: var(--fs-sm); color: var(--text-3); }
+.dt-sub { margin-top: var(--s-2); max-width: var(--w-text); font-size: var(--fs-sm); color: var(--text-2); overflow-wrap: anywhere; }
+.dt-more { font-size: var(--fs-xs); }
+.dt-full { margin-top: var(--s-2); padding: 8px 10px; border-radius: var(--r-md); background: var(--sunken); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2); }
+.dt-rule { max-width: var(--w-text); margin: var(--s-8) 0 var(--s-5); border: 0; border-top: 1px solid var(--border); }
+.dt-h { margin-bottom: var(--s-3); font-size: var(--fs-lg); }
+.dt-doc, .dt-events { overflow-wrap: anywhere; }
 .dt .tabs { margin: var(--s-6) 0 var(--s-5); }
 .dt-doc { max-width: var(--w-text); }
 .dt-doc .md-h { margin: var(--s-6) 0 var(--s-3); }
@@ -82,3 +109,19 @@
 .dt-events li.ask .t { color: var(--text); font-weight: 500; }
 .dt-empty { color: var(--text-3); }
 @media (max-width: 860px) { .dt-events li { grid-template-columns: 1fr; gap: 2px; } }
+
+/* bulk selection (the commander's feedback 4): a row's glyph turns into a checkbox on hover, and
+   while anything is selected; a bar at the bottom acts on the selection */
+.pick-cell { position: relative; display: inline-flex; width: 14px; height: 14px; align-items: center; justify-content: center; }
+.pick-cell .pick { position: absolute; inset: -3px; width: 20px; height: 20px; margin: 0; opacity: 0; cursor: pointer; accent-color: var(--accent); }
+.a-row:hover .pick-cell .glyph, .a-row.picking .pick-cell .glyph { opacity: 0; }
+.a-row:hover .pick-cell .pick, .a-row.picking .pick-cell .pick { opacity: 1; }
+.a-row.picked { background: var(--selected); }
+.sel-all { display: inline-flex; align-items: center; padding-right: var(--s-2); }
+.sel-all input { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.bulk { position: fixed; z-index: 30; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: center; max-width: calc(100vw - 32px);
+  padding: 6px 8px 6px 14px; border-radius: 12px; border: 1px solid var(--border-strong); background: var(--surface); box-shadow: var(--shadow-2); }
+.bulk-n { font-size: var(--fs-sm); color: var(--text-2); margin-right: 4px; }
+.a-app:has(.bulk) .toasts { bottom: 84px; }
+.bulk-n b { color: var(--text); font-variant-numeric: tabular-nums; }

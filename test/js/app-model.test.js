@@ -69,13 +69,32 @@ test("questions: a worker's options come from its own words, the recommendation 
   assert.strictEqual(qs[0].text, "Which cache?");
   assert.deepStrictEqual(qs[0].options.map((o) => [o.label, o.rec]), [["An in-process LRU", true], ["Redis", false]]);
   assert.strictEqual(qs[0].options[0].detail, "no new service.");
-  // "per partner, recommended" keeps the mark as a tag, not in the label
-  const q2 = M.questions({ type: "task", kind: "decide", text: "Count how? Details: Options: (A) per key. (B) per partner, recommended: one bucket. Need: which." }, EF)[0];
+  // "(B, recommended)" is a marker too
+  const q2 = M.questions({ type: "task", kind: "decide", text: "Count how? Details: Options: (A) per key. (B, recommended) per partner. Need: which." }, EF)[0];
   assert.deepStrictEqual(q2.options.map((o) => [o.label, o.rec]), [["Per key", false], ["Per partner", true]]);
   assert.deepStrictEqual(M.details(it, EF), [{ label: "Need", text: "Your pick." }]);
   // an ask with no options is one free-text question
   const free = M.questions({ type: "task", kind: "blocked", text: "the sandbox key expired" }, EF)[0];
   assert.ok(free.free && free.options.length === 0);
+});
+
+test("recommended: only an explicit marker counts, one per card at most, and --detail is not the headline", () => {
+  // the commander's feedback 1: option 2's own words say "Not recommended", and both showed the tag
+  const text = "The switch PR is green except the slow suite; merging needs you --detail PR: restore deploys. " +
+    "Decision for you: (1) Recommended: you turn on auto-merge. That runs the suite. (2) An admin bypass. Not recommended; it needs your say-so.";
+  const q = M.questions({ type: "task", kind: "decide", text }, EF)[0];
+  assert.deepStrictEqual(q.options.map((o) => o.rec), [true, false]);
+  assert.strictEqual(q.text, "The switch PR is green except the slow suite; merging needs you");
+  assert.ok(!/--detail/.test(q.text));
+  assert.deepStrictEqual(M.primary({ type: "task", kind: "decide", text }, EF).type, "answer");
+  // a mention in the text, lowercase or not, never recommends
+  const q3 = M.questions({ type: "task", kind: "decide", text: "Which? Options: (1) keep it, as recommended by the docs. (2) drop it." }, EF)[0];
+  assert.deepStrictEqual(q3.options.map((o) => o.rec), [false, false]);
+  // two markers: neither, so Enter never picks one of them on its own
+  const two = { type: "task", kind: "decide", text: "Which? Options: (1) RECOMMENDED: a. (2) RECOMMENDED: b." };
+  assert.deepStrictEqual(M.questions(two, EF)[0].options.map((o) => o.rec), [false, false]);
+  assert.strictEqual(M.primary(two, EF).type, "focus-note");
+  assert.strictEqual(M.headline("Report written to /tmp/x/report.md --detail all the rest"), "Report written to /tmp/x/report.md");
 });
 
 test("primary: Enter answers with the recommendation, approves, accepts, or opens the round", () => {
@@ -94,6 +113,54 @@ test("answerBody: one answer per question, picks and trimmed notes; an approval 
   assert.deepStrictEqual(M.answerBody(round, { 1: "Shoppers" }, { 2: " admin search " }),
     { card: "q-77aa", answers: [{ q: 1, choice: "Shoppers", note: null }, { q: 2, choice: null, note: "admin search" }] });
   assert.deepStrictEqual(M.answerBody({ card: "ev-d-2" }, null, { 1: "ship it" }, "approve"), { card: "ev-d-2", action: "approve", note: "ship it" });
+});
+
+test("bulk: each verb applies to the items it fits, skips the rest with why; ranges run in list order", () => {
+  const all = M.items(state);
+  const list = M.ordered(M.visible(all, { tab: "all" }));
+  const keys = list.map((x) => x.key);
+  // shift-click from the last row to the second selects the rows between, either way round
+  assert.deepStrictEqual(M.range(list, keys[3], keys[1]), keys.slice(1, 4));
+  assert.deepStrictEqual(M.range(list, keys[1], keys[3]), keys.slice(1, 4));
+  const inbox = { key: "a:i-1", kind: "inbox", type: "inbox", ref: "i-1" };
+  const review = { key: "a:t1", kind: "review", type: "task", ref: "t1", task: "t1" };
+  const decide = { key: "a:ev", kind: "decide", type: "task", ref: "ev-t2-9", card: "ev-t2-9", task: "t2" };
+  const card = { key: "a:q", kind: "round", type: "card", ref: "q-1", card: "q-1" };
+  const pick = [inbox, review, decide, card];
+  const done = M.bulkPlan(pick, "done");
+  assert.deepStrictEqual(done.run.map((r) => [r.action, r.body]), [["done", { ref: "i-1" }], ["accept", { task: "t1" }]]);
+  assert.deepStrictEqual(done.skip.map((x) => x.item.key), ["a:ev", "a:q"]);
+  assert.match(done.skip[0].why, /answer/);
+  assert.deepStrictEqual(M.bulkPlan(pick, "close").run.map((r) => r.body.task), ["t1", "t2"]);
+  assert.deepStrictEqual(M.bulkPlan(pick, "accept").run.map((r) => r.item.key), ["a:t1"]);
+  assert.deepStrictEqual(M.bulkPlan(pick, "snooze", { for: "4h" }).run.map((r) => r.body), [
+    { ref: "i-1", for: "4h" }, { ref: "t1", for: "4h" }, { ref: "ev-t2-9", for: "4h" }, { ref: "q-1", for: "4h" }]);
+  // close never asks for a discard: the body is the task alone
+  assert.ok(M.bulkPlan(pick, "close").run.every((r) => Object.keys(r.body).join() === "task"));
+});
+
+test("links: every URL is one, punctuation stays text, a GitHub PR or issue reads repo#n", () => {
+  assert.deepStrictEqual(M.linkParts("Q133: merge https://github.com/acme/shop/pull/35969. Then (see https://example.com/a_(b)), done"), [
+    { text: "Q133: merge " }, { href: "https://github.com/acme/shop/pull/35969", label: "shop#35969" },
+    { text: ". Then (see " }, { href: "https://example.com/a_(b)", label: "https://example.com/a_(b)" }, { text: "), done" }]);
+  assert.deepStrictEqual(M.linkParts("https://github.com/acme/api/issues/7#note"), [{ href: "https://github.com/acme/api/issues/7#note", label: "api#7" }]);
+  assert.deepStrictEqual(M.linkParts("no link here"), [{ text: "no link here" }]);
+  assert.deepStrictEqual(M.linkParts("javascript:alert(1) is text"), [{ text: "javascript:alert(1) is text" }]);
+});
+
+test("rounds: an ask with several option lists is a grilling, answered with each question's words", () => {
+  const it = { key: "a:ev", type: "task", kind: "decide", card: "ev-t-1", text:
+    "Two calls before I build. Options: (1) RECOMMENDED: keep the flag. (2) drop the flag. Storage: (1) Postgres. (2) RECOMMENDED: SQLite. Need: both." };
+  const r = M.promote(it, EF);
+  assert.strictEqual(r.kind, "round");
+  assert.strictEqual(r.questions.length, 2);
+  assert.deepStrictEqual(r.questions.map((q) => q.options.map((o) => o.rec)), [[true, false], [false, true]]);
+  assert.strictEqual(r.questions[1].text, "Storage");
+  assert.deepStrictEqual(M.primary(r, EF), { type: "open-round" });
+  const body = M.answerBody(r, { 1: "Keep the flag", 2: "SQLite" }, {});
+  assert.deepStrictEqual(body.answers.map((a) => [a.q, a.choice, typeof a.question]), [[1, "Keep the flag", "string"], [2, "SQLite", "string"]]);
+  // one list of options stays a single card in the quick view
+  assert.strictEqual(M.promote({ key: "a:x", type: "task", kind: "decide", card: "ev-x-1", text: "Which? Options: (1) a. (2) b." }, EF).kind, "decide");
 });
 
 test("move, ago and search: the keyboard's selection, short times, the palette's matches", () => {

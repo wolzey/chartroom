@@ -226,13 +226,25 @@ chartroom app stop               # (or: status)
   (`artifact done`, `todo done`, `accept`, `close`, `snooze`). Answers, approvals and anything
   typed go to that home's XO as your own words (`chartroom tell`), and its `watch` wakes with
   `[commander <id>] ...`. The app shows when the XO has read one.
+- **Instant.** Every action is queued in the page: the item moves at once, and an outbox kept in
+  the browser sends it in the background, retrying while the server cannot be reached. The
+  server accepts it at once and runs the verb behind it in order, per home. An action that
+  fails comes back with the reason and a Retry.
+- **Several at once.** Select rows (their checkbox, `x`, `Shift+J`/`Shift+K`, shift-click, `⌘A`)
+  and a bar acts on all of them: Mark done (an inbox question or a draft is marked done; a
+  finished task is accepted), Accept, Close, Snooze. One action per item: each one succeeds or
+  fails on its own, and Close never discards work: a task that cannot be closed cleanly
+  refuses and says why.
 - **Question cards.** A worker's `decision` (its options parsed from its own words), an inbox
-  question, and a card the XO posts with `chartroom ask` (one question, or a grilling round
-  answered and submitted together) are all cards. The first answer wins, from the app or the
-  terminal (`chartroom ask answer`).
+  question, and a card the XO posts with `chartroom ask` are all cards. Only an explicit
+  marker (`(1) RECOMMENDED: ...`) recommends an option, one per question at most. An ask with
+  several questions is a grilling round, answered on its own page and submitted together. The
+  first answer wins, from the app or the terminal (`chartroom ask answer`).
+- **Readable.** Every text colour measures at least 4.5:1 (WCAG AA), light and dark, and every
+  URL is a link; a GitHub PR or issue reads `repo#123`.
 - **Keys.** `j`/`k` move, `Enter` answers with the recommendation (or approves, or accepts),
-  `1`-`9` pick an option, `⌘↵` sends, `o` opens details, `s` snoozes, `⌘K` or `/` opens the
-  palette. Dark and light follow the system, and the moon toggles them.
+  `1`-`9` pick an option, `⌘↵` sends, `o` opens details, `s` snoozes, `x` selects, `⌘K` or `/`
+  opens the palette. Dark and light follow the system, and the moon toggles them.
 - **Every home.** It reads each registered home on the machine (`chartroom homes`) in the
   background with `chartroom app snapshot --json`, again whenever a home's records change. A
   client home is left out, and refuses `chartroom app`: the app runs on its brain.

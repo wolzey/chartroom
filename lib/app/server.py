@@ -20,6 +20,8 @@ stdin), so the CLI stays the one writer of the records and a client home's rules
   GET  /api/v1/stream       server-sent events: "version" when any home's snapshot changes
   GET  /api/v1/homes/<home>/tasks/<id>/files/<brief.md|plan.md|report.md|events.log>
   POST /api/v1/homes/<home>/<tell|answer|accept|close|snooze|unsnooze|done>   (JSON body)
+                            202 at once: the verb runs in the background, in order per home;
+                            X-Chartroom-Action names it, so a retry is never a second run
 Python 3.9+ (macOS /usr/bin/python3 is 3.9).
 """
 import argparse
@@ -83,8 +85,11 @@ def run(argv, home, stdin=None, timeout=VERB_TIMEOUT):
 
 
 def last_line(text):
+    """What went wrong, from a verb's stderr: its first "chartroom: ..." line (the reason; what
+    follows is advice), else its last line."""
     lines = [x for x in text.strip().splitlines() if x.strip()]
-    return re.sub(r"^chartroom: ", "", lines[-1]) if lines else ""
+    said = [x for x in lines if x.startswith("chartroom: ")]
+    return re.sub(r"^chartroom: ", "", (said or lines or [""])[0] if said else lines[-1]) if lines else ""
 
 
 class Home:
@@ -204,6 +209,134 @@ class Hub:
             h.wake.set()
 
 
+ACTION_ID = re.compile(r"^[A-Za-z0-9-]{8,64}$")
+ACTIONS_KEPT = 400  # finished actions remembered (and journaled) for dedupe and for the page's outbox
+
+
+class Actions:
+    """Writes, accepted at once and run in the background: one queue and one worker per home, so a
+    home's actions run in the order they came, and the page never waits on the CLI. Each action has
+    the id the page gave it; a retry with the same id is the same action, never a second run. The
+    journal (app-actions.ndjson beside the pid file, 0600) keeps them across a restart: an accepted
+    action that never finished runs when the server starts again, and a finished one is not rerun."""
+
+    def __init__(self, hub, cli, journal):
+        self.hub, self.cli, self.journal = hub, cli, journal
+        self.recs = {}
+        self.order = []
+        self.queues = {}
+        self.lock = threading.Lock()
+        self.cond = threading.Condition(self.lock)
+        pending = []
+        if journal and os.path.isfile(journal):
+            with open(journal, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    try:
+                        r = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(r, dict) and isinstance(r.get("id"), str):
+                        self.remember(dict(self.recs.get(r["id"], {}), **r))
+            pending = [r for r in (self.recs[i] for i in self.order) if r.get("state") in ("queued", "running")]
+            self.compact()
+        for r in pending:
+            r["state"] = "queued"
+            self.enqueue(r)
+
+    def remember(self, r):
+        if r["id"] not in self.recs:
+            self.order.append(r["id"])
+        self.recs[r["id"]] = r
+        while len(self.order) > ACTIONS_KEPT:
+            old = self.order.pop(0)
+            if self.recs.get(old, {}).get("state") in ("queued", "running"):
+                self.order.insert(0, old)
+                break
+            self.recs.pop(old, None)
+
+    def write(self, r):
+        if not self.journal:
+            return
+        try:
+            fd = os.open(self.journal, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(r, separators=(",", ":")) + "\n")
+        except OSError:
+            pass
+
+    def compact(self):
+        if not self.journal:
+            return
+        tmp = self.journal + ".tmp"
+        try:
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                for i in self.order:
+                    fh.write(json.dumps(self.recs[i], separators=(",", ":")) + "\n")
+            os.replace(tmp, self.journal)
+        except OSError:
+            pass
+
+    def submit(self, aid, home, action, argv, stdin, cleanup=None):
+        """-> the action's record: a new one queued now, or the one already known by that id."""
+        with self.lock:
+            known = self.recs.get(aid)
+            if known:
+                return known
+            r = {"id": aid, "home": home, "action": action, "argv": argv,
+                 "stdin": stdin.decode("utf-8") if stdin is not None else None, "cleanup": cleanup,
+                 "state": "queued", "error": None, "at": iso(), "done_at": None}
+            self.remember(r)
+            self.write(r)
+        self.enqueue(r)
+        self.hub.bump()
+        return r
+
+    def enqueue(self, r):
+        with self.lock:
+            q = self.queues.get(r["home"])
+            if q is None:
+                q = self.queues[r["home"]] = []
+                threading.Thread(target=self.worker, args=(r["home"],), daemon=True).start()
+            q.append(r["id"])
+            self.cond.notify_all()
+
+    def worker(self, home):
+        while True:
+            with self.lock:
+                while not self.queues[home]:
+                    self.cond.wait()
+                aid = self.queues[home].pop(0)
+                r = self.recs.get(aid)
+                if not r or r["state"] not in ("queued",):
+                    continue
+                r["state"] = "running"
+            h = self.hub.homes.get(home)
+            if not h:
+                code, out, err = 1, "", "no home named " + home
+            else:
+                stdin = r["stdin"].encode("utf-8") if r.get("stdin") is not None else None
+                code, out, err = run([self.cli] + r["argv"], h.path, stdin=stdin)
+            if r.get("cleanup"):
+                try:
+                    os.remove(r["cleanup"])
+                except OSError:
+                    pass
+            with self.lock:
+                r["state"] = "done" if code == 0 else "failed"
+                r["error"] = None if code == 0 else (last_line(err) or "failed (exit %d)" % code)
+                r["out"] = out.strip()[-500:] if code == 0 else None
+                r["done_at"] = iso()
+                self.write(r)
+            if h:
+                self.hub.refresh(home)
+            self.hub.bump()
+
+    def recent(self):
+        with self.lock:
+            return {i: {k: self.recs[i].get(k) for k in ("state", "error", "at", "done_at", "home", "action")} for i in self.order[-200:]}
+
+
 # The writes: each is one chartroom verb with a fixed argv shape; text goes on stdin.
 def verb_for(action, body):
     """-> (argv after the binary, stdin bytes or None) or raises ValueError with what is wrong."""
@@ -246,7 +379,7 @@ def verb_for(action, body):
     raise KeyError(action)
 
 
-def make_handler(hub, args, root):
+def make_handler(hub, args, root, actions):
     app_dir = os.path.join(root, "app")
     shared_dir = os.path.join(root, "lib", "dashboard")
     user = (args.user or "").strip().lower()
@@ -306,7 +439,7 @@ def make_handler(hub, args, root):
                 return self.static(os.path.join(shared_dir, path[len("/shared/"):]))
             if path == "/api/v1/state":
                 hub.looked()
-                return self.json(200, dict(hub.state(), user=self.who()))
+                return self.json(200, dict(hub.state(), user=self.who(), actions=actions.recent()))
             if path == "/api/v1/stream":
                 hub.looked()
                 return self.stream()
@@ -404,11 +537,12 @@ def make_handler(hub, args, root):
                 return self.json(404, {"error": "no such action"})
             except ValueError as exc:
                 return self.json(400, {"error": str(exc)})
-            code, out, err = run([args.bin] + argv, home.path, stdin=stdin)
-            hub.refresh(home.name)
-            if code != 0:
-                return self.json(409 if code == 1 else 500, {"error": last_line(err) or "failed (exit %d)" % code})
-            return self.json(200, {"ok": True, "out": out.strip()})
+            aid = h.get("X-Chartroom-Action") or ""
+            if not ACTION_ID.match(aid):
+                aid = "s-%x-%x" % (int(time.time() * 1000), threading.get_ident() & 0xffffff)
+            r = actions.submit(aid, home.name, m.group(2), argv, stdin)
+            # accepted: the verb runs in the background; its outcome is in /api/v1/state's actions
+            return self.json(202, {"ok": True, "id": r["id"], "state": r["state"], "error": r.get("error")})
 
         do_PUT = do_DELETE = do_PATCH = lambda self: self.json(405, {"error": "method not allowed"})
 
@@ -437,7 +571,8 @@ def main():
         sys.exit("chartroom app: cannot listen on %s:%d: %s" % (LOOPBACK, args.port, exc.strerror or exc))
     httpd.daemon_threads = True
     port = httpd.server_address[1]
-    httpd.RequestHandlerClass = make_handler(hub, args, args.root)
+    actions = Actions(hub, args.bin, os.path.join(os.path.dirname(args.pidfile), "app-actions.ndjson") if args.pidfile else None)
+    httpd.RequestHandlerClass = make_handler(hub, args, args.root, actions)
 
     def cleanup(*_):
         if args.pidfile:
