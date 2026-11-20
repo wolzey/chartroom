@@ -605,7 +605,7 @@ mig_move_conversations() {
           psz="$(mig_prev "$pid" transcript_size)"; psh="$(mig_prev "$pid" transcript_sha)"
           # Moved forward when the brain's copy is the client's with less written yet: nothing here added to it.
           local bsz=""; [[ -f "$f" ]] && bsz="$(wc -c <"$f" | tr -d ' ')"
-          if [[ "$t" == *.jsonl && -n "$psz" ]] && { [[ "$bsz" == "$psz" && "$(mig_sha <"$f")" == "$psh" ]] || cmp -s -n "$bsz" "$f" "$tmp/projects/$t"; }; then cp "$tmp/projects/$t" "$f"; continue; fi
+          if [[ "$t" == *.jsonl && -n "$psz" ]] && { [[ "$bsz" == "$psz" && "$(mig_sha <"$f")" == "$psh" ]] || head -c "$bsz" "$tmp/projects/$t" | cmp -s - "$f"; }; then cp "$tmp/projects/$t" "$f"; continue; fi
           if [[ "$t" != *.jsonl && -n "$psz" ]]; then cp -R "$tmp/projects/$t/." "$f/"; continue; fi
           mig_ledger "$sid" transcript-exists "$f: left as it is"; continue
         fi

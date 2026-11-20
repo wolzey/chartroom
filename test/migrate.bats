@@ -443,6 +443,8 @@ teardown() {
   git -C "$W" add -A; git -C "$W" commit -qm "a safe point on the client"; echo later >"$W/later.txt"   # A's moved worktree must follow
   sid="$(jq -r .session_id "$CH/tasks/$A/meta.json")"
   printf '{"type":"assistant","sessionId":"%s"}\n' "$sid" >>"$C/claude/projects/${W//[^A-Za-z0-9]/-}/$sid.jsonl"
+  # (and the brain's copy is shorter than the facts say: the worker wrote while the move copied)
+  BW0="$(bmeta "$A" .worktree)"; tb0="$B/claude/projects/${BW0//[^A-Za-z0-9]/-}/$sid.jsonl"; head -c 20 "$tb0" >"$tb0.t" && mv "$tb0.t" "$tb0"
   mv "$CH/.migrating" "$T/m.bak"; N="$(ctask "made during the freeze")"; mv "$T/m.bak" "$CH/.migrating"   # a client without the guard
   awk '{print} /^## Waiting on the commander$/ {print "- [i-c002] 2026-01-09 — [proj] a later client question"}' "$CH/inbox.md" >"$CH/inbox.md.t" && mv "$CH/inbox.md.t" "$CH/inbox.md"
   echo '2026-01-09T00:00:00Z [r-0009] topic=late supersedes=- src=chat :: a ruling made after the move' >>"$CH/rulings.log"
