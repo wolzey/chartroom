@@ -158,7 +158,11 @@ mig_mark() { # <step> [json value]
   local f="$MIG_S/state.json"
   jq --arg s "$1" --argjson v "${2:-true}" --arg at "$(now)" '.steps[$s] = $v | .at[$s] = $at' "$f" >"$f.tmp" && mv "$f.tmp" "$f"
 }
-mig_ledger() { [[ $MIG_DRY -eq 1 ]] || printf '%s\t%s\t%s\t%s\n' "$(now)" "$1" "$2" "${3:-}" >>"$MIG_S/ledger.tsv"; } # <id|*> <outcome> [detail]
+mig_ledger() { # <id|*> <outcome> [detail]: a dry run prints what it would record, and records nothing
+  local d="${3:-}"
+  if [[ $MIG_DRY -eq 1 ]]; then printf '(dry run) %s %s %s\n' "$1" "$2" "${d//$'\t'/ }"; return 0; fi
+  printf '%s\t%s\t%s\t%s\n' "$(now)" "$1" "$2" "${3:-}" >>"$MIG_S/ledger.tsv"
+}
 
 # ---------------------------------------------------------------- facts and triage
 
