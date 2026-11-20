@@ -843,6 +843,7 @@ cmd_status() {
   fi
   inbox_line
   relay_line
+  tell_line
   artifact_line
 }
 
@@ -1311,9 +1312,9 @@ cmd_watch() {
   watch_ms CHARTROOM_STALL_MINUTES "$CR_STALL_MINUTES" STALL_SECS; STALL_SECS=$((STALL_SECS * 60 / 1000))
   watch_ms CHARTROOM_STALL_BUSY_MAX_MINUTES "$CR_STALL_BUSY_MAX" STALL_BUSY_SECS; STALL_BUSY_SECS=$((STALL_BUSY_SECS * 60 / 1000))
   shopt -s nullglob
-  local d id f size start fresh=1 unseen b i hc_ids=() hc_unseen=(); clock_ms; start=$NOW_MS
+  local d id f size start fresh=1 unseen b i hc_ids=() hc_unseen=() new_cursor=0; clock_ms; start=$NOW_MS
   mkdir -p "$CR_HOME/tasks"
-  if [[ $once -eq 1 && -z "$cursor" ]]; then cursor="$CURSOR_FILE"; ensure_cursor; fi
+  if [[ $once -eq 1 && -z "$cursor" ]]; then cursor="$CURSOR_FILE"; [[ -f "$CURSOR_FILE" ]] || new_cursor=1; ensure_cursor; fi
   if [[ -n "$cursor" && -f "$cursor" ]]; then
     fresh=0
     while IFS=$'\t' read -r id a b; do
@@ -1355,7 +1356,9 @@ cmd_watch() {
   fi
   MC=()
   f="$(relay_dir)/inbox.ndjson"
-  if [[ $fresh -eq 1 && -f "$f" && -z "${OFF[@relays]+x}" ]]; then OFF[@relays]=$(($(wc -c <"$f"))); fi
+  if [[ $fresh -eq 1 && -f "$f" && -z "${OFF[@relays]+x}" ]]; then OFF[@relays]=$(($(wc -c <"$f"))); watch_unread_tells; fi
+  # a cursor made just now starts at the end of the mailbox too (ensure_cursor)
+  if [[ $new_cursor -eq 1 ]]; then watch_unread_tells; fi
   # Between scans the watch waits on its doorbell. A ring, or the light round's timer, scans only
   # the logs and task records that changed since the last scan started (a changed record, such
   # as a dispatch or a close, brings the full round forward), the stream's lines and the relay

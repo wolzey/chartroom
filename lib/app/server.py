@@ -454,7 +454,7 @@ def main():
     if args.pidfile:
         tmp = args.pidfile + ".tmp"
         with open(tmp, "w") as fh:
-            fh.write("%d %d\n" % (os.getpid(), port))
+            fh.write("%d %d %s\n" % (os.getpid(), port, "noauth" if args.no_auth else "tailscale"))
         os.replace(tmp, args.pidfile)
     print("chartroom app: http://%s:%d/ (%s; homes: %s)" % (LOOPBACK, port, "no identity check: this machine only" if args.no_auth
           else "only " + args.user, ", ".join(hub.order)), flush=True)

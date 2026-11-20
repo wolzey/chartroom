@@ -54,7 +54,8 @@ The server never writes a record itself. Each write runs one chartroom verb in t
 - **Ids.** A card is a posted card (`q-xxxx`, `questions/<id>.json`), a worker's ask (`ev-<task>-<byte offset>` of its decision, blocked, failed or awaiting-input line), or an open inbox question (`i-xxxx`).
 - **First answer wins.** An answer is `questions/<id>.answer.json`, created only if absent, so the first answer wins from any side. A second answer is refused and names the first.
 - **Reaching the XO.** An answer from the app is also told to the XO (`relays/inbox.ndjson`, `kind: "commander"`), whose `watch` wakes with `[commander <cm-id>] [via app] ...`. The XO acks it (`tell ack`), and the app then shows "read by the XO".
-- **No XO open.** The conn lease and resident XOs (one brain, step 3) are not built yet. Until they are, a message waits in the mailbox until the home's XO next runs `watch`, and the app says it has not been read yet.
+- **No XO open.** The conn lease and resident XOs (one brain, step 3) are not built yet. Until they are, a message waits in the mailbox, and the app says it has not been read yet. The next XO to start that home's `watch` (streaming, or the first `--once`) wakes with every message not yet acked, and `chartroom status` counts them (`told: N unread`).
+- **Versions.** Only a chartroom with `tell` wakes an XO with these messages. An older `watch` reads past them without a wake. So land and install this version, re-run `chartroom install-skills`, and restart each XO's watch before answering from the app.
 
 ## The code
 

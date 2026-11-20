@@ -14,6 +14,7 @@ setup() {
   export CHARTROOM="$REPO_ROOT/bin/chartroom"
   app_fixture "$BATS_TEST_TMPDIR/h" "$PROJECT"
   export CHARTROOM_HOME="$BATS_TEST_TMPDIR/h/acme"
+  export CHARTROOM_TAILSCALE=none CHARTROOM_OPENER=echo
 }
 
 teardown() { cr app stop >/dev/null 2>&1 || true; }
@@ -162,4 +163,24 @@ state() { # waits for both homes' first snapshot
   run cr sweep --json
   [ "$status" -eq 0 ]
   [ "$(jq --argjson p "$pid" '[.items[] | select((.pids // [.pid]) | index($p))] | length' <<<"$output")" -eq 0 ]
+}
+
+@test "open: this machine's browser gets 127.0.0.1 only from a --no-auth server; otherwise Serve's URL" {
+  printf 'CHARTROOM_APP_USER=owner@example.com\n' >"$CHARTROOM_CONFIG"
+  start
+  run cr app open
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not pointed at it yet"* ]]
+  # a fake Serve pointed at the app
+  printf '#!/bin/sh\nprintf "https://brain.example.ts.net (tailnet only)\\n|-- / proxy http://127.0.0.1:%%s\\n" "%s"\n' "$PORT" >"$BIN/fake-ts"
+  chmod +x "$BIN/fake-ts"
+  CHARTROOM_TAILSCALE="$BIN/fake-ts" run cr app open
+  [ "$status" -eq 0 ]
+  [ "$output" = "app open: https://brain.example.ts.net" ]
+  CHARTROOM_TAILSCALE="$BIN/fake-ts" run cr app doctor
+  [[ "$output" == *"tailscale serve: on: https://brain.example.ts.net"* ]]
+  cr app stop >/dev/null
+  run cr app open --no-auth
+  [ "$status" -eq 0 ]
+  [[ "${lines[${#lines[@]}-1]}" == "app open: http://127.0.0.1:"* ]]
 }

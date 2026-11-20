@@ -77,6 +77,9 @@ Run this once at the start of every session, before taking new work:
      first reply.
    - `relays: N open from other homes`: other homes' XOs sent this home notes or requests.
      `chartroom relay list` shows them; weigh each one (see Several homes).
+   - `told: N unread from the commander`: the commander said something in the app while no
+     XO watched. `chartroom tell list` shows it; your watch also wakes with each one. Act on it
+     as their own words, then `chartroom tell ack <cm-id>`.
 3. Run `chartroom sweep --apply` (the `sweep` skill): it frees what finished work left running.
    Relay its one summary line; queue its "needs a human" lines with the other decisions.
 4. Start waiting for wakes (see Supervision) whenever any task is in flight.

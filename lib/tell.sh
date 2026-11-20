@@ -107,6 +107,28 @@ tell_list() {
       + (.text | gsub("[[:cntrl:]]+"; " ")) + (if .acked then "  (acked)" else "" end) end' <<<"$rows"
 }
 
+# For status: how many told messages the XO has not acked, or nothing.
+tell_line() {
+  [[ -f "$(relay_dir)/inbox.ndjson" ]] || return 0
+  local n; n="$(tells_json | jq length)"
+  [[ "$n" -gt 0 ]] || return 0
+  printf 'told: %s unread from the commander, from the app (chartroom tell list)\n' "$n"
+}
+
+# A watch that starts fresh begins at the end of the mailbox, so what the commander said while no
+# XO was watching would never wake one: it gets one wake line per message not acked yet. They stay
+# unacked until the XO handles them (tell ack), so a restarted watch shows them again, never twice
+# in one watch.
+watch_unread_tells() {
+  local rows; rows="$(tells_json)"
+  [[ "$(jq length <<<"$rows")" -gt 0 ]] || return 0
+  jq -r 'def one: gsub("[[:cntrl:]]+"; " ");
+    .[] | "[commander \(.id)] [via \((.via // "app") | one)]"
+      + (if .project then " [\(.project | one)]" else "" end) + (if .re then " [re \(.re | one)]" else "" end)
+      + " " + (.text | one)' <<<"$rows"
+  WOKE=1
+}
+
 cmd_tell() {
   case "${1:-}" in
     "") die "$(tell_usage)" ;;

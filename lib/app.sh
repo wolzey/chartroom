@@ -39,7 +39,23 @@ app_intent() { # <task>
   local f; f="$(tdir "$1")/brief.md"
   [[ -f "$f" ]] || return 0
   awk '/^## /{ if (on) exit; if ($0 ~ /^## Commander.s intent/) { on = 1; next } } on' "$f" |
-    perl -0pe 's/<!--.*?-->//gs; s/^\s+|\s+$//g' | head -c 1500
+    jq -R -s -r 'gsub("<!--[\\s\\S]*?-->"; "") | gsub("^\\s+|\\s+$"; "") | .[0:1500]'
+}
+
+# The Tailscale CLI: CHARTROOM_TAILSCALE (none: no Tailscale), else on PATH, else the Mac app's.
+app_tailscale() {
+  local ts="${CHARTROOM_TAILSCALE:-}"
+  if [[ -n "$ts" ]]; then [[ "$ts" == none ]] || printf '%s' "$ts"; return 0; fi
+  ts="$(bin_of tailscale)"
+  [[ -z "$ts" && -x /Applications/Tailscale.app/Contents/MacOS/Tailscale ]] && ts=/Applications/Tailscale.app/Contents/MacOS/Tailscale
+  printf '%s' "$ts"
+}
+
+# The tailnet URL Tailscale Serve gives the app on <port>, or nothing.
+app_serve_url() { # <port>
+  local ts; ts="$(app_tailscale)"
+  [[ -n "$ts" ]] || return 0
+  "$ts" serve status 2>/dev/null | grep -B1 "127.0.0.1:$1\$" | head -1 | awk '/^https?:/ {print $1}' || true
 }
 
 # One home as the app reads it (lib/app/snapshot.jq).
@@ -83,13 +99,13 @@ app_snapshot_json() {
   rm -f "$f"
 }
 
-app_running() { # -> "pid port" when the app server runs
-  local f pid port; f="$(app_pidfile)"
+app_running() { # -> "pid port mode" when the app server runs (mode: tailscale or noauth)
+  local f pid port mode; f="$(app_pidfile)"
   [[ -f "$f" ]] || return 1
-  read -r pid port <"$f" || true
+  read -r pid port mode <"$f" || true
   pid_alive "$pid" || return 1
   ps -p "$pid" -o command= 2>/dev/null | grep -q 'app/server\.py' || return 1
-  printf '%s %s\n' "$pid" "$port"
+  printf '%s %s %s\n' "$pid" "$port" "${mode:-tailscale}"
 }
 
 app_healthy() { # <port>
@@ -102,7 +118,7 @@ PY
 
 app_stop() {
   local pid port i
-  if ! read -r pid port < <(app_running); then rm -f "$(app_pidfile)"; echo "app not running"; return 0; fi
+  if ! read -r pid port _ < <(app_running); then rm -f "$(app_pidfile)"; echo "app not running"; return 0; fi
   kill "$pid" 2>/dev/null || true
   for i in $(seq 1 50); do pid_alive "$pid" || break; sleep 0.1; done
   pid_alive "$pid" && { kill -9 "$pid" 2>/dev/null || true; }
@@ -114,12 +130,11 @@ app_stop() {
 app_doctor() {
   local pid port user ts serve=""
   user="$(cfg APP_USER '' '')"
-  if read -r pid port < <(app_running); then echo "server: running on 127.0.0.1:$port (pid $pid)"
+  if read -r pid port _ < <(app_running); then echo "server: running on 127.0.0.1:$port (pid $pid)"
   else echo "server: not running (chartroom app serve --daemon)"; port="$(app_port)"; fi
   if [[ -n "$user" ]]; then echo "allowed: $user (CHARTROOM_APP_USER)"
   else echo "allowed: nobody yet; set CHARTROOM_APP_USER=<your Tailscale login> in $CR_CONFIG_FILE"; fi
-  ts="$(bin_of tailscale)"
-  [[ -z "$ts" && -x /Applications/Tailscale.app/Contents/MacOS/Tailscale ]] && ts=/Applications/Tailscale.app/Contents/MacOS/Tailscale
+  ts="$(app_tailscale)"
   if [[ -z "$ts" ]]; then echo "tailscale: not found; the app stays on this machine (http://127.0.0.1:$port)"; return 0; fi
   serve="$("$ts" serve status 2>/dev/null || true)"
   if grep -q "127.0.0.1:$port" <<<"$serve"; then
@@ -141,15 +156,20 @@ cmd_app() {
     stop) app_stop; return ;;
     status)
       local pid port
-      if read -r pid port < <(app_running); then echo "app running: http://127.0.0.1:$port (pid $pid)"; else echo "app not running"; return 1; fi
+      if read -r pid port _ < <(app_running); then echo "app running: http://127.0.0.1:$port (pid $pid)"; else echo "app not running"; return 1; fi
       return ;;
     doctor) find_python; app_doctor; return ;;
     open)
       shift; find_python
       [[ ${#CR_PY[@]} -gt 0 ]] || die "the app needs python3 (standard library only)"
-      local pid port opener url
-      if ! read -r pid port < <(app_running); then cmd_app serve --daemon "$@" >&2; read -r pid port < <(app_running) || die "the app did not start"; fi
-      url="http://127.0.0.1:$port/"
+      local pid port mode opener url
+      if ! read -r pid port mode < <(app_running); then cmd_app serve --daemon "$@" >&2; read -r pid port mode < <(app_running) || die "the app did not start"; fi
+      # With the identity check on, only Tailscale Serve's URL lets anyone in.
+      if [[ "$mode" == noauth ]]; then url="http://127.0.0.1:$port/"
+      else
+        url="$(app_serve_url "$port")"
+        [[ -n "$url" ]] || die "the app (port $port) lets in only $(cfg APP_USER '' 'CHARTROOM_APP_USER') through Tailscale Serve, which is not pointed at it yet (chartroom app doctor prints the command); for this machine's browser alone: chartroom app stop, then chartroom app open --no-auth"
+      fi
       opener="$(cfg OPENER '' '')"
       if [[ -z "$opener" ]]; then
         if [[ "$(uname -s)" == Darwin && -n "$(bin_of open)" ]]; then opener=open; elif [[ -n "$(bin_of xdg-open)" ]]; then opener=xdg-open; fi
@@ -174,7 +194,7 @@ cmd_app() {
   find_python
   [[ ${#CR_PY[@]} -gt 0 ]] || die "the app needs python3 (standard library only)"
   local pid p
-  if read -r pid p < <(app_running); then die "the app is already running: http://127.0.0.1:$p (pid $pid); 'chartroom app stop' first"; fi
+  if read -r pid p _ < <(app_running); then die "the app is already running: http://127.0.0.1:$p (pid $pid); 'chartroom app stop' first"; fi
   local user; user="$(cfg APP_USER '' '')"
   [[ $noauth -eq 1 || -n "$user" ]] || die "app serve: set CHARTROOM_APP_USER=<your Tailscale login> in $CR_CONFIG_FILE first (only that person gets in), or --no-auth for this machine's own browser"
   mkdir -p "$(app_state_dir)"
@@ -185,7 +205,7 @@ cmd_app() {
   ( umask 077; nohup "${CR_PY[@]}" "${args[@]}" >"$log" 2>&1 </dev/null & echo $! >"$log.pid" )
   local child i; child="$(cat "$log.pid")"; rm -f "$log.pid"
   for i in $(seq 1 100); do
-    if read -r pid p < <(app_running) && [[ "$pid" == "$child" ]] && app_healthy "$p"; then
+    if read -r pid p _ < <(app_running) && [[ "$pid" == "$child" ]] && app_healthy "$p"; then
       echo "app running: http://127.0.0.1:$p (pid $pid; log $log; stop with: chartroom app stop)"
       return 0
     fi

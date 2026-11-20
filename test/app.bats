@@ -14,6 +14,8 @@ setup() {
 }
 
 snap() { cr app snapshot --json; }
+# a streaming watch for 3 seconds, then stopped; its output
+stream3() { local p; "$CHARTROOM" watch 3>&- & p=$!; sleep 3; kill "$p" 2>/dev/null; wait "$p" 2>/dev/null || true; }
 item() { snap | jq -c --arg t "$1" '[.needs[] | select(.title | test($t))][0]'; }
 
 @test "tell: the commander's words wake the XO's watch, and relay list never shows them" {
@@ -176,4 +178,22 @@ item() { snap | jq -c --arg t "$1" '[.needs[] | select(.title | test($t))][0]'; 
   cr tell "past a dead lock" >/dev/null
   [ "$(cr tell list --json | jq -r '[.[].text] | join("|")')" = "after the lock|past a dead lock" ]
   [ ! -e "$CHARTROOM_HOME/relays/inbox.ndjson.lock" ]
+}
+
+@test "tell: what the commander said while no XO watched wakes the next watch, fresh or --once" {
+  cr relay list >/dev/null # the mailbox exists before anyone told anything
+  mkdir -p "$CHARTROOM_HOME/relays"; : >>"$CHARTROOM_HOME/relays/inbox.ndjson"
+  id="$(cr tell --via app "said while nobody watched")"
+  # a first --once (it makes its cursor at the end of the mailbox) still wakes with it
+  run cr watch --once --timeout 3
+  [[ "$output" == *"[commander $id] [via app] said while nobody watched"* ]]
+  # a fresh stream too, until the XO acks it
+  stream3 >"$BATS_TEST_TMPDIR/w1"
+  grep -qF "[commander $id]" "$BATS_TEST_TMPDIR/w1"
+  [[ "$(cr status)" == *"told: 1 unread from the commander"* ]]
+  cr tell ack "$id" >/dev/null
+  stream3 >"$BATS_TEST_TMPDIR/w2"
+  run grep -qF "[commander $id]" "$BATS_TEST_TMPDIR/w2"
+  [ "$status" -ne 0 ]
+  [[ "$(cr status)" != *"told:"* ]]
 }
