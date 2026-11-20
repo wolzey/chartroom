@@ -603,7 +603,9 @@ mig_move_conversations() {
           # A resync moves a transcript forward only when the brain's copy is still the one the move made.
           local pid="${ids[$((i / 2))]}" psz psh
           psz="$(mig_prev "$pid" transcript_size)"; psh="$(mig_prev "$pid" transcript_sha)"
-          if [[ "$t" == *.jsonl && -n "$psz" && "$(wc -c <"$f" | tr -d ' ')" == "$psz" && "$(mig_sha <"$f")" == "$psh" ]]; then cp "$tmp/projects/$t" "$f"; continue; fi
+          # Moved forward when the brain's copy is the client's with less written yet: nothing here added to it.
+          local bsz=""; [[ -f "$f" ]] && bsz="$(wc -c <"$f" | tr -d ' ')"
+          if [[ "$t" == *.jsonl && -n "$psz" ]] && { [[ "$bsz" == "$psz" && "$(mig_sha <"$f")" == "$psh" ]] || cmp -s -n "$bsz" "$f" "$tmp/projects/$t"; }; then cp "$tmp/projects/$t" "$f"; continue; fi
           if [[ "$t" != *.jsonl && -n "$psz" ]]; then cp -R "$tmp/projects/$t/." "$f/"; continue; fi
           mig_ledger "$sid" transcript-exists "$f: left as it is"; continue
         fi
