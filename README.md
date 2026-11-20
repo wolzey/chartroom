@@ -1247,10 +1247,15 @@ busy timeout, one short transaction per write). A task's place is fixed at birth
   `status`. A process outside chartroom appends event lines to `tasks/<id>/events.spool` (the
   brief's fallback, a launch wrapper's `exited`), in the same line format; the store takes each
   whole line in once, keeping its time. An event the store cannot take waits there too.
-- The home gets `.home-id`, its uid in the store, written once. Records follow the uid, not the
-  path, so a renamed or moved home keeps them.
-- Every write still moves `.changed`; a reader that stats `meta.json` or `events.log` should stat
-  `.changed` too, since a store task has neither.
+- The home gets `.home-id`, written once: its uid in the store, and the database its first
+  record went into, which the home keeps using (unless `CHARTROOM_DB` is set) even where
+  `XDG_STATE_HOME` differs, as it can between a terminal and an ssh session. Records follow the
+  uid, not the path, so a renamed or moved home keeps them.
+- `status`, `board` and `todo` read all of a home's store tasks in one call to the store; only
+  liveness is still asked per open task.
+- Every write still moves `.changed`, and a store write also rewrites `tasks/.store-stamp`; a
+  reader that stats `meta.json` or `events.log` should stat one of those too, since a store task
+  has neither.
 
 `chartroom store doctor` shows the database and the Python it runs on; `store check` reports an
 id found in both places; `store legacy` counts what the home still keeps as files from before.

@@ -226,7 +226,7 @@ lines"
   # a task whose worktree chartroom did not create: no keys, a wake instead
   id2="$(new_task --backend tmux:claude)"
   cr worktree "$id2" >/dev/null
-  jq '.worktree_created="0"' "$CHARTROOM_HOME/tasks/$id2/meta.json" >"$BATS_TEST_TMPDIR/m" && mv "$BATS_TEST_TMPDIR/m" "$CHARTROOM_HOME/tasks/$id2/meta.json"
+  set_meta "$id2" '.worktree_created="0"'
   : >"$FAKE_TMUX_DIR/calls.log"
   FAKE_TMUX_TASK="$id2" run cr dispatch "$id2"
   [ "$status" -eq 0 ]
@@ -302,7 +302,7 @@ herdr_trust_screen() {
   id="$(new_task --backend herdr:claude)"
   export FAKE_HERDR_TASK="$id"
   # an earlier start died at the trust dialog: its agent still holds the name in its recorded tab
-  jq '.herdr_tab="w1:t9"' "$CHARTROOM_HOME/tasks/$id/meta.json" >"$BATS_TEST_TMPDIR/m" && mv "$BATS_TEST_TMPDIR/m" "$CHARTROOM_HOME/tasks/$id/meta.json"
+  set_meta "$id" '.herdr_tab="w1:t9"'
   echo "w1:p9 w1:t9 blocked" >"$FAKE_HERDR_DIR/agents/$id"
   run cr dispatch "$id"
   [ "$status" -eq 0 ]
@@ -321,7 +321,7 @@ herdr_trust_screen() {
   ! grep -q "^tab close" "$FAKE_HERDR_DIR/calls.log"
   ! grep -q "^agent start" "$FAKE_HERDR_DIR/calls.log"
   # nor is this task's own agent while it is mid-turn
-  jq '.herdr_tab="w1:t8"' "$CHARTROOM_HOME/tasks/$id2/meta.json" >"$BATS_TEST_TMPDIR/m" && mv "$BATS_TEST_TMPDIR/m" "$CHARTROOM_HOME/tasks/$id2/meta.json"
+  set_meta "$id2" '.herdr_tab="w1:t8"'
   echo "w1:p8 w1:t8 working" >"$FAKE_HERDR_DIR/agents/$id2"
   FAKE_HERDR_TASK="$id2" run cr dispatch "$id2"
   [ "$status" -ne 0 ]
@@ -342,7 +342,7 @@ herdr_trust_screen() {
   id="$(new_task --backend herdr:claude)"
   export FAKE_HERDR_TASK="$id"
   cr worktree "$id" >/dev/null
-  jq '.worktree_created="0"' "$CHARTROOM_HOME/tasks/$id/meta.json" >"$BATS_TEST_TMPDIR/m" && mv "$BATS_TEST_TMPDIR/m" "$CHARTROOM_HOME/tasks/$id/meta.json"
+  set_meta "$id" '.worktree_created="0"'
   run cr dispatch "$id"
   [ "$status" -eq 0 ]
   [[ "$output" == *"waiting at a startup dialog chartroom will not answer: answer it in herdr tab"*"the watch delivers its brief once it clears"* ]]
@@ -421,7 +421,7 @@ herdr_trust_screen() {
 @test "legacy backend names still work on old records" {
   use_fake codex
   id="$(new_task --backend codex)"
-  jq '.backend="codex" | del(.backend_source)' "$CHARTROOM_HOME/tasks/$id/meta.json" >"$BATS_TEST_TMPDIR/m" && mv "$BATS_TEST_TMPDIR/m" "$CHARTROOM_HOME/tasks/$id/meta.json"
+  set_meta "$id" '.backend="codex" | del(.backend_source)'
   run cr dispatch "$id"
   [ "$status" -eq 0 ]
   [ "$(meta_of "$id" backend)" = headless:codex ]

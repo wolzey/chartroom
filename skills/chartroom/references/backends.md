@@ -35,7 +35,8 @@ cmux is implemented against its documented CLI but **unverified on a real cmux i
   `$CHARTROOM_HOME/worktrees/<repo>/<id>`.
 - The worker gets one line: "Read the brief at … and follow it exactly." The brief carries
   the protocol: events, report, stop at decisions, no push.
-- Workers append to `tasks/<id>/events.log`; `chartroom watch` turns the lines that need you
+- Workers append events with `chartroom event` (to `tasks/<id>/events.log`, or the store for a task
+  born in it); `chartroom watch` turns the lines that need you
   into wakes. A line written through `chartroom event` (or a hook) rings `watch`, which wakes
   within a fraction of a second; a line appended any other way, a launcher's `exited` among them,
   is read within `CHARTROOM_WATCH_INTERVAL` (3 s), by the light round that looks, without a fork,
@@ -314,7 +315,7 @@ program from the `herdr` CLI/server below; workers on `herdr:*` never appear in 
   scouts `workspace-write` with network on and `--add-dir <task record>`; ship tasks
   `$CHARTROOM_CODEX_SHIP_SANDBOX` (default `danger-full-access`, because `workspace-write`
   refuses `.git` writes in recent codex, so a sandboxed worker cannot commit). The `sandbox`
-  key in `meta.json` wins.
+  setting (`chartroom set <id> sandbox=<mode>`) wins.
 - Thread id from the first `thread.started` event; `steer` after the run runs
   `codex exec … resume <thread> "<message>"` with the full conversation (verified).
 - `model` / `effort` in meta map to `-m` and `model_reasoning_effort`.

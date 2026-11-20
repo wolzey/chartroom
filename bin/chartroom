@@ -576,7 +576,7 @@ cmd_listen() { # <id> [--check] [--timeout S]
   trap '[[ "$(cat "'"$pf"'" 2>/dev/null)" == '"$$"' ]] && rm -f "'"$pf"'"; bell_close' EXIT
   start="$(date +%s)"
   while true; do
-    [[ -n "$(meta "$id" closed)" ]] && { echo "task $id is closed; stop listening"; return 0; }
+    [[ -n "$(meta_file "$id" closed)" ]] && { echo "task $id is closed; stop listening"; return 0; }
     mail_take "$id" && return 0
     if (( timeout > 0 && $(date +%s) - start >= timeout )); then echo "no messages after ${timeout}s; re-arm: chartroom listen $id"; exit 124; fi
     bell_check; bell_wait 1 || true
@@ -782,8 +782,8 @@ status_rows() { # [--all] [--id ID] [--since EPOCH]
   shopt -s nullglob
   if [[ -n "$only" ]]; then meta_path "$only"; TASK_METAS=(${META_PATH:+"$META_PATH"}); else task_meta_files; fi
   local metas=("${TASK_METAS[@]+"${TASK_METAS[@]}"}") m
-  # Store tasks' events, rendered at once (lib/store.sh) instead of one read per task below.
-  if [[ -z "$only" ]]; then store_render_events "$([[ $all -eq 1 ]] && echo all || echo open)"; fi
+  # Open store tasks' events, rendered at once for what their liveness reads (lib/store.sh).
+  if [[ -z "$only" ]]; then store_render_events open; fi
   # One jq over every meta.json: the open tasks' ids (the pool `mentions` looks for), and each
   # closed task by its directory, so the rows below skip one without a fork of its own: always
   # without --all, and with --since when it closed before then. A record this jq does not reach
@@ -802,8 +802,19 @@ status_rows() { # [--all] [--id ID] [--since EPOCH]
       | @tsv' "${metas[@]}" 2>/dev/null || true)
     open_ids="${open_ids%$'\n'}"
   fi
+  # Store tasks come from one read of the store (status_store_rows); with any, the rows are put
+  # in id order across both kinds, as a home of file tasks lists them.
+  if [[ -n "$STORE_D" && -s "$STORE_D/.ids" ]]; then
+    { status_file_rows; status_store_rows; } | jq -c -s 'sort_by(.id)[]'
+  else status_file_rows; fi
+}
+
+# status_rows' file tasks, one row each (its locals, by bash's dynamic scope).
+status_file_rows() {
+  local m
   # (one task, for resolve and show: only its record)
   for m in "${metas[@]+"${metas[@]}"}"; do
+    [[ -z "$STORE_D" || "$m" != "$STORE_D"/* ]] || continue
     id="${m%/meta.json}"; id="${id##*/}"; d="$CR_HOME/tasks/$id"
     [[ -z "$only" || "$id" == "$only" ]] || continue
     [[ -z "${skip[$id]+x}" ]] || continue
@@ -834,6 +845,42 @@ status_rows() { # [--all] [--id ID] [--since EPOCH]
         short_id:($shorts[.id] // .id),breaking:$brk}
        | . + focus_marks($focus; "task"; $brk)' "$m"
   done
+}
+
+# status_rows' store tasks: what their records and events say, for all of them in one read of the
+# store (lib/store.py rows: state_of, waiting_info, breaking_of, the last line and the mentions, by
+# the same rules), then each open one's liveness, and one jq for the rows, as above.
+status_store_rows() {
+  [[ -z "$only" || "$META_PATH" == "$STORE_D"/* ]] || return 0
+  local raw lives='' a=() r
+  [[ $all -eq 1 ]] && a+=(--all)
+  [[ -n "$only" ]] && a+=(--id "$only")
+  [[ -n "$since" ]] && a+=(--since "$since")
+  raw="$(printf '%s\n' "$open_ids" | store_py rows "${STORE_HOME_ARGS[@]}" --pool-stdin --grace "$CR_WAITING_GRACE" --max "$CR_WAITING_MAX" "${a[@]+"${a[@]}"}")" ||
+    die "could not read the store (${STORE_DB:-$CR_DB})"
+  [[ -n "$raw" ]] || return 0
+  local closed=()
+  while IFS=$'\t' read -r id st; do
+    [[ "$st" == closed ]] && { closed+=("$id"); continue; }
+    lives+="$id"$'\t'"$(live_of "$id")"$'\n'
+  done < <(jq -r '[.id, ._cr.state] | @tsv' <<<"$raw")
+  # The closed ones listed (--all: the board's recent lane) are read next for their extras
+  # (dashboard_task_extra): their events rendered now, at once, instead of one read each.
+  (( ${#closed[@]} == 0 )) || store_render "${closed[@]}"
+  jq -c --argjson lives "$(jq -R -s -c 'split("\n") | map(select(length > 0) | split("\t") | {key: .[0], value: .[1]}) | from_entries' <<<"$lives")" \
+    --argjson shorts "$shorts" --argjson focus "$focus" "$FOCUS_JQ"'
+    ._cr as $c | ($lives[.id] // "-") as $live | $c.wait as $wait
+    | (if $wait != null and ($live | test("^(stopped|gone|idle|done|listening|parked)$")) then (if $wait.overdue then "waiting-overdue" else "waiting" end)
+       elif $wait != null then "working" else $c.state end) as $st1
+    | (if $st1 == "working" and ($live | test("^(stopped|gone|idle|done|parked)$")) then "stopped-silent"
+       elif $st1 == "working" and $live == "blocked" then "awaiting-input" else $st1 end) as $st
+    | ($c.breaking_mark and ($st | test("^(decision|blocked|failed)$"))) as $brk
+    | {id,title,kind,backend:(if (.backend//"")=="" then "auto" else .backend end),project:((.project//"")|rtrimstr("/")|split("/")|last),
+        state:$st,live:$live,created,last:$c.last,last_at:(if $c.last_at=="" then null else $c.last_at end),
+        updated,dispatched,closed,branch,base:(.base // null),mentions:$c.mentions,has_report:$c.has_report,
+        waiting_on:($wait.on // null),waiting_until:($wait.until // null),waiting_since:($wait.since // null),
+        short_id:($shorts[.id] // .id),breaking:$brk}
+    | . + focus_marks($focus; "task"; $brk)' <<<"$raw"
 }
 
 cmd_status() {
@@ -1465,12 +1512,13 @@ cmd_watch() {
         store_reset; store_render_events open
         ids_now=""; [[ -f "$STORE_D/.ids" ]] && { read -r -d '' ids_now <"$STORE_D/.ids" || true; }
         [[ "$ids_now" == "$ids_was" ]] || next=0
-        for f in "$STORE_D"/*/events.log; do
-          d="${f%/events.log}"; id="${d##*/}"
-          is_closed "$id" && continue
-          size=$(($(wc -c <"$f")))
-          if (( size > ${OFF[$id]:-0} )); then watch_scan_lines "$id" "${OFF[$id]:-0}" "$size"; OFF[$id]=$size; watch_overdue "$id"; fi
-        done
+        # (the open ones, each with its log's size: lib/store.py render)
+        if [[ -f "$STORE_D/.sizes" ]]; then
+          while IFS=$'\t' read -r id size; do
+            [[ "$size" =~ ^[0-9]+$ ]] || continue
+            if (( size > ${OFF[$id]:-0} )); then watch_scan_lines "$id" "${OFF[$id]:-0}" "$size"; OFF[$id]=$size; watch_overdue "$id"; fi
+          done <"$STORE_D/.sizes"
+        fi
       fi
       f="$(relay_dir)/inbox.ndjson"
       [[ "$f" -ot "$BELL_PREV" ]] || watch_relays

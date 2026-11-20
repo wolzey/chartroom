@@ -21,11 +21,15 @@
 # check) stays valid. A process renders once and keeps it; its own writes drop what they change,
 # and a long-running loop (watch's rounds, a poll) calls store_reset to read the store again.
 #
-# A home is known to the store by <home>/.home-id (a uuid, written once when its first store task
-# is born). No .home-id: the home has nothing in the store, and nothing here runs python.
+# A home is known to the store by <home>/.home-id, written once when its first store task is born:
+# its uid, and on a second line the database that record went into. Every later command uses that
+# database for the home, unless CHARTROOM_DB is set: a default that moved with the environment
+# (XDG_STATE_HOME set in a terminal's rc file, not in an ssh session or a GUI launcher's) would
+# otherwise read and write a second, empty store. No .home-id: the home has nothing in the store,
+# and nothing here runs python.
 
 CR_STORE=files CR_DB="" CR_STORE_PY=""
-STORE_RUN="" STORE_UID_FOR="" STORE_UID="" STORE_D="" TASK_KIND="" META_PATH="" EVENTS_PATH=""
+STORE_RUN="" STORE_UID_FOR="" STORE_UID="" STORE_DB="" STORE_D="" TASK_KIND="" META_PATH="" EVENTS_PATH=""
 STORE_HOME_ARGS=()
 
 store_settings() { # (load_config)
@@ -45,15 +49,18 @@ store_python() {
   [[ -n "$CR_STORE_PY" ]] || CR_STORE_PY="$(type -P python3 || true)"
   [[ -n "$CR_STORE_PY" ]] || die "the store needs python3 with its sqlite3 module, and there is none on PATH (CHARTROOM_PYTHON names one; chartroom store doctor)"
 }
-store_py() { store_python; CHARTROOM_DB="$CR_DB" "$CR_STORE_PY" -I -S "$CR_ROOT/lib/store.py" "$@"; }
+store_py() { store_python; CHARTROOM_DB="${STORE_DB:-$CR_DB}" "$CR_STORE_PY" -I -S "$CR_ROOT/lib/store.py" "$@"; }
 
 # The home's uid into STORE_UID ("" when it has nothing in the store), and STORE_HOME_ARGS.
 store_uid_of() { # [home]
   local h="${1:-$CR_HOME}"
   [[ "$STORE_UID_FOR" == "$h" ]] && return 0
-  STORE_UID=""; STORE_UID_FOR="$h"
-  if [[ -f "$h/.home-id" ]]; then read -r STORE_UID <"$h/.home-id" || true; fi
+  local rec=""
+  STORE_UID=""; STORE_UID_FOR="$h"; STORE_DB="$CR_DB"
+  if [[ -f "$h/.home-id" ]]; then { read -r STORE_UID; read -r rec; } <"$h/.home-id" || true; fi
   [[ "$STORE_UID" =~ ^[A-Za-z0-9-]{8,64}$ ]] || STORE_UID=""
+  # (the database this home's records went into, unless CHARTROOM_DB says otherwise)
+  [[ -z "${CHARTROOM_DB:-}" && -n "$STORE_UID" && "$rec" == /* && -f "$rec" ]] && STORE_DB="$rec"
   STORE_HOME_ARGS=(--uid "$STORE_UID" --name "${h##*/}" --path "$h")
 }
 
@@ -63,7 +70,7 @@ store_home_ensure() {
   [[ -z "$STORE_UID" ]] || return 0
   [[ -d "$CR_HOME" ]] || die "no chartroom home at $CR_HOME"
   local f="$CR_HOME/.home-id"
-  [[ -s "$f" ]] || { set -o noclobber; { new_uuid >"$f"; } 2>/dev/null || true; set +o noclobber; }
+  [[ -s "$f" ]] || { set -o noclobber; { printf '%s\n%s\n' "$(new_uuid)" "$CR_DB" >"$f"; } 2>/dev/null || true; set +o noclobber; }
   STORE_UID_FOR=""; store_uid_of
   [[ -n "$STORE_UID" ]] || die "could not give $CR_HOME a store id ($f)"
 }
@@ -91,7 +98,7 @@ store_dir() {
 store_load() {
   store_dir || return 1
   [[ -f "$STORE_D/.ids" ]] && return 0
-  store_py render "${STORE_HOME_ARGS[@]}" --dir "$STORE_D" --meta-all >"$STORE_D/.ids.tmp.$BASHPID" || { rm -f "$STORE_D/.ids.tmp.$BASHPID"; die "could not read the store ($CR_DB)"; }
+  store_py render "${STORE_HOME_ARGS[@]}" --dir "$STORE_D" --meta-all >"$STORE_D/.ids.tmp.$BASHPID" || { rm -f "$STORE_D/.ids.tmp.$BASHPID"; die "could not read the store (${STORE_DB:-$CR_DB})"; }
   mv "$STORE_D/.ids.tmp.$BASHPID" "$STORE_D/.ids"
 }
 
@@ -99,17 +106,16 @@ store_load() {
 store_reset() { [[ -z "$STORE_D" ]] || rm -rf "$STORE_D"; STORE_UID_FOR=""; return 0; }
 store_forget_events() { [[ -z "$STORE_D" ]] || rm -f "$STORE_D/$1/events.log" "$STORE_D/.events-open" "$STORE_D/.events-all"; } # <id>
 
-# Where a task's record lives: TASK_KIND=file|db, or "" for no such task.
+# Where a task's record lives: TASK_KIND=file|db, or "" for no such task. One task is looked up
+# on its own (its record rendered, not every task's): store_load is for listing them all.
 task_kind() { # <id>
   if [[ -f "$CR_HOME/tasks/$1/meta.json" ]]; then TASK_KIND="file"; return 0; fi
   TASK_KIND=""
   [[ -n "$1" && "$1" != */* && "$1" != .* ]] || return 0
-  store_load || return 0
+  store_dir || return 0
   if [[ -d "$STORE_D/$1" ]]; then TASK_KIND=db; return 0; fi
-  # Born in the store since this process read it.
-  if [[ "$1" =~ ^[a-z][a-z0-9_-]{0,31}$ ]] && store_py exists "${STORE_HOME_ARGS[@]}" --id "$1"; then
-    store_render "$1"; TASK_KIND=db
-  fi
+  # Not rendered by this process yet (or born in the store since it listed them).
+  if [[ "$1" =~ ^[a-z][a-z0-9_-]{0,31}$ ]] && store_py render "${STORE_HOME_ARGS[@]}" --dir "$STORE_D" --meta "$1"; then TASK_KIND=db; fi
   return 0
 }
 task_exists() { task_kind "$1"; [[ -n "$TASK_KIND" ]]; } # <id>
@@ -118,7 +124,7 @@ is_store_task() { task_kind "$1"; [[ "$TASK_KIND" == db ]]; } # <id>
 store_render() { # <id>...: its meta.json and events.log, now
   local a=() i
   for i in "$@"; do a+=(--events "$i"); done
-  store_py render "${STORE_HOME_ARGS[@]}" --dir "$STORE_D" "${a[@]}" || die "could not read the store ($CR_DB)"
+  store_py render "${STORE_HOME_ARGS[@]}" --dir "$STORE_D" "${a[@]}" || die "could not read the store (${STORE_DB:-$CR_DB})"
 }
 
 # META_PATH: the task's meta.json to read ("" for no such task).
@@ -162,7 +168,7 @@ task_events() { events_path "$1"; cat "$EVENTS_PATH" 2>/dev/null || true; } # <i
 store_render_events() { # open|all
   store_load || return 0
   [[ -f "$STORE_D/.events-$1" || -f "$STORE_D/.events-all" ]] && return 0
-  store_py render "${STORE_HOME_ARGS[@]}" --dir "$STORE_D" "--events-$1" || die "could not read the store ($CR_DB)"
+  store_py render "${STORE_HOME_ARGS[@]}" --dir "$STORE_D" "--events-$1" || die "could not read the store (${STORE_DB:-$CR_DB})"
   : >"$STORE_D/.events-$1"
 }
 
@@ -210,12 +216,16 @@ store_task_new() { # <meta json>
   store_on || die "the store is off in this home (CHARTROOM_STORE=sqlite in its config turns it on)"
   store_home_ensure
   store_py task-new "${STORE_HOME_ARGS[@]}" --json "$1" || exit 1
-  store_reset
+  store_reset; store_stamp
 }
 store_meta_set() { # <id> <key> <value>
   store_py meta-set "${STORE_HOME_ARGS[@]}" --id "$1" --key "$2" --value "$3" || exit 1
-  store_reset
+  store_reset; store_stamp
 }
+# A store write changes nothing under tasks/, which a view may watch (the Herdr panel watches the
+# folder: mods/herdr-chartroom/schedule.js), so each one rewrites tasks/.store-stamp; the home's
+# own change stamp (.changed) moves as for every write.
+store_stamp() { { printf . >"$CR_HOME/tasks/.store-stamp"; } 2>/dev/null || true; }
 # An event into the store; when the store cannot take it (locked past its timeout, a damaged
 # database), it goes to the task's spool instead, which the store takes in later: never lost.
 store_event() { # <id> <kind> <text>
@@ -223,7 +233,7 @@ store_event() { # <id> <kind> <text>
     printf '%s %s: %s\n' "$(now)" "$2" "$3" >>"$CR_HOME/tasks/$1/events.spool"
     warn "the store did not take this event; it waits in tasks/$1/events.spool"
   fi
-  store_forget_events "$1"
+  store_forget_events "$1"; store_stamp
 }
 
 # ---------------------------------------------------------------- chartroom store

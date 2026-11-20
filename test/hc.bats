@@ -159,7 +159,7 @@ watch_after() { # <change...>
   [ "$(meta_of "$id" hc_space)" = sp-crew ]
   hc_calls | grep -qF -- "--label herdr.space=sp-crew "
   refute grep -q 'space.rename' "$FAKE_HERDR_APP_DIR/calls.log"
-  refute grep -q "new space" "$CHARTROOM_HOME/tasks/$id/events.log"
+  refute bash -c 'grep -q "new space" <<<"$1"' _ "$(events "$id")"
 }
 
 @test "hc steer: a fragment is retried, a blocked agent is never typed into" {
@@ -238,7 +238,7 @@ watch_after() { # <change...>
   trust
   id2="$(new_task --backend hc:claude)"
   cr worktree "$id2" >/dev/null
-  jq '.worktree_created="0"' "$CHARTROOM_HOME/tasks/$id2/meta.json" >"$BATS_TEST_TMPDIR/m" && mv "$BATS_TEST_TMPDIR/m" "$CHARTROOM_HOME/tasks/$id2/meta.json"
+  set_meta "$id2" '.worktree_created="0"'
   : >"$FAKE_HC_DIR/calls.log"
   run cr dispatch "$id2"
   [ "$status" -eq 0 ]
@@ -255,7 +255,7 @@ watch_after() { # <change...>
   mkdir -p "$FAKE_HC_DIR/terms"; echo 9 >"$FAKE_HC_DIR/n"
   jq -n --arg n "$id" --arg l "$CHARTROOM_HOME/tasks/$id/launch.sh" '{address: "t9", name: $n, argv: ["bash", $l], state: "live", status: {state: "idle"}, turn: 0, labels: {}}' >"$FAKE_HC_DIR/terms/t9.json"
   # recorded for this task by a start that never finished: ended, then a fresh start
-  jq '.hc_terminal="t9"' "$CHARTROOM_HOME/tasks/$id/meta.json" >"$BATS_TEST_TMPDIR/m" && mv "$BATS_TEST_TMPDIR/m" "$CHARTROOM_HOME/tasks/$id/meta.json"
+  set_meta "$id" '.hc_terminal="t9"'
   run cr dispatch "$id"
   [ "$status" -eq 0 ]
   hc_calls | grep -qx "kill t9"
@@ -351,7 +351,7 @@ watch_after() { # <change...>
   id="$(new_task --backend hc:claude)"
   cr dispatch "$id" >/dev/null
   watch_after bash -c 'printf "%s exited: agent session ended (exit 0)\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$1"; f="$2"; jq ".state = \"finished\"" "$f" >"$f.tmp" && mv "$f.tmp" "$f"' _ \
-    "$CHARTROOM_HOME/tasks/$id/events.log" "$FAKE_HC_DIR/terms/t1.json"
+    "$(log_of "$id")" "$FAKE_HC_DIR/terms/t1.json"
   grep -q "exited: agent session ended" "$BATS_TEST_TMPDIR/wake"
   refute grep -q "lost:" "$BATS_TEST_TMPDIR/wake"
   [ "$(cr status --json | jq -r '.[0].live')" = stopped ]

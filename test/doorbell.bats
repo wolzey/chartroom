@@ -75,7 +75,7 @@ ends_within() { # <pid> <secs>
   w=$!
   armed "$B" watch
   sleep 0.5
-  printf '%s decision: written by hand\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$B/tasks/$id/events.log"
+  printf '%s decision: written by hand\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$(CHARTROOM_HOME="$B" log_of "$id")"
   ends_within "$w" 5
   wait "$w"
   grep -q "^\[$id\] \[proj\] .* decision: written by hand$" "$BATS_TEST_TMPDIR/w"

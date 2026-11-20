@@ -334,6 +334,21 @@ def write_atomic(path, data):
     os.replace(tmp, path)
 
 
+def render_meta(conn, home, outdir, ids):
+    """<outdir>/<id>/meta.json for each of ids in the store; 3 when none of them is."""
+    hid = home.hid(conn)
+    found = 0
+    for t in ids:
+        row = task_row(conn, hid, t) if hid is not None else None
+        if row is None:
+            continue
+        d = os.path.join(outdir, t)
+        os.makedirs(d, exist_ok=True)
+        write_atomic(os.path.join(d, "meta.json"), json.dumps(meta_doc(row)) + "\n")
+        found += 1
+    return 0 if found else 3
+
+
 def render(conn, home, outdir, meta_all, events_which, ids):
     """Write <outdir>/<id>/meta.json and events.log for the tasks asked for. Prints, for --meta-all,
     one "<id>\\t<open|closed>\\t<updated>" line per task in the store."""
@@ -368,6 +383,7 @@ def render(conn, home, outdir, meta_all, events_which, ids):
         d = os.path.join(outdir, t)
         os.makedirs(d, exist_ok=True)
         write_atomic(os.path.join(d, "meta.json"), json.dumps(meta_doc(row)) + "\n")
+    sizes = []
     for t in want_events:
         if t not in rows:
             continue
@@ -375,12 +391,17 @@ def render(conn, home, outdir, meta_all, events_which, ids):
         os.makedirs(d, exist_ok=True)
         path = os.path.join(d, "events.log")
         lines = list(event_lines(conn, hid, t))
-        write_atomic(path, "".join(lines))
+        text = "".join(lines)
+        write_atomic(path, text)
+        sizes.append("%s\t%d\n" % (t, len(text.encode("utf-8"))))
         # Its time is the newest event's, as a file task's events.log has the time of its last
         # append: what "nothing in its log for N minutes" reads (park).
         last = event_epoch(lines[-1]) if lines else None
         if last is not None:
             os.utime(path, (last, last))
+    if events_which:
+        # Each rendered log's size, for the watch (no `wc -c` per task).
+        write_atomic(os.path.join(outdir, ".sizes"), "".join(sizes))
     if meta_all:
         out = sys.stdout
         for t, row in rows.items():
@@ -392,6 +413,147 @@ def iter_rows(conn, hid):
     cols = [c[0] for c in cur.description]
     for r in cur:
         yield dict(zip(cols, r))
+
+
+# ------------------------------------------------------------------ status rows
+# What `status_rows` (bin/chartroom) derives from a task's record and events, for every store task
+# at once: the same rules as state_of, waiting_info, breaking_of and its own last-line and mentions
+# reads, which read a file task's events.log (test/store-parity.bats holds the two together).
+
+EV_RE = re.compile(r"^(?P<ts>[^ ]+) (?P<kind>[a-z]+): ?(?P<text>.*)$")
+ISO_IN_TEXT = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2})?(\.[0-9]+)?Z")
+REPORT_KINDS = ("progress", "waiting", "decision", "blocked", "done", "failed", "steered")
+
+
+def first_word(text):
+    w = text.split(None, 1)
+    return w[0] if w else ""
+
+
+def state_of(lines):
+    """state_of's awk, for a dispatched task that is not closed."""
+    s = ""
+    for line in lines:
+        f = line.split()
+        k, w = (f[1] if len(f) > 1 else ""), (f[2] if len(f) > 2 else "")
+        if (k == "note:" and w == "dispatched") or k == "steered:":
+            s = "working"
+        if k in ("decision:", "blocked:", "failed:"):
+            s = k[:-1]
+        if k == "done:":
+            s = "review"
+        if k == "note:" and w == "accepted" and s == "review":
+            s = "done"
+    return s or "working"
+
+
+def iso_epoch(t):
+    """waiting_info's epoch: a fraction dropped, a missing seconds field taken as :00."""
+    t = re.sub(r"\.[0-9]+Z$", "Z", t)
+    t = re.sub(r"T([0-9]{2}:[0-9]{2})Z$", r"T\1:00Z", t)
+    try:
+        return calendar.timegm(time.strptime(t, "%Y-%m-%dT%H:%M:%SZ"))
+    except ValueError:
+        return None
+
+
+def todate(e):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(e))
+
+
+def waiting_info(lines, grace, wmax, now_s):
+    """waiting_info's jq: the open `waiting` event, or None."""
+    if not any(" waiting: " in l for l in lines):
+        return None
+    ev = [m.groupdict() for m in (EV_RE.match(l) for l in lines) if m]
+    idx = [j for j, e in enumerate(ev) if e["kind"] in REPORT_KINDS or (e["kind"] == "note" and e["text"].startswith("dispatched"))]
+    if not idx or ev[idx[-1]]["kind"] != "waiting":
+        return None
+    i = idx[-1]
+    rs = [j for j in range(i) if ev[j]["kind"] == "steered" or (ev[j]["kind"] == "note" and ev[j]["text"].startswith("dispatched"))]
+    r = rs[-1] if rs else -1
+    if any(e["kind"] in ("decision", "blocked", "failed", "done") for e in ev[r + 1:i]):
+        return None
+    w = ev[i]
+    m = ISO_IN_TEXT.search(w["text"])
+    until = iso_epoch(m.group(0)) if m else None
+    if until is not None:
+        deadline = until + grace * 60
+    else:
+        since = iso_epoch(w["ts"])
+        deadline = (since if since is not None else now_s) + wmax * 60
+    return {"on": w["text"], "since": w["ts"], "until": todate(until) if until is not None else None,
+            "deadline": todate(deadline), "overdue": now_s > deadline,
+            "announced": any(e["kind"] == "note" and e["text"].startswith("waiting overdue") for e in ev[i + 1:])}
+
+
+BREAKING_SRC = re.compile(r"^[^ ]+ (decision|blocked|done|failed): ")
+BREAKING_MARK = re.compile(r"^[^ ]+ [a-z]+: \[breaking\] ")
+
+
+def mentions(home, tid, lines, pool):
+    """The other open tasks the brief or events name, as whole words (grep -ow)."""
+    try:
+        with open(os.path.join(home.task_dir(tid), "brief.md"), encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        text = ""
+    text += "".join(lines)
+    found = set()
+    for o in pool:
+        if o != tid and o in text and re.search(r"(?<![A-Za-z0-9_])" + re.escape(o) + r"(?![A-Za-z0-9_])", text):
+            found.add(o)
+    return sorted(found)
+
+
+def status_rows(conn, home, which, only, since, pool, grace, wmax):
+    """One JSON object per store task, for status_rows to finish (live, focus marks, short id)."""
+    hid = home.hid(conn)
+    if hid is None:
+        return
+    now_s = time.time()
+    rows = [task_row(conn, hid, only)] if only else list(iter_rows(conn, hid))
+    rows = [r for r in rows if r is not None]
+    pool = set(pool) | {r["id"] for r in rows if (r.get("closed") or "") == ""}
+    spooled = spooled_ids(home, [r["id"] for r in rows])
+    if spooled:
+        with Tx(conn):
+            for t in spooled:
+                ingest_spool(conn, home, hid, t)
+    out = sys.stdout
+    for row in rows:
+        closed = str(row.get("closed") or "")
+        if closed:
+            if which != "all":
+                continue
+            if since is not None:
+                e = iso_epoch(closed)
+                if e is None or e < since:
+                    continue
+        lines = list(event_lines(conn, hid, row["id"]))
+        if closed:
+            st = "closed"
+        elif not row.get("dispatched"):
+            st = "drafting"
+        else:
+            st = state_of(lines)
+        wait = waiting_info(lines, grace, wmax, now_s) if st != "closed" else None
+        last = ""
+        for l in reversed(lines):
+            if " note: " not in l:
+                last = l.rstrip("\n")
+                break
+        brk_src = [l for l in lines if BREAKING_SRC.match(l)]
+        try:
+            has_report = os.path.getsize(os.path.join(home.task_dir(row["id"]), "report.md")) > 0
+        except OSError:
+            has_report = False
+        doc = meta_doc(row)
+        doc["_cr"] = {"state": st, "wait": wait, "last": last[21:], "last_at": last[0:20],
+                      "breaking_mark": bool(brk_src) and bool(BREAKING_MARK.match(brk_src[-1])),
+                      "mentions": mentions(home, row["id"], lines, pool) if st != "closed" else [],
+                      "has_report": has_report}
+        out.write(json.dumps(doc) + "\n")
 
 
 # ------------------------------------------------------------------ doctor / check / legacy
@@ -453,8 +615,8 @@ def legacy(home):
 
 def parse(argv):
     """--key value pairs (repeatable --events), and bare flags."""
-    opts = {"events": []}
-    flags = {"--meta-all", "--events-open", "--events-all"}
+    opts = {"events": [], "meta": []}
+    flags = {"--meta-all", "--events-open", "--events-all", "--all", "--pool-stdin"}
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -463,8 +625,8 @@ def parse(argv):
             i += 1
         elif a.startswith("--") and i + 1 < len(argv):
             k = a[2:]
-            if k == "events":
-                opts["events"].append(argv[i + 1])
+            if k in ("events", "meta"):
+                opts[k].append(argv[i + 1])
             else:
                 opts[k] = argv[i + 1]
             i += 2
@@ -507,6 +669,8 @@ def main(argv):
             return 3
         hid = home.hid(conn)
         return 0 if hid is not None and conn.execute("SELECT 1 FROM tasks WHERE hid = ? AND id = ?", (hid, opts.get("id", ""))).fetchone() else 3
+    if cmd == "render" and opts["meta"]:
+        return render_meta(conn, home, opts["dir"], opts["meta"]) if conn is not None else 3
     if cmd == "render":
         if conn is None:
             return 0
@@ -523,6 +687,14 @@ def main(argv):
             with Tx(conn):
                 ingest_spool(conn, home, hid, opts["id"])
         sys.stdout.write("".join(event_lines(conn, hid, opts["id"])))
+        return 0
+    if cmd == "rows":
+        if conn is None:
+            return 0
+        pool = [l.strip() for l in sys.stdin if l.strip()] if opts.get("pool-stdin") else []
+        status_rows(conn, home, "all" if opts.get("all") else "open", opts.get("id", ""),
+                    int(opts["since"]) if opts.get("since") else None, pool,
+                    int(opts.get("grace", "15")), int(opts.get("max", "120")))
         return 0
     if cmd == "check":
         return 1 if check(conn, home) else 0

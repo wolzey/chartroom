@@ -30,7 +30,7 @@ joined_id() { sed -n 's/^id=//p' <<<"$1"; }
   [ -z "$(meta_of "$id" worktree_created)" ]
   [ ! -d "$CHARTROOM_HOME/worktrees" ] || [ -z "$(ls "$CHARTROOM_HOME/worktrees")" ]
   [ "$(git -C "$PROJECT" worktree list | wc -l)" -eq 1 ]
-  grep -q 'note: dispatched via joined:claude' "$CHARTROOM_HOME/tasks/$id/events.log"
+  events "$id" | grep -q 'note: dispatched via joined:claude'
   grep -q "listen $id" "$CHARTROOM_HOME/tasks/$id/brief.md"
   grep -q "never removes or cleans this directory" "$CHARTROOM_HOME/tasks/$id/brief.md"
   run cr status
@@ -47,7 +47,7 @@ joined_id() { sed -n 's/^id=//p' <<<"$1"; }
   [ "$(joined_id "$output")" = "$id" ]
   [[ "$output" == *"already joined"* ]]
   [ "$(ls "$CHARTROOM_HOME/tasks" | wc -l)" -eq 1 ]
-  grep -q 'note: re-joined' "$CHARTROOM_HOME/tasks/$id/events.log"
+  events "$id" | grep -q 'note: re-joined'
   CLAUDE_CODE_SESSION_ID=sess-2 run join_here --title three
   [ "$(joined_id "$output")" != "$id" ]
   [ "$(ls "$CHARTROOM_HOME/tasks" | wc -l)" -eq 2 ]
@@ -174,11 +174,11 @@ with two lines"
 @test "watch: the joined agent's process ending is recorded once and wakes the XO" {
   id="$(joined_id "$(join_here --title vanishing)")"
   sleep 30 & dead=$!; kill "$dead"; wait "$dead" 2>/dev/null || true
-  jq --arg p "$dead" '.pid=$p' "$CHARTROOM_HOME/tasks/$id/meta.json" >"$BATS_TEST_TMPDIR/m" && mv "$BATS_TEST_TMPDIR/m" "$CHARTROOM_HOME/tasks/$id/meta.json"
+  set_meta "$id" ".pid=\"$dead\""
   run cr watch --once --timeout 5
   [ "$status" -eq 0 ]
   [[ "$output" == *"[$id]"*"exited: joined agent session ended (pid $dead gone)"* ]]
-  [ "$(grep -c ' exited: ' "$CHARTROOM_HOME/tasks/$id/events.log")" -eq 1 ]
+  [ "$(events "$id" | grep -c ' exited: ')" -eq 1 ]
   run cr status --json
   [ "$(jq -r '.[0].live' <<<"$output")" = stopped ]
   [ "$(jq -r '.[0].state' <<<"$output")" = stopped-silent ]

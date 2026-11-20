@@ -147,7 +147,7 @@ setup() {
   [ "$status" -ne 0 ]; [[ "$output" == *"acts on one home"* ]]
   run env CHARTROOM_HOME="$B" "$CHARTROOM" event "$id" progress added the --all-homes flag
   [ "$status" -eq 0 ]
-  grep -q 'progress: added the --all-homes flag' "$B/tasks/$id/events.log"
+  CHARTROOM_HOME="$B" events "$id" | grep -q 'progress: added the --all-homes flag'
 }
 
 @test "inbox list: the open items, or that nothing is open" {

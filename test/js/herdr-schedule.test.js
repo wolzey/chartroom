@@ -100,6 +100,11 @@ test("touches: macOS's /private/var spelling of the same root", () => {
   assert.strictEqual(S.touches(["/private/var/h/tasks/x/claude.jsonl"], "/var/h/tasks/"), false);
 });
 
+test("touches: a store task's writes (the store's stamp under the root, a spool line)", () => {
+  assert.strictEqual(S.touches([`${ROOT}/.store-stamp`], ROOT), true);
+  assert.strictEqual(S.touches([`${ROOT}/fix-21ba/events.spool`], ROOT), true);
+});
+
 test("taskDirs: this machine's homes the radar read, without the ones it couldn't", () => {
   const radar = { machine: { local: true, homes: [
     { name: "harbor", path: "/srv/x/.harbor", open: 23, error: null },

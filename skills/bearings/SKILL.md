@@ -38,7 +38,8 @@ never from conversation memory. (If `chartroom` is not on PATH, use
    For every task in `review` (a worker reported done; it waits on the commander's look),
    `decision`, `blocked`, `failed`, `stopped-silent`,
    `waiting-overdue`, `awaiting-input` or `lost` state, read its `$CHARTROOM_HOME/tasks/<id>/report.md` if one
-   exists, and the last few lines of `events.log`. Run `chartroom peek <id>` only when those
+   exists, and the last few lines of its events (`chartroom store events <id> | tail`, wherever
+   the task lives; a task in the store has no `events.log`). Run `chartroom peek <id>` only when those
    don't explain the state. If the commander says "include PRs", also check PR state for tasks
    that opened one with the project's forge CLI (`gh` for GitHub, `az repos` for Azure DevOps,
    `glab` for GitLab).

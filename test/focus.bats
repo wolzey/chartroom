@@ -10,8 +10,7 @@ task_in() { # <project> <kind> [--breaking] <text>
   local p="$BATS_TEST_TMPDIR/$1" id; shift
   [[ -d "$p/.git" ]] || { git init -q "$p"; git -C "$p" commit -q --allow-empty -m init; }
   id="$(PROJECT="$p" new_task --backend command --command "$STUB {id}")"
-  jq '.dispatched = "2026-01-01T00:00:00Z"' "$CHARTROOM_HOME/tasks/$id/meta.json" >"$BATS_TEST_TMPDIR/m" &&
-    mv "$BATS_TEST_TMPDIR/m" "$CHARTROOM_HOME/tasks/$id/meta.json"
+  set_meta "$id" '.dispatched = "2026-01-01T00:00:00Z"'
   cr event "$id" "$@"
   printf '%s' "$id"
 }

@@ -226,7 +226,7 @@ EOF
   run cr watch --once --timeout 5
   [ "$status" -eq 0 ]
   [[ "$output" == *"[$id] [proj] waiting overdue: review from the docs team (since "* ]]
-  grep -q ' note: waiting overdue: review from the docs team' "$CHARTROOM_HOME/tasks/$id/events.log"
+  events "$id" | grep -q ' note: waiting overdue: review from the docs team'
   run cr watch --once --timeout 2
   [ "$status" -eq 124 ]
   [[ "$output" != *"overdue"* ]]
@@ -273,8 +273,8 @@ EOF
   cr event "$id" decision --detail "Options: (1) RECOMMENDED retry; (2) roll back. Report: report.md" "Deploy failed on step 3: pick a fix"
   cr event "$id" blocked --breaking --detail $'two\nlines' "Prod is down."
   cr event "$id" progress "no detail, as before"
-  [ "$(grep -c . "$CHARTROOM_HOME/tasks/$id/events.log")" -eq "$(grep -cE '^[0-9TZ:-]{20} [a-z]+: ' "$CHARTROOM_HOME/tasks/$id/events.log")" ]
-  run tail -3 "$CHARTROOM_HOME/tasks/$id/events.log"
+  [ "$(events "$id" | grep -c .)" -eq "$(events "$id" | grep -cE '^[0-9TZ:-]{20} [a-z]+: ')" ]
+  run bash -c 'tail -3 <<<"$1"' _ "$(events "$id")"
   [[ "${lines[0]}" == *" decision: Deploy failed on step 3: pick a fix. Details: Options: (1) RECOMMENDED retry; (2) roll back. Report: report.md" ]]
   [[ "${lines[1]}" == *" blocked: [breaking] Prod is down. Details: two lines" ]]
   [[ "${lines[2]}" == *" progress: no detail, as before" ]]
@@ -334,7 +334,7 @@ EOF
 @test "a worker's done is review until the commander accepts it; only accept or close ends it" {
   id="$(new_task --backend command --command "$STUB {id}")"
   d="$CHARTROOM_HOME/tasks/$id"
-  jq '. + {dispatched: "2026-01-02T10:00:00Z"}' "$d/meta.json" >"$d/m" && mv "$d/m" "$d/meta.json"
+  set_meta "$id" '. + {dispatched: "2026-01-02T10:00:00Z"}'
   cr event "$id" progress "halfway" >/dev/null
   run cr accept "$id"
   [ "$status" -ne 0 ]
@@ -355,7 +355,7 @@ EOF
   [ "$status" -ne 0 ]
   [[ "$output" == *"$id is done, not awaiting review"* ]]
   # more work after the accept: its next done is in review again
-  printf '%s steered: one more thing\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$d/events.log"
+  printf '%s steered: one more thing\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$(log_of "$id")"
   cr event "$id" done "fixed too" >/dev/null
   [ "$(cr status --json | jq -r --arg id "$id" '.[] | select(.id == $id) | .state')" = review ]
 }

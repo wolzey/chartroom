@@ -14,8 +14,10 @@ not on PATH, use `../../bin/chartroom` relative to this skill's directory.)
 2. **Gather** only this:
    - **Inbox item** (`type: "inbox"`): its `project`, `text` and `date`. That is the question.
    - **Task** (`type: "task"`): `project`, `state`, `title`, `waiting_on`/`waiting_until`; in
-     `$CHARTROOM_HOME/tasks/<id>/`: the last `decision`/`blocked`/`failed`/`done` line of
-     `events.log`, the outcome section of `report.md` (if any), and PR/MR URLs in either file.
+     `$CHARTROOM_HOME/tasks/<id>/`: the last `decision`/`blocked`/`failed`/`done` line of its
+     events (`chartroom store events <id>`, which reads a task wherever it lives; a task in the
+     store has no `events.log`), the outcome section of `report.md` (if any), and PR/MR URLs in
+     either.
      `plan.md` only if the decision is a plan gate.
    - Either: its open drafts, `chartroom artifact list <id>`. Give each one's ref and title in
      your answer (`chartroom artifact copy <ref>` copies it), and `chartroom artifact done

@@ -212,3 +212,30 @@ db() { python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); [print("|
   run cr store legacy --json
   [ "$(jq -c . <<<"$output")" = '{"tasks":1,"open_tasks":1}' ]
 }
+
+@test "a running watch hears a store task's event at its next light round, not the next full one" {
+  store_on
+  id="$(new_task)"
+  cr watch --once --timeout 1 >/dev/null 2>&1 || true # (its cursor)
+  export CHARTROOM_WATCH_HC_INTERVAL=600 # nothing dispatched: the next full round is ten minutes away
+  start=$SECONDS
+  cr watch --once --timeout 30 >"$BATS_TEST_TMPDIR/out" 2>&1 &
+  sleep 2
+  cr event "$id" decision "heard between rounds" >/dev/null
+  wait
+  grep -q "\[$id\].*decision: heard between rounds" "$BATS_TEST_TMPDIR/out"
+  (( SECONDS - start < 15 ))
+}
+
+@test "a home keeps the database it was born in, whatever XDG_STATE_HOME says later" {
+  unset CHARTROOM_DB
+  store_on
+  id="$(new_task)"
+  first="$BATS_TEST_TMPDIR/state/chartroom/chartroom.db"
+  [ -f "$first" ]
+  [ "$(sed -n 2p "$CHARTROOM_HOME/.home-id")" = "$first" ]
+  # Another context with another state dir (an ssh session, a GUI launcher) reads the same store.
+  XDG_STATE_HOME="$BATS_TEST_TMPDIR/elsewhere" cr event "$id" progress "from elsewhere" >/dev/null
+  events "$id" | grep -q 'progress: from elsewhere'
+  [ ! -e "$BATS_TEST_TMPDIR/elsewhere/chartroom/chartroom.db" ]
+}

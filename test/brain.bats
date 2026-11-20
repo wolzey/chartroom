@@ -34,6 +34,10 @@ teardown() {
 # Run something as the brain machine (its HOME, config and homes).
 on_brain() { ( export HOME="$BH" CHARTROOM_CONFIG="$BH/.config/chartroom/config"; unset CHARTROOM_HOME; "$@" 3>&- ); }
 brain_cr() { on_brain env CHARTROOM_HOME="$BRAIN" "$CHARTROOM" "$@"; }
+# A task's record and events on the brain, wherever it lives there (a store task has no files).
+brain_meta() { brain_cr store meta "$1" | jq -r "$2"; }
+brain_events() { brain_cr store events "$1"; }
+brain_set_meta() { ( export HOME="$BH" CHARTROOM_CONFIG="$BH/.config/chartroom/config" CHARTROOM_HOME="$BRAIN"; set_meta "$@" ); }
 # A gate call by hand: a header line (JSON), then whatever follows on stdin.
 gate() { on_brain "$CHARTROOM" brain gate; }
 header() { jq -cn --arg verb "$1" --argjson x "${2:-"{}"}" '{v: 1, verb: $verb, home: "acme", client: {machine: "test"}} + $x'; }
@@ -87,7 +91,7 @@ new_remote() { # a task made through the client; prints its id
 @test "new runs on the brain and its brief is readable here at the same relative path" {
   local id; id="$(new_remote)"
   [ -n "$id" ]
-  [ -f "$BRAIN/tasks/$id/meta.json" ]
+  brain_meta "$id" .id >/dev/null
   [ -f "$CHARTROOM_HOME/tasks/$id/brief.md" ]
   cmp "$BRAIN/tasks/$id/brief.md" "$CHARTROOM_HOME/tasks/$id/brief.md"
   run cr status
@@ -109,10 +113,10 @@ new_remote() { # a task made through the client; prints its id
     [ "$status" -eq 0 ]
     [ "$(tail -1 "$BH/chartroom/other/relays/inbox.ndjson" | jq -r .text)" = "$hostile" ]
     local id; TITLE="--title -x '\$HOME'" id="$(new_remote)"
-    [ "$(jq -r .title "$BRAIN/tasks/$id/meta.json")" = "--title -x '\$HOME'" ]
+    [ "$(brain_meta "$id" .title)" = "--title -x '\$HOME'" ]
     run cr event "$id" progress "$big"
     [ "$status" -eq 0 ]
-    [ "$(tail -1 "$BRAIN/tasks/$id/events.log" | wc -c)" -gt 100000 ]
+    [ "$(brain_events "$id" | tail -1 | wc -c)" -gt 100000 ]
     run cr event "$id" progress ""
   done
   [ ! -e /tmp/pwned-cr ]
@@ -125,7 +129,7 @@ new_remote() { # a task made through the client; prints its id
   CHARTROOM_HARNESS=claude run cr dispatch "$id"
   [ "$status" -eq 0 ]
   grep -q 'Please do the thing' "$BRAIN/tasks/$id/brief.md"
-  [ -n "$(jq -r '.dispatched // empty' "$BRAIN/tasks/$id/meta.json")" ]
+  [ -n "$(brain_meta "$id" '.dispatched // empty')" ]
 }
 
 @test "a forwarded dispatch never starts a worker in the ssh session: headless and command are refused" {
@@ -134,7 +138,7 @@ new_remote() { # a task made through the client; prints its id
   run cr dispatch "$id"
   [ "$status" -ne 0 ]
   [[ "$output" == *"would start in the ssh session"* ]]
-  [ -z "$(jq -r '.dispatched // empty' "$BRAIN/tasks/$id/meta.json")" ]
+  [ -z "$(brain_meta "$id" '.dispatched // empty')" ]
 }
 
 @test "an edit that crosses a change on the brain stops the command and keeps both versions" {
@@ -145,7 +149,7 @@ new_remote() { # a task made through the client; prints its id
   [ "$status" -eq 1 ]
   [[ "$output" == *"changed on the brain before your edit reached it"* ]]
   [[ "$output" == *"nothing was run"* ]]
-  ! grep -q steered "$BRAIN/tasks/$id/events.log"
+  ! brain_events "$id" | grep -q steered
   grep -q "client's line" "$CHARTROOM_HOME/tasks/$id/brief.md".client-conflict-*
   grep -q "brain's line" "$CHARTROOM_HOME/tasks/$id/brief.md"
   ! grep -q "client's line" "$BRAIN/tasks/$id/brief.md"
@@ -215,7 +219,9 @@ new_remote() { # a task made through the client; prints its id
   [[ "$output" == *"does not take tasks/$id/meta.json"* ]]
   [ "$(snapshot "$BRAIN/tasks/$id")" = "$before" ]
   ls "$CHARTROOM_HOME/tasks/$id/" | grep -q 'meta.json.client-refused-'
-  jq -e '.id' "$CHARTROOM_HOME/tasks/$id/meta.json" >/dev/null # the brain's record is back
+  # the brain's record is back (a store task's record is in the brain's store: never in the copy)
+  if [[ -f "$BRAIN/tasks/$id/meta.json" ]]; then jq -e '.id' "$CHARTROOM_HOME/tasks/$id/meta.json" >/dev/null
+  else [ ! -e "$CHARTROOM_HOME/tasks/$id/meta.json" ]; fi
 }
 
 @test "the gate's put refuses paths out of the home, symlinks, and chartroom's own records" {
@@ -355,7 +361,7 @@ new_remote() { # a task made through the client; prints its id
 
 @test "attach: the brain prepares, this machine shows the worker through its hc link" {
   local id; id="$(new_remote --backend hc:claude)"
-  on_brain jq '.dispatched = "2026-01-01T00:00:00Z" | .hc_terminal = "t9"' "$BRAIN/tasks/$id/meta.json" >"$BATS_TEST_TMPDIR/m" && mv "$BATS_TEST_TMPDIR/m" "$BRAIN/tasks/$id/meta.json"
+  brain_set_meta "$id" '.dispatched = "2026-01-01T00:00:00Z" | .hc_terminal = "t9"'
   run brain_cr attach "$id" --prepare
   [ "$status" -eq 0 ]; [ "$(jq -r .runner <<<"$output")" = hc ]; [ "$(jq -r .hc_terminal <<<"$output")" = t9 ]
   use_fake herdr-app

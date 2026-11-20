@@ -5,10 +5,12 @@
 // test/js/herdr-schedule.test.js runs it under node.
 
 // The files a task's radar row is read from (status_rows in bin/chartroom): meta.json and
-// events.log, report.md (has_report) and brief.md (mentions). Nothing else under tasks/ shows in
-// the panel: not a headless worker's claude.jsonl, scratch files, or meta.json.tmp before its
-// rename to meta.json.
-export const ROW_FILES = ["meta.json", "events.log", "report.md", "brief.md"];
+// events.log, report.md (has_report) and brief.md (mentions), and a store task's events.spool
+// (lines appended without chartroom, lib/store.sh). Nothing else under tasks/ shows in the panel:
+// not a headless worker's claude.jsonl, scratch files, or meta.json.tmp before its rename to
+// meta.json. A store task's record and events are in the store's database, not under tasks/:
+// every write there rewrites tasks/.store-stamp, a file right under the root, which counts.
+export const ROW_FILES = ["meta.json", "events.log", "events.spool", "report.md", "brief.md"];
 
 // A read costs a few seconds of CPU (status in every home), so changes never read more than one
 // every FLOOR_MS, the old poll's pace: a busy crew writes something more often than that (measured:

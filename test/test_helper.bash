@@ -87,6 +87,38 @@ meta_of() {
   else "$CHARTROOM" store meta "$1" 3>&- | jq -r --arg k "$2" '.[$k] // empty'; fi
 }
 
+# The file a line is appended to without chartroom (a raw printf, as a launcher's wrapper does):
+# a file task's events.log, a store task's events.spool.
+log_of() {
+  if [[ -f "$CHARTROOM_HOME/tasks/$1/meta.json" ]]; then printf '%s/tasks/%s/events.log' "$CHARTROOM_HOME" "$1"
+  else printf '%s/tasks/%s/events.spool' "$CHARTROOM_HOME" "$1"; fi
+}
+# Change a task's record as a test fakes one (a dispatch time, a pid), wherever it lives: <jq filter>.
+set_meta() { # <id> <jq filter>
+  local f="$CHARTROOM_HOME/tasks/$1/meta.json" doc
+  if [[ -f "$f" ]]; then jq "$2" "$f" >"$f.t" && mv "$f.t" "$f"; return; fi
+  doc="$("$CHARTROOM" store meta "$1" 3>&- | jq -c "$2")" || return 1
+  python3 - "$REPO_ROOT/lib" "$CHARTROOM_HOME" "$1" "$doc" <<'PY'
+import json, os, sqlite3, sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+import store
+home, tid, doc = sys.argv[2], sys.argv[3], json.loads(sys.argv[4])
+with open(os.path.join(home, ".home-id")) as f:
+    uid, db = (f.read().split("\n") + ["", ""])[:2]
+db = os.environ.get("CHARTROOM_DB") or db
+c = sqlite3.connect(db)
+hid = c.execute("SELECT hid FROM homes WHERE uid = ?", (uid,)).fetchone()[0]
+row = store.task_row(c, hid, tid)
+extra = {k: v for k, v in doc.items() if k not in store.META_COLS}
+for k in store.META_COLS:
+    if k != "id":
+        c.execute("UPDATE tasks SET %s = ? WHERE hid = ? AND id = ?" % k, (doc.get(k), hid, tid))
+c.execute("UPDATE tasks SET extra = ? WHERE hid = ? AND id = ?", (json.dumps(extra), hid, tid))
+c.commit()
+PY
+}
+
 # Wait (default ~10s, or <secs>) until the task's events.log matches a regex.
 wait_event() {
   local id="$1" re="$2" i n=$(( ${3:-10} * 4 ))

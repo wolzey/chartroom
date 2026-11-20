@@ -125,6 +125,13 @@ are stable from 0.1.0.
   - `chartroom store doctor|check|legacy|events|meta`, and `chartroom set <id> key=value` for the
     settings the skill had the XO edit in `meta.json` (model, effort, sandbox, permission).
   - The dashboard refreshes on the home's change stamp and shows a store task's events.
+  - `status`, `board` and `todo` read every store task in one call to the store (its state,
+    waiting window, last line, breaking mark and mentions by the same rules as a file task's,
+    held together by test/store-parity.bats); only liveness is still asked per open task.
+  - A home keeps the database it was born in (`.home-id` records it), so a state directory that
+    differs between a terminal and an ssh session or GUI launcher never splits a home's records.
+  - Store writes rewrite `tasks/.store-stamp`, and the Herdr panel counts that and a spool line
+    as changes.
 - Client homes (one brain, step 1): `chartroom brain link <target>` makes an empty home a client
   of another machine's home of the same name. Every chartroom command in it then runs there over
   one fixed ssh gate (`chartroom brain gate`: the arguments as JSON on stdin, registered homes
