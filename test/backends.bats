@@ -437,12 +437,12 @@ herdr_trust_screen() {
   [ "$(cr status --json | jq -r '.[0].live')" = in-session ]
 }
 
-@test "herdr claude workers get only the prompt hook; tmux/cmux get all three" {
+@test "herdr claude workers get the prompt hook and the Bash guard; tmux/cmux get all four" {
   use_fake claude
   id="$(new_task --backend herdr:claude)"
   run bash -c "source '$REPO_ROOT/lib/core.sh'; source '$REPO_ROOT/lib/agents.sh'; CR_BIN='$CHARTROOM'; load_config; interactive_argv '$id' claude prompt"
   [[ "$output" == *"--settings"* ]]
-  [ "$(jq -c '.hooks|keys' "$CHARTROOM_HOME/tasks/$id/claude-settings.json")" = '["UserPromptSubmit"]' ]
+  [ "$(jq -c '.hooks|keys' "$CHARTROOM_HOME/tasks/$id/claude-settings.json")" = '["PreToolUse","UserPromptSubmit"]' ]
   run bash -c "source '$REPO_ROOT/lib/core.sh'; source '$REPO_ROOT/lib/agents.sh'; CR_BIN='$CHARTROOM'; load_config; interactive_argv '$id' claude 1"
-  [ "$(jq -c '.hooks|keys' "$CHARTROOM_HOME/tasks/$id/claude-settings.json")" = '["Notification","Stop","UserPromptSubmit"]' ]
+  [ "$(jq -c '.hooks|keys' "$CHARTROOM_HOME/tasks/$id/claude-settings.json")" = '["Notification","PreToolUse","Stop","UserPromptSubmit"]' ]
 }

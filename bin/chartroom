@@ -659,6 +659,17 @@ cmd_hook() {
     IFS=$'\t' read -r CR_HOME id _ <"$reg"
     [[ -n "$(meta "$id" closed 2>/dev/null)" ]] && exit 0
   fi
+  # The Bash tool's guard (claude_settings_file): it refuses a pattern kill whatever the task's
+  # record says, answering on stdout, and the deny goes out before anything that could fail.
+  if [[ "$what" == pre-bash ]]; then
+    [[ -n "$payload" ]] || payload="$(cat 2>/dev/null || true)"
+    msg="$(jq -r '.tool_input.command // empty' <<<"$payload" 2>/dev/null || true)"
+    if [[ -n "$msg" ]] && pattern_kill "$msg"; then
+      jq -n --arg r "$PATTERN_KILL_ADVICE" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+      if [[ -n "$id" && -f "$(tdir "$id")/meta.json" ]]; then log_event "$id" note "blocked a pattern kill: ${msg:0:200}" >/dev/null 2>&1 || true; fi
+    fi
+    exit 0
+  fi
   [[ -n "$id" && -f "$(tdir "$id")/meta.json" ]] || exit 0
   case "$what" in
     stop) log_event "$id" agent "turn-ended" ;;

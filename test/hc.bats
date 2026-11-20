@@ -85,7 +85,7 @@ watch_after() { # <change...>
   l="$CHARTROOM_HOME/tasks/$id/launch.sh"
   grep -q "CHARTROOM_TASK=$id" "$l"
   grep -qF -- "--settings $CHARTROOM_HOME/tasks/$id/claude-settings.json \"\$@\"" "$l"
-  [ "$(jq -c '.hooks|keys' "$CHARTROOM_HOME/tasks/$id/claude-settings.json")" = '["UserPromptSubmit"]' ]
+  [ "$(jq -c '.hooks|keys' "$CHARTROOM_HOME/tasks/$id/claude-settings.json")" = '["PreToolUse","UserPromptSubmit"]' ]
   events "$id" | grep -q "agent: prompt-received sig=$(brief_sig "$id") len="
   events "$id" | grep -q "note: hc: new space $sp for chartroom-crew"
   refute grep -q '^send' "$FAKE_HC_DIR/calls.log"
