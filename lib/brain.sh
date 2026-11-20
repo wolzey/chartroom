@@ -732,12 +732,14 @@ gate_watch1() { # <header>
   mkfifo "$calldir/w"
   trap '' PIPE
   # shellcheck disable=SC2064 # the paths, now
-  trap "[[ -n \"\${wpid:-}\" ]] && kill_tree \"\$wpid\"; [[ -n \"\${mpid:-}\" ]] && kill \"\$mpid\" 2>/dev/null; rm -rf '$calldir' '$tmp'" EXIT
+  trap "[[ -n \"\${wpid:-}\" ]] && gate_kill_watch \"\$wpid\"; [[ -n \"\${mpid:-}\" ]] && kill \"\$mpid\" 2>/dev/null; rm -rf '$calldir' '$tmp'" EXIT
   printf '%sCRB hello %s %s\n' "$BRAIN_RS" "$BRAIN_PROTOCOL" "$CR_VERSION" || exit "$BRAIN_EX_UNREACHABLE"
-  ( cd "$GATE_HOME" && exec env -u CHARTROOM_BRAIN "${GATE_ENV[@]}" "$CR_BIN" watch --once --cursor "$tmp" ${t:+--timeout "$t"} </dev/null >"$calldir/w" ) &
+  # (in a process group of its own, so its hc event stream and every other helper end with it:
+  # signalling the watch's children first orphaned the stream's pipeline, seen on the brain)
+  ( cd "$GATE_HOME" && exec perl -e 'setpgrp(0, 0); exec @ARGV or die "exec: $!"' env -u CHARTROOM_BRAIN "${GATE_ENV[@]}" "$CR_BIN" watch --once --cursor "$tmp" ${t:+--timeout "$t"} </dev/null >"$calldir/w" ) &
   wpid=$!
   ( while IFS= read -r line; do [[ "$line" == ack ]] && : >"$calldir/ack"; done
-    : >"$calldir/eof"; [[ -f "$calldir/done" ]] || kill_tree "$wpid" ) <&0 &
+    : >"$calldir/eof"; [[ -f "$calldir/done" ]] || gate_kill_watch "$wpid" ) <&0 &
   mpid=$!
   exec {r}<"$calldir/w"
   while true; do
@@ -759,6 +761,15 @@ gate_watch1() { # <header>
   elif [[ $wrc -eq 124 ]]; then mv -- "$tmp" "$cur"
   fi
   exit "$wrc"
+}
+
+# The watch a gate round started, and everything in its process group: TERM, which its own trap
+# takes to close its hc stream, then KILL for whatever is left after 2 s.
+gate_kill_watch() { # <pid, the group's leader>
+  local i
+  kill -TERM -- "-$1" 2>/dev/null || kill_tree "$1"
+  for i in $(seq 1 20); do kill -0 -- "-$1" 2>/dev/null || return 0; sleep 0.1; done
+  kill -KILL -- "-$1" 2>/dev/null || true
 }
 
 # A client's watch: watch --once is one acked round (and retries while the brain is away);
