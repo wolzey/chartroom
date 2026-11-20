@@ -287,6 +287,12 @@ Work exactly as usual: every chartroom command runs there.
   nothing runs (each command exits 75, "nothing was run").
 - **Never ssh to the brain yourself.**
 
+`chartroom migrate-home` moves a home from another machine into this one (README, "Moving a home
+to another machine"). Every step that writes on the other machine (snapshot, freeze, settle,
+finish, rollback, reap) needs the commander's word, and the triage's `decisions.tsv` is theirs to
+fill. While a home is frozen (`.migrating` in it), `new`, `dispatch`, `steer` and `attach` refuse
+there: say so, and wait for the move to finish or roll back, rather than working around it.
+
 The dashboard shows the same fleet in a browser: `waiting` tasks under In progress, overdue
 ones under On hold. `chartroom dashboard open` (or the `dashboard` skill, `/dashboard`) opens
 it, starting it if needed; `chartroom board` prints the same lanes in the terminal, short id

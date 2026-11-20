@@ -6,6 +6,25 @@ are stable from 0.1.0.
 
 ## [Unreleased]
 
+### Added
+- `chartroom migrate-home`: move a home from another machine into this one, one home at a time,
+  triage first.
+  - **triage:** every open task lands in a bucket (landed, needs the commander's word, stale with
+    unlanded work, live), with a prefilled `decisions.tsv`.
+  - **snapshot, freeze, settle:** tar.gz snapshots on both machines; the client frozen (new,
+    dispatch, steer and attach refuse there) and its live workers parked; the commander's
+    decisions applied (close, accept, or bundle into a `git bundle`).
+  - **move:** every record (records only), the open tasks' Claude and Codex conversations, their
+    branches by read-only `git fetch`, and their uncommitted changes. Rulings merge by time,
+    `commander.md` on the client's base, and inbox, relays, config and the XO's memory are
+    unioned.
+  - **verify:** the union, checked.
+  - **finish:** the client's home renamed and replaced by a stub.
+  - **rollback, materialize, restore, reap.**
+
+  A moved Claude worker resumes its own session in the same worktree path; its worktree is rebuilt
+  on first use. The watch never replays a moved task's history.
+
 ## [0.2.0] - 2026-11-22
 
 The first release since 0.1.0. Several features are experimental and off by default: the README's "What is new since 0.1.0" table says which.

@@ -411,6 +411,75 @@ cd ~/chartroom/acme && claude                                 # that home's XO
 What each home keeps to itself, reading across homes, and how one home's XO tells or asks
 another's: [docs/homes.md](docs/homes.md).
 
+## Moving a home to another machine
+
+`chartroom migrate-home` moves a home from another machine (the client) into this one (the brain),
+one home at a time. It runs on the brain, which reads the client over `ssh -o BatchMode=yes`. Paths
+are the same on both machines (same user, same layout), so a moved worker resumes its own Claude
+or Codex conversation in the same worktree path.
+
+```bash
+chartroom migrate-home triage   --from laptop --home acme   # read-only: every open task in a bucket
+chartroom migrate-home snapshot --from laptop --all         # tar.gz of every home, on both machines
+chartroom migrate-home freeze   --from laptop --home acme   # client: no new work, live workers parked
+chartroom migrate-home settle   --from laptop --home acme   # the commander's decisions (decisions.tsv)
+chartroom migrate-home move     --from laptop --home acme [--dry-run]
+chartroom migrate-home verify   --from laptop --home acme   # the brain's home = the union of both
+chartroom migrate-home finish   --from laptop --home acme --brain desk   # client: rename, fresh stub
+chartroom migrate-home rollback --from laptop --home acme   # undoes move (and finish)
+```
+
+- **Triage first.** Each open task on the client lands in a bucket:
+  - **(a)** landed (a PR merged at its exact HEAD, or every PR closed, and nothing local): close in place;
+  - **(b)** waiting on the commander (review, done, decision, blocked, failed, drafted, a scout
+    report unread): accept, close or keep;
+  - **(c)** stale (waiting overdue or idle a week) with unlanded work: bundled and closed;
+  - **(d)** live or recently active: moved with its worktree.
+
+  `records/migrate/<from>-<home>/decisions.tsv` holds one prefilled line per task; edit its action
+  column (`accept`, `close`, `keep`, `bundle`, `move`). Git facts it cannot read count as work, so
+  nothing unread is ever closed as landed. `close` refuses a dirty worktree, and the task is kept:
+  migrate-home never runs `--discard`.
+- **What moves.** Every record, closed ones too, as records only: top-level files, artifacts and
+  messages of each task (at most 4 MB a file, except artifacts and messages). Clones, `node_modules` and screenshots in task dirs
+  stay behind; `skipped.tsv` lists them.
+
+  For each open task that moves:
+  - its Claude transcript (with its dir and file history) or Codex rollout;
+  - its branch, by `git fetch` from the client's checkout (read-only there), into
+    `refs/chartroom/migrate/<id>` when the brain has another commit under that name;
+  - its staged, unstaged and untracked changes, as patches under `tasks/<id>/migrate/`.
+
+  A `move` task's worktree is rebuilt at once. A kept task's is rebuilt when its worker is first
+  resumed: hc's revive calls `migrate-home materialize <id>`. A moved Claude task lands parked on
+  `hc:claude` with its session id, so `steer` or `attach` resumes the same conversation here.
+- **What merges, for a home both machines have.**
+
+  | What | Rule |
+  |---|---|
+  | `rulings.log` | union, by timestamp, so the newest ruling per topic wins |
+  | `commander.md` | the client's is the base; the brain's extra lines are appended for review |
+  | `inbox.md`, `inbox/`, artifacts and relays | unioned; a clashing id is renamed on the brain's side |
+  | `config` | the brain's keys win (its own dashboard port), plus the client's other keys |
+  | the XO's Claude project dir | sessions and memory unioned |
+
+  Every brain file a merge replaces is backed up under the state dir first.
+- **Safe to stop at any step.**
+  - Each step is idempotent, and `move` refuses without a freeze, or when the disk would drop
+    under 15% free.
+  - A frozen home refuses `new`, `dispatch`, `steer` and `attach`.
+  - The brain's watch reads a moved log from where the client left it, so a task's history never
+    wakes the XO again.
+  - `verify` checks every client record is here, with the same log bytes and state; branch heads,
+    rebuilt worktrees and transcripts equal to the client's; the brain's own tasks untouched; and
+    the merged files holding both sides.
+  - `finish` locks the client's worktrees, renames its home to `.migrated/<home>-<stamp>`, and
+    leaves a fresh stub (linked with `chartroom brain link` where that is installed).
+  - `rollback` is a rename back. `reap --apply`, after 14 days and on the commander's word,
+    removes the client's clean worktrees and the renamed home.
+- `CHARTROOM_MIGRATE_PATH_MAP=<from>=<to>` maps a path prefix where the two machines differ.
+  `--from local` takes a client on this machine.
+
 ## Housekeeping: sweep
 
 Finished work leaves things running: the agent sessions of done tasks, a `chartroom watch` whose

@@ -480,6 +480,10 @@ hc_revive() { # <id> [text]
   local id="$1" text="${2:-}" wt sid argv=() launcher out t tab before rc=0 why scr code args=()
   wt="$(meta "$id" worktree)"; sid="$(meta "$id" session_id)"
   [[ -n "$sid" ]] || { revive_failed "$id" "no session id is recorded"; return 1; }
+  # A task moved here from another machine gets its worktree on first use (lib/migrate.sh).
+  if [[ -n "$wt" && ! -d "$wt" && -n "$(meta_file "$id" migrated_from)" ]]; then
+    why="$( (migrate_materialize "$id") 2>&1 >/dev/null)" || { revive_failed "$id" "its worktree could not be rebuilt after the move: ${why##*: }"; return 1; }
+  fi
   [[ -n "$wt" && -d "$wt" ]] || { revive_failed "$id" "its worktree ${wt:-(none)} is gone"; return 1; }
   why="$(hc_probe 2>&1)" || { revive_failed "$id" "$why"; return 1; }
   mapfile -t argv < <(interactive_argv "$id" claude prompt resume)

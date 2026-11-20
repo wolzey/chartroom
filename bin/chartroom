@@ -123,6 +123,8 @@ source "$CR_ROOT/lib/request.sh"
 source "$CR_ROOT/lib/initiative.sh"
 # shellcheck source=../lib/marks.sh
 source "$CR_ROOT/lib/marks.sh"
+# shellcheck source=../lib/migrate.sh
+source "$CR_ROOT/lib/migrate.sh"
 for _f in "$CR_ROOT"/lib/backends/*.sh; do
   # shellcheck source=/dev/null
   source "$_f"
@@ -303,6 +305,7 @@ cmd_project() {
 # ---------------------------------------------------------------- new / worktree
 
 cmd_new() {
+  migrating_guard new
   local project="" title="" kind="ship" backend="" base="" id="" plan_gate=0 command="" permission="" model="" grants=() node=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -653,6 +656,7 @@ cmd_worktree() {
 # ---------------------------------------------------------------- dispatch
 
 cmd_dispatch() {
+  migrating_guard dispatch
   local id="${1:-}"; [[ -n "$id" ]] || die "usage: chartroom dispatch <id>"; need_task "$id"
   local kind wt="" runner agent
   kind="$(meta "$id" kind)"
@@ -804,11 +808,9 @@ live_of() { # <id> -> liveness word
 # A worker's `done` puts the task in review (finished, awaiting the commander's look); only the
 # commander's `accept` (a "note: accepted" event) makes it done, and `close` closes it. A record
 # from before review existed reads the same way: its `done` event is review until accepted.
-state_of() { # derived from the last wake-worthy event; a restart re-derives the same answer
-  local id="$1"
-  [[ -n "$(meta "$id" closed)" ]] && { echo closed; return; }
-  [[ -n "$(meta "$id" dispatched)" ]] || { echo drafting; return; }
-  awk '
+# The state of a dispatched, open task from its log alone. migrate-home runs the same program on
+# the client's records (lib/migrate-client.sh), so both machines derive a state the same way.
+CR_STATE_AWK='
     ($2=="note:" && $3=="dispatched") || $2=="steered:" { s="working"; pa=0 }
     $2 ~ /^(decision|blocked|failed):$/ { k=$2; sub(/:$/, "", k); s=k; pa=0 }
     # A permission card waits on the commander (lib/permit.sh); its answer, or its expiry, ends it.
@@ -817,7 +819,12 @@ state_of() { # derived from the last wake-worthy event; a restart re-derives the
     $2=="permit:" && pa && ((($3=="allowed" || $3=="denied") && ($0 ~ / by (commander|app) | \(expired\)/)) || $3=="closed") { s="working"; pa=0 }
     $2=="done:" { s="review" }
     $2=="note:" && $3=="accepted" && s=="review" { s="done" }
-    END { print (s=="" ? "working" : s) }' "$(events_path "$id"; printf '%s' "$EVENTS_PATH")"
+    END { print (s=="" ? "working" : s) }'
+state_of() { # derived from the last wake-worthy event; a restart re-derives the same answer
+  local id="$1"
+  [[ -n "$(meta "$id" closed)" ]] && { echo closed; return; }
+  [[ -n "$(meta "$id" dispatched)" ]] || { echo drafting; return; }
+  awk "$CR_STATE_AWK" "$(events_path "$id"; printf '%s' "$EVENTS_PATH")"
 }
 
 # One JSON object per line per task: the fleet view that `status` and `dashboard` share.
@@ -1177,6 +1184,7 @@ cmd_peek() {
 # ---------------------------------------------------------------- steer / stop / close / attach
 
 cmd_steer() {
+  migrating_guard steer
   local inbox=""
   [[ "${2:-}" == --inbox ]] && { inbox=--inbox; set -- "$1" "${@:3}"; }
   [[ $# -ge 2 ]] || die "usage: chartroom steer <id> [--inbox] <message>"
@@ -1214,6 +1222,7 @@ cmd_stop() {
 }
 
 cmd_attach() {
+  migrating_guard attach
   local id="${1:-}" prepare=0; [[ -n "$id" ]] || die "usage: chartroom attach <id>"; need_task "$id"
   # --prepare (a client home's attach, lib/brain.sh): resume a parked worker and print where it
   # runs as JSON, without showing anything on this machine's screen; the client shows it.
@@ -1347,6 +1356,17 @@ accept_many() {
 declare -A OFF=() HST=() SEEN_ST=() SEEN_TURN=() WAIT_DUE=()
 CURSOR_FILE="$CR_HOME/.watch-cursor"
 WATCH_IVL_MS=3000 WATCH_SLOW_MS=60000 # cmd_watch's two intervals, from the settings
+
+# A log the watch has no offset for is read from its start, except a task moved here from another
+# machine (migrate-home): its history was the other home's news, so it is read from where it was
+# when it moved (meta migrated_log_bytes).
+watch_seed_off() { # <id>: read with bash alone (no jq, no fork), as the light round must
+  local m="$CR_HOME/tasks/$1/meta.json" j
+  [[ -f "$m" ]] || return 0
+  j="$(<"$m")"
+  [[ "$j" =~ \"migrated_log_bytes\":[[:space:]]*\"([0-9]+)\" ]] && OFF[$1]="${BASH_REMATCH[1]}"
+  return 0
+}
 
 # The --once cursor is created once, at the current end of every log, so history is
 # never replayed; tasks created after that are absent from it and are read from byte 0.
@@ -1587,6 +1607,7 @@ cmd_watch() {
         events_path "$id"; f="$EVENTS_PATH"
         [[ -f "$f" ]] || continue
         size=$(($(wc -c <"$f")))
+        [[ -n "${OFF[$id]+x}" ]] || watch_seed_off "$id"
         if (( size > ${OFF[$id]:-0} )); then
           watch_scan_lines "$id" "${OFF[$id]:-0}" "$size"
           OFF[$id]=$size
@@ -1625,6 +1646,7 @@ cmd_watch() {
         [[ -f "$d/meta.json" ]] || continue
         is_closed "$id" && continue
         size=$(($(wc -c <"$f")))
+        [[ -n "${OFF[$id]+x}" ]] || watch_seed_off "$id"
         if (( size > ${OFF[$id]:-0} )); then watch_scan_lines "$id" "${OFF[$id]:-0}" "$size"; OFF[$id]=$size; watch_overdue "$id"; fi
       done
       if [[ -n "$BELL_PREV" ]]; then
@@ -2087,6 +2109,12 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           snapshot); contact, copy and tunnel; a full resync; one
                                           file the copy leaves out; read-only git in a task's
                                           worktree on the brain
+  chartroom migrate-home <verb> --from <ssh target|local> --home <name> [--dry-run]
+                                          move a home from another machine into this one:
+                                          triage | snapshot [--all] | freeze | settle | move |
+                                          verify | finish --brain <target> | rollback | status |
+                                          reap --apply; and materialize|restore <id> here
+                                          (chartroom migrate-home --help)
   chartroom accept <id>                   the commander's word that a task in review (a worker
                                           reported done) is done; keeps its worktree (close
                                           removes it) and parks its worker
@@ -2128,6 +2156,7 @@ if [[ "$cmd" =~ ^(status|ls|board|todo|inbox|relay)$ ]]; then
 fi
 case "$cmd" in
   init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|steer|stop|attach|park|accept|close|sweep|watch|dashboard|radar|node|nodes|fleet|device|doctor|homes|brain|tell|ask|snooze|app|attachment|link|brief|set|request|initiative|permit|version|help|store|remove|restore|done|removed) "cmd_$cmd" "$@" ;;
+  migrate-home) cmd_migrate_home "$@" ;;
   install-skills) cmd_install_skills "$@" ;;
   ls) cmd_status "$@" ;;
   show) cmd_show "$@" ;;
