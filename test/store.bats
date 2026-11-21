@@ -265,6 +265,8 @@ db() { python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); [print("|
   out="$(grep -nE '(^|[^a-z_])(ask_dir|ask_answer_file|snooze_file|relay_dir)|\.answer\.json|snoozes\.ndjson|inbox\.ndjson|outbox\.ndjson' \
       bin/chartroom lib/*.sh lib/*/*.sh lib/*.jq lib/*/*.jq lib/*/*.py |
     grep -vE '^lib/(ask|snooze|relay|tell|store)\.sh:' |
+    # (the permission broker's own cards and answers, in the home's permits/<task>/: lib/permit.sh)
+    grep -vE '^lib/permit\.sh:' |
     grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' |
     grep -vE '^bin/chartroom:[0-9]+:[[:space:]]{20,}' |
     grep -vE '^lib/app/server\.py:.*for rel in \("\.changed", ' |
