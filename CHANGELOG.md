@@ -144,6 +144,24 @@ are stable from 0.1.0.
 - `accept` and `close` take several ids. With the store on, new inbox items and the focus are
   store rows, and `todo done` and `artifact done` mark instead of editing files.
 - `sweep --apply` purges what removes no longer need and keeps a daily backup of the store.
+- The store, stage (d): the app's own records on it.
+  - **New tables:** schema 3 adds `docs` (one JSON doc per kind and id), `mail` (append-only)
+    and `compat`, so a newer additive schema never locks an older chartroom out.
+  - **Snoozes, cards and answers.** An answer lives where its card does, so the first wins in
+    one place.
+  - **The mailbox.** A record is born in the receiving home's own database when its switch is
+    on. The watch reads it under `@mail`. `chartroom store mail` prints a home's records.
+  - **Answering a worker from the app.** An answer to a worker's own ask is steered to the
+    worker directly, and the XO is told it was. A worker that can't take it then leaves it to
+    the XO, as before.
+  - **The app's server** gains `remove` and `restore` actions.
+  - **The snapshot** takes a store task's extras from the same read of the store.
+  - **`store legacy`** counts the app's files from before.
+- Fixes:
+  - `status`, `board` and the app's snapshot fail when the store can't be read, instead of
+    showing an empty crew.
+  - A running watch hears its home's first store mail.
+  - The inbox filter works under jq 1.8.
 - Client homes (one brain, step 1): `chartroom brain link <target>` makes an empty home a client
   of another machine's home of the same name. Every chartroom command in it then runs there over
   one fixed ssh gate (`chartroom brain gate`: the arguments as JSON on stdin, registered homes

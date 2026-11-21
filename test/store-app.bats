@@ -209,3 +209,14 @@ db() { python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); [print("|
   wait "$w" || true
   [ "$(cat "$BATS_TEST_TMPDIR/w")" = "[relay $rid] [from acme] the first store record of this home" ]
 }
+
+@test "store legacy counts the app's files from before the store: open cards, answers, snoozes, unacked mail" {
+  q1="$(cr ask --title "Open?" --option a --option b)"
+  q2="$(cr ask --title "Answered?" --option a --option b)"; cr ask answer "$q2" --pick 1 >/dev/null
+  cr snooze i-aaaa --for 1h >/dev/null; cr snooze off i-aaaa >/dev/null
+  t1="$(cr tell "still open")"; t2="$(cr tell "acked")"; cr tell ack "$t2" >/dev/null
+  store_on
+  cr ask --title "In the store" --option a --option b >/dev/null; cr tell "in the store" >/dev/null # (none of these count)
+  [ "$(cr store legacy --json | jq -c '[.cards_open, .answers, .snooze_lines, .mail_unacked]')" = "[1,1,2,1]" ]
+  [[ "$(cr store legacy)" == *"the app's: 1 open card(s), 1 answer(s), 2 snooze line(s), 1 unacked mailbox record(s)"* ]]
+}

@@ -239,7 +239,7 @@ db() { python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); [print("|
   run cr store check
   [ "$output" = "store: no problems" ]
   run cr store legacy --json
-  [ "$(jq -c . <<<"$output")" = '{"tasks":1,"open_tasks":1,"inbox_lines":0,"artifacts":0}' ]
+  [ "$(jq -c . <<<"$output")" = '{"tasks":1,"open_tasks":1,"inbox_lines":0,"artifacts":0,"cards_open":0,"answers":0,"snooze_lines":0,"mail_unacked":0}' ]
 }
 
 @test "a running watch hears a store task's event at its next light round, not the next full one" {

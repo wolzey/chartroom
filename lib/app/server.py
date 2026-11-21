@@ -19,7 +19,7 @@ stdin), so the CLI stays the one writer of the records and a client home's rules
   GET  /api/v1/state        {api, version, user, homes: [{name, path, ok, error, refreshed_at, snapshot}]}
   GET  /api/v1/stream       server-sent events: "version" when any home's snapshot changes
   GET  /api/v1/homes/<home>/tasks/<id>/files/<brief.md|plan.md|report.md|events.log>
-  POST /api/v1/homes/<home>/<tell|answer|accept|close|snooze|unsnooze|done>   (JSON body)
+  POST /api/v1/homes/<home>/<tell|answer|accept|close|snooze|unsnooze|done|remove|restore>   (JSON body)
                             202 at once: the verb runs in the background, in order per home;
                             X-Chartroom-Action names it, so a retry is never a second run
 Python 3.9+ (macOS /usr/bin/python3 is 3.9).
@@ -733,6 +733,17 @@ def verb_for(action, body):
         if isinstance(ref, str) and ARTIFACT_REF.match(ref):
             return ["artifact", "done", ref], None
         raise ValueError("ref: an inbox item (i-xxxx) or an artifact (<id>/<slug>)")
+    if action in ("remove", "restore"):
+        # Out of every view by a mark, nothing written to the item; 30 days to restore (lib/marks.sh).
+        # A task whose worker is live is refused (no --stop from here: that stays a terminal word).
+        ref = body.get("ref")
+        if not isinstance(ref, str) or not (TASK_ID.match(ref) or INBOX_ID.match(ref) or ARTIFACT_REF.match(ref)):
+            raise ValueError("ref: a task, an inbox item (i-xxxx) or an artifact (<id>/<slug>)")
+        argv = [action, ref]
+        why = body.get("why")
+        if action == "remove" and isinstance(why, str) and why.strip():
+            argv += ["--why", re.sub(r"[\x00-\x1f\x7f]+", " ", why.strip())[:500]]
+        return argv, None
     if action == "comment":
         task = need("task", TASK_ID, "a task id")
         text = body.get("text")

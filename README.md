@@ -1284,6 +1284,25 @@ id found in both places; `store legacy` counts what the home still keeps as file
 With the switch on, new inbox items (`inbox add`) and the focus are store rows too; `inbox.md`
 and `focus.json` from before are still read (the first focus write removes the old file).
 
+So are the app's records, each kept as the JSON its file would hold, under its own id. The files
+from before are still read beside them.
+- **Snoozes:** one per ref. The newest by time wins across `snoozes.ndjson` and the store, so a
+  snooze off ends an old file snooze.
+- **Cards and answers:** the XO's `q-` cards (`questions/`). An answer lives where its card does,
+  so the first answer wins in one place: a worker's ask follows its task, an inbox item's follows
+  the item.
+- **The mailbox:** tells, relays from other homes, and acks (`relays/inbox.ndjson`), plus the
+  copies a home sends.
+  - A record is born where the **receiving** home's switch says, in the database its `.home-id`
+    names. A home with the switch off gets the file as before.
+  - `chartroom store mail` prints a home's records from both halves.
+  - The watch reads the store's mailbox under the cursor key `@mail`, beside the file's
+    `@relays`.
+
+`store legacy` counts these files too: open cards, answers, snooze lines and unacked mailbox
+records. `requests/`, `initiatives/`, and a task's `links.ndjson` and `attachments.ndjson` stay
+files: they live in the home's or the task's own folder.
+
 **Removing work.** `chartroom remove <ref>... [--why T]` takes tasks, inbox items (`i-xxxx`) and
 artifacts (`<id>/<slug>`) out of every view (status, board, todo, inbox list, artifact list, the
 watch's wakes) at once, by a mark in the store, whatever the switch says and however old the item.

@@ -60,16 +60,17 @@ app_serve_url() { # <port>
 
 # One home as the app reads it (lib/app/snapshot.jq).
 app_snapshot_json() {
-  local since row id rows=() extra ask intent off line
+  local since row id st rows=() extra ask intent off line
   printf -v since '%(%s)T' -1; since=$((since - CR_APP_RECENT_HOURS * 3600))
   # (read whole first: a store that cannot be read fails the snapshot, never shows an empty home)
-  local all_rows; all_rows="$(status_rows --all --since "$since")" || exit 1
+  # (a store task's row carries its extras already, from the same read of the store, as the board's)
+  local all_rows; all_rows="$(CR_ROWS_EXTRA=1 status_rows --all --since "$since")" || exit 1
   while IFS= read -r row; do
     [[ -n "$row" ]] || continue
-    id="$(jq -r .id <<<"$row")"
-    extra="$(dashboard_task_extra "$id")"
+    IFS=$'\t' read -r id st < <(jq -r '[.id, .state] | @tsv' <<<"$row")
+    if [[ "$row" == *'"_extra":'* ]]; then extra='{}'; else extra="$(dashboard_task_extra "$id")"; fi
     ask=null intent=""
-    case "$(jq -r .state <<<"$row")" in
+    case "$st" in
       decision|blocked|failed|awaiting-input|review)
         if IFS=$'\t' read -r off line < <(app_last_ask "$id"); then
           ask="$(jq -n -c --arg id "ev-$id-$off" --arg line "$line" '{id: $id, line: $line,
@@ -80,7 +81,7 @@ app_snapshot_json() {
     meta_path "$id"
     rows+=("$(jq -c --argjson x "$extra" --argjson ask "$ask" --arg intent "$intent" \
       --argjson links "$(links_json "$id")" --slurpfile meta "$META_PATH" \
-      '. + $x + {ask: $ask, intent: (if $intent == "" then null else $intent end),
+      '(. + (._extra // {}) | del(._extra)) + $x + {ask: $ask, intent: (if $intent == "" then null else $intent end),
         prs: ([$links[] | select(.kind == "pr") | .url]), links: $links,
         priority: ($meta[0].priority // null), labels: ($meta[0].labels // []),
         initiative: ($meta[0].initiative // null), milestone: ($meta[0].milestone // null)}' <<<"$row")")

@@ -314,7 +314,8 @@ cmd_store() {
     legacy)
       local out; out="$(store_py legacy --uid legacy --path "$CR_HOME")" || exit 1
       if [[ "${1:-}" == --json ]]; then jq . <<<"$out"; return; fi
-      jq -r '"files from before the store: \(.tasks) task(s), \(.open_tasks) open; \(.inbox_lines) inbox line(s); \(.artifacts) artifact(s)"' <<<"$out" ;;
+      jq -r '"files from before the store: \(.tasks) task(s), \(.open_tasks) open; \(.inbox_lines) inbox line(s); \(.artifacts) artifact(s)",
+        "the app'"'"'s: \(.cards_open) open card(s), \(.answers) answer(s), \(.snooze_lines) snooze line(s), \(.mail_unacked) unacked mailbox record(s)"' <<<"$out" ;;
     events)
       [[ $# -eq 1 ]] || die "usage: chartroom store events <id>"
       task_exists "$1" || die "no such task: $1"

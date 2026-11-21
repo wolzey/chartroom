@@ -270,3 +270,20 @@ state() { # waits for both homes' first snapshot
   state
   [ "$(jq -r '.xo.reads_app' "$BATS_TEST_TMPDIR/app-state")" = true ]
 }
+
+@test "remove and restore: an item leaves every view and comes back, one queued action each; a bad ref is refused" {
+  task="$(cr status --json | jq -r '.[] | select(.title | test("stock badge")) | .id')"
+  item="$(cr inbox list --json | jq -r '.waiting[0].short_id')"
+  start --no-auth
+  state
+  [ "$(act acme remove "{\"ref\":\"$task\",\"why\":\"not needed\"}" a-rm-0001)" = 202 ]
+  [ "$(act acme remove "{\"ref\":\"$item\"}" a-rm-0002)" = 202 ]
+  [ "$(outcome a-rm-0001)" = "done	" ]; [ "$(outcome a-rm-0002)" = "done	" ]
+  [ "$(cr status --json | jq --arg t "$task" 'map(select(.id == $t)) | length')" = 0 ]
+  [ "$(cr inbox list --json | jq --arg i "$item" '[.waiting[] | select(.short_id == $i)] | length')" = 0 ]
+  [ "$(cr removed --json | jq -r --arg t "$task" '.[] | select(.ref == $t) | .why')" = "not needed" ]
+  [ "$(act acme restore "{\"ref\":\"$task\"}" a-rm-0003)" = 202 ]
+  [ "$(outcome a-rm-0003)" = "done	" ]
+  [ "$(cr status --json | jq --arg t "$task" 'map(select(.id == $t)) | length')" = 1 ]
+  [ "$(post /api/v1/homes/acme/remove '{"ref":"../x"}' -H 'X-Chartroom-App: 1')" = 400 ]
+}

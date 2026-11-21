@@ -1028,7 +1028,38 @@ def legacy(home):
                 arts += sum(1 for n in os.listdir(os.path.join(base, o, "artifacts")) if n.endswith(".json"))
             except OSError:
                 pass
-    print(json.dumps({"tasks": tasks, "open_tasks": open_tasks, "inbox_lines": inbox, "artifacts": arts}))
+    # The app's records: posted cards still open (no answer file), answers, snooze lines, and the
+    # mailbox's relays and told words not acked yet.
+    qdir = os.path.join(home.path, "questions")
+    try:
+        qnames = set(os.listdir(qdir))
+    except OSError:
+        qnames = set()
+    answers = sum(1 for n in qnames if n.endswith(".answer.json"))
+    cards_open = sum(1 for n in qnames if n.startswith("q-") and n.endswith(".json") and not n.endswith(".answer.json")
+                     and n[:-5] + ".answer.json" not in qnames)
+    snoozes = 0
+    try:
+        with open(os.path.join(home.path, "snoozes.ndjson"), encoding="utf-8", errors="replace") as f:
+            snoozes = sum(1 for line in f if line.strip())
+    except OSError:
+        pass
+    recs = []
+    try:
+        with open(os.path.join(home.path, "relays", "inbox.ndjson"), encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(r, dict) and isinstance(r.get("id"), str):
+                    recs.append(r)
+    except OSError:
+        pass
+    acked = {r["id"] for r in recs if r.get("kind") == "ack"}
+    mail_open = sum(1 for r in recs if r.get("kind") in ("relay", "commander") and r["id"] not in acked)
+    print(json.dumps({"tasks": tasks, "open_tasks": open_tasks, "inbox_lines": inbox, "artifacts": arts,
+                      "cards_open": cards_open, "answers": answers, "snooze_lines": snoozes, "mail_unacked": mail_open}))
 
 
 # ------------------------------------------------------------------ main
