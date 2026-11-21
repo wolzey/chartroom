@@ -285,8 +285,11 @@ EOF
 
 @test "denied: auto mode's refusal is recorded and a retry card pre-approves the call once" {
   task_with_worktree --backend command --command "$STUB {id}"
+  f="$CHARTROOM_HOME/tasks/$id/meta.json"; jq '.dispatched = "2026-01-01T00:00:00Z"' "$f" >"$f.tmp" && mv "$f.tmp" "$f"
   out="$(payload Bash "$(bash_in 'gh api repos/o/r/issues -f title=x')" | jq -c '. + {reason: "[Unsanctioned Communication]"}' | cr hook "$id" denied)"
   [ -z "$out" ]
+  # a retry card holds no call: the worker carries on, so the task stays working
+  [ "$(cr status --json --all | jq -r --arg i "$id" '.[]? // . | select(.id == $i) | .state')" = working ]
   events "$id" | grep -qF 'permit: auto mode refused Bash "gh api repos/o/r/issues -f title=x". Reason: [Unsanctioned Communication]'
   p="$(card_id)"
   events "$id" | grep -qF "permit: asks $p: allow a retry of Bash"

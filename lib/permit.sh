@@ -305,7 +305,8 @@ permit_rows() { # [<task id>] [--all] -> one JSON object per card
                   elif .answer.answer == "expired" then "expired" elif .answer.answer == "lapsed" then "lapsed" else "answered" end)' "$f" 2>/dev/null
   done | if [[ "$all" == 1 ]]; then cat; else jq -c 'select(.state == "open")'; fi
 }
-permit_open() { [[ -n "$(permit_rows "$1" 0 | head -n 1)" ]]; } # <task id>
+# A card the worker's call is waiting on (not a retry card, which holds nothing).
+permit_open() { [[ -n "$(permit_rows "$1" 0 | jq -c 'select(.blocking)' | head -n 1)" ]]; } # <task id>
 
 # A one-time pre-approval of the card's exact call, consumed by the next matching hook.
 permit_preapprove() { # <task id> <card json>

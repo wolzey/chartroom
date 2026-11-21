@@ -791,7 +791,8 @@ state_of() { # derived from the last wake-worthy event; a restart re-derives the
     ($2=="note:" && $3=="dispatched") || $2=="steered:" { s="working"; pa=0 }
     $2 ~ /^(decision|blocked|failed):$/ { k=$2; sub(/:$/, "", k); s=k; pa=0 }
     # A permission card waits on the commander (lib/permit.sh); its answer, or its expiry, ends it.
-    $2=="permit:" && $3=="asks" { if (s != "decision" || pa) { s="decision"; pa=1 } }
+    # (A retry card, "asks p-xxxx: allow a retry of ...", holds no call: the worker carries on.)
+    $2=="permit:" && $3=="asks" && $0 !~ / asks p-[0-9a-f]+: allow a retry of / { if (s != "decision" || pa) { s="decision"; pa=1 } }
     $2=="permit:" && pa && ((($3=="allowed" || $3=="denied") && ($0 ~ / by (commander|app) | \(expired\)/)) || $3=="closed") { s="working"; pa=0 }
     $2=="done:" { s="review" }
     $2=="note:" && $3=="accepted" && s=="review" { s="done" }
