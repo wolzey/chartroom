@@ -85,9 +85,11 @@ item() { snap | jq -c --arg t "$1" '[.needs[] | select(.title | test($t))][0]'; 
   [ "$status" -eq 0 ]
   run cr tell list --json
   [ "$(jq -r '.[-1].re' <<<"$output")" = "$task" ]
-  [[ "$(jq -r '.[-1].text' <<<"$output")" == "Answer to $task's decision ("*"): An in-process LRU. Note: keep it simple" ]]
-  # the item moves from Needs me to sent
-  [ "$(item "Pick a cache" | jq -r '.sent.via')" = app ]
+  # (its worker took the answer directly: lib/ask.sh)
+  [[ "$(jq -r '.[-1].text' <<<"$output")" == "Answered $task directly from the app: the worker has it already (steered), so there is nothing to relay. Answer to $task's decision ("*"): An in-process LRU. Note: keep it simple" ]]
+  # answered from the app and taken by the worker: the item leaves Needs me
+  [ "$(cr ask show "$card" --json | jq -r '"\(.answer.via) \(.answer.steered)"')" = "app true" ]
+  [ "$(item "Pick a cache")" = null ]
 }
 
 @test "ask: requesting changes to a plan needs a note" {
@@ -96,7 +98,7 @@ item() { snap | jq -c --arg t "$1" '[.needs[] | select(.title | test($t))][0]'; 
   [ "$status" -ne 0 ]
   run cr ask answer "$card" --via app - <<<'{"action":"changes","note":"keep the old form for a month"}'
   [ "$status" -eq 0 ]
-  [[ "$(cr tell list --json | jq -r '.[-1].text')" == "Requested changes to "*"'s plan: keep the old form for a month"* ]]
+  [[ "$(cr tell list --json | jq -r '.[-1].text')" == "Answered "*" directly from the app: "*"Requested changes to "*"'s plan: keep the old form for a month"* ]]
 }
 
 @test "ask withdraw: the XO takes a card back, and it leaves Needs me" {
@@ -126,9 +128,37 @@ item() { snap | jq -c --arg t "$1" '[.needs[] | select(.title | test($t))][0]'; 
   run cr ask answer "$card" --via app - <<<'{"answers":[{"q":1,"question":"Options","choice":"One index per store"},{"q":2,"question":"Storage","choice":"A SQLite sidecar","note":"for now"}]}'
   [ "$status" -eq 0 ]
   text="$(cr tell list --json | jq -r '.[-1].text')"
-  [[ "$text" == "Answers to $task's decision ("* ]]
+  [[ "$text" == "Answered $task directly from the app: the worker has it already (steered), so there is nothing to relay. Answers to $task's decision ("* ]]
   [[ "$text" == *$'\n1. Options → One index per store'* ]]
   [[ "$text" == *$'\n2. Storage → A SQLite sidecar. Note: for now'* ]]
+}
+
+@test "a worker's ask answered from the app goes to the worker directly; the XO is told it was steered" {
+  card="$(item "Pick a cache" | jq -r .card)"
+  task="$(item "Pick a cache" | jq -r .task)"
+  run cr ask answer "$card" --via app --note "the LRU"
+  [ "$status" -eq 0 ]
+  [[ "$output" == "answered $card (steered to the worker) (told the XO: cm-"* ]]
+  events "$task" | grep -q "steered: The commander answered your decision from the app\. Answer to $task's decision (Which cache for search?.*): the LRU$"
+  [[ "$(cr tell list --json | jq -r '.[-1].text')" == "Answered $task directly from the app: the worker has it already (steered), so there is nothing to relay. Answer to $task's decision"* ]]
+  [ "$(cr ask show "$card" --json | jq -r '.answer.steered')" = true ]
+  # the worker has moved on, so the item leaves Needs me
+  [ "$(item "Pick a cache")" = null ]
+}
+
+@test "a worker's ask answered from the app: a worker that cannot take it now leaves the XO to relay it" {
+  id="$(TITLE="Busy worker" new_task --backend command --command "STUB_SLEEP=30 $STUB {id}")"
+  cr dispatch "$id" >/dev/null
+  cr event "$id" decision "Which region?" >/dev/null
+  card="$(item "Busy worker" | jq -r .card)"
+  [[ "$card" == ev-$id-* ]]
+  run cr ask answer "$card" --via app --note "us-east-2"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"steered to the worker"* ]]
+  ! events "$id" | grep -q "steered: The commander answered"
+  [[ "$(cr tell list --json | jq -r '.[-1].text')" == "Answer to $id's decision (Which region?): us-east-2" ]]
+  [ "$(cr ask show "$card" --json | jq -r '.answer.steered')" = false ]
+  cr stop "$id" >/dev/null 2>&1 || true
 }
 
 @test "snapshot: a worker at a prompt is the XO's to handle, never a card in Needs me" {

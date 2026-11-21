@@ -335,15 +335,28 @@ ask_answer() {
     die "ask answer: $id was already answered ($(ask_answer_get "$id" | jq -r '"by \(.via) at \(.at)"' 2>/dev/null || echo "just now"))"
   fi
   # From the app, the XO hears it as the commander's words; in the terminal it already has them.
+  # A worker's own ask (ev-) answered from the app goes to the worker directly, after the answer
+  # is kept (the steer closes the ask), and the XO is told it as done, not to relay. A steer
+  # that cannot be delivered (the worker mid-run, gone, or not steerable from here) leaves the
+  # XO to relay it, as before: the answer stands either way.
+  local steered=false
   if [[ "$via" == app ]]; then
     local re project
     re="$(jq -r 'if .kind == "event" then .task else .id end' <<<"$card")"
     project="$(jq -r '.project // empty' <<<"$card")"
     [[ -n "$project" ]] || { [[ "$re" == "$id" ]] || project="$(project_label "$re" 2>/dev/null || true)"; }
-    told="$(tell_send --via app --re "$re" ${project:+--project "$project"} -- "$words")" ||
+    local say="$words"
+    if [[ "$(jq -r .kind <<<"$card")" == event ]]; then
+      if "$CR_BIN" steer "$re" "The commander answered your $(jq -r .event_kind <<<"$card") from the app. $words" >/dev/null 2>&1; then
+        steered=true
+        say="Answered $re directly from the app: the worker has it already (steered), so there is nothing to relay. $words"
+      fi
+    fi
+    told="$(tell_send --via app --re "$re" ${project:+--project "$project"} -- "$say")" ||
       warn "answered $id, but could not tell the XO; the answer is kept (chartroom ask show $id)"
-    if [[ -n "$told" ]]; then
-      ask_answer_set "$id" "$(jq -c --arg t "$told" '.told = $t' <<<"$rec")"
+    if [[ -n "$told" || "$steered" == true ]]; then
+      rec="$(jq -c --arg t "$told" --argjson s "$steered" '.told = (if $t == "" then null else $t end) | .steered = $s' <<<"$rec")"
+      ask_answer_set "$id" "$rec"
     fi
   fi
   # an answered card of an initiative is one of its decisions, numbered, linked to the card
@@ -352,7 +365,7 @@ ask_answer() {
     initiative_decide "$init" --card "$id" -- "$words" >/dev/null || warn "answered $id, but could not record it as a decision of $init"
   fi
   stamp_changed
-  echo "answered $id${told:+ (told the XO: $told)}"
+  echo "answered $id$([[ "$steered" == true ]] && echo " (steered to the worker)")${told:+ (told the XO: $told)}"
 }
 
 ask_withdraw() {

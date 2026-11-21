@@ -364,7 +364,11 @@ others read between steps. `close` only marks it closed; its directory is never 
   from: when they answer in this session, record it with `chartroom ask answer <q-id> --pick N
   [--note "..."]` (or an answer file) so the app's card closes; if that says it was already
   answered, the app's answer stands and has reached you as a `[commander ...]` wake. A worker's
-  `decision` and an inbox question are cards already; nothing to post. `chartroom ask withdraw
+  `decision` and an inbox question are cards already; nothing to post. When the commander answers
+  a worker's own ask in the app, chartroom steers the answer to that worker itself, and your wake
+  reads `Answered <task> directly from the app: the worker has it already (steered), so there is
+  nothing to relay. ...`: note it, and don't steer it again. A wake without that line (the worker
+  could not take it then) is yours to relay with `steer`, as before. `chartroom ask withdraw
   <q-id>` takes back a card you no longer need.
 - **New work from the app.** A `[commander ...] [re rq-xxxx] New task request ...` wake is the
   commander asking for a task from the app's composer. Treat it like a request in this session:
