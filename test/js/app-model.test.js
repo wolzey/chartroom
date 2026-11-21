@@ -227,6 +227,30 @@ test("notifications: a home's first read is only remembered; then only new open 
   assert.deepStrictEqual(n, { title: "T q-9", body: "acme · Decide: Pick the cache", tag: "acme:q-9", url: "/#/n/acme%3Aq-9" });
 });
 
+test("a notification's tap lands on the item's own page: a task's details, a round, or the card itself", () => {
+  const s = { homes: [{ name: "acme", snapshot: { tasks: [{ id: "fix-b", short_id: "f00d" }, { id: "gift-cards" }], needs: [
+    { id: "ev-gift-cards-12", type: "task", kind: "decide", group: "decide", task: "gift-cards", card: "ev-gift-cards-12", title: "Refund to the card?" },
+    { id: "fix-b", type: "task", kind: "review", group: "read", task: "fix-b", title: "Fix the badge" },
+    { id: "q-77aa", type: "card", kind: "round", group: "decide", card: "q-77aa", title: "Search" },
+    { id: "p-3c4d", type: "permit", kind: "permission", group: "decide", task: "gift-cards", permit: "p-3c4d", title: "Gift cards" },
+    { id: "i-1a2b", type: "inbox", kind: "inbox", group: "decide", card: "i-1a2b", title: "Sale on Monday?" },
+    { id: "stories-in-1", type: "initiative", kind: "stories", group: "approve", initiative: "in-1", title: "Approve the stories" }] } }],
+    fleet: { needs: [{ id: "login-laptop-gh", type: "fleet", kind: "login", group: "unblock", machine: "laptop", title: "gh sign-in" }] } };
+  const all = M.items(s);
+  const at = (key) => M.noticeTarget(all, key, s);
+  assert.deepStrictEqual(at("acme:ev-gift-cards-12"), { hash: "#/t/acme/gift-cards" });
+  assert.deepStrictEqual(at("acme:fix-b"), { hash: "#/t/acme/fix-b" });
+  assert.deepStrictEqual(at("acme:q-77aa"), { hash: "#/q/acme/q-77aa" });
+  assert.deepStrictEqual(at("acme:stories-in-1"), { hash: "#/i/acme/in-1" });
+  assert.deepStrictEqual(at("fleet:login-laptop-gh"), { hash: "#/fleet/laptop" });
+  // a permission card is its own card (Allow or Deny is the point), not the task's page
+  assert.deepStrictEqual(at("acme:p-3c4d"), { hash: "#/", select: "acme:p-3c4d" });
+  assert.deepStrictEqual(at("acme:i-1a2b"), { hash: "#/", select: "acme:i-1a2b" });
+  // answered since: its task, when the key names one; else Needs me
+  assert.deepStrictEqual(at("acme:ev-gift-cards-40"), { hash: "#/t/acme/gift-cards", gone: true });
+  assert.deepStrictEqual(at("acme:i-9999"), { hash: "#/", gone: true });
+});
+
 test("permission cards: first, nearest expiry first; a clock; never allowed by Enter", () => {
   const now = 1_800_000_000_000;
   const p = (id, exp, extra) => Object.assign({ key: "acme:" + id, id, kind: "permission", group: "decide", blocking: true, missed: false,

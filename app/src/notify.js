@@ -25,6 +25,23 @@ export async function register() {
   return reg;
 }
 
+// A notification's tap (sw.js, openAt): the worker says where to go, and is told it was heard. A
+// page that starts asks once for the item a tap opened it for (an installed app may open at its
+// start page). fn gets the item's address.
+export function onOpen(fn) {
+  if (!("serviceWorker" in navigator)) return () => {};
+  const sw = navigator.serviceWorker;
+  const h = (e) => {
+    if (!e.data || e.data.type !== "open") return;
+    if (e.ports && e.ports[0]) e.ports[0].postMessage("ok");
+    fn(e.data.url);
+  };
+  sw.addEventListener("message", h);
+  if (sw.startMessages) sw.startMessages();
+  sw.ready.then((r) => r.active && r.active.postMessage({ type: "opened", hash: location.hash })).catch(() => null);
+  return () => sw.removeEventListener("message", h);
+}
+
 export async function enable() {
   if (!supported()) return "unsupported";
   const p = await Notification.requestPermission();

@@ -429,17 +429,26 @@ function App() {
     for (const it of r.fresh.slice(0, 3)) N.show(M.notice(it));
     if (r.fresh.length > 3) N.show({ title: r.fresh.length - 3 + " more need you", body: "Open Needs me", tag: "chartroom-more", url: "/#/" });
   }, [all]);
-  // a notification's link (#/n/<key>): Needs me with that item selected, once; the address then
-  // becomes #/ so a later change to the list never pulls the selection back
+  // a notification's link (#/n/<key>): the item's own page (a task's details, a round, ...), or
+  // Needs me with the card open when it has none (model.js, noticeTarget); once, in place of the
+  // link, so Back and a later change to the list never pull it back
   // (only once every home is read: before that, an item may simply not be in the list yet)
   const allRead = !!data && (data.homes || []).every((h) => h.snapshot || h.error) && (!route.select || !route.select.startsWith("fleet:") || !!data.fleet);
   useEffect(() => {
     if (!route.select || !allRead) return;
-    if (all.some((x) => x.key === route.select)) { setTab("all"); setSelKey(route.select); if (!wide()) setQvOpen(true); }
-    else toast("That item is no longer open; it was answered or closed");
-    history.replaceState(null, "", "#/");
+    const t = M.noticeTarget(all, route.select, data);
+    history.replaceState(null, "", t.hash);
     setRoute(parseRoute());
+    if (t.select) { setTab("all"); setSelKey(t.select); if (!wide()) setQvOpen(true); }
+    if (t.gone) toast("That item is no longer open; it was answered or closed" + (t.hash !== "#/" ? ". Here is its task" : ""));
   }, [route.select, allRead]);
+  // a tap on a notification while the app is open (on any page): the service worker says where
+  useEffect(() => N.onOpen((url) => {
+    let u = null;
+    try { u = new URL(url, location.href); } catch (e) { return; }
+    if (u.origin !== location.origin) return;
+    if (u.hash && u.hash !== location.hash) location.hash = u.hash;
+  }), []);
 
   const entries = useMemo(() => {
     const e = [

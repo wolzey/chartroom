@@ -72,17 +72,65 @@ async function keep(paths) {
   }
 }
 
+// A tap lands on the item, whatever state the app is in:
+// - open (in front, behind, or on another page): the window is focused and told where to go, and
+//   says it heard (navigate() fails for a window this worker does not control, and Safari has none);
+//   a window that does not answer (a page from before this worker) is navigated, or a new one opens;
+// - closed: a new window opens at the item. The target is also kept a little while, because an
+//   installed app may open at its start page instead: the page asks for it as it starts.
+const PENDING = "/__chartroom-open";
+const PENDING_MS = 2 * 60 * 1000;
+
+function tell(c, url) {
+  return new Promise((resolve) => {
+    const ch = new MessageChannel();
+    const t = setTimeout(() => resolve(false), 1500);
+    ch.port1.onmessage = () => { clearTimeout(t); resolve(true); };
+    try { c.postMessage({ type: "open", url }, [ch.port2]); } catch (err) { clearTimeout(t); resolve(false); }
+  });
+}
+
+async function remember(url) {
+  try { await (await caches.open(CACHE)).put(PENDING, new Response(JSON.stringify({ url, at: Date.now() }))); } catch (err) { /* no storage */ }
+}
+async function pending() {
+  try {
+    const cache = await caches.open(CACHE);
+    const r = await cache.match(PENDING);
+    if (!r) return null;
+    await cache.delete(PENDING);
+    const p = await r.json();
+    return p && Date.now() - p.at < PENDING_MS ? p.url : null;
+  } catch (err) { return null; }
+}
+
+async function openAt(url) {
+  const target = new URL(url || "/", self.location.origin).href;
+  const cs = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  const c = cs.find((x) => new URL(x.url).origin === self.location.origin);
+  if (c) {
+    try { await c.focus(); } catch (err) { /* focus is a hint */ }
+    if (await tell(c, target)) return "told";
+    if (typeof c.navigate === "function") { try { await c.navigate(target); return "navigated"; } catch (err) { /* not controlled */ } }
+  }
+  await remember(target);
+  await self.clients.openWindow(target);
+  return "opened";
+}
+self.openAt = openAt; // for the browser test, which cannot tap a notification
+
 self.addEventListener("message", (e) => {
   if (e.data && e.data.type === "notify") e.waitUntil(show(e.data));
   if (e.data && e.data.type === "keep" && Array.isArray(e.data.paths)) e.waitUntil(keep(e.data.paths.slice(0, 200)));
+  // a page starting: the item a tap opened it for, unless it opened there already
+  if (e.data && e.data.type === "opened" && e.source) {
+    e.waitUntil(pending().then((url) => {
+      if (url && new URL(url).hash !== (e.data.hash || "")) e.source.postMessage({ type: "open", url });
+    }));
+  }
 });
 
 self.addEventListener("notificationclick", (e) => {
   e.notification.close();
-  const target = new URL((e.notification.data && e.notification.data.url) || "/", self.location.origin).href;
-  e.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((cs) => {
-    const c = cs.find((x) => new URL(x.url).origin === self.location.origin);
-    if (c) return c.focus().then((w) => (w || c).navigate(target));
-    return self.clients.openWindow(target);
-  }));
+  e.waitUntil(openAt((e.notification.data && e.notification.data.url) || "/"));
 });

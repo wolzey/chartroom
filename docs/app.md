@@ -26,7 +26,16 @@ On the brain itself, before Serve is set up, `chartroom app serve --daemon --no-
 
 - **Install.** Open the HTTPS address and add it to the home screen (Safari: Share, Add to Home Screen; Chrome: Install). It opens full screen with a tab bar: Needs me, Board, Initiatives, Fleet. A selected item opens as a sheet from the bottom.
 - **Offline.** The service worker (`/sw.js`) keeps the shell and the last state. With the brain out of reach the app still opens, says how old what it shows is, and keeps your actions in the outbox until the brain is back. It always asks the network first, so a new version shows at once.
-- **Notifications, with no third party.** "Turn on notifications" (the sidebar's foot, or ⌘K) asks the browser once. While the app is open in the background, a new Needs me item shows a notification; tapping it opens the app on that item (`#/n/<home>:<id>`). Each item notifies once per device, and what is already open when the app loads never does.
+- **Notifications, with no third party.** "Turn on notifications" (the sidebar's foot, or ⌘K) asks the browser once. While the app is open in the background, a new Needs me item shows a notification. Each item notifies once per device, and what is already open when the app loads never does.
+- **A tap lands on the item.** The notification links to `#/n/<home>:<id>`, which opens the item's own page:
+  - a task's question, blocker or finished work: the task's details, with its question at the top;
+  - a grilling round: its round page; stories to approve: their initiative; a failed sign-in: its machine on Fleet;
+  - a permission card, or a question that belongs to no task: Needs me, with that card open (a sheet on the phone).
+  An item answered since then opens its task, when it has one, and says it was answered.
+- **However the app is.** The service worker (`app/sw.js`, `openAt`) handles the tap:
+  - open, on any page, in front or behind: the window is focused and told where to go. It answers that it heard, because `navigate()` fails for a window the worker does not control and Safari has none;
+  - an older page that does not answer is navigated there;
+  - closed: a new window opens at the item. An installed app may open at its start page instead, so the worker keeps the target for two minutes, and a page that starts asks for it once.
 - **Web Push, for a closed app.** Off unless the brain's config says `CHARTROOM_APP_PUSH=on`. Then the server sends each new item through the push service of the browser's maker (Apple, Google, Mozilla). The payload is encrypted end to end (RFC 8291, `lib/app/push.mjs` with node's built-in `node:crypto`), so that service sees only the endpoint, the size and the time. It needs node on the brain; `chartroom app doctor` says whether push can send. `CHARTROOM_APP_PUSH_SUBJECT` is the contact the push services see (a `mailto:` or `https:` URL; the default is a placeholder). On iOS, push reaches only the installed app (iOS 16.4 or later).
 - **What the server keeps.** The VAPID keys and each device's subscription live beside the pid file (`app-push-keys.json`, `app-push-subs.json`, both 0600), never in a home. A subscription is a write (the same checks), only for an https endpoint, 20 devices at most; one the push service reports gone (404, 410) is dropped. An item is pushed once, when it first appears; what is open when the server starts, or when a home is first read, is only remembered.
 

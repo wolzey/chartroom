@@ -422,6 +422,28 @@ var AppModel = (function () {
     const kept = [...known].filter((k) => !read.has(k.split(":")[0]));
     return { fresh, next: { seen: kept.concat(keys).slice(-SEEN_MAX), read: [...new Set([...before, ...read])] } };
   }
+  // Where a notification's tap lands (#/n/<key>): the item's own page. A task's item opens the task
+  // (its question is the banner there), a round its round page, stories their initiative, a sign-in
+  // its machine. A permission card or a question of no task has no page of its own: Needs me, that
+  // card open. An item no longer open still opens its task when the key names one (gone: true).
+  // -> {hash, select?, gone?}
+  function noticeTarget(all, key, state) {
+    const enc = encodeURIComponent;
+    const it = all.find((x) => x.key === key);
+    if (it) {
+      if (it.kind === "round" && it.card) return { hash: "#/q/" + enc(it.home) + "/" + enc(it.card) };
+      if (it.kind === "stories" && it.initiative) return { hash: "#/i/" + enc(it.home) + "/" + enc(it.initiative) };
+      if (it.kind === "login" && it.machine) return { hash: "#/fleet/" + enc(it.machine) };
+      if (it.kind !== "permission" && it.task) return { hash: "#/t/" + enc(it.home) + "/" + enc(it.task) };
+      return { hash: "#/", select: it.key };
+    }
+    const i = String(key).indexOf(":");
+    const home = i > 0 ? key.slice(0, i) : "", id = i > 0 ? key.slice(i + 1) : "";
+    const h = ((state && state.homes) || []).find((x) => x.name === home);
+    const t = ((h && h.snapshot && h.snapshot.tasks) || []).find((x) => x.id === id || id.startsWith("ev-" + x.id + "-"));
+    return t ? { hash: "#/t/" + enc(home) + "/" + enc(t.id), gone: true } : { hash: "#/", gone: true };
+  }
+
   // One notification: the item's key as its tag (the push of the same item replaces it), and a link
   // that opens Needs me on it.
   function notice(it) {
@@ -436,6 +458,6 @@ var AppModel = (function () {
 
   return { KINDS, GROUPS, STATUS, kind, items, homes, standing, visible, ordered, counts, projects, questions, details,
     primary, answerBody, answered, move, ago, agoText, snoozes, search, askText, headline, bulkPlan, range, promote, linkParts, BOARD, boardItems, boardFilter, boardColumns, initiatives, milestones,
-    freshItems, notice, permitLeft };
+    freshItems, notice, noticeTarget, permitLeft };
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = AppModel;

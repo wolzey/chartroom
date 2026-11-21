@@ -7,6 +7,10 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Fixed
+- The app: tapping a notification lands on the item, not just the app.
+  - **Where it lands:** a task's question, blocker or finished work opens the task's details; a grilling round its page; a permission card or a question with no task opens that card.
+  - **The cause:** the tap handler called `navigate()` on the open window. That fails for a window the service worker does not control, and Safari has no `navigate()`.
+  - **The fix:** the open window is now told where to go and answers that it heard. A closed app opens at the item, and a page that starts at the start page is sent there.
 - A Codex worker at an approval prompt no longer sits unnoticed. hc reports no state for Codex and
   its notify fires only at a turn's end, so nothing woke the XO (one sat 45 minutes). Its terminal
   title says `Action Required` while an approval is up: hc:codex reads that from `hc events` at once,
