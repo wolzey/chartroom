@@ -75,7 +75,7 @@ permit_desc() { # <tool> <input json>
 permit_query() { # <id> <event> <payload>
   local id="$1" ev="$2" payload="$3" tool cmd cur="" wt branch sig="" pre="" pd
   pd="$(permit_tdir "$id")"
-  { IFS= read -r tool; IFS= read -r cmd; } < <(jq -r '(.tool_name // ""), (.tool_input.command // "" | gsub("\n"; " ") | .[0:4000])' <<<"$payload") || return 1
+  { IFS= read -r tool; IFS= read -r cmd; } < <(jq -r '(.tool_name // ""), ((.tool_input.command | strings) // "" | gsub("\n"; " ") | .[0:4000])' <<<"$payload") || return 1
   [[ -n "$tool" ]] || return 1
   { IFS= read -r wt; IFS= read -r branch; } < <(jq -r '(.worktree // ""), (.branch // "")' "$(tdir "$id")/meta.json") || return 1
   # The worktree's branch, only when a grant could need it.
@@ -176,7 +176,7 @@ permit_wait() { # <id> <p-id>
     # call's result instead (verified on 2.1.330), checked every few seconds.
     if [[ -n "$tr" && $((n++ % 3)) -eq 0 ]]; then
       [[ -n "$tuid" ]] || tuid="$(permit_tool_use_id "$d/$pid.json")"
-      if [[ -n "$tuid" ]] && tail -c +"$((off + 1))" "$tr" 2>/dev/null | grep -qF "\"tool_use_id\":\"$tuid\""; then permit_lapse "$id" "$pid"; break; fi
+      if [[ -n "$tuid" ]] && tail -c +"$((off + 1))" "$tr" 2>/dev/null | grep -qF "\"tool_use_id\":\"$tuid\""; then permit_lapse "$id" "$pid" "its terminal answered the prompt"; break; fi
     fi
     if [[ -n "$(meta_file "$id" closed 2>/dev/null)" ]]; then
       permit_write_once "$ans" "$(jq -cn '{answer: "deny", by: "chartroom", note: "the task was closed", at: (now | todate)}')" || true
@@ -193,9 +193,9 @@ permit_wait() { # <id> <p-id>
   trap - TERM INT HUP
   PERMIT_ANSWER="$(cat "$ans" 2>/dev/null || echo '{"answer":"expired"}')"
 }
-permit_lapse() { # <id> <p-id>
-  permit_write_once "$(permit_tdir "$1")/$2.answer.json" "$(jq -cn '{answer: "lapsed", by: "chartroom", at: (now | todate)}')" &&
-    permit_log "$1" "closed $2: the worker went on without chartroom's answer (its terminal answered the prompt, or it stopped)"
+permit_lapse() { # <id> <p-id> [why]
+  permit_write_once "$(permit_tdir "$1")/$2.answer.json" "$(jq -cn --arg w "${3:-it stopped, or its terminal answered the prompt}" '{answer: "lapsed", by: "chartroom", why: $w, at: (now | todate)}')" &&
+    permit_log "$1" "closed $2: the worker went on without chartroom's answer (${3:-it stopped, or its terminal answered the prompt})"
 }
 
 # The message a worker reads with a deny.

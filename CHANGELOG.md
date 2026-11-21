@@ -191,8 +191,11 @@ are stable from 0.1.0.
     `chartroom event` refuses.
   - **A worker cannot answer its own card.** The verbs refuse it, by its environment or a worker
     ancestor, and the hook denies its tool calls that touch the record.
-  - **Watch and state.** An open card makes the task `decision`, and the prompt it shows does not
-    wake the XO twice. `close` archives the record into the task.
+  - **Watch and state.** An open card that a call waits on (not a retry card) makes the task
+    `decision`, and the prompt it shows does not wake the XO twice.
+  - **A card closes at once if Claude goes on without it** (`permit: closed p-xxxx`): its terminal
+    answered the prompt (seen in the session transcript), or the worker stopped. `close` archives
+    the record into the task.
 - A Bash guard for Claude workers: a pattern kill is refused. A worker's `pkill -f` stopped the
   commander's dev server and other workers' servers, since theirs match the same pattern. Every
   Claude worker chartroom launches with `--settings` (hc, herdr, tmux, cmux) now gets a `PreToolUse`

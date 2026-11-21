@@ -62,6 +62,15 @@ permission|[]|allow local:bash|S=/tmp/scr/x; mkdir -p $S && echo hi > "$S/a.txt"
 permission|[]|card commander:unlisted|S=/etc; rm -rf $S/x
 permission|[]|card commander:unlisted|S=$(pwd)/..; rm -rf $S
 permission|[]|allow local:bash|rm -f "$HOME/../../w/wt/x"
+permission|[]|card commander:unlisted|python3 -c "import subprocess; subprocess.run(['git','push'])"
+permission|[]|card commander:unlisted|node -e "require('child_process').execSync('git push')"
+permission|[]|card commander:unlisted|python3 - <<EOF\nimport os\nEOF
+permission|[]|card commander:unlisted|git -c alias.p='!git push --force origin main' p
+permission|[]|card commander:unlisted|GIT_DIR=/other/.git git commit -m x
+permission|[]|card commander:unlisted|git branch -D main
+permission|[]|card commander:unlisted|git stash drop
+permission|[]|allow local:bash|python3 -m pytest -q
+permission|[]|allow local:bash|node scripts/build.js
 permission|[]|card commander:unlisted|/opt/tool/run.sh
 permission|[]|card commander:unlisted|cd /etc && rm passwd
 permission|[]|card commander:unlisted|rm -rf $HOME/x

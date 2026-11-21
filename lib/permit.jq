@@ -327,6 +327,24 @@ def bash_local($R):
       # worktree's own code, like `node script.js`; its path arguments are still checked below.
       elif (.cwd as $c | ($s.path | test("/")) and ($s.path | resolve($c; $R.user_home) | under_any($wr)) and ($R.worktree != "")) | not and (rw_heads | index($s.head)) == null then .ok = false
       elif $s.xargs and (mutating | index($s.head)) then .ok = false
+      # Code given inline (python3 -c, node -e, a heredoc or stdin) is code this policy cannot read:
+      # it could push or deploy as easily as a script could. (A script file in the worktree still
+      # passes, like the tests the brief allows: that is the worktree's own code.)
+      elif ($s.head | test("^(python[0-9.]*|node|nodejs|deno|bun|tsx|ts-node|ruby|perl|php|lua|osascript|Rscript)$"))
+           and (($s.args | any(test("^(-c|-e|-E|-p|--eval|--print|-r|--require|-|eval|-pe|-ne|-lne|-le)$") or startswith("<<")))
+                or ($s.args | length) == 0)
+        then .ok = false
+      # git told to run something else (an alias, a config, an environment override), or deleting
+      # what other worktrees share: refs and the stash.
+      elif $s.head == "git" and (($s.args | any(test("^(-c|--config-env|--exec-path)(=|$)") or startswith("--git-dir") or startswith("--work-tree")))
+           or ($s.env | any(test("^GIT_"))))
+        then .ok = false
+      elif $s.head == "git" and ($s | git_sub | (.sub == "branch" and (.sargs | any(test("^(-d|-D|--delete|-m|-M|--move|-f|--force)$"))))
+           or (.sub == "stash" and ((.sargs[0] // "") | IN("drop", "pop", "clear")))
+           or (.sub == "tag" and (.sargs | any(test("^(-d|--delete|-f|--force)$"))))
+           or (.sub == "worktree" and ((.sargs[0] // "") | IN("remove", "prune", "move")))
+           or (.sub | IN("update-ref", "reflog", "gc", "prune", "replace", "notes")))
+        then .ok = false
       elif $s.head == "git" and ($s | git_sub | .sub | test("^(push|remote|config|send-email|request-pull|credential|filter-branch|filter-repo|lfs|daemon|svn|p4)$")) then .ok = false
       elif ($s.head | test("^(npm|pnpm|yarn|bun)$")) and (($s.args[0] // "") | test(publish_verbs)) then .ok = false
       elif ($s.head | IN("curl", "wget")) and (($s | urls) as $u | ($u | length) == 0 or ($u | all(is_local_url) | not)) then .ok = false

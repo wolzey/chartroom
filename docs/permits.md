@@ -121,6 +121,14 @@ All the rules live in one file. **First match wins:**
 - Heredoc bodies are skipped unless they are fed to a shell.
 - `cd` is followed, and so are the line's own `VAR=value` assignments (`S=/tmp/x; cat $S/a`).
 - A word it cannot resolve (`$X`, `$(...)`) is never trusted in a command that writes.
+- Code given inline is never local: `python3 -c`, `node -e`, `perl -e`, or a heredoc or stdin
+  fed to an interpreter. Neither is git told to run something else (`-c`, `--config-env`,
+  `GIT_*=`), or git deleting shared things (`branch -D`, `stash drop|pop|clear`, `tag -d`,
+  `worktree remove`).
+- **What `local:bash` does allow: running the worktree's own code.** That covers `node x.js`,
+  `python3 -m pytest`, `scripts/check.sh` and `./gradlew`. That code can do anything a worker
+  could type, so a worker that writes a script and runs it gets past the classes above. The policy
+  gates what is visible on the command line; it does not inspect files.
 - A grant never covers a command with git's global options before the subcommand (`-C`, `-c`).
 
 It is a policy classifier for routine work, not a sandbox. What it cannot read never becomes an
@@ -164,8 +172,9 @@ permit: refused Bash "chartroom permit answer p-1a2b once" (guard:self-answer)
   - 370 production; 21 controls; 14 flags; 2 money.
 
   Grants (`push-branch`, `open-pr`, `merge-auto`) and "always" cover most of the outward ones.
-- **Replayed as prompts** (`PermissionRequest`, what Claude would ask about), 67% are allowed by
-  the `local:*` rules. Real prompts are far rarer than calls: about a dozen in one busy home's history.
+- **Replayed as prompts** (`PermissionRequest`, what Claude would ask about), 56% are allowed by
+  the `local:*` rules. Most of the rest is inline code (`python3 - <<EOF` file edits) and lines
+  outside the worktree. Real prompts are far rarer than calls: about a dozen in one busy home's history.
 
 ## Security, and what it is not
 
