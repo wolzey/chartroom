@@ -170,12 +170,13 @@ closed_record() { # <id> [extra-json]
   [ -f "$(meta_of "$dirty" worktree)/notes.txt" ]
   [ -d "$(meta_of "$ship" worktree)" ]
   alive "$ses"; alive "$dev"
-  # merged into its base: landed, so it closes (the branch is kept, as close always does)
+  # merged into its base: landed, so it closes, and its branch goes with it (nothing unlanded)
   git -C "$PROJECT" merge -q --ff-only "chartroom/$ship"
   run cr sweep --apply
   [[ "${lines[0]}" == "sweep (applied): freed 1 done task(s) closed;"* ]]
   [ -n "$(meta_of "$ship" closed)" ]
-  git -C "$PROJECT" rev-parse --verify -q "chartroom/$ship" >/dev/null
+  ! git -C "$PROJECT" rev-parse --verify -q "chartroom/$ship" >/dev/null
+  grep -q "note: branch chartroom/$ship deleted (landed: merged into main" "$CHARTROOM_HOME/tasks/$ship/events.log"
   [ -z "$(meta_of "$dirty" closed)" ]
 }
 

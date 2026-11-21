@@ -1017,7 +1017,11 @@ either. herdr's agent and pane lists add the sessions it hosts. All the rules li
 - kills orphaned chartroom loops: a `watch` run from this home whose session is gone (its nearest
   real parent is init), a `listen` of a closed task, a second dashboard for the home;
 - kills processes left in a closed task's worktree, or in a chartroom worktree path that no
-  longer exists.
+  longer exists;
+- deletes the branches of closed tasks whose work has landed since they closed (a pull request
+  merged the day after, say), first removing the task's worktree if it is still there and clean.
+  An unlanded branch, a worktree with changes in it, and any branch no task record names are
+  never touched. This one fetches origin (once per project) and asks `gh` about merged PRs.
 
 Kills are TERM, then KILL after 5 seconds, and only if the pid still runs what the plan saw. Every
 act is logged to `sweep.log` in the home and, when it belongs to a task, to its `events.log`.
@@ -1134,7 +1138,11 @@ that is recognised from Claude Code's own session record when its transcript is 
   event). A task from before `review` existed reads the same way: its `done` event is `review`
   until accepted. The state is derived from the log; nothing is rewritten.
 - **Authority is explicit.** Workers never push, open PRs, merge, or delete branches unless the
-  brief grants it for that task. `close` refuses a dirty worktree, and branches are never deleted.
+  brief grants it for that task. `close` refuses a dirty worktree, and **chartroom never deletes
+  unlanded work**: a task's branch is deleted at close only once its work has landed (merged
+  into its base, on origin at that very commit, or a merged pull request at it, which `gh` is
+  asked about to catch a squash merge; without `gh` such a branch is kept), and close says which
+  it did and why. A branch checked out elsewhere is kept.
 
 ## Backends
 

@@ -306,6 +306,105 @@ log_event() {
 }
 pid_alive() { [[ -n "${1:-}" ]] && kill -0 "$1" 2>/dev/null; }
 
+# ---------------------------------------------------------------- landed work
+# chartroom never deletes unlanded work. A task's branch is deleted (at close, or by sweep for a
+# task closed before its work landed) only once what it points at is somewhere safe:
+#   merged     the tip is in the task's base (origin/main, after a fetch)
+#   pushed     origin has a branch at exactly that commit (asked of origin itself, never read
+#              from a remote-tracking ref that may be stale)
+#   pr         GitHub reports a merged pull request whose head was that commit (a squash merge,
+#              whose branch was deleted after), when gh answers; without gh it is kept
+# Origin and GitHub are asked once per project in a run (landed_facts), every call bounded; a
+# call that fails only ever keeps a branch.
+
+# Runs <cmd...> for at most <seconds> (macOS has no `timeout`).
+run_bounded() { # <seconds> <cmd...>
+  local s="$1"; shift
+  perl -e 'alarm shift; exec @ARGV or exit 127' "$s" "$@"
+}
+
+declare -gA LANDED_SEEN=() LANDED_HEADS=() LANDED_PRS=()
+# A project's origin, fetched, with its branch heads ("<sha> <branch>" lines, or "?" when origin
+# did not answer) and its merged PRs (JSON, [] without gh), once per run.
+landed_facts() { # <project>
+  local p="$1" out gh
+  [[ -z "${LANDED_SEEN[$p]+x}" ]] || return 0
+  LANDED_SEEN[$p]=1; LANDED_HEADS[$p]="?"; LANDED_PRS[$p]="[]"
+  git -C "$p" config --get remote.origin.url >/dev/null 2>&1 || return 0
+  # (never a credential prompt: one that would need a person keeps the branch instead)
+  GIT_TERMINAL_PROMPT=0 run_bounded 60 git -C "$p" fetch --quiet origin </dev/null >/dev/null 2>&1 || true
+  if out="$(GIT_TERMINAL_PROMPT=0 run_bounded 30 git -C "$p" ls-remote --heads origin </dev/null 2>/dev/null)"; then
+    LANDED_HEADS[$p]="$(awk '{ sub("^refs/heads/", "", $2); print $1, $2 }' <<<"$out")"
+  fi
+  gh="$(bin_of gh)"
+  if [[ -n "$gh" ]] && out="$(cd "$p" && run_bounded 30 "$gh" pr list --state merged --limit 300 --json number,headRefName,headRefOid </dev/null 2>/dev/null)" &&
+    jq -e 'type == "array"' <<<"$out" >/dev/null 2>&1; then
+    LANDED_PRS[$p]="$out"
+  fi
+}
+
+# Has <sha> landed? Returns 0 or 1, with LANDED_WHY saying why ("merged into origin/main", "on
+# origin as <branch>", "PR #12 merged") or why not.
+branch_landed() { # <project> <branch> <sha> <base ref>
+  local project="$1" branch="$2" sha="$3" base="$4" n
+  landed_facts "$project"
+  if [[ -n "$base" ]] && git -C "$project" rev-parse --verify --quiet "$base^{commit}" >/dev/null 2>&1 &&
+    git -C "$project" merge-base --is-ancestor "$sha" "$base" 2>/dev/null; then
+    LANDED_WHY="merged into $base"; return 0
+  fi
+  if [[ "${LANDED_HEADS[$project]}" != "?" ]] && grep -qxF "$sha $branch" <<<"${LANDED_HEADS[$project]}"; then
+    LANDED_WHY="on origin as $branch"; return 0
+  fi
+  n="$(jq -r --arg s "$sha" 'first(.[] | select(.headRefOid == $s) | .number) // empty' <<<"${LANDED_PRS[$project]}" 2>/dev/null || true)"
+  if [[ "$n" =~ ^[0-9]+$ ]]; then LANDED_WHY="PR #$n merged"; return 0; fi
+  LANDED_WHY="not in ${base:-its base}, not on origin"
+  if [[ -z "$(bin_of gh)" ]]; then LANDED_WHY+="; gh is not here to ask about a squash merge"; else LANDED_WHY+=", no merged PR at that commit"; fi
+  return 1
+}
+
+# The worktree a branch is checked out in, if any (deleting it there would break that worktree).
+branch_checked_out() { # <project> <branch>
+  git -C "$1" worktree list --porcelain 2>/dev/null | awk -v b="branch refs/heads/$2" '
+    /^worktree / { w = substr($0, 10) } $0 == b { print w; exit }'
+}
+
+# A task's branch judged: JUDGE (landed | kept | none: no branch of chartroom's to judge), with
+# JUDGE_LINE saying so, JUDGE_SHA, JUDGE_BRANCH and JUDGE_PROJECT. Only a ship task's own branch,
+# never a joined session's. A branch checked out in a worktree is kept, unless that worktree is
+# the task's own one named here (sweep removes it first).
+task_branch_judge() { # <id> [its own worktree, clean, that may go first]
+  local id="$1" own="${2:-}" project branch base base_sha kind sha ahead at
+  JUDGE=none JUDGE_LINE="" JUDGE_SHA="" JUDGE_BRANCH="" JUDGE_PROJECT=""
+  project="$(meta "$id" project)"; branch="$(meta "$id" branch)"; base="$(meta "$id" base)"
+  base_sha="$(meta "$id" base_sha)"; kind="$(meta "$id" kind)"
+  [[ -n "$branch" && -n "$project" && -d "$project" && "$kind" == ship && "$(meta "$id" joined)" != 1 ]] || return 0
+  sha="$(git -C "$project" rev-parse --verify --quiet "refs/heads/$branch" 2>/dev/null)" || return 0
+  JUDGE_SHA="$sha" JUDGE_BRANCH="$branch" JUDGE_PROJECT="$project"
+  ahead="?"; [[ -n "$base_sha" ]] && ahead="$(git -C "$project" rev-list --count "$base_sha..$sha" 2>/dev/null || echo "?")"
+  if [[ "$sha" == "$base_sha" ]]; then LANDED_WHY="no commits of its own"
+  elif ! branch_landed "$project" "$branch" "$sha" "$base"; then
+    JUDGE=kept JUDGE_LINE="branch $branch kept ($ahead commit(s) ahead of base, not landed: $LANDED_WHY)"; return 0
+  fi
+  at="$(branch_checked_out "$project" "$branch")"
+  if [[ -n "$at" && ( -z "$own" || "$(phys_dir "$at")" != "$(phys_dir "$own")" ) ]]; then JUDGE=kept JUDGE_LINE="branch $branch kept (landed: $LANDED_WHY; but it is checked out at $at)"; return 0; fi
+  JUDGE=landed JUDGE_LINE="branch $branch: landed ($LANDED_WHY)"
+}
+
+# A task's branch, deleted if its work has landed, else kept. Prints one line saying which and
+# why; returns 0 when deleted, 1 when kept, 2 when there is no branch to judge. The delete is
+# `update-ref -d <ref> <sha>`: a branch that moved after the check is left alone.
+task_branch_prune() { # <id>
+  task_branch_judge "$1"
+  case "$JUDGE" in
+    none) return 2 ;;
+    kept) echo "$JUDGE_LINE"; return 1 ;;
+  esac
+  if git -C "$JUDGE_PROJECT" update-ref -d "refs/heads/$JUDGE_BRANCH" "$JUDGE_SHA" 2>/dev/null; then
+    echo "branch $JUDGE_BRANCH deleted (landed: $LANDED_WHY; it was at ${JUDGE_SHA:0:12})"; return 0
+  fi
+  echo "branch $JUDGE_BRANCH kept (landed: $LANDED_WHY; but it moved while being checked)"; return 1
+}
+
 # ---------------------------------------------------------------- change stamp
 # $CHARTROOM_HOME/.changed is rewritten after each write of what the board shows, once the write
 # is on disk: a task's events.log (log_event) and meta.json (meta_set), inbox.md (inbox_rewrite),

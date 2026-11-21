@@ -162,6 +162,9 @@ with two lines"
   [ "$status" -eq 0 ]
   [[ "$output" == *"left $(cd "$PROJECT" && pwd -P) as it is"*"uncommitted changes"* ]]
   [ -f "$PROJECT/wip.txt" ] && [ -f "$PROJECT/README" ]
+  # its branch is the session's own: never judged or deleted, landed or not
+  git -C "$PROJECT" rev-parse --verify -q "refs/heads/$(git -C "$PROJECT" branch --show-current)" >/dev/null
+  [[ "$output" != *"branch "*" deleted"* ]]
   [ "$(meta_of "$id" closed)" != "" ]
   [ ! -f "$XDG_STATE_HOME/chartroom/sessions/sess-1" ]
   wait "$lp"

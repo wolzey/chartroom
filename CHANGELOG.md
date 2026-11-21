@@ -6,6 +6,11 @@ are stable from 0.1.0.
 
 ## [Unreleased]
 
+### Changed
+- chartroom cleans up after itself. The rule "branches are never deleted" becomes "**chartroom never deletes unlanded work**".
+  - **At close:** the task's branch is deleted once its work has landed: merged into its base, on origin at that very commit, or a merged pull request at it (asked of `gh`, so a squash merge counts). Otherwise it is kept, and close says why. A branch checked out elsewhere is kept, and a branch that moved during the check is left alone.
+  - **`sweep`:** it deletes the branches of closed tasks whose work landed after they closed, removing a leftover clean worktree first. A branch no task record names is never touched.
+
 ### Fixed
 - `chartroom nodes` and the app's Fleet count a machine honestly.
   - **The crew is counted apart.** A machine's slots are chartroom's own workers (hc terminals carrying a task), not every agent in its hc core. XOs and your own sessions show apart (`11/20 +3 other`), and placement's UTIL counts only the crew. An hc with no event stream still counts every agent, and says so.

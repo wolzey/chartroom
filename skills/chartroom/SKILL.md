@@ -165,7 +165,8 @@ evidence, then ask for the next decision: "merge locally / open a PR / leave it"
 steer the *worker* to do it (push, then a PR through the project's forge tooling, e.g. `gh` for
 GitHub or `az repos` for Azure DevOps, or whatever `projects.md` names), or fast-forward-merge
 locally only if they said local. Once it has landed or the commander says to drop it, run
-`chartroom close <id>`, which keeps the branch. A worker's `done` only puts the task in `review`;
+`chartroom close <id>`: it removes the worktree, and deletes the branch only once its work has
+landed (merged, on origin at that commit, or a merged PR at it); an unlanded branch is kept. A worker's `done` only puts the task in `review`;
 only the commander marks it done. When they accept it without closing yet (they want the
 worktree kept, say), run `chartroom accept <id>`, which also parks its worker.
 

@@ -1258,10 +1258,11 @@ cmd_close() {
     fi
     if [[ -n "$dirty" ]]; then git -C "$project" worktree remove --force "$wt"; else git -C "$project" worktree remove "$wt"; fi
   fi
-  if [[ -n "$branch" && -n "$base_sha" ]] && git -C "$project" rev-parse --verify --quiet "$branch" >/dev/null; then
-    local ahead; ahead="$(git -C "$project" rev-list --count "$base_sha..$branch")"
-    echo "branch $branch kept ($ahead commit(s) ahead of base; branches are never deleted by chartroom)"
-  fi
+  # its branch: deleted once its work has landed, else kept (chartroom never deletes unlanded work)
+  local pruned rc=0 tmp; tmp="$(mktemp)"
+  task_branch_prune "$id" >"$tmp" || rc=$?
+  pruned="$(cat "$tmp")"; rm -f "$tmp"
+  if [[ -n "$pruned" ]]; then echo "$pruned"; (( rc == 0 )) && log_event "$id" note "$pruned"; fi
   if [[ -n "$r" && "$r" =~ ^($SESSION_RUNNERS|joined)$ ]]; then "${r}_close" "$id" || true; fi
   meta_set "$id" closed "$(now)"
   permit_archive "$id"
@@ -2050,7 +2051,8 @@ chartroom - run a crew of coding agents from one agent session (the XO)
   chartroom accept <id>                   the commander's word that a task in review (a worker
                                           reported done) is done; keeps its worktree (close
                                           removes it) and parks its worker
-  chartroom close <id> [--discard]        remove a clean worktree, close its tab, mark closed
+  chartroom close <id> [--discard]        remove a clean worktree, close its tab, mark closed;
+                                          its branch goes only once its work has landed
                                           (a joined task's directory is never touched)
                                           (--discard only on the commander's explicit word)
   chartroom sweep [--apply] [--verbose|--json] [--idle-hours N]

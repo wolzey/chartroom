@@ -14,6 +14,11 @@
 #   daemon   anything else running from a task's worktree (dev servers, watchers, daemons:
 #            found by working directory and argv, whatever the program), or from a chartroom
 #            worktree path that no longer exists
+# Apart from processes, it lists the leftovers of closed tasks: a task's branch still here whose
+# work has landed since it closed (merged, on origin at that commit, or a merged PR at it: lib/core.sh
+# task_branch_judge), with its worktree when that is still here and clean. --apply deletes them;
+# a branch that has not landed is never touched.
+#
 # Each item's action is `apply` (the safe set --apply acts on), `human` (the reason says why
 # not) or `keep` (in-flight work, or too fresh to judge; counted, never listed). The rules
 # are in lib/sweep.jq. --apply closes through `chartroom close` (which refuses a dirty
@@ -235,6 +240,50 @@ sweep_herdr_panes() {
   printf '%s\n' "${r:-[]}"
 }
 
+# The leftovers of closed tasks: [{task, branch, project, sha, worktree, action, reason}], action
+# apply (landed: --apply deletes it, and first its clean worktree when that is still here) or
+# keep (not landed, or its worktree has uncommitted changes).
+sweep_leftovers_json() {
+  task_meta_files
+  local metas=("${TASK_METAS[@]+"${TASK_METAS[@]}"}") id wt action reason rows=()
+  [[ ${#metas[@]} -gt 0 ]] || { echo '[]'; return 0; }
+  while IFS= read -r id; do
+    wt="$(meta "$id" worktree)"
+    if [[ -n "$wt" && -d "$wt" ]] && [[ -n "$(git -C "$wt" status --porcelain 2>/dev/null || echo '?')" ]]; then
+      task_branch_judge "$id"
+      [[ "$JUDGE" != none ]] || continue
+      action=keep reason="its worktree $wt is still here, with uncommitted changes"
+    else
+      [[ -n "$wt" && -d "$wt" ]] || wt=""
+      task_branch_judge "$id" "$wt"
+      [[ "$JUDGE" != none ]] || continue
+      if [[ "$JUDGE" == landed ]]; then action=apply reason="landed: $LANDED_WHY"; else action=keep reason="${JUDGE_LINE#* kept (}"; reason="${reason%)}"; fi
+    fi
+    rows+=("$(jq -cn --arg t "$id" --arg b "$JUDGE_BRANCH" --arg p "$JUDGE_PROJECT" --arg s "$JUDGE_SHA" --arg w "$wt" --arg a "$action" --arg r "$reason" \
+      '{task: $t, branch: $b, project: ($p | split("/") | last), sha: $s, worktree: (if $w == "" then null else $w end), action: $a, reason: $r}')")
+  done < <(jq -r 'select((.closed // "") != "" and (.joined // "") != "1") | .id' "${metas[@]}")
+  printf '%s\n' "${rows[@]+"${rows[@]}"}" | jq -s -c .
+}
+
+# --apply's part for them, each judged again now: the clean worktree removed, then the branch.
+sweep_leftovers_apply() { # <plan-json> -> [{task, branch, result}]
+  local id wt out rc project rows=()
+  while IFS=$'\t' read -r id wt; do
+    project="$(meta "$id" project)"
+    if [[ -n "$wt" && -d "$wt" ]]; then
+      if ! git -C "$project" worktree remove "$wt" >/dev/null 2>&1; then
+        rows+=("$(jq -cn --arg t "$id" --arg r "skipped: its worktree $wt would not come off cleanly" '{task: $t, result: $r}')"); continue
+      fi
+      log_event "$id" note "sweep: removed its leftover worktree $wt (clean)"; sweep_log "removed worktree: $id $wt"
+    fi
+    rc=0; out="$(task_branch_prune "$id")" || rc=$?
+    if (( rc == 0 )); then log_event "$id" note "sweep: $out"; sweep_log "deleted: $id $out"
+      rows+=("$(jq -cn --arg t "$id" '{task: $t, result: "deleted"}')")
+    else rows+=("$(jq -cn --arg t "$id" --arg r "skipped: ${out:-no branch}" '{task: $t, result: $r}')"); fi
+  done < <(jq -r '.leftovers[]? | select(.action == "apply") | [.task, (.worktree // "")] | @tsv' <<<"$1")
+  printf '%s\n' "${rows[@]+"${rows[@]}"}" | jq -s -c .
+}
+
 # One plan: the snapshot classified (lib/sweep.jq). <close-failed> is a JSON array of task
 # ids whose close failed in this run, so nothing of theirs counts as safe.
 # .parkable: the workers at rest that --apply parks (lib/park.sh); their sessions are left to that.
@@ -248,7 +297,7 @@ sweep_plan() { # [close-failed-json]
     --argjson homes "$(sweep_forms "$CR_HOME" | jq -R -s -c 'split("\n") | map(select(length > 0))')" \
     --argjson self "$$" --argjson idle "$((CR_SWEEP_IDLE_HOURS * 3600))" \
     --argjson failed "${1:-[]}" --arg dash "$dash" --argjson others "$(sweep_others_json)" --argjson parkable "$parkable" \
-    -f "$CR_ROOT/lib/sweep.jq" | jq -c --argjson p "$parkable" '.parkable = $p'
+    -f "$CR_ROOT/lib/sweep.jq" | jq -c --argjson p "$parkable" --argjson l "$(sweep_leftovers_json)" '.parkable = $p | .leftovers = $l'
 }
 
 # Kill pids (TERM, then KILL whatever is still there after 5s), but only those whose argv is
@@ -309,6 +358,8 @@ sweep_apply() { # <plan-json>
       results="$(jq -c --arg k "close:$id" --arg v "failed: $(tr '\n' ' ' <<<"$out" | cut -c1-200)" '.[$k] = $v' <<<"$results")"
     fi
   done < <(jq -r '.items[] | select(.class == "close" and .action == "apply") | .task' <<<"$plan")
+  # 1b. closed tasks' landed leftovers: their clean worktrees, then their branches
+  local leftover_results; leftover_results="$(sweep_leftovers_apply "$plan")"
   # 2. herdr sessions of closed tasks: close the tab, but only the one herdr says the task's
   #    agent runs in (the plan carries it only when that matches the recorded tab)
   while IFS=$'\t' read -r id tab; do
@@ -364,6 +415,9 @@ sweep_apply() { # <plan-json>
         pcpu: ([$done[].pcpu] | add // 0 | . * 10 | round / 10), cpu_s: ([$done[].cpu_s] | add // 0)}
     | .summary.human = ([.items[] | select(.action == "human" or ((.result // "") | test("^(failed|skipped|not run)"))) | .task // "pid \(.pids[0])"] | unique | length)' <<<"$final")"
   final="$(printf '%s\n' "${parked[@]+"${parked[@]}"}" | jq -R -s -c --argjson f "$final" '$f + {parked: (split("\n") | map(select(length > 0)))}')"
+  final="$(jq -c --argjson plan "$plan" --argjson lr "$leftover_results" '
+    ($lr | map({key: .task, value: .result}) | from_entries) as $r
+    | .leftovers = [$plan.leftovers[]? | if .action == "apply" then .result = ($r[.task] // "not run") else . end]' <<<"$final")"
   while IFS=$'\t' read -r id what reason res pids; do
     sweep_log "$res: ${id:+$id }$what (pid $pids): $reason"
     [[ -n "$id" && "$res" =~ ^(stopped|killed) ]] && log_event "$id" note "sweep: $res $what (pid $pids): $reason"
@@ -444,6 +498,12 @@ sweep_print() { # <plan-json> <verbose: 0|1>
       echo
     done
   fi
+  if [[ "$verbose" == 1 && "$(jq '[.leftovers[]?] | length' <<<"$plan")" -gt 0 ]]; then
+    echo "Branches of closed tasks (deleted only once landed)"
+    jq -r '(["ACTION", "TASK", "PROJECT", "BRANCH", "WHY"] | @tsv),
+      (.applied as $applied | .leftovers[] | [(if .action == "keep" then "keep" elif $applied then (.result // "not run") else "delete" end), .task, .project, .branch, .reason] | @tsv)' <<<"$plan" | table | sed 's/^/  /'
+    echo
+  fi
   jq -r --argjson verbose "$verbose" "$CR_SWEEP_FMT"'
     .summary as $s | $s.apply as $a
     | (.applied // false) as $applied | ((if $applied then .parked else .parkable end) // []) as $pk
@@ -456,7 +516,9 @@ sweep_print() { # <plan-json> <verbose: 0|1>
           (if $a.sessions > 0 then "\($a.sessions) session(s)" else empty end),
           (if $a.orphans > 0 then "\($a.orphans) orphaned loop(s)" else empty end),
           (if $a.daemons > 0 then "\($a.daemons) dev process tree(s)" else empty end),
-          (if ($pk | length) > 0 then "\($pk | length) idle worker(s) \(if $applied then "parked" else "to park" end)" else empty end)] | if length > 0 then join(", ") else "nothing" end)
+          (if ($pk | length) > 0 then "\($pk | length) idle worker(s) \(if $applied then "parked" else "to park" end)" else empty end),
+          ([.leftovers[]? | select(.action == "apply" and (if $applied then .result == "deleted" else true end))] | length) as $lb
+          | (if $lb > 0 then "\($lb) landed branch(es) of closed tasks \(if $applied then "deleted" else "to delete" end)" else empty end)] | if length > 0 then join(", ") else "nothing" end)
       + (if $a.processes > 0 then " = \($a.processes) proc(s), \($a.rss_kb | mem) RSS, \($a.pcpu)% CPU" else "" end)
       + "; needs a human: \($h | length); left alone: \($s.kept) proc(s) of live work"
       + "; load \(if .load.avg then (.load.avg | map(tostring) | join(" ")) else "?" end)\(if .load.cpus then " on \(.load.cpus) CPUs" else "" end)",

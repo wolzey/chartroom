@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
-# fake gh: `gh pr view <url> --json ...` answers from $FAKE_GH_STATES ({url: {...}}).
+# fake gh: `gh pr view <url> --json ...` answers from $FAKE_GH_STATES ({url: {...}}), and
+# `gh pr list --state merged ...` from $FAKE_GH_MERGED (a JSON array of {number, headRefName,
+# headRefOid}; [] without it).
 echo "gh $*" >>"${FAKE_LOG:-/dev/null}"
+if [[ "${1:-}" == pr && "${2:-}" == list && " $* " == *" --state merged "* ]]; then
+  if [[ -n "${FAKE_GH_MERGED:-}" ]]; then cat "$FAKE_GH_MERGED"; else echo '[]'; fi
+  exit 0
+fi
 if [[ "${1:-}" == pr && "${2:-}" == view && -n "${FAKE_GH_STATES:-}" ]]; then
   out="$(jq -ce --arg u "$3" '.[$u]' "$FAKE_GH_STATES" 2>/dev/null)" || { echo "no pull requests found for $3" >&2; exit 1; }
   printf '%s\n' "$out"; exit 0
