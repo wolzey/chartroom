@@ -442,10 +442,21 @@ class Pusher:
     self-test is the RFC 8291 vector). The VAPID keys and the devices' subscriptions live beside
     the pid file, 0600. An item is pushed once, when it first appears: what is open when the server
     starts, or when a home is first read, is only remembered. Payloads are encrypted end to end;
-    the browser maker's push service sees the endpoint, the size and the time, never the words."""
+    the browser maker's push service sees the endpoint, the size and the time, never the words.
 
-    def __init__(self, hub, fleet, root, state_dir, mode, subject):
+    The XO answers first. A worker's permission card or decision (or plan approval) wakes the XO at
+    once, and is pushed only if it is still open after `hold` seconds (CHARTROOM_APP_PUSH_HOLD):
+    at once if it is breaking, the XO handed it over (`chartroom permit escalate`), or a card has
+    less than the hold left on its clock. An item answered first is never pushed. One pushed and
+    then answered is withdrawn: a "close" push to the devices that got it (never to Apple's
+    service, which revokes a subscription whose push shows nothing; the app clears it there when
+    it opens)."""
+
+    def __init__(self, hub, fleet, root, state_dir, mode, subject, hold=120):
         self.hub, self.fleet = hub, fleet
+        self.hold = max(0, int(hold))
+        self.first, self.pushed, self.cur = {}, {}, {}
+        self.withdrawn = 0
         self.script = os.path.join(root, "lib", "app", "push.mjs")
         self.keys = os.path.join(state_dir, "app-push-keys.json") if state_dir else None
         self.subs_file = os.path.join(state_dir, "app-push-subs.json") if state_dir else None
@@ -483,7 +494,8 @@ class Pusher:
 
     def info(self):
         return {"available": bool(self.public), "on": self.on, "key": self.public, "reason": self.reason,
-                "devices": len(self.subs), "sent": self.sent, "error": self.error}
+                "devices": len(self.subs), "sent": self.sent, "withdrawn": self.withdrawn, "hold": self.hold,
+                "holding": len(self.first), "error": self.error}
 
     def load(self):
         try:
@@ -554,11 +566,65 @@ class Pusher:
         new = [k for k in cur if k not in self.seen and cur[k][0] in self.ready]
         self.ready |= read
         self.seen = set(cur) | {k for k in self.seen if k.split(":", 1)[0] not in read}
+        # what a source not read this time had open stays open: never withdrawn for a failed read
+        self.cur = dict(cur, **{k: v for k, v in self.cur.items() if v[0] not in read})
         return [(k, cur[k][0], cur[k][1]) for k in new]
+
+    @staticmethod
+    def xo_first(it):
+        """A worker's call or question the XO may answer before the commander sees it."""
+        return it.get("kind") == "permission" or (it.get("type") == "task" and it.get("kind") in ("decide", "approve"))
+
+    def due(self, it, first):
+        """When an item seen first at `first` is pushed (epoch seconds)."""
+        if not self.xo_first(it) or it.get("breaking") or it.get("escalated"):
+            return first
+        if it.get("kind") == "permission" and it.get("blocking") and not it.get("missed"):
+            try:
+                if float(it.get("expires_epoch")) - time.time() <= self.hold:
+                    return first
+            except (TypeError, ValueError):
+                pass
+        return first + self.hold
+
+    def step(self, now=None):
+        """One round after a read: hold what is new, push what is due and still open, withdraw
+        what was pushed and is open no more."""
+        now = time.time() if now is None else now
+        for key, home, it in self.scan():
+            self.first[key] = now
+        for key in list(self.first):
+            hit = self.cur.get(key)
+            if hit is None:  # answered (or gone) before it was pushed: never pushed
+                del self.first[key]
+                continue
+            if now >= self.due(hit[1], self.first[key]):
+                del self.first[key]
+                if self.subs:
+                    got = self.send(self.payload(key, hit[0], hit[1]))
+                    if got:
+                        self.pushed[key] = got
+        for key in list(self.pushed):
+            if key not in self.cur:
+                self.withdraw(key, self.pushed.pop(key))
+
+    def next_due(self):
+        """Seconds until the first held item is due, or None."""
+        ds = [self.due(self.cur[k][1], t) for k, t in self.first.items() if k in self.cur]
+        return max(0.2, min(ds) - time.time()) if ds else None
+
+    def withdraw(self, key, endpoints):
+        # Apple's push service revokes a subscription whose push shows no notification
+        only = [e for e in endpoints if not (urlsplit(e).hostname or "").endswith("push.apple.com")]
+        if only:
+            self.withdrawn += len(self.send({"type": "close", "tag": key}, only=only, count=False))
 
     def payload(self, key, home, it):
         if it.get("kind") == "permission":  # a worker's call, waiting on the commander
-            return {"title": ("Allow %s?" % (it.get("desc") or "a call"))[:100], "body": ("%s · %s" % (home, it.get("title") or ""))[:180],
+            body = "%s · %s" % (home, it.get("title") or "")
+            if it.get("escalated"):
+                body += " · the XO left this one to you" + (": " + it["escalated"]["note"] if it["escalated"].get("note") else "")
+            return {"title": ("Allow %s?" % (it.get("desc") or "a call"))[:100], "body": body[:180],
                     "tag": key, "url": "/#/n/" + quote(key, safe="")}
         title = str(it.get("title") or "Chartroom")
         body = home + " · " + PUSH_GROUP.get(it.get("group"), "Needs you")
@@ -566,8 +632,12 @@ class Pusher:
             body += ": " + str(it["summary"])
         return {"title": title[:100], "body": body[:180], "tag": key, "url": "/#/n/" + quote(key, safe="")}
 
-    def send(self, payload):
+    def send(self, payload, only=None, count=True):
+        """Push to every device (or those whose endpoint is in `only`); the endpoints that took it."""
+        got = []
         for s in list(self.subs):
+            if only is not None and s["endpoint"] not in only:
+                continue
             code, out, err = run([self.node, self.script, "send", self.keys, self.subject], None,
                                  stdin=json.dumps({"subscription": s, "payload": payload, "ttl": 6 * 3600}).encode(), timeout=40)
             try:
@@ -581,8 +651,11 @@ class Pusher:
             elif status is None or status >= 400:
                 self.error = "%s: %s" % (urlsplit(s["endpoint"]).hostname, status or last_line(err) or "failed")
             else:
-                self.sent += 1
+                if count:
+                    self.sent += 1
                 self.error = None
+                got.append(s["endpoint"])
+        return got
 
     def loop(self):
         self.setup()
@@ -591,12 +664,12 @@ class Pusher:
         last = -1
         while True:
             with self.hub.cond:
-                while self.hub.version == last:
-                    self.hub.cond.wait(30)
+                # a new read, or the first held item coming due, whichever is first
+                if self.hub.version == last:
+                    nd = self.next_due()
+                    self.hub.cond.wait(30 if nd is None else min(30, nd))
                 last = self.hub.version
-            for key, home, it in self.scan():
-                if self.subs:
-                    self.send(self.payload(key, home, it))
+            self.step()
 
 
 class Prs:
@@ -1233,6 +1306,7 @@ def main():
     ap.add_argument("--no-auth", action="store_true", help="no identity: requests straight to 127.0.0.1 only")
     ap.add_argument("--push", choices=("on", "off"), default="off", help="Web Push for new Needs me items (CHARTROOM_APP_PUSH)")
     ap.add_argument("--push-subject", default="mailto:chartroom@example.com", help="the VAPID contact (CHARTROOM_APP_PUSH_SUBJECT)")
+    ap.add_argument("--push-hold", type=int, default=120, help="seconds a worker's card or decision waits for the XO before it is pushed (CHARTROOM_APP_PUSH_HOLD)")
     args = ap.parse_args()
     if not args.no_auth and not (args.user or "").strip():
         sys.exit("chartroom app: --user (CHARTROOM_APP_USER) or --no-auth")
@@ -1250,7 +1324,7 @@ def main():
     actions = Actions(hub, args.bin, os.path.join(os.path.dirname(args.pidfile), "app-actions.ndjson") if args.pidfile else None)
     prs = Prs(hub)
     fleet = Fleet(hub, args.bin)
-    pusher = Pusher(hub, fleet, args.root, os.path.dirname(args.pidfile) if args.pidfile else None, args.push, args.push_subject)
+    pusher = Pusher(hub, fleet, args.root, os.path.dirname(args.pidfile) if args.pidfile else None, args.push, args.push_subject, args.push_hold)
     httpd.RequestHandlerClass = make_handler(hub, args, args.root, actions, prs, fleet, pusher)
 
     def cleanup(*_):

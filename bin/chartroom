@@ -1958,6 +1958,10 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           answer a card on the commander's word: once allows
                                           that call, always allows its pattern until the task
                                           closes, deny refuses it (the note reaches the worker).
+  chartroom permit escalate <p-id> [--note T]
+                                          hand an open card to the commander: the app pushes it
+                                          to their devices now (else only once it has waited
+                                          CHARTROOM_APP_PUSH_HOLD unanswered), marked as the XO's
                                           The first answer wins; a late allow (after the card's
                                           wait ran out) pre-approves the call and tells the
                                           worker to run it again. A worker may not answer

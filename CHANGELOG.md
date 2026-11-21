@@ -6,6 +6,14 @@ are stable from 0.1.0.
 
 ## [Unreleased]
 
+### Added
+- `chartroom permit escalate <p-id> [--note T]`: the XO hands an open permission card to the commander. The app pushes it at once and marks it "The XO left this one to you", with the note.
+
+### Changed
+- The app's push waits for the XO first. A worker's permission card or decision is pushed only if it is still open after `CHARTROOM_APP_PUSH_HOLD` (120 s).
+  - **Pushed at once:** breaking ones, escalated ones, and a card with less than the hold left.
+  - **Withdrawn:** a pushed card answered since is withdrawn by its tag on devices that got it, Apple's excepted. The app closes such notifications when it opens.
+
 ### Fixed
 - The app: tapping a notification lands on the item, not just the app.
   - **Where it lands:** a task's question, blocker or finished work opens the task's details; a grilling round its page; a permission card or a question with no task opens that card.

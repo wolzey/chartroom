@@ -39,14 +39,20 @@ function worker(windows) {
     location: { origin: ORIGIN },
     addEventListener: (type, fn) => { handlers[type] = fn; },
     clients: { matchAll: async () => windows.slice(), openWindow: async (u) => { opened.push(u); return win(u); }, claim: async () => {} },
-    registration: { showNotification: async () => {} },
+    // the device's notifications shown now: each with its tag, closed or not
+    registration: {
+      shown: [],
+      showNotification: async function (title, o) { this.shown.push({ title, tag: o.tag, closed: false, close() { this.closed = true; } }); },
+      getNotifications: async function (f) { return this.shown.filter((x) => !x.closed && (!f || !f.tag || x.tag === f.tag)); },
+    },
     skipWaiting: () => {},
   };
   vm.runInNewContext(SRC, { self, caches, Response, Headers, URL, MessageChannel, setTimeout, clearTimeout, fetch: async () => { throw new Error("offline"); }, console });
   const fire = async (type, e) => { const ps = []; handlers[type](Object.assign({ waitUntil: (p) => ps.push(p) }, e)); await Promise.all(ps); };
   const tap = (url) => { const note = { data: { url }, closed: 0, close() { this.closed++; } }; return fire("notificationclick", { notification: note }).then(() => note); };
   const starts = (hash) => { const page = { got: [], postMessage(m) { this.got.push(m); } }; return fire("message", { data: { type: "opened", hash }, source: page }).then(() => page); };
-  return { tap, starts, opened, store };
+  const push = (payload) => fire("push", { data: { json: () => payload, text: () => JSON.stringify(payload) } });
+  return { tap, starts, push, opened, store, shown: self.registration.shown };
 }
 
 // the worker builds its messages in its own realm: compare them as data
@@ -104,6 +110,16 @@ const TARGET = ORIGIN + LINK;
     await w.tap(LINK);
     assert.deepStrictEqual(other.told, []);
     assert.deepStrictEqual(w.opened, [TARGET]);
+  });
+
+  await t("withdrawn: a 'close' push closes that item's notification and shows nothing; others stay", async () => {
+    const w = worker([]);
+    await w.push({ title: "Allow Bash \"git push\"?", body: "acme · Fix the badge", tag: "acme:p-5e6f", url: "/#/n/acme%3Ap-5e6f" });
+    await w.push({ title: "Sale on Monday?", body: "acme · To decide", tag: "acme:i-1a2b", url: "/#/n/acme%3Ai-1a2b" });
+    assert.deepStrictEqual(w.shown.map((x) => x.tag), ["acme:p-5e6f", "acme:i-1a2b"]);
+    await w.push({ type: "close", tag: "acme:p-5e6f" });
+    assert.strictEqual(w.shown.length, 2, "nothing new is shown");
+    assert.deepStrictEqual(w.shown.map((x) => [x.tag, x.closed]), [["acme:p-5e6f", true], ["acme:i-1a2b", false]]);
   });
 
   console.log(`${n - failed}/${n} passed`);

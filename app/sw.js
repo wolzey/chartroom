@@ -56,9 +56,17 @@ function show(n) {
   });
 }
 
+// A card answered after it was pushed: its notification is withdrawn, never left to say "already
+// answered" (the server sends this only to devices that got the card, and never to Apple's service).
+async function closeTag(tag) {
+  if (!tag) return;
+  for (const x of await self.registration.getNotifications({ tag })) x.close();
+}
+
 self.addEventListener("push", (e) => {
   let n = {};
   try { n = e.data ? e.data.json() : {}; } catch (err) { n = { title: "Chartroom", body: e.data ? e.data.text() : "" }; }
+  if (n.type === "close") { e.waitUntil(closeTag(n.tag)); return; }
   e.waitUntil(show(n));
 });
 

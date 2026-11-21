@@ -203,6 +203,8 @@
 .perm-cwd { font-size: var(--fs-xs); margin-top: -4px; overflow-wrap: anywhere; }
 .perm-why { font-size: var(--fs-sm); }
 .perm-late { font-size: var(--fs-sm); color: var(--rose); }
+.perm-xo { margin: 0; padding: 8px 10px; border-radius: var(--r-md); background: var(--amber-soft); font-size: var(--fs-sm); line-height: 1.5; }
+.perm-xo b { font-weight: 600; }
 .perm-acts { flex-wrap: wrap; align-items: flex-start; }
 .perm-always { display: inline-flex; flex-direction: column; gap: 3px; max-width: 100%; }
 .perm-always .faint { font-size: var(--fs-xs); overflow-wrap: anywhere; }

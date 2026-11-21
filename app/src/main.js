@@ -442,6 +442,11 @@ function App() {
     if (t.select) { setTab("all"); setSelKey(t.select); if (!wide()) setQvOpen(true); }
     if (t.gone) toast("That item is no longer open; it was answered or closed" + (t.hash !== "#/" ? ". Here is its task" : ""));
   }, [route.select, allRead]);
+  // notifications of items answered since (by the XO, or here): closed once every home is read
+  useEffect(() => {
+    if (!allRead || (data && data.offline)) return;
+    N.tidy(new Set(all.filter((x) => M.standing(x, local) === "open").map((x) => x.key)));
+  }, [all, allRead]);
   // a tap on a notification while the app is open (on any page): the service worker says where
   useEffect(() => N.onOpen((url) => {
     let u = null;

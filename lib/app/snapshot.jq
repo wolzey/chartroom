@@ -77,6 +77,8 @@ def askline: sub("^[^ ]+ [a-z-]+: ?"; "");
       input: (if $p.tool == "Bash" then null else ($p.input | tojson | cut(4000)) end),
       desc: $p.desc, why: ($p.why // ""), cwd: ($p.cwd // ""), rule: $p.rule, reason: $p.reason, pattern: $p.pattern,
       reason_denied: ($p.reason_denied // null), summary: $p.desc, live: $t.live, state: $t.state,
+      # the XO handed it over (permit escalate): pushed at once, and the card says so
+      escalated: (if $p.escalated then {at: $p.escalated.at, note: ($p.escalated.note // "")} else null end),
       breaking: false, held: $t.held}] as $permits
 | ([$permits[] | select(.blocking and (.missed | not)) | .task] | unique) as $permit_tasks
 

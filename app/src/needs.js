@@ -71,6 +71,7 @@ function PermitBody({ it, note, setNote, noteRef, busy, onAct }) {
   const act = (answer) => onAct(it, { type: "permit", answer });
   return html`
     <div class="perm-head"><${Clock} it=${it} />${!it.blocking && it.reason_denied ? html`<span class="faint"> · ${it.reason_denied}</span>` : null}</div>
+    ${it.escalated ? html`<p class="perm-xo"><b>The XO left this one to you.</b>${it.escalated.note ? " " + it.escalated.note : ""}</p>` : null}
     ${it.command != null ? html`<pre class="perm-cmd">${it.command}</pre>` : html`<div class="perm-cmd-d"><b>${it.desc}</b>${it.input ? html`<pre class="perm-cmd">${it.input}</pre>` : null}</div>`}
     ${it.cwd ? html`<div class="perm-cwd faint">in ${it.cwd}</div>` : null}
     ${it.why ? html`<p class="a-detail-sum">${it.why}</p>` : null}

@@ -239,6 +239,10 @@ cmd_app() {
   local push; push="$(cfg APP_PUSH '' off)"
   [[ "$push" == on ]] || push=off
   args+=(--push "$push" --push-subject "$(cfg APP_PUSH_SUBJECT '' 'mailto:chartroom@example.com')")
+  # a worker's card or decision is the XO's first: pushed only if still open after this many seconds
+  local hold; hold="$(cfg APP_PUSH_HOLD '' 120)"
+  [[ "$hold" =~ ^[0-9]+$ ]] || hold=120
+  args+=(--push-hold "$hold")
   [[ $daemon -eq 1 ]] || exec "${CR_PY[@]}" "${args[@]}"
   local log; log="$(app_logfile)"
   ( umask 077; nohup "${CR_PY[@]}" "${args[@]}" >"$log" 2>&1 </dev/null & echo $! >"$log.pid" )

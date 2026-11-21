@@ -42,6 +42,20 @@ export function onOpen(fn) {
   return () => sw.removeEventListener("message", h);
 }
 
+// Notifications of items no longer open (answered here or by the XO since): closed when the app
+// opens, on every device (a phone gets no "close" push: see sw.js). open: the keys still open.
+export async function tidy(open) {
+  try {
+    const r = reg || (await navigator.serviceWorker.getRegistration("/"));
+    if (!r || !r.getNotifications) return 0;
+    let n = 0;
+    for (const x of await r.getNotifications()) {
+      if (x.tag && x.tag.includes(":") && !open.has(x.tag)) { x.close(); n++; }
+    }
+    return n;
+  } catch (e) { return 0; }
+}
+
 export async function enable() {
   if (!supported()) return "unsupported";
   const p = await Notification.requestPermission();

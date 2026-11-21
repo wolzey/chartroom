@@ -299,10 +299,11 @@ permit_rows() { # [<task id>] [--all] -> one JSON object per card
   local only="$1" all="$2" f d
   shopt -s nullglob
   for f in "$(permit_root)"/${only:-*}/p-*.json; do
-    [[ "$f" == *.answer.json || "$f" == *.late.json ]] && continue
+    [[ "$f" == *.answer.json || "$f" == *.late.json || "$f" == *.escalated.json ]] && continue
     d="${f%.json}"
-    jq -c --argjson now "$(date +%s)" --slurpfile a <(cat "$d.answer.json" 2>/dev/null || true) --slurpfile l <(cat "$d.late.json" 2>/dev/null || true) '
-      . + {answer: ($a[0] // null), late: ($l[0] // null)}
+    jq -c --argjson now "$(date +%s)" --slurpfile a <(cat "$d.answer.json" 2>/dev/null || true) --slurpfile l <(cat "$d.late.json" 2>/dev/null || true) \
+      --slurpfile x <(cat "$d.escalated.json" 2>/dev/null || true) '
+      . + {answer: ($a[0] // null), late: ($l[0] // null), escalated: ($x[0] // null)}
       | .state = (if .answer == null then (if $now < .expires_epoch then "open" else "lapsed" end)
                   elif .answer.answer == "expired" then "expired" elif .answer.answer == "lapsed" then "lapsed" else "answered" end)' "$f" 2>/dev/null
   done | if [[ "$all" == 1 ]]; then cat; else jq -c 'select(.state == "open")'; fi
@@ -325,9 +326,33 @@ cmd_permit() {
     ls|list) permit_cmd_ls "$@" ;;
     show) permit_cmd_show "$@" ;;
     answer) permit_cmd_answer "$@" ;;
+    escalate) permit_cmd_escalate "$@" ;;
     grant|revoke|grants) permit_cmd_grant "$sub" "$@" ;;
-    *) die "usage: chartroom permit ls [<task>] [--all] [--json] | show <p-id> | answer <p-id> once|always|deny [--note <text>] [--by commander|app] [--via xo|terminal|app] | grant <task> <name>... | revoke <task> <name>... | grants <task>" ;;
+    *) die "usage: chartroom permit ls [<task>] [--all] [--json] | show <p-id> | answer <p-id> once|always|deny [--note <text>] [--by commander|app] [--via xo|terminal|app] | escalate <p-id> [--note <text>] | grant <task> <name>... | revoke <task> <name>... | grants <task>" ;;
   esac
+}
+
+# The XO hands an open card to the commander: the app pushes it at once (not after its hold) and
+# the card says the XO left it to them, with the XO's note. Only the XO does this, never a worker.
+permit_cmd_escalate() {
+  local pid="${1:-}" note="" id d rec
+  [[ -n "$pid" ]] || die "usage: chartroom permit escalate <p-id> [--note <text>]"
+  shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in --note) note="${2:-}"; shift 2 ;; *) die "permit escalate: unknown arg $1" ;; esac
+  done
+  id="$(permit_find "$pid" || true)"
+  permit_from_worker && permit_refuse_worker "escalate permission card $pid" "$id"
+  [[ -n "$id" ]] || die "no such permission card: $pid"
+  [[ "$(permit_rows "$id" 1 | jq -r --arg p "$pid" 'select(.id == $p) | .state')" == open ]] \
+    || die "permit escalate: $pid is not open (answered, expired or lapsed): nothing to hand over"
+  [[ "$note" != *$'\n'* ]] || note="${note//$'\n'/ }"
+  d="$(permit_tdir "$id")"
+  rec="$(jq -cn --arg n "$note" '{by: "xo", note: $n, at: (now | todate)}')"
+  printf '%s\n' "$rec" >"$d/$pid.escalated.json.tmp" && mv "$d/$pid.escalated.json.tmp" "$d/$pid.escalated.json"
+  permit_log "$id" "escalated $pid to the commander${note:+: \"$note\"}"
+  stamp_changed
+  echo "escalated $pid: the commander's app pushes it now"
 }
 
 permit_cmd_ls() {

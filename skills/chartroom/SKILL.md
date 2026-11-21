@@ -225,7 +225,12 @@ On a wake:
   that runs out denies the call and the worker posts a `decision`; an allow given after that is
   still kept (`permit answer` pre-approves the call and tells the worker to run it again). A
   `refused: a worker tried to answer ...` wake is a worker forging its own approval: tell the
-  commander.
+  commander. You get every card first. The app pushes it to the commander's devices only if it is
+  still open after `CHARTROOM_APP_PUSH_HOLD` (120 s by default), so a card answered on a ruling
+  they already gave never interrupts them. When a card is theirs to decide, hand it over at once:
+  `chartroom permit escalate <p-id> [--note "<why it is yours>"]`. It is pushed now, and the card
+  says you left it to them. Breaking cards, and cards with less than the hold left, push at once
+  anyway. A worker's `decision` follows the same hold.
 - **awaiting input**: peek. While a permission card is open for the task, its prompt does not
   wake you again (the card is the wake). A routine in-worktree action (tests, installs, local git) may be
   approved by typing into the worker's terminal (`chartroom attach <id>`, or the runner's own
