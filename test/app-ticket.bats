@@ -26,7 +26,7 @@ steers() { events "$T" | grep -c ' steered: ' || true; }
   att="$(cr attachment list "$T" --json | jq -r '.[0].id')"
   f="$CHARTROOM_HOME/tasks/$T/attachments/$att/shot.png"
   [ "$(cat "$f")" = "a screenshot" ]
-  [ "$(stat -f %Lp "$f" 2>/dev/null || stat -c %a "$f")" = 600 ]
+  [ "$(stat -c %a "$f" 2>/dev/null || stat -f %Lp "$f")" = 600 ]
   [ "$(cr attachment list "$T" --json | jq -r '.[0] | "\(.type) \(.size) \(.by) \(.caption)"')" = "image/png 12 commander before the fix" ]
   [ "$(steers)" -eq $((n0 + 1)) ]
   events "$T" | grep -q "steered: The commander attached a file to this task: .*shot.png"

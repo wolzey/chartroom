@@ -57,7 +57,7 @@ pushinfo() { curl -s "http://127.0.0.1:$PORT/api/v1/push"; }
   serve
   for _ in $(seq 1 50); do [ "$(pushinfo | jq -r .available)" = true ] && break; sleep 0.2; done
   [ "$(pushinfo | jq -r '.key | length')" -eq 87 ]
-  [ "$(stat -f '%Lp' "$BATS_TEST_TMPDIR/app-push-keys.json" 2>/dev/null || stat -c '%a' "$BATS_TEST_TMPDIR/app-push-keys.json")" = 600 ]
+  [ "$(stat -c %a "$BATS_TEST_TMPDIR/app-push-keys.json" 2>/dev/null || stat -f %Lp "$BATS_TEST_TMPDIR/app-push-keys.json")" = 600 ]
   k='"keys":{"p256dh":"BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4","auth":"BTBZMqHH6r4Tts7J_aSIgg"}'
   [ "$(post /api/v1/push/subscribe "{\"endpoint\":\"https://push.example.net/a\",$k}")" = 403 ]
   [ "$(post /api/v1/push/subscribe "{\"endpoint\":\"https://push.example.net/a\",$k}" -H 'X-Chartroom-App: 1' -H 'Sec-Fetch-Site: cross-site')" = 403 ]
@@ -66,7 +66,7 @@ pushinfo() { curl -s "http://127.0.0.1:$PORT/api/v1/push"; }
   [ "$(post /api/v1/push/subscribe "{\"endpoint\":\"https://push.example.net/a\",$k}" -H 'X-Chartroom-App: 1')" = 200 ]
   [ "$(post /api/v1/push/subscribe "{\"endpoint\":\"https://push.example.net/a\",$k}" -H 'X-Chartroom-App: 1')" = 200 ]
   [ "$(pushinfo | jq -r .devices)" -eq 1 ]
-  [ "$(stat -f '%Lp' "$BATS_TEST_TMPDIR/app-push-subs.json" 2>/dev/null || stat -c '%a' "$BATS_TEST_TMPDIR/app-push-subs.json")" = 600 ]
+  [ "$(stat -c %a "$BATS_TEST_TMPDIR/app-push-subs.json" 2>/dev/null || stat -f %Lp "$BATS_TEST_TMPDIR/app-push-subs.json")" = 600 ]
   [ "$(post /api/v1/push/unsubscribe '{"endpoint":"https://push.example.net/a"}' -H 'X-Chartroom-App: 1')" = 200 ]
   [ "$(pushinfo | jq -r .devices)" -eq 0 ]
 }
