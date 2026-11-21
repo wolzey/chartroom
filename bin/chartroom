@@ -865,6 +865,7 @@ status_store_rows() {
   [[ -n "$only" ]] && a+=(--id "$only")
   [[ -n "$since" ]] && a+=(--since "$since")
   [[ -n "$only" || "${CR_STATUS_REMOVED:-}" == 1 ]] && a+=(--with-removed)
+  [[ "${CR_ROWS_EXTRA:-}" == 1 ]] && a+=(--extras) # (the board's: dashboard_task_extra's facts too)
   raw="$(printf '%s\n' "$open_ids" | store_py rows "${STORE_HOME_ARGS[@]}" --pool-stdin --grace "$CR_WAITING_GRACE" --max "$CR_WAITING_MAX" "${a[@]+"${a[@]}"}")" ||
     die "could not read the store (${STORE_DB:-$CR_DB})"
   [[ -n "$raw" ]] || return 0
@@ -889,7 +890,8 @@ status_store_rows() {
         updated,dispatched,closed,branch,base:(.base // null),mentions:$c.mentions,has_report:$c.has_report,
         waiting_on:($wait.on // null),waiting_until:($wait.until // null),waiting_since:($wait.since // null),
         short_id:($shorts[.id] // .id),breaking:$brk}
-    | . + focus_marks($focus; "task"; $brk)' <<<"$raw"
+    | . + focus_marks($focus; "task"; $brk)
+    | if $c.extra then . + {_extra: $c.extra} else . end' <<<"$raw"
 }
 
 cmd_status() {

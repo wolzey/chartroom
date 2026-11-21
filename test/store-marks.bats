@@ -174,3 +174,16 @@ store_on() { printf 'CHARTROOM_STORE=sqlite\n' >>"$CHARTROOM_HOME/config"; }
   [[ "$(cr status)" == *"inbox: 1 waiting on the commander"* ]]
   [ "$(cat "$CHARTROOM_HOME/inbox.md")" = "$before" ]
 }
+
+@test "a removed task takes its artifacts out of view with it; restore brings both back" {
+  id="$(new_task)"
+  printf 'x\n' | cr artifact add "$id" --kind message --title "Send this" - >/dev/null
+  printf 'y\n' | cr artifact add "$id" --kind page --title "A page" - >/dev/null 2>&1 || true
+  [ "$(cr artifact list --json | jq length)" -ge 1 ]
+  cr remove "$id" >/dev/null
+  [ "$(cr artifact list --json --all | jq length)" = 0 ]
+  [ "$(cr todo --json | jq '[.. | objects | select(.type? == "artifact")] | length')" = 0 ]
+  [ "$(cr board --json | jq '.artifacts.open')" = 0 ]
+  cr restore "$id" >/dev/null
+  [ "$(cr artifact list --json | jq length)" -ge 1 ]
+}

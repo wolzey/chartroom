@@ -125,7 +125,8 @@ are stable from 0.1.0.
   - `chartroom store doctor|check|legacy|events|meta`, and `chartroom set <id> key=value` for the
     settings the skill had the XO edit in `meta.json` (model, effort, sandbox, permission).
   - The dashboard refreshes on the home's change stamp and shows a store task's events.
-  - `status`, `board` and `todo` read every store task in one call to the store (its state,
+  - `status`, `board` and `todo` read every store task in one call to the store (its state, the
+    board's PR links, files and last event,
     waiting window, last line, breaking mark and mentions by the same rules as a file task's,
     held together by test/store-parity.bats); only liveness is still asked per open task.
   - A home keeps the database it was born in (`.home-id` records it), so a state directory that

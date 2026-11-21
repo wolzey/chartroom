@@ -105,6 +105,8 @@ marks_apply() { # <op> <args...>
   [[ "$why" != *[$'\n\r']* ]] || die "--why is one line of text"
   marks_fail() { failed="$(jq -c --arg r "$1" --arg w "$2" '. + [{ref: $r, why: $w}]' <<<"$failed")"; }
   local -A seen=()
+  # Every store record of the home read once, so each ref below is found without a store call.
+  store_load || true
   for a in "${refs[@]}"; do
     if ! mark_resolve "$a"; then marks_fail "$a" "$MK_WHY"; continue; fi
     [[ -z "${seen[$MK_KIND/$MK_REF]+x}" ]] || continue
@@ -116,6 +118,7 @@ marks_apply() { # <op> <args...>
       live="$(live_of "$MK_REF")"
       if [[ ! "$live" =~ ^($MARK_AT_REST)$ ]]; then
         if [[ $stop -eq 0 ]]; then marks_fail "$a" "its worker is $live (--stop ends it first; the worktree stays)"; continue; fi
+        if is_joined "$MK_REF"; then marks_fail "$a" "a joined session is its own: end it there, then remove it"; continue; fi
         mark_stop_worker "$MK_REF" || { marks_fail "$a" "its worker is $live and could not be stopped"; continue; }
         log_event "$MK_REF" note "its worker ended to remove the task (remove --stop)"
       fi

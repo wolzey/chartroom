@@ -31,7 +31,8 @@ not on PATH, use `../../bin/chartroom` relative to this skill's directory.)
      then the others. An inbox item without a project: infer it from the question.
      Then carry out the answer exactly as the chartroom skill says: `chartroom steer` it to the
      worker (and append the commander's words to the brief's intent), write approvals into the
-     brief, record lasting preferences with `chartroom rule add`, and remove the answered `inbox.md` line.
+     brief, record lasting preferences with `chartroom rule add`, and take the answered inbox item off with
+     `chartroom todo done <i-id>` (never by editing `inbox.md`).
    - Every other answer below also starts with `**[<project>]**`.
    - `review` (the worker reported `done`; it waits on the commander): Verify (chartroom skill
      step 7) if you have not already, then give the outcome, the risk and the evidence in two or

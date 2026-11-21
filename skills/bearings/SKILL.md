@@ -21,8 +21,8 @@ never from conversation memory. (If `chartroom` is not on PATH, use
    and their artifacts. Don't list or walk the held items: the count stands for them. When it says `on:
    false` with `ran_out` set, open with one line: the focus on those projects ran out at
    `until`, and everything is back in view.
-   Also read `$CHARTROOM_HOME/inbox.md`: questions waiting on the commander and chat
-   approvals not yet in a brief, `chartroom artifact list --json`: drafts still to send
+   Also read `chartroom inbox list --json` (not `inbox.md`: the list leaves out removed and
+   done items and includes those born in the store): questions waiting on the commander and chat approvals not yet in a brief, `chartroom artifact list --json`: drafts still to send
    or run, and `chartroom relay list --json`: relays from other homes' XOs not yet acked. A
    relay is the XO's to weigh: it goes in the digest only when it needs the commander, under
    **Needs you**, led with its home (`**[from <home> · <project>]**`). Run `chartroom sweep` (a dry run, a few lines): its
@@ -49,8 +49,8 @@ never from conversation memory. (If `chartroom` is not on PATH, use
    **Needs you**: decisions and blockers only a human can resolve, highest impact first.
    One line each, project first: `**[<project>]** <question> (recommend: <option>)`. Use
    `**[multi]**` for a question that spans projects, `**[chartroom]**` for one about the crew
-   itself. Include every open item under "Waiting on the commander" in `inbox.md`, with the
-   `[project]` its line carries (an unlabelled line: infer it from the question, else say so).
+   itself. Include every open item `chartroom inbox list` shows as waiting on the commander,
+   with its `project` (none: infer it from the question, else say so).
    Every open `message` or `runbook` artifact is a line too, with its ref (the commander copies
    it with `chartroom artifact copy <ref>`): `**[<project>]** send: <title> (<ref>)`, or
    `run: <title> (<ref>)`. Put it on the line of the inbox item it belongs to, if any.

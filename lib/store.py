@@ -550,7 +550,33 @@ def mentions(home, tid, lines, pool):
     return sorted(found)
 
 
-def status_rows(conn, home, which, only, since, pool, grace, wmax, with_removed=False):
+# dashboard_task_extra's facts (lib/dashboard.sh), for the board: PR/MR links in the events and
+# report.md, which task files there are, the newest worker-meaningful event.
+PR_URL = re.compile(r"https?://[^\]\[ <>()\"'`]+/(?:pull|pulls|merge_requests|pullrequest)/[0-9]+")
+TASK_FILES = ("brief.md", "report.md", "plan.md", "final.md")
+LAST_EVENT = re.compile(r"^[^ ]+ (progress|waiting|decision|blocked|done|failed|steered): ")
+
+
+def task_extra(home, tid, lines):
+    d = home.task_dir(tid)
+    try:
+        with open(os.path.join(d, "report.md"), encoding="utf-8", errors="replace") as f:
+            report = f.read()
+    except OSError:
+        report = ""
+    prs, seen = [], set()
+    for u in PR_URL.findall("".join(lines) + report):
+        if u not in seen:
+            seen.add(u)
+            prs.append(u)
+    files = [n for n in TASK_FILES if os.path.isfile(os.path.join(d, n)) and os.path.getsize(os.path.join(d, n)) > 0]
+    if lines:
+        files.append("events.log")
+    last = next((l.rstrip("\n") for l in reversed(lines) if LAST_EVENT.match(l)), "")
+    return {"prs": prs, "files": files, "last_event": last[21:] if last else None, "last_event_at": last[0:20] if last else None}
+
+
+def status_rows(conn, home, which, only, since, pool, grace, wmax, with_removed=False, extras=False):
     """One JSON object per store task, for status_rows to finish (live, focus marks, short id)."""
     hid = home.hid(conn)
     if hid is None:
@@ -600,6 +626,8 @@ def status_rows(conn, home, which, only, since, pool, grace, wmax, with_removed=
                       "breaking_mark": bool(brk_src) and bool(BREAKING_MARK.match(brk_src[-1])),
                       "mentions": mentions(home, row["id"], lines, pool) if st != "closed" else [],
                       "has_report": has_report}
+        if extras:
+            doc["_cr"]["extra"] = task_extra(home, row["id"], lines)
         out.write(json.dumps(doc) + "\n")
 
 
@@ -838,7 +866,30 @@ def legacy(home):
                         open_tasks += 1
             except (OSError, ValueError):
                 open_tasks += 1
-    print(json.dumps({"tasks": tasks, "open_tasks": open_tasks}))
+    # inbox.md's open lines (Waiting and Approvals, "(none)" aside) and the artifacts' sidecars.
+    inbox = 0
+    try:
+        section = ""
+        with open(os.path.join(home.path, "inbox.md"), encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if line.startswith("## "):
+                    section = "w" if line.startswith("## Waiting") else ("a" if line.startswith("## Approvals") else "")
+                elif section and line.startswith("- ") and not line.startswith("- (none)"):
+                    inbox += 1
+    except OSError:
+        pass
+    arts = 0
+    for base in (tasks_dir, os.path.join(home.path, "inbox")):
+        try:
+            owners = os.listdir(base)
+        except OSError:
+            continue
+        for o in owners:
+            try:
+                arts += sum(1 for n in os.listdir(os.path.join(base, o, "artifacts")) if n.endswith(".json"))
+            except OSError:
+                pass
+    print(json.dumps({"tasks": tasks, "open_tasks": open_tasks, "inbox_lines": inbox, "artifacts": arts}))
 
 
 # ------------------------------------------------------------------ main
@@ -847,7 +898,7 @@ def legacy(home):
 def parse(argv):
     """--key value pairs (repeatable --events), and bare flags."""
     opts = {"events": [], "meta": []}
-    flags = {"--meta-all", "--events-open", "--events-all", "--all", "--pool-stdin", "--with-removed"}
+    flags = {"--meta-all", "--events-open", "--events-all", "--all", "--pool-stdin", "--with-removed", "--extras"}
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -925,7 +976,7 @@ def main(argv):
         pool = [l.strip() for l in sys.stdin if l.strip()] if opts.get("pool-stdin") else []
         status_rows(conn, home, "all" if opts.get("all") else "open", opts.get("id", ""),
                     int(opts["since"]) if opts.get("since") else None, pool,
-                    int(opts.get("grace", "15")), int(opts.get("max", "120")), bool(opts.get("with-removed")))
+                    int(opts.get("grace", "15")), int(opts.get("max", "120")), bool(opts.get("with-removed")), bool(opts.get("extras")))
         return 0
     if cmd == "events-add":
         items = [tuple(l.rstrip("\n").split("\t", 2)) for l in sys.stdin if l.count("\t") >= 2]

@@ -1251,8 +1251,8 @@ busy timeout, one short transaction per write). A task's place is fixed at birth
   record went into, which the home keeps using (unless `CHARTROOM_DB` is set) even where
   `XDG_STATE_HOME` differs, as it can between a terminal and an ssh session. Records follow the
   uid, not the path, so a renamed or moved home keeps them.
-- `status`, `board` and `todo` read all of a home's store tasks in one call to the store; only
-  liveness is still asked per open task.
+- `status`, `board` and `todo` read all of a home's store tasks in one call to the store, the
+  board's PR links, files and last event included; only liveness is still asked per open task.
 - Every write still moves `.changed`, and a store write also rewrites `tasks/.store-stamp`; a
   reader that stats `meta.json` or `events.log` should stat one of those too, since a store task
   has neither.
@@ -1266,7 +1266,7 @@ and `focus.json` from before are still read (the first focus write removes the o
 **Removing work.** `chartroom remove <ref>... [--why T]` takes tasks, inbox items (`i-xxxx`) and
 artifacts (`<id>/<slug>`) out of every view (status, board, todo, inbox list, artifact list, the
 watch's wakes) at once, by a mark in the store, whatever the switch says and however old the item.
-Nothing the item is made of is written: no record, worktree, branch or session, so unlanded work
+A removed task's or inbox item's artifacts leave with it. Nothing the item is made of is written: no record, worktree, branch or session, so unlanded work
 stays where it is (`close` and `sweep` keep their own guards; sweep still sees removed tasks).
 `chartroom restore <ref>...` undoes it for 30 days, `chartroom removed` lists what is removed, and
 `chartroom done <ref>...` marks inbox items and artifacts done. A task whose worker is live is

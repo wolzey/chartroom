@@ -92,9 +92,12 @@ artifacts_json() { # [--open] [--owner task|inbox <id>]
          description: (if ($m.description // "") == "" then null else $m.description end), project: ($m.project // null),
          created: ($m.created // null), updated: ($m.updated // $m.created // null),
          done: (if ($m.done // "") == "" then null else $m.done end), path: ($base + (if $m.kind == "page" then ".html" else ".md" end))}' "$f" 2>/dev/null || true
-  done | jq -s -c --argjson shorts "$(short_ids_json)" --argjson open "$open" --argjson marks "$(marks_json | jq -c .artifact)" '
-    # (a removed one is left out; a done mark is its done: lib/marks.sh)
-    map(($marks[.owner + "/" + .slug] // {}) as $m | select($m.removed == null) | .done = (.done // $m.done)
+  done | jq -s -c --argjson shorts "$(short_ids_json)" --argjson open "$open" --argjson marks "$(marks_json)" '
+    # (a removed one is left out, and so is one whose task or inbox item is removed; a done mark
+    # is its done: lib/marks.sh)
+    map(($marks.artifact[.owner + "/" + .slug] // {}) as $m
+        | select($m.removed == null and ($marks[.owner_type][.owner].removed // null) == null)
+        | .done = (.done // $m.done)
         | {ref: ((if .owner_type == "task" then ($shorts[.owner] // .owner) else .owner end) + "/" + .slug)} + .
         | select($open == 0 or .done == null))
     | sort_by(.updated // "") | reverse'

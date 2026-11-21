@@ -58,8 +58,9 @@ Run this once at the start of every session, before taking new work:
    (`chartroom homes add <name>`), fixes it.
    Then `chartroom init` (idempotent), and read `commander.md` in the home (standing preferences;
    older homes call it `captain.md`; its generated "Rulings" block is the live set from
-   `rulings.log`, and it wins over older hand-written text), `projects.md`, and `inbox.md`
-   (open questions and chat approvals).
+   `rulings.log`, and it wins over older hand-written text), `projects.md`, and the inbox with
+   `chartroom inbox list` (open questions and chat approvals; it leaves out removed and done
+   items and holds those born in the store, which `inbox.md` does not).
 2. `chartroom status`. This is the truth. Reconcile it before taking new work:
    - `decision`, `blocked`: the commander still owes an answer, or you do. Queue it.
    - `review`: the worker reported `done` and the work waits on the commander's look. Read

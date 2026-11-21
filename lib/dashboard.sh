@@ -97,10 +97,15 @@ dashboard_json() { # [pr-states-file]
   # A task closed before the recent window is on no lane (lanes.jq): its row is never built. This
   # cutoff is taken before lanes.jq takes its own, so it never leaves out a task lanes.jq keeps.
   printf -v since '%(%s)T' -1; since=$((since - 10#$hours * 3600))
+  # (a store task's row carries its extras already, from the same read of the store: lib/store.py)
   while IFS= read -r row; do
+    if [[ "$row" == *'"_extra":'* ]]; then rows+=("$row"); continue; fi
     id="$(jq -r .id <<<"$row")"
     rows+=("$(jq -c --argjson x "$(dashboard_task_extra "$id")" '. + $x' <<<"$row")")
-  done < <(status_rows --all --since "$since" ${CR_BOARD_ID:+--id "$CR_BOARD_ID"}) # CR_BOARD_ID (`show`): that task alone; the inbox stays
+  done < <(CR_ROWS_EXTRA=1 status_rows --all --since "$since" ${CR_BOARD_ID:+--id "$CR_BOARD_ID"}) # CR_BOARD_ID (`show`): that task alone; the inbox stays
+  if [[ ${#rows[@]} -gt 0 && "${rows[*]}" == *'"_extra":'* ]]; then
+    mapfile -t rows < <(printf '%s\n' "${rows[@]}" | jq -c 'if has("_extra") then (. + ._extra | del(._extra)) else . end')
+  fi
   local prs='{}'
   if [[ -n "$prs_file" && -s "$prs_file" ]]; then prs="$(jq -c 'if type == "object" then . else {} end' "$prs_file" 2>/dev/null || echo '{}')"; fi
   arts="$(artifacts_json --open)"

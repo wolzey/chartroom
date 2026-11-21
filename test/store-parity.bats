@@ -99,3 +99,13 @@ same() {
   [ "$(jq -r '[.state, .live, .last] | @tsv' <<<"$out")" = $'closed\t-\tdone: shipped' ]
   [ "$(cr status --json | jq length)" = 0 ]
 }
+
+@test "parity: the board's extras (PR links, files, last event) are the same for both kinds" {
+  twin '2026-03-01T10:00:00Z progress: opened https://github.com/acme/app/pull/12' '2026-03-01T10:01:00Z note: a note'
+  for t in "$F" "$S"; do printf 'Done: https://github.com/acme/app/pull/12 and https://gitlab.com/x/y/merge_requests/3\n' >"$CHARTROOM_HOME/tasks/$t/report.md"; done
+  board="$(cr board --json)"
+  card() { jq -c --arg id "$1" '[.lanes[][] | select(.id == $id)][0] | [.prs, .files, .last_event, .last_event_at]' <<<"$board"; }
+  [ "$(card "$F")" = "$(card "$S")" ]
+  [ "$(card "$S" | jq -c '.[0] | map(.url)')" = '["https://github.com/acme/app/pull/12","https://gitlab.com/x/y/merge_requests/3"]' ]
+  [ "$(card "$S" | jq -c '.[1]')" = '["brief.md","report.md","events.log"]' ]
+}
