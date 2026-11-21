@@ -160,6 +160,14 @@ export function AskBody({ it, picks, setPick, note, setNote, busy, onAct, onDeta
     // approved on the initiative's page, where the whole checklist fits
     body = html`<p class="a-detail-sum">${it.summary}</p>
       <div class="a-detail-actions"><button class="btn primary" onClick=${() => onDetails(it)}>Review the stories <kbd>↵</kbd></button>${snoozeBtn}</div>`;
+  } else if (it.kind === "login") {
+    // only the commander can sign in again; it leaves Needs me by itself at the next fleet check
+    const cmd = (it.summary || "").replace(/^Sign in again on [^:]+: /, "").replace(/\. Until then.*$/, "");
+    body = html`<p class="a-detail-sum">${it.summary}</p>
+      ${it.detail ? html`<p class="muted">${it.detail}</p>` : null}
+      <div class="qv-sent"><span>On <b>${it.machine}</b>, run:</span><code class="qv-cmd">${cmd}</code>
+        <span>It clears here at the next fleet check, or press Check again on Fleet.</span></div>
+      <div class="a-detail-actions"><button class="btn primary" onClick=${() => onDetails(it)}>Open Fleet <kbd>↵</kbd></button></div>`;
   } else if (it.kind === "artifact") {
     body = html`
       <p class="a-detail-sum">A ${it.sub || "draft"} for you to send or run, kept with ${it.owner}.</p>

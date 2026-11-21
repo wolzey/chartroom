@@ -160,6 +160,15 @@ cmd_app() {
     task)
       shift; [[ $# -eq 2 && "$2" == --json ]] || die "usage: chartroom app task <id> --json"
       need_task "$1"; ticket_json "$1"; return ;;
+    fleet)
+      # the machines (chartroom nodes: each one's probe, over ssh for the others) as Fleet shows them
+      shift; [[ "${1:-}" == --json ]] || die "usage: chartroom app fleet --json"
+      # CHARTROOM_APP_NODES (tests only): a file of `chartroom nodes --json` to read instead of the machines
+      local nodes
+      if [[ -n "${CHARTROOM_APP_NODES:-}" ]]; then nodes="$(cat "$CHARTROOM_APP_NODES")" || die "app fleet: cannot read $CHARTROOM_APP_NODES"
+      else nodes="$(cmd_nodes --json)" || die "app fleet: chartroom nodes failed"; fi
+      jq -c --arg at "$(now)" -f "$CR_ROOT/lib/app/fleet.jq" <<<"$nodes" | jq -c --arg at "$(now)" '. + {checked_at: $at}'
+      return ;;
     stop) app_stop; return ;;
     status)
       local pid port

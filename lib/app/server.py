@@ -376,6 +376,41 @@ class Actions:
             return {i: {k: self.recs[i].get(k) for k in ("state", "error", "at", "done_at", "home", "action")} for i in self.order[-200:]}
 
 
+FLEET_EVERY = 300.0  # one brain: health checks every 5 minutes (while someone looks)
+
+
+class Fleet:
+    """The machines' health for Fleet: `chartroom app fleet --json` (lib/app/fleet.jq over `chartroom
+    nodes`), read in the background every FLEET_EVERY seconds while someone looks, and at once when
+    the page asks (Check again). Its failed sign-ins are Needs me items."""
+
+    def __init__(self, hub, cli):
+        self.hub, self.cli = hub, cli
+        self.value = None
+        self.wake = threading.Event()
+
+    def loop(self):
+        last = 0.0
+        while True:
+            due = self.wake.is_set() or (self.hub.watched() and time.time() - last >= FLEET_EVERY)
+            if due:
+                self.wake.clear()
+                last = time.time()
+                home = next(iter(self.hub.homes.values()), None)
+                code, out, err = run([self.cli, "app", "fleet", "--json"], home.path if home else None, timeout=180)
+                try:
+                    v = json.loads(out) if code == 0 else None
+                except ValueError:
+                    v = None
+                if v is None:
+                    v = dict(self.value or {"machines": [], "needs": []}, error=last_line(err) or "the fleet check failed", checked_at=iso())
+                else:
+                    v["error"] = None
+                self.value = v
+                self.hub.bump()
+            self.wake.wait(5)
+
+
 class Prs:
     """GitHub PR states for the PRs the snapshots name, looked up with gh in the background while
     someone looks at the app. A merged or closed PR is final and never looked up again; an open one
@@ -608,7 +643,7 @@ def verb_for(action, body):
     raise KeyError(action)
 
 
-def make_handler(hub, args, root, actions, prs):
+def make_handler(hub, args, root, actions, prs, fleet):
     app_dir = os.path.join(root, "app")
     shared_dir = os.path.join(root, "lib", "dashboard")
     user = (args.user or "").strip().lower()
@@ -670,7 +705,7 @@ def make_handler(hub, args, root, actions, prs):
             if path == "/api/v1/state":
                 hub.looked()
                 return self.json(200, dict(hub.state(), user=self.who(), actions=actions.recent(), prs=prs.states, gh_error=prs.error,
-                                           xo=xo_reads_app(args.bin)))
+                                           xo=xo_reads_app(args.bin), fleet=fleet.value))
             if path == "/api/v1/stream":
                 hub.looked()
                 return self.stream()
@@ -902,6 +937,19 @@ def make_handler(hub, args, root, actions, prs):
                 return self.upload(unquote(up.group(1)), unquote(up.group(2)))
             if not (h.get("Content-Type") or "").startswith("application/json"):
                 return self.json(403, {"error": "writes come from the app only"})
+            if path == "/api/v1/fleet/check":
+                # Check again: every machine's probe now (ssh to the others), so a write's checks.
+                # Its body is read (and ignored), or the next request on this connection starts inside it.
+                try:
+                    n = int(h.get("Content-Length") or "0")
+                except ValueError:
+                    n = -1
+                if n < 0 or n > BODY_MAX:
+                    return self.json(413, {"error": "the request is too large"})
+                self.rfile.read(n)
+                hub.looked()
+                fleet.wake.set()
+                return self.json(202, {"ok": True})
             m = re.match(r"^/api/v1/homes/([^/]+)/([a-z]+(?:-[a-z]+)?)$", path)
             if not m:
                 return self.json(404, {"error": "not found"})
@@ -962,7 +1010,8 @@ def main():
     port = httpd.server_address[1]
     actions = Actions(hub, args.bin, os.path.join(os.path.dirname(args.pidfile), "app-actions.ndjson") if args.pidfile else None)
     prs = Prs(hub)
-    httpd.RequestHandlerClass = make_handler(hub, args, args.root, actions, prs)
+    fleet = Fleet(hub, args.bin)
+    httpd.RequestHandlerClass = make_handler(hub, args, args.root, actions, prs, fleet)
 
     def cleanup(*_):
         if args.pidfile:
@@ -991,6 +1040,7 @@ def main():
 
     threading.Thread(target=rediscover, daemon=True).start()
     threading.Thread(target=prs.loop, daemon=True).start()
+    threading.Thread(target=fleet.loop, daemon=True).start()
     httpd.serve_forever()
 
 

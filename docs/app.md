@@ -35,6 +35,7 @@ On the brain itself, before Serve is set up, `chartroom app serve --daemon --no-
 - **Which homes.** The server reads every registered home on the machine (`chartroom homes --json`) and leaves out client homes, whose records live on their brain. A home registered later appears within a minute.
 - **How each home is read.** Each home has its own background thread running `chartroom app snapshot --json` in it. That is `lib/app.sh` plus `lib/app/snapshot.jq`: the task rows `status` builds, the inbox, open artifacts, cards and their answers, snoozes and the told messages, classified there and never in the server.
 - **When.** A thread looks every 2 s at the home's change stamp and the few files the app writes. It reads again when one moves, and at least every 20 s, because a worker's live state changes with no record written.
+- **Fleet.** One background thread runs `chartroom app fleet --json`: `chartroom nodes` (each machine's probe, over ssh for the others) through `lib/app/fleet.jq`, which decides each machine's health. It runs every 5 minutes while the app is open, and at once on `POST /api/v1/fleet/check` (the page's Check again; it starts ssh probes, so it passes a write's checks). The result rides in the state as `fleet`; a failed sign-in in it is a Needs me item of no home.
 - **Updates.** The page loads `GET /api/v1/state`. It loads again on each `version` event from `GET /api/v1/stream` (server-sent events), and polls every 10 s when the stream is down.
 
 ## What it writes
@@ -48,6 +49,9 @@ The server never writes a record itself. Each write runs one chartroom verb in t
 | Accept, close | `accept <id>`, `close <id>` (never `--discard`) |
 | Snooze, undo | `snooze <ref> --for/--until`, `snooze off <ref>` |
 | Mark done | `todo done <i-id>`, `artifact done <ref>` |
+| New initiative, approve its stories | `initiative new --via app`, `initiative approve <id> - --via app` |
+| A comment on the plan, a proposed edit | `initiative comment <id> --section S --via app -`, `initiative propose <id> -` |
+| Confirm a close | `initiative close <id> --confirm --via app` |
 
 ### Instant, queued, never twice
 
@@ -77,12 +81,15 @@ app/src/round.js        a card of several questions
 app/src/ticket.js       a task as a ticket: its question, PRs, description, plan, report, attachments, activity
 app/src/outbox.js       every action queued, sent in the background, retried (pure)
 app/src/palette.js      ⌘K
+app/src/initiatives.js  initiatives: the list, the page (plan, stories, decisions, PRs), the approval checklist
+app/src/fleet.js        Fleet: the machines, their checks and budgets, the workers
 app/styles/             tokens, base and layout from the approved prototypes; app.css adds to them
 app/vendor/             react 18.3.1, react-dom 18.3.1, htm 3.1.1 (LICENSES.md)
 lib/app.sh              chartroom app: serve, open, stop, status, doctor, snapshot
 lib/app/server.py       the server
 lib/app/snapshot.jq     Needs me and the seven statuses
-lib/tell.sh, lib/ask.sh, lib/snooze.sh
+lib/app/fleet.jq        each machine's health, and its failed sign-ins as Needs me items
+lib/tell.sh, lib/ask.sh, lib/snooze.sh, lib/initiative.sh
 ```
 
-There is no build step: the files in `app/` are what the browser loads. Tests: `test/app.bats` (the verbs and the snapshot), `test/app-server.bats` (access, writes, files, the stream, sweep) and `test/js/app-model.test.js`.
+There is no build step: the files in `app/` are what the browser loads. Tests: `test/app.bats` (the verbs and the snapshot), `test/app-server.bats` (access, writes, files, the stream, sweep), `test/app-ticket.bats`, `test/app-initiative.bats`, `test/app-fleet.bats` (over the invented machines in `test/fixtures/app-nodes.json`, read through `CHARTROOM_APP_NODES`) and `test/js/app-model.test.js`.

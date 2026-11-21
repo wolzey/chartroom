@@ -8,6 +8,11 @@ export async function getState() {
   return r.json();
 }
 
+// Fleet's Check again: the server reads every machine now (it answers at once; the state follows).
+export function checkFleet() {
+  return fetch("/api/v1/fleet/check", { method: "POST", headers: WRITE, credentials: "same-origin", body: "{}" }).catch(() => null);
+}
+
 export async function act(home, action, body) {
   const r = await fetch("/api/v1/homes/" + encodeURIComponent(home) + "/" + action, {
     method: "POST", headers: WRITE, credentials: "same-origin", body: JSON.stringify(body || {}),

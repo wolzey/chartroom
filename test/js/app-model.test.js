@@ -198,6 +198,15 @@ test("initiatives: milestones with progress, the current one open; approved stor
   assert.strictEqual(M.initiatives(st)[0].key, "acme:in-1");
 });
 
+test("fleet: a failed sign-in is in Needs me, of no home, opened on Fleet", () => {
+  const st = { homes: [], fleet: { checked_at: "2026-01-01T00:00:00Z", machines: [],
+    needs: [{ id: "login-laptop-gh", type: "fleet", kind: "login", group: "unblock", machine: "laptop", title: "gh sign-in expired on laptop", at: null }] } };
+  const [it] = M.items(st);
+  assert.deepStrictEqual([it.key, it.home, it.at], ["fleet:login-laptop-gh", "fleet", "2026-01-01T00:00:00Z"]);
+  assert.strictEqual(M.primary(it).type, "open-round");
+  assert.strictEqual(M.items({ homes: [], fleet: null }).length, 0);
+});
+
 test("move, ago and search: the keyboard's selection, short times, the palette's matches", () => {
   assert.strictEqual(M.move(null, 1, 3), 0);
   assert.strictEqual(M.move(2, 1, 3), 2);

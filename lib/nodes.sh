@@ -120,6 +120,7 @@ NODES_ROW_JQ='
        model: (one("model")[1] | s), clock: (one("clock")[1] | n),
        cores: (one("cores")[1] | n), cores_perf: (one("cores_perf")[1] | n), cores_eff: (one("cores_eff")[1] | n),
        mem_bytes: (one("mem_bytes")[1] | n), load: [one("load")[1, 2, 3] | n], mem_free_pct: (one("mem_free_pct")[1] | n),
+       disk_free_pct: (one("disk_free_pct")[1] | n),
        power: (one("power")[1] | s), battery_pct: (one("battery_pct")[1] | n), hid_idle_s: (one("hid_idle_s")[1] | n),
        initialised: (one("initialised")[1] == "1"), config: (one("config")[1] | s),
        budgets: ([$r[] | select(.[0] == "budget") | {key: .[1], value: (.[2] | s)}] | from_entries

@@ -66,6 +66,16 @@ are stable from 0.1.0.
   - Properties are in a slim column: status (Accept or Close), priority and labels.
   - A worker stopped at a prompt nothing can read says so, with the command that opens its
     terminal.
+- The chartroom app, slice 5: Fleet (`chartroom app fleet --json`, over `chartroom nodes`).
+  - **Health per machine:** healthy, needs a look (a failed sign-in, a crew tool missing, disk
+    under 15% free) or unreachable, with every check as a chip, the brain first.
+  - **Capacity:** worker slots, budgets, power, and whether one more worker fits its budget.
+  - **Tabs:** Machines, Workers (the working tasks), and Attempts and XOs, which say plainly
+    they come with remote dispatch and the conn lease (one brain, steps 3 and 4).
+  - **Needs me:** a failed sign-in is an item with the command to run on that machine; it
+    clears at the next check.
+  - **Checks:** the server reads every machine every 5 minutes while the app is open, and at
+    once on Check again. The node probe now reports `disk_free_pct`.
 - The chartroom app, slice 4: initiatives (`chartroom initiative`).
   - **Creating one:** a name and an intent start a shaping round (goal, criteria, scope,
     non-goals).

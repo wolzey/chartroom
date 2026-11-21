@@ -22,6 +22,7 @@ var AppModel = (function () {
     review: { label: "Review", glyph: "read" },
     artifact: { label: "To send", glyph: "tidy" },
     stories: { label: "Stories", glyph: "approve" },
+    login: { label: "Sign-in", glyph: "login" },
   };
   const GROUPS = [
     { id: "decide", label: "Decide", hint: "Questions and choices waiting on you" },
@@ -44,6 +45,9 @@ var AppModel = (function () {
       if (!snap || !Array.isArray(snap.needs)) return;
       for (const it of snap.needs) out.push(Object.assign({}, it, { home: h.name, hue: (i % 5) + 1, key: h.name + ":" + it.id }));
     });
+    // the fleet's own: a failed sign-in on a machine belongs to no home (only the commander can fix it)
+    const fl = state && state.fleet;
+    for (const it of (fl && fl.needs) || []) out.push(Object.assign({}, it, { home: "fleet", hue: 0, key: "fleet:" + it.id, at: it.at || fl.checked_at }));
     return out;
   }
 
@@ -189,7 +193,7 @@ var AppModel = (function () {
 
   // What Enter does on a row: answer with the recommendation, approve, accept, or open the card.
   function primary(it, EventFmt) {
-    if (it.kind === "round" || it.kind === "stories") return { type: "open-round" };
+    if (it.kind === "round" || it.kind === "stories" || it.kind === "login") return { type: "open-round" };
     if (it.kind === "approve") return { type: "approve" };
     if (it.kind === "review") return { type: "accept" };
     if (it.kind === "artifact") return { type: "done" };

@@ -2,7 +2,7 @@
 // the palette and the keyboard. Routes live in the hash: #/ (Needs me), #/q/<home>/<card> (a round),
 // #/t/<home>/<task>[/<tab>] (a task's details).
 import { html, useState, useEffect, useRef, useMemo, useCallback } from "./html.js";
-import { getState, postAction, subscribe } from "./api.js";
+import { getState, postAction, subscribe, checkFleet } from "./api.js";
 import { Toasts, Menu } from "./ui.js";
 import { NeedsList, QuickView, BulkBar } from "./needs.js";
 import { RoundPage } from "./round.js";
@@ -11,6 +11,7 @@ import { Palette } from "./palette.js";
 import { BoardPage, BoardSummary, TaskQuick } from "./board.js";
 import { Composer } from "./composer.js";
 import { InitiativesList, InitiativePage, NewInitiative } from "./initiatives.js";
+import { FleetPage, MachineDetail } from "./fleet.js";
 
 const M = window.AppModel;
 const EF = window.EventFmt;
@@ -24,6 +25,7 @@ function parseRoute() {
   if (p[0] === "board") return { name: "board" };
   if (p[0] === "i" && p.length >= 3) return { name: "initiative", home: p[1], id: p[2] };
   if (p[0] === "i") return { name: "initiatives" };
+  if (p[0] === "fleet") return { name: "fleet", machine: p[1] || null };
   return { name: "needs" };
 }
 function go(path) { location.hash = path; }
@@ -32,7 +34,7 @@ function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch 
 const typing = (el) => el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT" || el.isContentEditable);
 const wide = () => window.matchMedia("(min-width: 1181px)").matches;
 
-function Sidebar({ homes, filters, setFilters, counts, onPalette, onLater, link, updated, theme, toggleTheme, route, inits, onNewInit }) {
+function Sidebar({ homes, filters, setFilters, counts, onPalette, link, updated, theme, toggleTheme, route, inits, onNewInit, fleetBad }) {
   return html`<aside class="a-side">
     <div class="a-brand"><span class="a-logo" aria-hidden="true"></span><span class="grow">Chartroom</span>
       <button class="btn ghost icon" title=${"Switch to " + (theme === "dark" ? "light" : "dark") + " mode"} aria-label="Toggle dark mode" onClick=${toggleTheme}>${theme === "dark" ? "☀" : "☾"}</button></div>
@@ -41,8 +43,8 @@ function Sidebar({ homes, filters, setFilters, counts, onPalette, onLater, link,
       <a class=${"nav-i" + (route.name === "needs" ? " on" : "")} href="#/"><span class="nav-ic needs" aria-hidden="true"></span><span class="grow">Needs me</span>${counts.all ? html`<span class="count">${counts.all}</span>` : null}</a>
       <a class=${"nav-i" + (route.name === "board" ? " on" : "")} href="#/board"><span class="nav-ic board" aria-hidden="true"></span><span class="grow">Board</span></a>
       <a class=${"nav-i" + (route.name === "initiatives" || route.name === "initiative" ? " on" : "")} href="#/i"><span class="nav-ic initiatives" aria-hidden="true"></span><span class="grow">Initiatives</span></a>
-      ${[["fleet", "Fleet"]].map(([id, label]) => html`<button key=${id} class="nav-i" aria-disabled="true" onClick=${() => onLater(label)}>
-        <span class=${"nav-ic " + id} aria-hidden="true"></span><span class="grow">${label}</span></button>`)}
+      <a class=${"nav-i" + (route.name === "fleet" ? " on" : "")} href="#/fleet"><span class="nav-ic fleet" aria-hidden="true"></span><span class="grow">Fleet</span>
+        ${fleetBad ? html`<span class="home-err" title=${fleetBad + (fleetBad === 1 ? " machine needs" : " machines need") + " a look"} aria-label="a machine needs a look"></span>` : null}</a>
     </nav>
     ${inits.length ? html`<div class="a-sec row-flex"><span class="grow">Initiatives</span><button class="a-sec-add" title="New initiative" aria-label="New initiative" onClick=${onNewInit}>+</button></div>
       <div class="a-nav">${inits.map((i) => html`<a key=${i.key} class=${"nav-i" + (route.name === "initiative" && route.id === i.id ? " on" : "")}
@@ -98,7 +100,7 @@ function App() {
   useEffect(() => { refresh(); return subscribe(refresh, setLink); }, []);
   useEffect(() => { const f = () => { setRoute(parseRoute()); setPalette(false); }; window.addEventListener("hashchange", f); return () => window.removeEventListener("hashchange", f); }, []);
   useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 15000); return () => clearInterval(t); }, []);
-  useEffect(() => { document.body.setAttribute("data-screen", ["task", "round", "board", "initiative", "initiatives"].includes(route.name) ? (route.name === "initiatives" ? "needs" : route.name) : "needs"); }, [route.name]);
+  useEffect(() => { document.body.setAttribute("data-screen", ["task", "round", "board", "initiative", "initiatives", "fleet"].includes(route.name) ? (route.name === "initiatives" ? "needs" : route.name) : "needs"); }, [route.name]);
   // the board: every home's tasks and requests, its own filters and selection; the composer (c)
   const [boardFilters, setBoardFiltersRaw] = useState(load("chartroom-board-filters", {}));
   const setBoardFilters = (f) => { setBoardFiltersRaw(f); save("chartroom-board-filters", f); };
@@ -170,6 +172,7 @@ function App() {
   const openDetails = (it, which) => {
     if (it.kind === "round") return go("#/q/" + encodeURIComponent(it.home) + "/" + encodeURIComponent(it.card));
     if (it.kind === "stories") return go("#/i/" + encodeURIComponent(it.home) + "/" + encodeURIComponent(it.initiative));
+    if (it.kind === "login") return go("#/fleet/" + encodeURIComponent(it.machine));
     if (it.task) return go("#/t/" + encodeURIComponent(it.home) + "/" + encodeURIComponent(it.task) + (which ? "/" + which : ""));
   };
   const pick = (key, qid, label) => setPicks((p) => Object.assign({}, p, { [key]: Object.assign({}, p[key], { [qid]: label }) }));
@@ -264,8 +267,13 @@ function App() {
     toast(undelivered ? "Round kept · it reaches the " + it.home + " XO once the app is installed" : "Round sent to the " + it.home + " XO");
   };
 
-  // The keyboard.
-  const state = { list, sel, cur, route, roundItem, focusQ, palette, snoozeOpen, picked, composer: composer || newInit, boardOrder, boardSel };
+  // The keyboard. ⌘↵ answers the item the page shows: Needs me's selection, the ticket's own open
+  // question, the board card's; on every other page there is none (never a hidden Needs me row).
+  const openFor = (home, task) => all.find((x) => x.home === home && x.task === task && M.standing(x, local) === "open") || null;
+  const boardCard = route.name === "board" ? boardList.find((x) => x.key === boardSel) : null;
+  const active = route.name === "needs" ? cur : route.name === "task" ? openFor(route.home, route.id)
+    : boardCard ? openFor(boardCard.home, boardCard.task) : null;
+  const state = { list, sel, cur, active, route, roundItem, focusQ, palette, snoozeOpen, picked, composer: composer || newInit, boardOrder, boardSel };
   const ref = useRef(state); ref.current = state;
   useEffect(() => {
     const onKey = (e) => {
@@ -275,7 +283,7 @@ function App() {
       if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
         e.preventDefault();
         if (s.route.name === "round") return submitRoundRef.current();
-        const it = s.cur;
+        const it = s.active;
         if (!it || it.sent) return;
         if (it.kind === "approve") return performRef.current(it, { type: "approve" });
         const t = (notesRef.current[it.key] || {})[1];
@@ -289,6 +297,7 @@ function App() {
       if (e.key === "/") { e.preventDefault(); setPalette(true); return; }
       if (e.key === "c" && !e.shiftKey) { e.preventDefault(); setComposer(true); return; }
       if (s.route.name === "initiative" || s.route.name === "initiatives") { if (e.key === "Escape") go(s.route.name === "initiative" ? "#/i" : "#/"); return; }
+      if (s.route.name === "fleet") { if (e.key === "Escape") go("#/"); return; }
       if (s.route.name === "board") {
         const order = s.boardOrder, i = order.findIndex((t) => t.key === s.boardSel);
         if (e.key === "j" || e.key === "ArrowDown") { e.preventDefault(); const t = order[M.move(i < 0 ? null : i, 1, order.length)]; if (t) setBoardSel(t.key); }
@@ -349,7 +358,11 @@ function App() {
   const notesRef = useRef(notes); notesRef.current = notes;
 
   const toggleTheme = () => { const t = theme === "dark" ? "light" : "dark"; document.documentElement.setAttribute("data-theme", t); try { localStorage.setItem("chartroom-theme", t); } catch (e) { /* */ } setTheme(t); };
-  const later = (label) => toast(label + " comes in a later slice; Needs me is first.");
+  // Fleet: the machines (the server checks them every 5 minutes while the app is open)
+  const fleet = data && data.fleet;
+  const fleetBad = fleet ? (fleet.machines || []).filter((m) => m.state !== "healthy").length : 0;
+  const workers = useMemo(() => boardAll.filter((t) => t.type === "task" && t.status === "working"), [boardAll]);
+  useEffect(() => { if (route.name === "fleet" && data && !data.fleet) checkFleet(); }, [route.name, !!data, !!(data && data.fleet)]);
 
   const entries = useMemo(() => {
     const e = [
@@ -359,6 +372,7 @@ function App() {
       { id: "c-new", group: "Commands", label: "New task", sub: "c", run: () => setComposer(true) },
       { id: "c-newi", group: "Commands", label: "New initiative", run: () => setNewInit(true) },
       { id: "c-inits", group: "Go to", label: "Initiatives", run: () => go("#/i") },
+      { id: "c-fleet", group: "Go to", label: "Fleet", sub: "machines, sign-ins, workers", run: () => go("#/fleet") },
       { id: "c-theme", group: "Commands", label: "Switch to " + (theme === "dark" ? "light" : "dark") + " mode", run: toggleTheme },
       { id: "c-clear", group: "Commands", label: "Clear filters", run: () => setFilters({}) },
     ];
@@ -419,6 +433,12 @@ function App() {
           onAct=${perform} onDetails=${openDetails} prs=${prsMap} />`
       : html`<${TaskQuick} t=${t} open=${qvOpen} toast=${toast} onAct=${boardAct} onClose=${() => { setBoardSel(null); setQvOpen(false); }}
           onOpen=${(x) => go("#/t/" + encodeURIComponent(x.home) + "/" + encodeURIComponent(x.task))} />`;
+  } else if (route.name === "fleet") {
+    const ms = (fleet && fleet.machines) || [];
+    const m = ms.find((x) => x.name === route.machine) || ms[0];
+    main = html`<${FleetPage} fleet=${fleet} workers=${workers} sel=${m && m.name} setSel=${(name) => go("#/fleet/" + encodeURIComponent(name))}
+      onRefresh=${() => { checkFleet(); toast("Checking every machine; it takes up to a minute"); }} />`;
+    aside = html`<${MachineDetail} m=${m} workers=${workers} names=${ms.map((x) => x.name)} />`;
   } else if (route.name === "initiatives") {
     main = html`<${InitiativesList} list=${inits} onNew=${() => setNewInit(true)}
       onOpen=${(i) => go("#/i/" + encodeURIComponent(i.home) + "/" + encodeURIComponent(i.id))} />`;
@@ -454,7 +474,7 @@ function App() {
       onAct=${perform} onDetails=${openDetails} snoozeAnchorRef=${snoozeAnchor} snoozeOpen=${snoozeOpen} setSnoozeOpen=${setSnoozeOpen} prs=${(data && data.prs) || {}} />`;
   }
   return html`<div class="a-app">
-    <${Sidebar} homes=${homes} filters=${filters} setFilters=${setFilters} counts=${counts} onPalette=${() => setPalette(true)} onLater=${later}
+    <${Sidebar} homes=${homes} filters=${filters} setFilters=${setFilters} counts=${counts} onPalette=${() => setPalette(true)} fleetBad=${fleetBad}
       link=${link} updated=${updated} theme=${theme} toggleTheme=${toggleTheme} route=${route} inits=${inits} onNewInit=${() => setNewInit(true)} />
     ${main}${aside}
     ${newInit ? html`<${NewInitiative} homes=${homes} home=${filters.home || (homes[0] && homes[0].name)} onClose=${() => setNewInit(false)}

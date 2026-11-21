@@ -18,7 +18,7 @@
 #
 # Lines (a value of "-" is unknown):
 #   probe_schema 1 | host H | os NAME VERSION | model M | clock EPOCH
-#   cores N | cores_perf N | cores_eff N | mem_bytes N | load L1 L5 L15 | mem_free_pct N
+#   cores N | cores_perf N | cores_eff N | mem_bytes N | load L1 L5 L15 | mem_free_pct N | disk_free_pct N
 #   power ac|battery|- | battery_pct N | hid_idle_s N
 #   initialised 0|1 | config PATH | budget KEY VALUE (max_workers cpu mem on_battery priority project_roots accept)
 #   runner hc up|down|none VERSION | context core|shell|ssh | agents_live N
@@ -137,6 +137,10 @@ probe_main() {
     free="$(awk '/^MemTotal:/ {t = $2} /^MemAvailable:/ {a = $2} END {if (t > 0 && a > 0) printf "%d", a * 100 / t}' /proc/meminfo)"
   fi
   kv mem_free_pct "$(num_or_dash "$free")"
+
+  # Disk: the share free on the volume that holds the home directory (worktrees and homes live there).
+  free="$(df -Pk "$HOME" 2>/dev/null | awk 'NR == 2 && ($3 + $4) > 0 {printf "%d", $4 * 100 / ($3 + $4)}')"
+  kv disk_free_pct "$(num_or_dash "$free")"
 
   # Power: the source, and the battery's charge when there is one (a desktop has none).
   src=- pct=-

@@ -168,3 +168,10 @@
 .bulk-n { font-size: var(--fs-sm); color: var(--text-2); margin-right: 4px; }
 .a-app:has(.bulk) .toasts { bottom: 84px; }
 .bulk-n b { color: var(--text); font-variant-numeric: tabular-nums; }
+
+/* Fleet (slice 5): a machine's detail lists what to fix, each with its command under it */
+.sp .checks li { grid-template-columns: 14px 1fr; }
+.ck.unk { color: var(--text-2); }
+.ck.unk .ck-i { color: var(--text-3); }
+.sp .checks code { font-size: var(--fs-xs); }
+.a-detail.slim .a-detail-title { margin-bottom: var(--s-3); }
