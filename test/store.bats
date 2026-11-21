@@ -295,6 +295,7 @@ has no events\.log of its own
 ^lib/dashboard/server\.py:.*glob\.glob\(os\.path\.join\(base, "events\.log"\)\)
 ^lib/app/server\.py:.*GET  /api/v1/homes/<home>/tasks/<id>/files/
 ^lib/app/server\.py:.*FILE_RECORD = "meta\.json"
+^lib/permit\.jq:.*def control_files\(\$R\): \[\$R\.task_dir \+ "/meta\.json"
 PATTERNS
   cd "$REPO_ROOT"
   shopt -s nullglob

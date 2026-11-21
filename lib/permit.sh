@@ -267,7 +267,7 @@ permit_denied() { # <id> <payload> <query> <desc>
 
 # 0 when this process runs under a chartroom worker: its environment says so, or an ancestor is a
 # claude started with a task's claude-settings.json (every launched Claude worker is), in any home,
-# while that file exists (a store task has no meta.json beside it). Neither the environment nor the config decides it, since a worker sets
+# while that file exists. Neither the environment nor the config decides it, since a worker sets
 # both. The XO, the app and the commander's terminal have no such ancestor. A process that detaches
 # itself from its worker (a double fork) escapes this check: the PreToolUse guard, which refuses
 # any tool call that answers a permit or touches the record, is the first line.
@@ -277,7 +277,7 @@ permit_from_worker() {
   for i in $(seq 1 40); do
     args="$(ps -o args= -p "$p" 2>/dev/null || true)"
     if [[ "$args" =~ ^[^[:space:]]*claude[^[:space:]/]*[[:space:]](.*[[:space:]])?--settings[[:space:]=]([^[:space:]]*/tasks/[^/[:space:]]+)/claude-settings\.json ]]; then
-      [[ -f "${BASH_REMATCH[2]}/claude-settings.json" || -f "${BASH_REMATCH[2]}/meta.json" ]] && return 0
+      [[ -f "${BASH_REMATCH[2]}/claude-settings.json" ]] && return 0
     fi
     p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ' || true)"
     [[ -n "$p" && "$p" -gt 1 ]] || break
