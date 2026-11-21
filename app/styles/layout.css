@@ -101,6 +101,8 @@
 .r-bar-prog .bar { width: 140px; }
 .r-bar-n { font-size: var(--fs-sm); color: var(--text-2); white-space: nowrap; }
 .r-bar-n b { color: var(--text); font-variant-numeric: tabular-nums; }
+/* the phone's progress row (the round's question list, folded): shown only at phone width */
+.r-steps { display: none; }
 .btn[disabled] { opacity: .45; cursor: not-allowed; filter: none; }
 .r-sent .empty { padding: var(--s-9) var(--s-6); }
 
@@ -268,12 +270,37 @@
   .a-row-quick { grid-column: 2; grid-row: 3; opacity: 1; margin-top: 4px; }
   .a-row-quick .btn { height: 30px; }
   .a-group { padding: 0 var(--s-5); }
-  .r-a { grid-template-columns: 1fr; padding: var(--s-5) var(--s-5) 140px; }
-  .r-tree { position: static; }
-  .r-tree .tree ul .node .ans, .r-tree .group:not(.current) > ul { display: none; }
-  .r-meta { display: none; }
+  /* a grilling round on the phone: one column, a progress row in place of the question list, the
+     question full width with its options as large targets, the bar clear of every option */
+  .a-main .r-a { display: block; grid-template-columns: minmax(0, 1fr); padding: var(--s-4) var(--s-4) calc(150px + env(safe-area-inset-bottom)); }
+  .r-tree { display: none; }
+  .r-head { flex-wrap: nowrap; gap: var(--s-3); }
+  .r-head .a-head-l { align-items: center; flex-wrap: nowrap; overflow: hidden; }
+  .r-head .r-back { white-space: nowrap; flex: none; }
+  .r-head .r-home, .r-head .r-pill { display: none; }
+  .r-head .a-head-l h1 { min-width: 0; font-size: var(--fs-md); }
+  .r-steps { display: flex; align-items: center; gap: var(--s-2); position: sticky; top: 48px; z-index: 5;
+    padding: 6px var(--s-3); background: color-mix(in srgb, var(--bg) 94%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--border); }
+  .r-step-n { flex: none; font-size: var(--fs-sm); color: var(--text-2); white-space: nowrap; }
+  .r-step-n b { color: var(--text); font-variant-numeric: tabular-nums; }
+  .r-dots { flex: 1; display: flex; gap: 6px; justify-content: flex-end; overflow-x: auto; scrollbar-width: none; padding: 2px; }
+  .r-dot { flex: none; width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid var(--border-strong); background: var(--surface);
+    font-size: var(--fs-xs); font-weight: 600; color: var(--text-2); font-variant-numeric: tabular-nums; cursor: pointer; padding: 0; }
+  .r-dot.done { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .r-dot.cur { box-shadow: 0 0 0 3px var(--accent-soft); border-color: var(--accent); }
+  .r-dot.cur:not(.done) { color: var(--accent-text); }
+  .r-step-btn { flex: none; width: 36px; height: 36px; font-size: 22px; line-height: 1; }
+  .r-qs { gap: var(--s-4); }
+  .qcard { padding: var(--s-4); scroll-margin-top: 112px; }
+  .qcard .card-h { gap: var(--s-3); align-items: flex-start; }
+  .qcard .qtitle { font-size: var(--fs-md); line-height: 1.45; overflow-wrap: anywhere; }
+  .qcard .opt { min-height: 48px; padding: 12px 14px; }
+  .qcard .note { font-size: 16px; } /* 16px: iOS does not zoom into the field */
   .r-bar { left: 0; }
+  .r-bar-in { gap: var(--s-3); }
   .r-bar-prog .bar { display: none; }
+  .r-bar .r-submit kbd, .r-bar .r-submit-w { display: none; }
+  .r-bar .r-submit { min-height: 40px; padding-inline: 18px; }
   .r-keys { display: none; }
   .b-top-in { gap: var(--s-3); padding: var(--s-3) var(--s-5); flex-wrap: wrap; }
   .b-nav { order: 3; flex-basis: 100%; justify-content: flex-start; overflow-x: auto; flex-wrap: nowrap; }

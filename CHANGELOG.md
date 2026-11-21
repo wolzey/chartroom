@@ -15,6 +15,10 @@ are stable from 0.1.0.
   - **Withdrawn:** a pushed card answered since is withdrawn by its tag on devices that got it, Apple's excepted. The app closes such notifications when it opens.
 
 ### Fixed
+- The app: a grilling round works on the phone.
+  - **The cause:** a later stylesheet kept its two desktop columns at every width, so the question was squeezed to one word a line.
+  - **Now:** one column, with the question full width and its options as large targets. The question list becomes a progress row ("Question 1 of 3", a dot per question, previous and next); picking an option moves on to the next question.
+  - **The bar and the breadcrumb:** the Submit bar sits above the tab bar and never covers an option, and the breadcrumb stays on one line.
 - The app: tapping a notification lands on the item, not just the app.
   - **Where it lands:** a task's question, blocker or finished work opens the task's details; a grilling round its page; a permission card or a question with no task opens that card.
   - **The cause:** the tap handler called `navigate()` on the open window. That fails for a window the service worker does not control, and Safari has no `navigate()`.
