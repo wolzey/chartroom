@@ -110,10 +110,19 @@
 .dt-empty { color: var(--text-3); }
 @media (max-width: 860px) { .dt-events li { grid-template-columns: 1fr; gap: 2px; } }
 
+/* the board and the composer (slice 3) */
+.cmp-sel { border: 0; background: transparent; font: inherit; color: inherit; padding: 0 2px; outline: none; cursor: pointer; }
+.cmp-prio { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.b-col.empty .b-col-h .st { padding-right: 6px; }
+
 /* the ticket (slice 2) */
 .task-body .ticket-banner { max-width: var(--w-text); margin-top: var(--s-4); }
 .task-body .t-sec { margin-top: var(--s-8); }
 .task-body .t-sec > .dt-doc, .task-body .desc, .task-body .feed, .task-body .composer, .task-body .pr-list, .task-body .att-grid, .task-body .drop { max-width: var(--w-text); }
+/* a section's actions (Edit, Attach, ...) sit in its heading row, at the end of the text column,
+   never at the page's far edge (the commander's feedback 7) */
+.task-body .sec-h { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; max-width: var(--w-text); }
+.task-body .sec-h .i-h { margin: 0; }
 .desc-s + .desc-s { margin-top: var(--s-4); }
 .desc-s .d-h, .desc-f .d-h { margin: 0 0 var(--s-2); }
 .desc-f { display: grid; gap: 4px; margin-bottom: var(--s-4); }

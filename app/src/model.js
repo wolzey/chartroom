@@ -246,6 +246,37 @@ var AppModel = (function () {
     ];
   }
 
+  // The board (slice 3): every home's tasks, plus the requests not yet briefed (Drafting), each
+  // keyed by home and carrying its home's machine. Closed tasks are in Done.
+  const BOARD = ["drafting", "queued", "working", "waiting", "needs", "review", "done"];
+  function boardItems(state) {
+    const out = [];
+    ((state && state.homes) || []).forEach((h, i) => {
+      const s = h.snapshot;
+      if (!s) return;
+      const base = { home: h.name, hue: (i % 5) + 1, machine: s.machine || null };
+      for (const t of s.tasks || []) {
+        const line = t.status === "working" || t.status === "waiting" ? headline(String(t.last_event || "").replace(/^[a-z-]+: /, "")) : null;
+        out.push(Object.assign({}, t, base, { key: h.name + ":" + t.id, type: "task", task: t.id, column: t.status === "closed" ? "done" : t.status, line }));
+      }
+      for (const r of s.requests || []) {
+        out.push(Object.assign({}, base, { key: h.name + ":" + r.id, id: r.id, short_id: r.id, type: "request", title: r.title, project: r.project,
+          priority: r.priority, initiative: r.initiative, status: "drafting", column: "drafting", created: r.at, line: "Asked for; the XO briefs it", prs: [] }));
+      }
+    });
+    return out;
+  }
+  function boardFilter(list, f) {
+    const o = f || {};
+    return list.filter((t) => (!o.home || t.home === o.home) && (!o.project || t.project === o.project) &&
+      (!o.initiative || t.initiative === o.initiative) && (!o.machine || t.machine === o.machine));
+  }
+  // Columns in the design's order, cards in each newest-first by their last move.
+  function boardColumns(list) {
+    return BOARD.map((s) => ({ status: s, cards: list.filter((t) => t.column === s)
+      .sort((a, b) => String(b.last_at || b.created || "").localeCompare(String(a.last_at || a.created || ""))) }));
+  }
+
   // Text with its links: [{text}] and [{href, label}] parts, in order. Any http(s) URL is a link
   // (trailing punctuation stays text); a GitHub PR or issue reads "repo#123", its URL behind it.
   const URL_RE = /https?:\/\/[^\s<>"'`]+/g;
@@ -320,6 +351,6 @@ var AppModel = (function () {
   }
 
   return { KINDS, GROUPS, STATUS, kind, items, homes, standing, visible, ordered, counts, projects, questions, details,
-    primary, answerBody, answered, move, ago, agoText, snoozes, search, askText, headline, bulkPlan, range, promote, linkParts };
+    primary, answerBody, answered, move, ago, agoText, snoozes, search, askText, headline, bulkPlan, range, promote, linkParts, BOARD, boardItems, boardFilter, boardColumns };
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = AppModel;

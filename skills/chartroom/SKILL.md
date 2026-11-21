@@ -340,6 +340,15 @@ others read between steps. `close` only marks it closed; its directory is never 
   answered, the app's answer stands and has reached you as a `[commander ...]` wake. A worker's
   `decision` and an inbox question are cards already; nothing to post. `chartroom ask withdraw
   <q-id>` takes back a card you no longer need.
+- **New work from the app.** A `[commander ...] [re rq-xxxx] New task request ...` wake is the
+  commander asking for a task from the app's composer. Treat it like a request in this session:
+  brief it and dispatch it (or ask first, as you would), then `chartroom request done <rq-id>
+  --task <id>` so it leaves the board's Drafting column. If you will not do it,
+  `chartroom request done <rq-id>` alone, and tell them why.
+- **Tickets.** A commander's comment on a ticket reaches the worker as a steer that starts
+  "The commander:"; one that starts `@xo` reaches you as a `[commander ...] [re <task>]` wake.
+  Files the commander attaches are in the task's `attachments/`, and the worker is told where;
+  workers attach their own evidence with `chartroom attachment add <id> --caption "..." <file>`.
 - **Artifacts.** Text for the commander to send or run (a message, a reply, commands, a
   checklist), yours or a worker's, is saved before you show it, never left in chat alone:
   `chartroom artifact add <task-or-inbox-id> --kind message|runbook|note --title "<one line>" <file|->`.

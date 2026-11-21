@@ -245,6 +245,12 @@ chartroom app stop               # (or: status)
 - **Keys.** `j`/`k` move, `Enter` answers with the recommendation (or approves, or accepts),
   `1`-`9` pick an option, `⌘↵` sends, `o` opens details, `s` snoozes, `x` selects, `⌘K` or `/`
   opens the palette. Dark and light follow the system, and the moon toggles them.
+- **Tickets and the board.** A task opens as a ticket: its question, its PRs (state and checks
+  from `gh`), its description (the brief, edited in place), plan, report, attachments (25 MB
+  each; `chartroom attachment`), and the activity with comments that steer the worker (`@xo`
+  asks the XO). The board shows every home's tasks in seven columns, filtered by home, project,
+  initiative and machine. `c` anywhere writes a new task, which goes to that home's XO as a
+  request (`chartroom request`).
 - **Every home.** It reads each registered home on the machine (`chartroom homes`) in the
   background with `chartroom app snapshot --json`, again whenever a home's records change. A
   client home is left out, and refuses `chartroom app`: the app runs on its brain.

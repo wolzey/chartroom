@@ -131,6 +131,19 @@ item() { snap | jq -c --arg t "$1" '[.needs[] | select(.title | test($t))][0]'; 
   [[ "$text" == *$'\n2. Storage → A SQLite sidecar. Note: for now'* ]]
 }
 
+@test "snapshot: a worker at a prompt is the XO's to handle, never a card in Needs me" {
+  # the state comes from a live backend (a prompt up in its terminal): a status row says so
+  s="$(jq -n -c '{home: "/h", home_name: "acme", machine: "m", version: "x", inbox: {waiting: [], approvals: []}, artifacts: [],
+    cards: [], answers: {}, tells: [], snoozes: {}, focus: null, requests: [],
+    rows: [{id: "t-prompt", short_id: "abcd", title: "At a prompt", state: "awaiting-input", live: "blocked", prs: [],
+            ask: {id: "ev-t-prompt-0", kind: "awaiting-input", line: "2026-01-01T00:00:00Z agent: awaiting-input: hc: prompt"}},
+           {id: "t-decide", short_id: "efgh", title: "A decision", state: "decision", live: "working", prs: [],
+            ask: {id: "ev-t-decide-0", kind: "decision", line: "2026-01-01T00:00:00Z decision: which?"}}]}' |
+    jq -c -f "$REPO_ROOT/lib/app/snapshot.jq")"
+  [ "$(jq -r '[.needs[].task] | join(" ")' <<<"$s")" = "t-decide" ]
+  [ "$(jq -r '.tasks[] | select(.id == "t-prompt") | "\(.status) | \(.warning)"' <<<"$s")" = "working | at a prompt in its terminal, for the XO to handle" ]
+}
+
 @test "snooze: an item leaves Needs me until its time; off brings it back" {
   ref="$(item "Gift cards" | jq -r .ref)"
   cr snooze "$ref" --for 2h
@@ -210,4 +223,17 @@ item() { snap | jq -c --arg t "$1" '[.needs[] | select(.title | test($t))][0]'; 
   run grep -qF "[commander $id]" "$BATS_TEST_TMPDIR/w2"
   [ "$status" -ne 0 ]
   [[ "$(cr status)" != *"told:"* ]]
+}
+
+@test "request: new work from the composer reaches the XO, sits in Drafting, and leaves it once briefed" {
+  id="$(cr request --title "Gift wrap at checkout" --project shop --priority high --via app - <<<"Shoppers ask for it every December.")"
+  [[ "$id" =~ ^rq-[0-9a-f]{4}$ ]]
+  run cr watch --once --timeout 5
+  [[ "$output" == *"[commander cm-"*"] [via app] [shop] [re $id] New task request $id: Gift wrap at checkout (project shop) [priority high] Shoppers ask for it every December."* ]]
+  [ "$(snap | jq -r --arg id "$id" '.requests[] | select(.id == $id) | .title')" = "Gift wrap at checkout" ]
+  run cr request --title "Bad" --priority extreme
+  [ "$status" -ne 0 ]
+  cr request "done" "$id" --task "$(cr status --json | jq -r '.[0].id')" >/dev/null
+  [ "$(snap | jq '.requests | length')" -eq 0 ]
+  [ "$(cr request list --all --json | jq -r '.[0].task != null')" = true ]
 }

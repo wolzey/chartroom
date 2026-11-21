@@ -9,7 +9,9 @@
 #   drafting                                  -> drafting
 #   working                                   -> working   (stalled: a warning, never a status)
 #   waiting, waiting-overdue, stopped-silent  -> waiting   (overdue / stopped without reporting: a warning)
-#   decision, blocked, failed, awaiting-input -> needs
+#   decision, blocked, failed                 -> needs
+#   awaiting-input                            -> working   (at a prompt: a warning; the XO's to handle,
+#                                                           never in Needs me: it shows nothing to answer)
 #   review                                    -> review
 #   done                                      -> done      (accepted)
 #   closed                                    -> closed
@@ -24,9 +26,10 @@
 def status7:
   {"drafting": "drafting", "working": "working", "waiting": "waiting", "waiting-overdue": "waiting",
    "stopped-silent": "waiting", "decision": "needs", "blocked": "needs", "failed": "needs",
-   "awaiting-input": "needs", "review": "review", "done": "done", "closed": "closed"}[.] // "working";
+   "awaiting-input": "working", "review": "review", "done": "done", "closed": "closed"}[.] // "working";
 def warning($t):
-  if $t.state == "waiting-overdue" then "waiting overdue"
+  if $t.state == "awaiting-input" then "at a prompt in its terminal, for the XO to handle"
+  elif $t.state == "waiting-overdue" then "waiting overdue"
   elif $t.state == "stopped-silent" then "stopped without reporting"
   elif ($t.last_event // "") | startswith("stalled: ") then "stalled"
   else null end;
@@ -104,4 +107,6 @@ def askline: sub("^[^ ]+ [a-z-]+: ?"; "");
             sent: ([$all[] | select(.sent != null)] | length)},
    needs: ($all | sort_by([(if .breaking then 0 else 1 end), (.at // "")]) ),
    tasks: $tasks,
-   tells: [$in.tells[]? | {id, at, via, re, project, acked, text: (.text | cut(300))}] | .[-30:]}
+   tells: ([$in.tells[]? | {id, at, via, re, project, acked, text: (.text | cut(300))}] | .[-30:]),
+   # new work asked for from the app, not briefed yet: the board shows it in Drafting
+   requests: [$in.requests[]? | {id, title, description: (.description | cut(600)), project, priority, initiative, at}]}

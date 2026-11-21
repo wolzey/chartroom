@@ -8,6 +8,8 @@ import { NeedsList, QuickView, BulkBar } from "./needs.js";
 import { RoundPage } from "./round.js";
 import { TicketPage } from "./ticket.js";
 import { Palette } from "./palette.js";
+import { BoardPage, BoardSummary, TaskQuick } from "./board.js";
+import { Composer } from "./composer.js";
 
 const M = window.AppModel;
 const EF = window.EventFmt;
@@ -18,6 +20,7 @@ function parseRoute() {
   const p = (location.hash || "#/").slice(1).split("/").filter(Boolean).map(decodeURIComponent);
   if (p[0] === "q" && p.length >= 3) return { name: "round", home: p[1], id: p[2] };
   if (p[0] === "t" && p.length >= 3) return { name: "task", home: p[1], id: p[2], tab: p[3] && p[3] !== "events" ? p[3] : "brief" };
+  if (p[0] === "board") return { name: "board" };
   return { name: "needs" };
 }
 function go(path) { location.hash = path; }
@@ -33,7 +36,8 @@ function Sidebar({ homes, filters, setFilters, counts, onPalette, onLater, link,
     <div class="a-side-search"><button class="search-trigger" onClick=${onPalette}><span class="s-ic" aria-hidden="true"></span><span>Search</span><kbd>⌘K</kbd></button></div>
     <nav class="a-nav">
       <a class=${"nav-i" + (route.name === "needs" ? " on" : "")} href="#/"><span class="nav-ic needs" aria-hidden="true"></span><span class="grow">Needs me</span>${counts.all ? html`<span class="count">${counts.all}</span>` : null}</a>
-      ${[["board", "Board"], ["initiatives", "Initiatives"], ["fleet", "Fleet"]].map(([id, label]) => html`<button key=${id} class="nav-i" aria-disabled="true" onClick=${() => onLater(label)}>
+      <a class=${"nav-i" + (route.name === "board" ? " on" : "")} href="#/board"><span class="nav-ic board" aria-hidden="true"></span><span class="grow">Board</span></a>
+      ${[["initiatives", "Initiatives"], ["fleet", "Fleet"]].map(([id, label]) => html`<button key=${id} class="nav-i" aria-disabled="true" onClick=${() => onLater(label)}>
         <span class=${"nav-ic " + id} aria-hidden="true"></span><span class="grow">${label}</span></button>`)}
     </nav>
     <div class="a-sec">Homes</div>
@@ -85,7 +89,15 @@ function App() {
   useEffect(() => { refresh(); return subscribe(refresh, setLink); }, []);
   useEffect(() => { const f = () => { setRoute(parseRoute()); setPalette(false); }; window.addEventListener("hashchange", f); return () => window.removeEventListener("hashchange", f); }, []);
   useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 15000); return () => clearInterval(t); }, []);
-  useEffect(() => { document.body.setAttribute("data-screen", route.name === "task" ? "task" : route.name === "round" ? "round" : "needs"); }, [route.name]);
+  useEffect(() => { document.body.setAttribute("data-screen", ["task", "round", "board"].includes(route.name) ? route.name : "needs"); }, [route.name]);
+  // the board: every home's tasks and requests, its own filters and selection; the composer (c)
+  const [boardFilters, setBoardFiltersRaw] = useState(load("chartroom-board-filters", {}));
+  const setBoardFilters = (f) => { setBoardFiltersRaw(f); save("chartroom-board-filters", f); };
+  const [boardSel, setBoardSel] = useState(null);
+  const [composer, setComposer] = useState(false);
+  const boardAll = useMemo(() => M.boardItems(data), [data]);
+  const boardList = useMemo(() => M.boardFilter(boardAll, boardFilters), [boardAll, boardFilters]);
+  const boardOrder = useMemo(() => M.boardColumns(boardList).flatMap((c) => c.cards), [boardList]);
 
   const toast = (text, undo) => {
     const id = Math.random().toString(36).slice(2);
@@ -94,6 +106,10 @@ function App() {
   };
 
   const all = useMemo(() => M.items(data).map((it) => M.promote(it, EF)), [data]);
+  // Until the XOs run a chartroom that reads the app's words, every answer says it is only kept
+  // (the commander's feedback 8: five answers once sat two hours unread).
+  const undelivered = !!(data && data.xo && data.xo.reads_app === false);
+  const viaXo = (s) => (undelivered ? s.replace(/^Sent to/, "Kept for") + " · it reaches the XO once the app is installed" : s);
   const homes = useMemo(() => M.homes(data), [data]);
   // The outbox, kept across reloads; reconciled with the server's view of its actions on every state.
   useEffect(() => { try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(outbox)); } catch (e) { /* private window */ } }, [outbox]);
@@ -159,6 +175,7 @@ function App() {
     else if (what.type === "done") { action = "done"; body = { ref: it.ref }; msg = "Marked done"; }
     else if (what.type === "snooze") { action = "snooze"; body = Object.assign({ ref: it.ref }, what.body); msg = "Snoozed for " + what.label.toLowerCase(); }
     else return;
+    if (action === "answer" || action === "tell") msg = viaXo(msg);
     const e = enqueue(it, action, body, msg.split(";")[0]);
     const i = list.findIndex((x) => x.key === it.key);
     const next = list.filter((x) => x.key !== it.key)[Math.min(i, list.length - 2)];
@@ -214,7 +231,7 @@ function App() {
     const p = M.primary(it, EF);
     if (p.type === "answer" && !it.sent) {
       enqueue(it, "answer", { card: it.card, answers: [{ q: 1, choice: p.choice, note: ((notes[it.key] || {})[1] || "").trim() || null }] }, "Answer “" + p.choice + "”");
-      toast("Sent “" + p.choice + "” to the " + it.home + " XO");
+      toast(viaXo("Sent “" + p.choice + "” to the " + it.home + " XO"));
       return;
     }
     return doPrimary(it);
@@ -226,17 +243,17 @@ function App() {
     if (!it) return;
     if (M.answered(it, picks[it.key], notes[it.key]) < (it.questions || []).length) { toast("Answer every question first, or take the recommendations for the rest."); return; }
     enqueue(it, "answer", M.answerBody(it, picks[it.key], notes[it.key]), "Round answers");
-    toast("Round sent to the " + it.home + " XO");
+    toast(undelivered ? "Round kept · it reaches the " + it.home + " XO once the app is installed" : "Round sent to the " + it.home + " XO");
   };
 
   // The keyboard.
-  const state = { list, sel, cur, route, roundItem, focusQ, palette, snoozeOpen, picked };
+  const state = { list, sel, cur, route, roundItem, focusQ, palette, snoozeOpen, picked, composer, boardOrder, boardSel };
   const ref = useRef(state); ref.current = state;
   useEffect(() => {
     const onKey = (e) => {
       const s = ref.current;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setPalette((p) => !p); return; }
-      if (s.palette || s.snoozeOpen || (e.target && e.target.closest && e.target.closest(".palette, .menu"))) return;
+      if (s.palette || s.snoozeOpen || s.composer || (e.target && e.target.closest && e.target.closest(".palette, .menu"))) return;
       if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
         e.preventDefault();
         if (s.route.name === "round") return submitRoundRef.current();
@@ -252,6 +269,15 @@ function App() {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a" && s.route.name === "needs") { e.preventDefault(); onPickAllRef.current(true); return; }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "/") { e.preventDefault(); setPalette(true); return; }
+      if (e.key === "c" && !e.shiftKey) { e.preventDefault(); setComposer(true); return; }
+      if (s.route.name === "board") {
+        const order = s.boardOrder, i = order.findIndex((t) => t.key === s.boardSel);
+        if (e.key === "j" || e.key === "ArrowDown") { e.preventDefault(); const t = order[M.move(i < 0 ? null : i, 1, order.length)]; if (t) setBoardSel(t.key); }
+        else if (e.key === "k" || e.key === "ArrowUp") { e.preventDefault(); const t = order[M.move(i < 0 ? null : i, -1, order.length)]; if (t) setBoardSel(t.key); }
+        else if ((e.key === "o" || e.key === "Enter") && i >= 0 && order[i].type === "task") go("#/t/" + encodeURIComponent(order[i].home) + "/" + encodeURIComponent(order[i].task));
+        else if (e.key === "Escape") { setBoardSel(null); setQvOpen(false); }
+        return;
+      }
       if (s.route.name === "round") {
         const qs = s.roundItem ? M.questions(s.roundItem) : [];
         if (e.key === "j" || e.key === "ArrowDown") { e.preventDefault(); setFocusQ((f) => M.move(f, 1, qs.length)); }
@@ -309,7 +335,9 @@ function App() {
   const entries = useMemo(() => {
     const e = [
       { id: "c-needs", group: "Go to", label: "Needs me", run: () => { setTab("all"); go("#/"); } },
+      { id: "c-board", group: "Go to", label: "Board", run: () => go("#/board") },
       { id: "c-sent", group: "Go to", label: "Sent answers", sub: "waiting on an XO", run: () => { setTab("sent"); go("#/"); } },
+      { id: "c-new", group: "Commands", label: "New task", sub: "c", run: () => setComposer(true) },
       { id: "c-theme", group: "Commands", label: "Switch to " + (theme === "dark" ? "light" : "dark") + " mode", run: toggleTheme },
       { id: "c-clear", group: "Commands", label: "Clear filters", run: () => setFilters({}) },
     ];
@@ -318,11 +346,21 @@ function App() {
       if (M.standing(it) !== "open") continue;
       e.push({ id: "i-" + it.key, group: "Needs me", label: it.title, sub: it.home + (it.short_id ? " · " + it.short_id : ""), run: () => { setTab("all"); go("#/"); setSelKey(it.key); if (!wide()) setQvOpen(true); } });
     }
+    // every task on the board, by title or short id: straight to its ticket
+    for (const t of boardAll) {
+      if (t.type !== "task") continue;
+      e.push({ id: "t-" + t.key, group: "Tasks", label: t.title, sub: t.home + " · " + (t.short_id || t.id) + " · " + (M.STATUS[t.status] || t.status),
+        run: () => go("#/t/" + encodeURIComponent(t.home) + "/" + encodeURIComponent(t.task)) });
+    }
     return e;
-  }, [all, homes, theme]);
+  }, [all, homes, theme, boardAll]);
 
   // Notices above the list: homes not read yet, or that failed; items focus mode holds.
   const notices = [];
+  if (undelivered) {
+    notices.push(html`<div key="xo" class="notice warn"><span><b>Answers here are kept, not yet read.</b> The XOs run a chartroom
+      (${data.xo.bin}) that cannot read what the app sends; each answer reaches its XO once this version is installed and its watch restarted.</span></div>`);
+  }
   for (const e of outbox.filter((x) => x.state === "failed")) {
     notices.push(html`<div key=${"x" + e.id} class="notice warn"><span class="grow"><b>${e.label}</b> did not go through: ${e.error}</span>
       <button class="btn sm" onClick=${() => retryFailed(e)}>Retry</button><button class="btn ghost sm" onClick=${() => dismissFailed(e)}>Dismiss</button></div>`);
@@ -344,6 +382,20 @@ function App() {
     main = html`<${RoundPage} it=${it && !it.sent && local[it.key] ? Object.assign({}, it, { sent: { at: new Date(it.at).toISOString(), via: "app", pending: obState[it.key] === "pending" } }) : it} picks=${(it && picks[it.key]) || {}} notes=${(it && notes[it.key]) || {}} busy=${false}
       setPick=${(q, l) => pick(it.key, q, l)} setNote=${(q, t) => note(it.key, q, t)} focus=${focusQ} setFocus=${setFocusQ}
       onSubmit=${submitRound} onBack=${() => go("#/")} />`;
+  } else if (route.name === "board") {
+    const prsMap = (data && data.prs) || {};
+    main = html`<${BoardPage} all=${boardAll} list=${boardList} filters=${boardFilters} setFilters=${setBoardFilters}
+      selKey=${boardSel} setSelKey=${(k) => { setBoardSel(k); if (!wide()) setQvOpen(true); }} prs=${prsMap} onCompose=${() => setComposer(true)} />`;
+    const t = boardList.find((x) => x.key === boardSel);
+    // a card the commander owes an answer on gets that item's quick view, answered in place
+    const item = t && all.find((x) => x.home === t.home && x.task === t.task && M.standing(x, local) === "open");
+    const boardAct = (home, action, body, label) => { setOutbox((o) => o.concat([OB.create(home, action, body, item ? item.key : null, label, Date.now())])); if (action === "accept") toast(label); };
+    aside = !t ? html`<${BoardSummary} list=${boardList} prs=${prsMap} />`
+      : item ? html`<${QuickView} it=${item} open=${qvOpen} undelivered=${undelivered} onClose=${() => { setBoardSel(null); setQvOpen(false); }}
+          picks=${picks[item.key]} setPick=${(q, l) => pick(item.key, q, l)} note=${(notes[item.key] || {})[1]} setNote=${(x) => note(item.key, 1, x)} busy=${false}
+          onAct=${perform} onDetails=${openDetails} prs=${prsMap} />`
+      : html`<${TaskQuick} t=${t} open=${qvOpen} toast=${toast} onAct=${boardAct} onClose=${() => { setBoardSel(null); setQvOpen(false); }}
+          onOpen=${(x) => go("#/t/" + encodeURIComponent(x.home) + "/" + encodeURIComponent(x.task))} />`;
   } else if (route.name === "task") {
     // the ticket: its open question (if Needs me has one for it) is answered in place, as in the quick view
     const raw = all.find((x) => x.home === route.home && x.task === route.id && ["open", "sent"].includes(M.standing(x, local)));
@@ -358,13 +410,13 @@ function App() {
     main = html`<${TicketPage} home=${route.home} hue=${hueOf(route.home)} id=${route.id} version=${data && data.version} prs=${(data && data.prs) || {}}
       item=${it} machine=${h && h.snapshot ? h.snapshot.machine : null} onAct=${ticketAct} onBack=${() => go("#/")} toast=${toast}
       askProps=${{ picks: raw && picks[raw.key], setPick: (q, l) => raw && pick(raw.key, q, l), note: raw && (notes[raw.key] || {})[1],
-        setNote: (t) => raw && note(raw.key, 1, t), busy: false, onAct: perform, onDetails: openDetails, prs: (data && data.prs) || {} }} />`;
+        setNote: (t) => raw && note(raw.key, 1, t), busy: false, onAct: perform, onDetails: openDetails, prs: (data && data.prs) || {}, undelivered }} />`;
   } else {
     main = html`<${NeedsList} all=${all} list=${list} tab=${tab} setTab=${setTab} filters=${filters} setFilters=${setFilters} homes=${homes}
       counts=${counts} sel=${sel} setSel=${setSel} ob=${obState} onQuick=${quick} notices=${notices}
       picked=${picked} onPick=${onPick} onPickAll=${onPickAll} prs=${(data && data.prs) || {}} />`;
     const shown = cur && !cur.sent && local[cur.key] === "sent" ? Object.assign({}, cur, { sent: { at: new Date().toISOString(), via: "app", pending: obState[cur.key] === "pending" } }) : cur;
-    aside = html`<${QuickView} it=${shown} open=${qvOpen} onClose=${() => setQvOpen(false)}
+    aside = html`<${QuickView} it=${shown} open=${qvOpen} onClose=${() => setQvOpen(false)} undelivered=${undelivered}
       picks=${cur && picks[cur.key]} setPick=${(q, l) => pick(cur.key, q, l)}
       note=${cur && (notes[cur.key] || {})[1]} setNote=${(t) => note(cur.key, 1, t)} busy=${false}
       onAct=${perform} onDetails=${openDetails} snoozeAnchorRef=${snoozeAnchor} snoozeOpen=${snoozeOpen} setSnoozeOpen=${setSnoozeOpen} prs=${(data && data.prs) || {}} />`;
@@ -379,6 +431,14 @@ function App() {
         onPick=${(x) => perform(cur, { type: "snooze", body: x.body, label: x.label })} onClose=${() => setSnoozeOpen(false)} />` : null}
     ${route.name === "needs" ? html`<${BulkBar} items=${pickedItems} onRun=${runBulk} onClear=${() => setPicked(new Set())} />` : null}
     ${palette ? html`<${Palette} entries=${entries} onClose=${() => setPalette(false)} />` : null}
+    ${composer ? html`<${Composer} homes=${homes} home=${filters.home || boardFilters.home || (homes[0] && homes[0].name)}
+        projects=${(h) => [...new Set(boardAll.filter((t) => t.home === h).map((t) => t.project).filter(Boolean))].sort()}
+        onClose=${() => setComposer(false)}
+        onSend=${(h, body) => {
+          setOutbox((o) => o.concat([OB.create(h, "request", body, null, "New task request", Date.now())]));
+          setComposer(false);
+          toast(viaXo("Sent to the " + h + " XO as a request; it waits in Drafting until it is briefed"));
+        }} />` : null}
     <${Toasts} toasts=${toasts} onUndo=${(t) => { setToasts((ts) => ts.filter((x) => x.id !== t.id)); t.undo(); }} />
   </div>`;
 }

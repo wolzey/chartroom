@@ -254,3 +254,16 @@ state() { # waits for both homes' first snapshot
   [ -f "$wt/notes.txt" ]
   [ -z "$(jq -r '.closed // empty' "$CHARTROOM_HOME/tasks/$dirty/meta.json")" ]
 }
+
+@test "delivery: the state says when the XOs' own chartroom cannot read what the app sends" {
+  # an older chartroom: no tell, so no XO would ever wake on an answer from the app
+  printf '#!/bin/sh\necho "usage: chartroom new ... chartroom relay ..."\n' >"$BIN/old-chartroom"
+  chmod +x "$BIN/old-chartroom"
+  CHARTROOM_XO_BIN="$BIN/old-chartroom" start --no-auth
+  state
+  [ "$(jq -r '.xo.reads_app' "$BATS_TEST_TMPDIR/state")" = false ]
+  cr app stop >/dev/null
+  CHARTROOM_XO_BIN="$CHARTROOM" start --no-auth
+  state
+  [ "$(jq -r '.xo.reads_app' "$BATS_TEST_TMPDIR/state")" = true ]
+}

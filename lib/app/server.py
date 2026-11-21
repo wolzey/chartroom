@@ -29,6 +29,7 @@ import json
 import os
 import re
 import signal
+import shutil
 import subprocess
 import sys
 import threading
@@ -124,6 +125,33 @@ class Home:
             except OSError:
                 out.append((rel, None, None))
         return tuple(out)
+
+
+XO_CHECK_EVERY = 300.0
+_xo = {"at": 0.0, "value": None}
+
+
+def xo_reads_app(own_bin):
+    """Can the XOs' own chartroom read what the app tells them? An XO runs the installed chartroom
+    (CHARTROOM_XO_BIN, else `chartroom` on PATH or in ~/.local/bin); only one with `tell` wakes on
+    the commander's words from the app. Until it is installed, an answer is kept but read by nobody,
+    and the page must say so. -> {"reads_app": True|False|None, "bin": path or None}."""
+    now = time.time()
+    if _xo["value"] is not None and now - _xo["at"] < XO_CHECK_EVERY:
+        return _xo["value"]
+    path = os.environ.get("CHARTROOM_XO_BIN") or shutil.which("chartroom", path=os.environ.get("PATH", "") + os.pathsep + os.path.expanduser("~/.local/bin"))
+    value = {"reads_app": None, "bin": path}
+    if path:
+        if os.path.realpath(path) == os.path.realpath(own_bin):
+            value["reads_app"] = True
+        else:
+            try:
+                p = subprocess.run([path, "help"], capture_output=True, timeout=20, env=child_env())
+                value["reads_app"] = b"chartroom tell" in p.stdout
+            except (OSError, subprocess.TimeoutExpired):
+                value["reads_app"] = None
+    _xo["at"], _xo["value"] = now, value
+    return value
 
 
 class Hub:
@@ -525,6 +553,19 @@ def verb_for(action, body):
         if len(argv) == 2:
             raise ValueError("nothing to set")
         return argv, None
+    if action == "request":
+        title = body.get("title")
+        if not isinstance(title, str) or not title.strip() or len(title) > 200:
+            raise ValueError("title: a title of at most 200 characters")
+        argv = ["request", "--via", "app", "--title", title.strip()]
+        if body.get("project"):
+            argv += ["--project", need("project", re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"), "a project name")]
+        if body.get("priority"):
+            argv += ["--priority", need("priority", re.compile(r"^(urgent|high|medium|low)$"), "urgent, high, medium or low")]
+        desc = body.get("description")
+        if desc is not None and (not isinstance(desc, str) or len(desc) > 16000):
+            raise ValueError("description: at most 16000 characters")
+        return argv + ["-"], (desc or "").encode("utf-8")
     if action == "brief":
         task = need("task", TASK_ID, "a task id")
         sec = body.get("sections")
@@ -595,7 +636,8 @@ def make_handler(hub, args, root, actions, prs):
                 return self.static(os.path.join(shared_dir, path[len("/shared/"):]))
             if path == "/api/v1/state":
                 hub.looked()
-                return self.json(200, dict(hub.state(), user=self.who(), actions=actions.recent(), prs=prs.states, gh_error=prs.error))
+                return self.json(200, dict(hub.state(), user=self.who(), actions=actions.recent(), prs=prs.states, gh_error=prs.error,
+                                           xo=xo_reads_app(args.bin)))
             if path == "/api/v1/stream":
                 hub.looked()
                 return self.stream()

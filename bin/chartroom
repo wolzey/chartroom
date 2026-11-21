@@ -109,6 +109,8 @@ source "$CR_ROOT/lib/snooze.sh"
 source "$CR_ROOT/lib/app.sh"
 # shellcheck source=../lib/ticket.sh
 source "$CR_ROOT/lib/ticket.sh"
+# shellcheck source=../lib/request.sh
+source "$CR_ROOT/lib/request.sh"
 for _f in "$CR_ROOT"/lib/backends/*.sh; do
   # shellcheck source=/dev/null
   source "$_f"
@@ -364,7 +366,7 @@ brief_report_steps() { # <id>
    How to write one: a headline first, at most ~140 characters, saying what happened and what
    is needed. Details follow under labels the dashboard shows as blocks: \`Cause:\`,
    \`Options: (1) ... (2) ...\` (mark one RECOMMENDED), \`Need:\`, \`Report:\`; or pass them as
-   \`--detail "<the rest>"\`. Anything longer than a few lines goes in report.md.
+   \`--detail "<the rest>"\`, before the headline. Anything longer than a few lines goes in report.md.
 3. Before \`done\` or \`failed\`, write $d/report.md containing: outcome; what changed
    (files, commits) or what you found; validation you actually ran with real results (never claim
    a check you did not run); risks and open questions.
@@ -376,6 +378,8 @@ brief_report_steps() { # <id>
      CHARTROOM_HOME=$CR_HOME $CR_BIN artifact add $id --kind page --title "<one line>" --description "<one line>" <file>
    and name the ref it prints in your \`done\` event (\`... (page <ref>)\`). Never put a secret in a
    page: say where one is kept instead.
+   Screenshots, recordings or logs that show what you built or tested go on the task's ticket:
+     CHARTROOM_HOME=$CR_HOME $CR_BIN attachment add $id --caption "<what it shows>" <file>
 EOF
 }
 
@@ -1854,7 +1858,7 @@ if [[ "$cmd" =~ ^(status|ls|board|todo|inbox|relay)$ ]]; then
   done
 fi
 case "$cmd" in
-  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|steer|stop|attach|park|accept|close|sweep|watch|dashboard|radar|node|nodes|doctor|homes|brain|tell|ask|snooze|app|attachment|link|brief|set|version|help) "cmd_$cmd" "$@" ;;
+  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|steer|stop|attach|park|accept|close|sweep|watch|dashboard|radar|node|nodes|doctor|homes|brain|tell|ask|snooze|app|attachment|link|brief|set|request|version|help) "cmd_$cmd" "$@" ;;
   install-skills) cmd_install_skills "$@" ;;
   ls) cmd_status "$@" ;;
   show) cmd_show "$@" ;;

@@ -162,7 +162,7 @@ export function TicketPage({ home, hue, id, version, prs, item, machine, askProp
     onAct("comment", { task: id, text }, toXo ? "Comment to the XO" : "Comment to the worker");
     setPending((p) => p.concat([{ type: "comment", at: new Date().toISOString(), who: "you", to: toXo ? "xo" : "worker", text: toXo ? text.replace(/^\s*@xo\b[:,]?\s*/i, "") : text }]));
     setComment("");
-    toast(toXo ? "Sent to the " + home + " XO" : "Sent to the worker, as a steer");
+    toast(toXo ? (askProps && askProps.undelivered ? "Kept for the " + home + " XO · it reaches the XO once the app is installed" : "Sent to the " + home + " XO") : "Sent to the worker, as a steer");
   };
   const saveDesc = () => {
     const changed = {};

@@ -119,7 +119,7 @@ export function NeedsList({ all, list, tab, setTab, filters, setFilters, homes, 
 
 // An item's question and the controls that answer it: the quick view's body, and the ticket's
 // banner when the task waits on the commander.
-export function AskBody({ it, picks, setPick, note, setNote, busy, onAct, onDetails, snoozeAnchorRef, snoozeOpen, setSnoozeOpen, prs, hidePrs }) {
+export function AskBody({ it, picks, setPick, note, setNote, busy, onAct, onDetails, snoozeAnchorRef, snoozeOpen, setSnoozeOpen, prs, hidePrs, undelivered }) {
   const [confirmClose, setConfirmClose] = useState(false);
   const noteRef = useRef(null);
   useEffect(() => { setConfirmClose(false); }, [it && it.key]);
@@ -136,7 +136,8 @@ export function AskBody({ it, picks, setPick, note, setNote, busy, onAct, onDeta
   if (sent) {
     body = sent.pending ? html`<div class="qv-sent"><span><b>Sending…</b> It is queued here and goes as soon as the server takes it; nothing more to do.</span></div>`
       : html`<div class="qv-sent"><span><b>${sent.withdrawn ? "Withdrawn" : "Sent"}</b> ${M.agoText(sent.at)}${sent.via === "terminal" ? " from the terminal" : ""}.
-      ${sent.withdrawn ? "" : sent.read_by_xo ? " The XO has read it." : " Not read by the XO yet; it waits in the home's mailbox until an XO session reads it."}</span>
+      ${sent.withdrawn ? "" : sent.read_by_xo ? " The XO has read it." : undelivered ? " Kept, not yet read: it reaches the XO once this version of chartroom is installed and its watch restarted."
+        : " Not read by the XO yet; it waits in the home's mailbox until an XO session reads it."}</span>
       ${sent.words ? html`<span class="words faint"><${Linked} text=${sent.words} /></span>` : null}</div>`;
   } else if (it.kind === "round") {
     // a round is never answered in the side panel: one line, and it opens in the main area

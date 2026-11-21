@@ -66,6 +66,16 @@ are stable from 0.1.0.
   - Properties are in a slim column: status (Accept or Close), priority and labels.
   - A worker stopped at a prompt nothing can read says so, with the command that opens its
     terminal.
+- The chartroom app, slice 3:
+  - **The board:** every home's tasks in the seven columns, with a working card's live line,
+    filtered by home, project, initiative and machine. A card click shows its quick view (its
+    question if it waits on you, else a steer); `j`/`k` move and `o` opens the ticket.
+  - **New task from anywhere (`c`):** pick the home, write it, and optionally a project and a
+    priority. It reaches that home's XO as a request (`chartroom request`) and waits in Drafting
+    until the XO briefs it (`chartroom request done <rq-id> --task <id>`).
+  - **The palette** jumps to any task's ticket.
+  - **Workers attach evidence:** the brief's protocol now says to use `chartroom attachment add`,
+    and that `--detail` goes before the headline.
 - `chartroom tell`: the commander's words to the XO from outside its session. One record in the
   home's mailbox, and a `[commander <cm-id>] ...` wake for its `watch`; `tell ack` marks it read.
 - `chartroom ask`: question cards. The XO posts a question or a grilling round as a card;

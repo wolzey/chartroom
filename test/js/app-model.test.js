@@ -163,6 +163,24 @@ test("rounds: an ask with several option lists is a grilling, answered with each
   assert.strictEqual(M.promote({ key: "a:x", type: "task", kind: "decide", card: "ev-x-1", text: "Which? Options: (1) a. (2) b." }, EF).kind, "decide");
 });
 
+test("board: every home's tasks and unbriefed requests, in the seven columns, filtered by home, project and machine", () => {
+  const st = { homes: [
+    { name: "acme", snapshot: { machine: "studio", tasks: [
+      { id: "a1", title: "Working one", status: "working", project: "shop", last_event: "progress: indexing the catalogue. Details: 40k rows", last_at: "2026-01-02T00:00:00Z" },
+      { id: "a2", title: "Closed one", status: "closed", project: "shop", last_at: "2026-01-01T00:00:00Z" },
+      { id: "a3", title: "Review one", status: "review", project: "api", last_at: "2026-01-03T00:00:00Z" }],
+      requests: [{ id: "rq-1a2b", title: "Gift wrap", project: "shop", at: "2026-01-04T00:00:00Z" }] } },
+    { name: "globex", snapshot: { machine: "m5", tasks: [{ id: "g1", title: "Their one", status: "needs", project: "api" }] } }] };
+  const all = M.boardItems(st);
+  const cols = M.boardColumns(all);
+  assert.deepStrictEqual(cols.map((c) => c.status), ["drafting", "queued", "working", "waiting", "needs", "review", "done"]);
+  assert.deepStrictEqual(cols.map((c) => c.cards.map((x) => x.id)), [["rq-1a2b"], [], ["a1"], [], ["g1"], ["a3"], ["a2"]]);
+  assert.strictEqual(cols[2].cards[0].line, "Indexing the catalogue");
+  assert.strictEqual(cols[0].cards[0].type, "request");
+  assert.deepStrictEqual(M.boardFilter(all, { home: "acme", project: "shop" }).map((x) => x.id).sort(), ["a1", "a2", "rq-1a2b"]);
+  assert.deepStrictEqual(M.boardFilter(all, { machine: "m5" }).map((x) => x.id), ["g1"]);
+});
+
 test("move, ago and search: the keyboard's selection, short times, the palette's matches", () => {
   assert.strictEqual(M.move(null, 1, 3), 0);
   assert.strictEqual(M.move(2, 1, 3), 2);
