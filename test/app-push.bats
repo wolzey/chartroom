@@ -191,8 +191,9 @@ until_lines() { for _ in $(seq 1 "$((${2:-10} * 5))"); do [ "$(lines)" -ge "$1" 
   run as_commander permit escalate p-5e6f
   [ "$status" -ne 0 ]
   [[ "$output" == *"is not open"* ]]
-  # and a worker may not escalate a card at all (the broker refuses it, and says so as breaking)
-  run cr permit escalate p-5e6f
+  # and a worker may not escalate a card at all (the broker refuses it, and says so as breaking): run
+  # as a worker is, with its task in the environment, whoever runs this suite (a worker or CI)
+  run env CHARTROOM_TASK="$t" "$CHARTROOM" permit escalate p-5e6f
   [ "$status" -ne 0 ]
   [[ "$output" == *"a worker may not escalate permission card p-5e6f"* ]]
 }
