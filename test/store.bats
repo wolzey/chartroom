@@ -168,7 +168,9 @@ db() { python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); [print("|
   id="$(new_task)"
   chmod 444 "$CHARTROOM_DB"
   run cr event "$id" decision "while the store was read-only"
-  chmod 644 "$CHARTROOM_DB"
+  # (the -wal and -shm files too: SQLite makes them with the database's own mode, and on Linux a
+  # read-only open leaves a 0444 -shm behind that refuses every later write)
+  chmod 644 "$CHARTROOM_DB"*
   [ "$status" -eq 0 ]
   [[ "$output" == *"waits in tasks/$id/events.spool"* ]]
   grep -q 'decision: while the store was read-only' "$CHARTROOM_HOME/tasks/$id/events.spool"
