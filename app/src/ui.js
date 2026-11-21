@@ -35,7 +35,8 @@ export function linkifyDom(root) {
 const PR_STATE = { draft: "Draft", open: "Open", approved: "Approved", changes: "Changes requested", merged: "Merged", closed: "Closed" };
 function prName(url, pr) {
   if (pr && pr.repo) return pr.repo.split("/").pop() + pr.num;
-  const m = /github\.com\/[^/]+\/([^/]+)\/pull\/(\d+)/.exec(url || "");
+  // a GitHub PR, or an Azure DevOps one (…/_git/<repo>/pullrequest/<n>): "repo#n", never the whole URL
+  const m = /github\.com\/[^/]+\/([^/]+)\/pull\/(\d+)/.exec(url || "") || /\/_git\/([^/?#]+)\/pullrequest\/(\d+)/.exec(url || "");
   return m ? m[1] + "#" + m[2] : url;
 }
 export function PrIcon({ state }) {

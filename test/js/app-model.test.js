@@ -216,6 +216,9 @@ test("links: every URL is one, punctuation stays text, a GitHub PR or issue read
     { text: ". Then (see " }, { href: "https://example.com/a_(b)", label: "https://example.com/a_(b)" }, { text: "), done" }]);
   assert.deepStrictEqual(M.linkParts("https://github.com/acme/api/issues/7#note"), [{ href: "https://github.com/acme/api/issues/7#note", label: "api#7" }]);
   assert.deepStrictEqual(M.linkParts("no link here"), [{ text: "no link here" }]);
+  // an Azure DevOps PR reads repo#n too, never its whole URL (it ran a row off the page)
+  assert.deepStrictEqual(M.linkParts("https://dev.azure.com/acme/shop/_git/web/pullrequest/19636"),
+    [{ href: "https://dev.azure.com/acme/shop/_git/web/pullrequest/19636", label: "web#19636" }]);
   assert.deepStrictEqual(M.linkParts("javascript:alert(1) is text"), [{ text: "javascript:alert(1) is text" }]);
 });
 

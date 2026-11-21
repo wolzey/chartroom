@@ -361,7 +361,8 @@ var AppModel = (function () {
         url = url.slice(0, -1);
       }
       if (m.index > at) out.push({ text: s.slice(at, m.index) });
-      const gh = /^https:\/\/github\.com\/[^/]+\/([^/]+)\/(pull|issues)\/(\d+)(?:[/?#].*)?$/.exec(url);
+      const gh = /^https:\/\/github\.com\/[^/]+\/([^/]+)\/(pull|issues)\/(\d+)(?:[/?#].*)?$/.exec(url)
+        || /^https:\/\/[^/]+\/(?:[^/]+\/)*_git\/([^/?#]+)\/(pullrequest)\/(\d+)(?:[/?#].*)?$/.exec(url); // Azure DevOps
       out.push({ href: url, label: gh ? gh[1] + "#" + gh[3] : url });
       at = m.index + url.length;
       URL_RE.lastIndex = at;

@@ -258,3 +258,6 @@
 .ini-taskdec { display: grid; gap: var(--s-2); }
 .dec-task { justify-self: start; font-weight: 600; }
 .r-owner { margin: 0; font-size: var(--fs-sm); line-height: 1.5; color: var(--text-2); overflow-wrap: anywhere; }
+/* a row's PR badges give way before its title does: the title always keeps room */
+.a-row-title .pr-badges { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+.a-row-title > .truncate { min-width: min(12em, 55%); }
