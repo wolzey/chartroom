@@ -10,6 +10,7 @@ import { TicketPage } from "./ticket.js";
 import { Palette } from "./palette.js";
 import { BoardPage, BoardSummary, TaskQuick } from "./board.js";
 import { Composer } from "./composer.js";
+import { InitiativesList, InitiativePage, NewInitiative } from "./initiatives.js";
 
 const M = window.AppModel;
 const EF = window.EventFmt;
@@ -21,6 +22,8 @@ function parseRoute() {
   if (p[0] === "q" && p.length >= 3) return { name: "round", home: p[1], id: p[2] };
   if (p[0] === "t" && p.length >= 3) return { name: "task", home: p[1], id: p[2], tab: p[3] && p[3] !== "events" ? p[3] : "brief" };
   if (p[0] === "board") return { name: "board" };
+  if (p[0] === "i" && p.length >= 3) return { name: "initiative", home: p[1], id: p[2] };
+  if (p[0] === "i") return { name: "initiatives" };
   return { name: "needs" };
 }
 function go(path) { location.hash = path; }
@@ -29,7 +32,7 @@ function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch 
 const typing = (el) => el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT" || el.isContentEditable);
 const wide = () => window.matchMedia("(min-width: 1181px)").matches;
 
-function Sidebar({ homes, filters, setFilters, counts, onPalette, onLater, link, updated, theme, toggleTheme, route }) {
+function Sidebar({ homes, filters, setFilters, counts, onPalette, onLater, link, updated, theme, toggleTheme, route, inits, onNewInit }) {
   return html`<aside class="a-side">
     <div class="a-brand"><span class="a-logo" aria-hidden="true"></span><span class="grow">Chartroom</span>
       <button class="btn ghost icon" title=${"Switch to " + (theme === "dark" ? "light" : "dark") + " mode"} aria-label="Toggle dark mode" onClick=${toggleTheme}>${theme === "dark" ? "☀" : "☾"}</button></div>
@@ -37,9 +40,15 @@ function Sidebar({ homes, filters, setFilters, counts, onPalette, onLater, link,
     <nav class="a-nav">
       <a class=${"nav-i" + (route.name === "needs" ? " on" : "")} href="#/"><span class="nav-ic needs" aria-hidden="true"></span><span class="grow">Needs me</span>${counts.all ? html`<span class="count">${counts.all}</span>` : null}</a>
       <a class=${"nav-i" + (route.name === "board" ? " on" : "")} href="#/board"><span class="nav-ic board" aria-hidden="true"></span><span class="grow">Board</span></a>
-      ${[["initiatives", "Initiatives"], ["fleet", "Fleet"]].map(([id, label]) => html`<button key=${id} class="nav-i" aria-disabled="true" onClick=${() => onLater(label)}>
+      <a class=${"nav-i" + (route.name === "initiatives" || route.name === "initiative" ? " on" : "")} href="#/i"><span class="nav-ic initiatives" aria-hidden="true"></span><span class="grow">Initiatives</span></a>
+      ${[["fleet", "Fleet"]].map(([id, label]) => html`<button key=${id} class="nav-i" aria-disabled="true" onClick=${() => onLater(label)}>
         <span class=${"nav-ic " + id} aria-hidden="true"></span><span class="grow">${label}</span></button>`)}
     </nav>
+    ${inits.length ? html`<div class="a-sec row-flex"><span class="grow">Initiatives</span><button class="a-sec-add" title="New initiative" aria-label="New initiative" onClick=${onNewInit}>+</button></div>
+      <div class="a-nav">${inits.map((i) => html`<a key=${i.key} class=${"nav-i" + (route.name === "initiative" && route.id === i.id ? " on" : "")}
+          href=${"#/i/" + encodeURIComponent(i.home) + "/" + encodeURIComponent(i.id)}>
+        <span class="ring" style=${{ "--p": i.progress.total ? Math.round((100 * i.progress.done) / i.progress.total) : 0 }} aria-hidden="true"></span>
+        <span class="grow truncate">${i.name}</span>${i.progress.proposed ? html`<span class="count">${i.progress.proposed}</span>` : null}</a>`)}</div>` : null}
     <div class="a-sec">Homes</div>
     <div class="a-nav">${homes.map((h) => html`<button key=${h.name} class=${"nav-i" + (filters.home === h.name ? " on" : "")} title=${h.error || ""}
         onClick=${() => { setFilters(filters.home === h.name ? {} : { home: h.name }); go("#/"); }}>
@@ -89,12 +98,20 @@ function App() {
   useEffect(() => { refresh(); return subscribe(refresh, setLink); }, []);
   useEffect(() => { const f = () => { setRoute(parseRoute()); setPalette(false); }; window.addEventListener("hashchange", f); return () => window.removeEventListener("hashchange", f); }, []);
   useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 15000); return () => clearInterval(t); }, []);
-  useEffect(() => { document.body.setAttribute("data-screen", ["task", "round", "board"].includes(route.name) ? route.name : "needs"); }, [route.name]);
+  useEffect(() => { document.body.setAttribute("data-screen", ["task", "round", "board", "initiative", "initiatives"].includes(route.name) ? (route.name === "initiatives" ? "needs" : route.name) : "needs"); }, [route.name]);
   // the board: every home's tasks and requests, its own filters and selection; the composer (c)
   const [boardFilters, setBoardFiltersRaw] = useState(load("chartroom-board-filters", {}));
   const setBoardFilters = (f) => { setBoardFiltersRaw(f); save("chartroom-board-filters", f); };
   const [boardSel, setBoardSel] = useState(null);
   const [composer, setComposer] = useState(false);
+  const [newInit, setNewInit] = useState(false);
+  const inits = useMemo(() => M.initiatives(data), [data]);
+  // each home's tasks by id (for an initiative's PRs)
+  const tasksByHome = useMemo(() => {
+    const m = {};
+    for (const h of (data && data.homes) || []) { m[h.name] = {}; for (const t of (h.snapshot && h.snapshot.tasks) || []) m[h.name][t.id] = t; }
+    return m;
+  }, [data]);
   const boardAll = useMemo(() => M.boardItems(data), [data]);
   const boardList = useMemo(() => M.boardFilter(boardAll, boardFilters), [boardAll, boardFilters]);
   const boardOrder = useMemo(() => M.boardColumns(boardList).flatMap((c) => c.cards), [boardList]);
@@ -152,6 +169,7 @@ function App() {
   const hueOf = (home) => (homes.find((h) => h.name === home) || {}).hue || 5;
   const openDetails = (it, which) => {
     if (it.kind === "round") return go("#/q/" + encodeURIComponent(it.home) + "/" + encodeURIComponent(it.card));
+    if (it.kind === "stories") return go("#/i/" + encodeURIComponent(it.home) + "/" + encodeURIComponent(it.initiative));
     if (it.task) return go("#/t/" + encodeURIComponent(it.home) + "/" + encodeURIComponent(it.task) + (which ? "/" + which : ""));
   };
   const pick = (key, qid, label) => setPicks((p) => Object.assign({}, p, { [key]: Object.assign({}, p[key], { [qid]: label }) }));
@@ -247,7 +265,7 @@ function App() {
   };
 
   // The keyboard.
-  const state = { list, sel, cur, route, roundItem, focusQ, palette, snoozeOpen, picked, composer, boardOrder, boardSel };
+  const state = { list, sel, cur, route, roundItem, focusQ, palette, snoozeOpen, picked, composer: composer || newInit, boardOrder, boardSel };
   const ref = useRef(state); ref.current = state;
   useEffect(() => {
     const onKey = (e) => {
@@ -270,6 +288,7 @@ function App() {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "/") { e.preventDefault(); setPalette(true); return; }
       if (e.key === "c" && !e.shiftKey) { e.preventDefault(); setComposer(true); return; }
+      if (s.route.name === "initiative" || s.route.name === "initiatives") { if (e.key === "Escape") go(s.route.name === "initiative" ? "#/i" : "#/"); return; }
       if (s.route.name === "board") {
         const order = s.boardOrder, i = order.findIndex((t) => t.key === s.boardSel);
         if (e.key === "j" || e.key === "ArrowDown") { e.preventDefault(); const t = order[M.move(i < 0 ? null : i, 1, order.length)]; if (t) setBoardSel(t.key); }
@@ -338,6 +357,8 @@ function App() {
       { id: "c-board", group: "Go to", label: "Board", run: () => go("#/board") },
       { id: "c-sent", group: "Go to", label: "Sent answers", sub: "waiting on an XO", run: () => { setTab("sent"); go("#/"); } },
       { id: "c-new", group: "Commands", label: "New task", sub: "c", run: () => setComposer(true) },
+      { id: "c-newi", group: "Commands", label: "New initiative", run: () => setNewInit(true) },
+      { id: "c-inits", group: "Go to", label: "Initiatives", run: () => go("#/i") },
       { id: "c-theme", group: "Commands", label: "Switch to " + (theme === "dark" ? "light" : "dark") + " mode", run: toggleTheme },
       { id: "c-clear", group: "Commands", label: "Clear filters", run: () => setFilters({}) },
     ];
@@ -352,8 +373,10 @@ function App() {
       e.push({ id: "t-" + t.key, group: "Tasks", label: t.title, sub: t.home + " · " + (t.short_id || t.id) + " · " + (M.STATUS[t.status] || t.status),
         run: () => go("#/t/" + encodeURIComponent(t.home) + "/" + encodeURIComponent(t.task)) });
     }
+    for (const i of inits) e.push({ id: "n-" + i.key, group: "Initiatives", label: i.name, sub: i.home + " · " + i.progress.done + "/" + i.progress.total,
+      run: () => go("#/i/" + encodeURIComponent(i.home) + "/" + encodeURIComponent(i.id)) });
     return e;
-  }, [all, homes, theme, boardAll]);
+  }, [all, homes, theme, boardAll, inits]);
 
   // Notices above the list: homes not read yet, or that failed; items focus mode holds.
   const notices = [];
@@ -396,6 +419,15 @@ function App() {
           onAct=${perform} onDetails=${openDetails} prs=${prsMap} />`
       : html`<${TaskQuick} t=${t} open=${qvOpen} toast=${toast} onAct=${boardAct} onClose=${() => { setBoardSel(null); setQvOpen(false); }}
           onOpen=${(x) => go("#/t/" + encodeURIComponent(x.home) + "/" + encodeURIComponent(x.task))} />`;
+  } else if (route.name === "initiatives") {
+    main = html`<${InitiativesList} list=${inits} onNew=${() => setNewInit(true)}
+      onOpen=${(i) => go("#/i/" + encodeURIComponent(i.home) + "/" + encodeURIComponent(i.id))} />`;
+  } else if (route.name === "initiative") {
+    const initAct = (action, body, label) => setOutbox((o) => o.concat([OB.create(route.home, action, body, null, label, Date.now())]));
+    main = html`<${InitiativePage} home=${route.home} hue=${hueOf(route.home)} id=${route.id} version=${data && data.version} prs=${(data && data.prs) || {}}
+      tasksByHome=${tasksByHome} onAct=${initAct} onBack=${() => go("#/i")} toast=${toast}
+      onOpenTask=${(home, task) => go("#/t/" + encodeURIComponent(home) + "/" + encodeURIComponent(task))}
+      onOpenRound=${(card) => go("#/q/" + encodeURIComponent(route.home) + "/" + encodeURIComponent(card))} />`;
   } else if (route.name === "task") {
     // the ticket: its open question (if Needs me has one for it) is answered in place, as in the quick view
     const raw = all.find((x) => x.home === route.home && x.task === route.id && ["open", "sent"].includes(M.standing(x, local)));
@@ -423,8 +455,15 @@ function App() {
   }
   return html`<div class="a-app">
     <${Sidebar} homes=${homes} filters=${filters} setFilters=${setFilters} counts=${counts} onPalette=${() => setPalette(true)} onLater=${later}
-      link=${link} updated=${updated} theme=${theme} toggleTheme=${toggleTheme} route=${route} />
+      link=${link} updated=${updated} theme=${theme} toggleTheme=${toggleTheme} route=${route} inits=${inits} onNewInit=${() => setNewInit(true)} />
     ${main}${aside}
+    ${newInit ? html`<${NewInitiative} homes=${homes} home=${filters.home || (homes[0] && homes[0].name)} onClose=${() => setNewInit(false)}
+        onSend=${(h, body) => {
+          setOutbox((o) => o.concat([OB.create(h, "initiative-new", body, null, "New initiative", Date.now())]));
+          setNewInit(false);
+          go("#/i");
+          toast("Created " + body.name + ": its shaping round is in Needs me, and the " + h + " XO proposes stories after it");
+        }} />` : null}
     ${qvOpen && aside ? html`<div class="qv-scrim" onClick=${() => setQvOpen(false)}></div>` : null}
     ${snoozeOpen && cur && snoozeAnchor.current ? html`<${Menu} anchor=${snoozeAnchor.current} title="Snooze until"
         items=${M.snoozes().map((x) => ({ id: x.label, label: x.label, body: x.body }))}

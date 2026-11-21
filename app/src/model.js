@@ -21,6 +21,7 @@ var AppModel = (function () {
     input: { label: "Needs input", glyph: "blocked" },
     review: { label: "Review", glyph: "read" },
     artifact: { label: "To send", glyph: "tidy" },
+    stories: { label: "Stories", glyph: "approve" },
   };
   const GROUPS = [
     { id: "decide", label: "Decide", hint: "Questions and choices waiting on you" },
@@ -188,7 +189,7 @@ var AppModel = (function () {
 
   // What Enter does on a row: answer with the recommendation, approve, accept, or open the card.
   function primary(it, EventFmt) {
-    if (it.kind === "round") return { type: "open-round" };
+    if (it.kind === "round" || it.kind === "stories") return { type: "open-round" };
     if (it.kind === "approve") return { type: "approve" };
     if (it.kind === "review") return { type: "accept" };
     if (it.kind === "artifact") return { type: "done" };
@@ -259,6 +260,15 @@ var AppModel = (function () {
         const line = t.status === "working" || t.status === "waiting" ? headline(String(t.last_event || "").replace(/^[a-z-]+: /, "")) : null;
         out.push(Object.assign({}, t, base, { key: h.name + ":" + t.id, type: "task", task: t.id, column: t.status === "closed" ? "done" : t.status, line }));
       }
+      // an initiative's approved stories that have no task yet: Queued (held ones wait on their "after")
+      for (const ini of s.initiatives || []) {
+        for (const st of ini.stories || []) {
+          if (st.task || !["approved", "held"].includes(st.state)) continue;
+          out.push(Object.assign({}, base, { key: h.name + ":" + st.id, id: st.id, short_id: st.id, type: "story", title: st.title, project: st.project,
+            initiative: ini.id, status: "queued", column: "queued", created: ini.created, prs: [],
+            line: st.state === "held" ? "Waits for " + (st.after || []).map((a) => ((ini.stories || []).find((x) => x.id === a) || {}).title || a).join(", ") : "Approved; the XO briefs it" }));
+        }
+      }
       for (const r of s.requests || []) {
         out.push(Object.assign({}, base, { key: h.name + ":" + r.id, id: r.id, short_id: r.id, type: "request", title: r.title, project: r.project,
           priority: r.priority, initiative: r.initiative, status: "drafting", column: "drafting", created: r.at, line: "Asked for; the XO briefs it", prs: [] }));
@@ -275,6 +285,32 @@ var AppModel = (function () {
   function boardColumns(list) {
     return BOARD.map((s) => ({ status: s, cards: list.filter((t) => t.column === s)
       .sort((a, b) => String(b.last_at || b.created || "").localeCompare(String(a.last_at || a.created || ""))) }));
+  }
+
+  // Initiatives (slice 4): every home's, each with its home and hue.
+  function initiatives(state) {
+    const out = [];
+    ((state && state.homes) || []).forEach((h, i) => {
+      for (const ini of (h.snapshot && h.snapshot.initiatives) || []) out.push(Object.assign({}, ini, { home: h.name, hue: (i % 5) + 1, key: h.name + ":" + ini.id }));
+    });
+    return out;
+  }
+  // An initiative's milestones with their stories and progress, in order; stories in none come last.
+  // The current milestone is the first not finished: open; finished ones fold.
+  function milestones(ini) {
+    const live = (ini.stories || []).filter((s) => s.state !== "dropped" && s.state !== "proposed");
+    const groups = (ini.milestones || []).map((m) => ({ id: m.id, name: m.name, target: m.target, stories: live.filter((s) => s.milestone === m.id) }));
+    const loose = live.filter((s) => !s.milestone || !groups.some((g) => g.id === s.milestone));
+    if (loose.length) groups.push({ id: null, name: groups.length ? "Not in a milestone" : "Stories", target: null, stories: loose });
+    let current = null;
+    for (const g of groups) {
+      g.done = g.stories.filter((s) => s.status === "done").length;
+      g.total = g.stories.length;
+      g.finished = g.total > 0 && g.done === g.total;
+      if (!current && !g.finished) current = g.id || "loose";
+    }
+    for (const g of groups) g.current = (g.id || "loose") === current;
+    return groups;
   }
 
   // Text with its links: [{text}] and [{href, label}] parts, in order. Any http(s) URL is a link
@@ -351,6 +387,6 @@ var AppModel = (function () {
   }
 
   return { KINDS, GROUPS, STATUS, kind, items, homes, standing, visible, ordered, counts, projects, questions, details,
-    primary, answerBody, answered, move, ago, agoText, snoozes, search, askText, headline, bulkPlan, range, promote, linkParts, BOARD, boardItems, boardFilter, boardColumns };
+    primary, answerBody, answered, move, ago, agoText, snoozes, search, askText, headline, bulkPlan, range, promote, linkParts, BOARD, boardItems, boardFilter, boardColumns, initiatives, milestones };
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = AppModel;

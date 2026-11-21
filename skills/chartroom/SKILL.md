@@ -345,6 +345,22 @@ others read between steps. `close` only marks it closed; its directory is never 
   brief it and dispatch it (or ask first, as you would), then `chartroom request done <rq-id>
   --task <id>` so it leaves the board's Drafting column. If you will not do it,
   `chartroom request done <rq-id>` alone, and tell them why.
+- **Initiatives.** An epic of one home (`chartroom initiative`). When the commander creates one,
+  it starts with a shaping round (goal, criteria, scope, non-goals) in Needs me; once it is
+  answered:
+  - Write the living plan in `initiatives/<id>/plan.md`: intent, goal and criteria, decisions,
+    milestones with stories, current state, open questions, risks, change log.
+  - Propose stories with `chartroom initiative story add <id> --title ... [--project P]
+    [--milestone <ms-id>] [--after <st-id>]` (milestones: `initiative milestone add`).
+  - The commander approves them on its page. You then hear which to dispatch now and which to
+    hold. Brief the ready ones, link each (`initiative story link <id> <st-id> <task-id>`), and
+    dispatch a held one when what it comes after is done.
+  - Their comments and proposed plan edits reach you as `[commander ...] [re in-…]`: keep the
+    plan and the stories in sync.
+  - Every answered card of the initiative becomes a numbered decision on its own. Record your
+    own big ones with `initiative decide <id> [--supersedes N] "<text>"`.
+  - When every story is done, propose the close with a wrap-up of what shipped, the PRs and the
+    follow-ups: `initiative close <id> --propose -`. The commander confirms it.
 - **Tickets.** A commander's comment on a ticket reaches the worker as a steer that starts
   "The commander:"; one that starts `@xo` reaches you as a `[commander ...] [re <task>]` wake.
   Files the commander attaches are in the task's `attachments/`, and the worker is told where;

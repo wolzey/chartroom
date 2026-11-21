@@ -66,6 +66,20 @@ are stable from 0.1.0.
   - Properties are in a slim column: status (Accept or Close), priority and labels.
   - A worker stopped at a prompt nothing can read says so, with the command that opens its
     terminal.
+- The chartroom app, slice 4: initiatives (`chartroom initiative`).
+  - **Creating one:** a name and an intent start a shaping round (goal, criteria, scope,
+    non-goals).
+  - **Stories:** the XO proposes them. The commander edits, drops, adds and reorders them and says
+    what waits for what, then approves: the ready ones are dispatched and the dependent ones held
+    (they wait in the board's Queued column).
+  - **The plan:** the living plan (`initiatives/<id>/plan.md`, the XO's) is the page's main tab.
+    Each section takes an inline comment, and an edit goes to the XO as a proposal.
+  - **Milestones** come with progress, the current one open and finished ones folded.
+  - **Decisions:** every answered card of an initiative becomes a numbered decision, and a later
+    one can supersede it.
+  - **Closing:** the XO proposes a close with a wrap-up, and the commander confirms it.
+  - **Where it shows:** proposed stories are a Needs me item; open initiatives are in the sidebar
+    with their progress.
 - The chartroom app, slice 3:
   - **The board:** every home's tasks in the seven columns, with a working card's live line,
     filtered by home, project, initiative and machine. A card click shows its quick view (its

@@ -95,10 +95,10 @@ app_snapshot_json() {
     --arg machine "$(cfg MACHINE_NAME '' "$(hostname -s 2>/dev/null || echo this)")" \
     --argjson inbox "$(dashboard_inbox)" --argjson artifacts "$(artifacts_json --open)" \
     --argjson cards "$(asks_json --all)" --argjson answers "$answers" --argjson tells "$(tells_json --all)" \
-    --argjson snoozes "$(snoozes_json)" --argjson focus "$(focus_json)" --argjson requests "$(requests_json)" \
+    --argjson snoozes "$(snoozes_json)" --argjson focus "$(focus_json)" --argjson requests "$(requests_json)" --argjson initiatives "$(initiatives_json)" \
     '{home: $home, home_name: (if $home_name == "" then ($home | split("/") | last) else $home_name end),
       machine: $machine, version: $version, rows: ., inbox: $inbox, artifacts: $artifacts, cards: $cards,
-      answers: $answers, tells: $tells, snoozes: $snoozes, focus: $focus, requests: $requests}' >"$f"
+      answers: $answers, tells: $tells, snoozes: $snoozes, focus: $focus, requests: $requests, initiatives: $initiatives}' >"$f"
   jq -c -f "$CR_ROOT/lib/app/snapshot.jq" "$f"
   rm -f "$f"
 }

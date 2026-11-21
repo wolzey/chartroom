@@ -111,6 +111,8 @@ source "$CR_ROOT/lib/app.sh"
 source "$CR_ROOT/lib/ticket.sh"
 # shellcheck source=../lib/request.sh
 source "$CR_ROOT/lib/request.sh"
+# shellcheck source=../lib/initiative.sh
+source "$CR_ROOT/lib/initiative.sh"
 for _f in "$CR_ROOT"/lib/backends/*.sh; do
   # shellcheck source=/dev/null
   source "$_f"
@@ -1858,7 +1860,7 @@ if [[ "$cmd" =~ ^(status|ls|board|todo|inbox|relay)$ ]]; then
   done
 fi
 case "$cmd" in
-  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|steer|stop|attach|park|accept|close|sweep|watch|dashboard|radar|node|nodes|doctor|homes|brain|tell|ask|snooze|app|attachment|link|brief|set|request|version|help) "cmd_$cmd" "$@" ;;
+  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|steer|stop|attach|park|accept|close|sweep|watch|dashboard|radar|node|nodes|doctor|homes|brain|tell|ask|snooze|app|attachment|link|brief|set|request|initiative|version|help) "cmd_$cmd" "$@" ;;
   install-skills) cmd_install_skills "$@" ;;
   ls) cmd_status "$@" ;;
   show) cmd_show "$@" ;;

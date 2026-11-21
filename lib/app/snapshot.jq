@@ -93,6 +93,11 @@ def askline: sub("^[^ ]+ [a-z-]+: ?"; "");
      | {id: ("approval-" + (.text | @base64 | gsub("[^A-Za-z0-9]"; "") | .[0:20])), type: "approval", kind: "approval", group: "approve",
         ref: null, title: (.text | headline), text, summary: .text, project, at: (if .date then .date + "T00:00:00Z" else null end),
         breaking: false, held: false}]
+  # stories the XO proposed for an initiative: the commander approves them on its page
+  + [$in.initiatives[]? | select((.progress.proposed // 0) > 0)
+     | {id: ("stories-" + .id), type: "initiative", kind: "stories", group: "approve", ref: ("stories-" + .id), initiative: .id,
+        title: ("Approve the stories of " + .name), summary: "The XO proposes \(.progress.proposed) \(if .progress.proposed == 1 then "story" else "stories" end): edit, drop, add, order and approve them.",
+        project: null, at: .created, breaking: false, held: false}]
   + [$arts[] | select(.kind == "message" or .kind == "runbook")
      | {id: .ref, type: "artifact", kind: "artifact", group: "read", sub: .kind, ref: .ref, title, project: null,
         owner_type, owner, at: .updated, breaking: false, held: false}]
@@ -109,4 +114,6 @@ def askline: sub("^[^ ]+ [a-z-]+: ?"; "");
    tasks: $tasks,
    tells: ([$in.tells[]? | {id, at, via, re, project, acked, text: (.text | cut(300))}] | .[-30:]),
    # new work asked for from the app, not briefed yet: the board shows it in Drafting
-   requests: [$in.requests[]? | {id, title, description: (.description | cut(600)), project, priority, initiative, at}]}
+   requests: [$in.requests[]? | {id, title, description: (.description | cut(600)), project, priority, initiative, at}],
+   # initiatives in brief: the list, the sidebar, and the board's Queued stories (approved or held, no task yet)
+   initiatives: [$in.initiatives[]?]}

@@ -110,11 +110,11 @@ item() { snap | jq -c --arg t "$1" '[.needs[] | select(.title | test($t))][0]'; 
 @test "snapshot: Needs me groups every kind, and tasks carry the seven statuses" {
   s="$(snap)"
   kinds="$(jq -r '[.needs[] | "\(.kind)/\(.group)"] | sort | join(" ")' <<<"$s")"
-  [ "$kinds" = "approve/approve blocked/unblock decide/decide decide/decide inbox/decide inbox/decide review/read round/decide" ]
+  [ "$kinds" = "approve/approve blocked/unblock decide/decide decide/decide inbox/decide inbox/decide review/read round/decide round/decide stories/approve" ]
   [ "$(jq -r '.tasks[] | select(.title | test("stock badge")) | .status' <<<"$s")" = review ]
   [ "$(jq -r '.tasks[] | select(.title | test("Pick a cache")) | .status' <<<"$s")" = needs ]
   [ "$(jq -r '.tasks[] | select(.title | test("Pick a cache")) | .intent' <<<"$s")" = "Search feels slow on big catalogues; make it fast." ]
-  [ "$(jq -r '.counts.needs' <<<"$s")" -eq 8 ]
+  [ "$(jq -r '.counts.needs' <<<"$s")" -eq 9 ]
 }
 
 @test "ask: a round a worker asked is answered whole, each answer naming its question" {

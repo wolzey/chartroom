@@ -553,6 +553,39 @@ def verb_for(action, body):
         if len(argv) == 2:
             raise ValueError("nothing to set")
         return argv, None
+    if action.startswith("initiative-"):
+        sub = action[len("initiative-"):]
+        if sub == "new":
+            name = body.get("name")
+            if not isinstance(name, str) or not name.strip() or len(name) > 120:
+                raise ValueError("name: at most 120 characters")
+            argv = ["initiative", "new", "--name", name.strip(), "--via", "app"]
+            if isinstance(body.get("intent"), str) and body["intent"].strip():
+                argv += ["--intent", body["intent"].strip()[:2000]]
+            if body.get("target"):
+                argv += ["--target", need("target", re.compile(r"^\d{4}-\d{2}-\d{2}$"), "YYYY-MM-DD")]
+            return argv, None
+        iid = need("id", re.compile(r"^in-[0-9a-f]{4,}$"), "an initiative id")
+        if sub == "approve":
+            if not isinstance(body.get("stories"), list):
+                raise ValueError("stories: the checklist")
+            return ["initiative", "approve", iid, "-", "--via", "app"], json.dumps({"stories": body["stories"]}).encode("utf-8")
+        if sub == "comment":
+            text = body.get("text")
+            if not isinstance(text, str) or not text.strip() or len(text) > 8000:
+                raise ValueError("text: a comment of at most 8000 characters")
+            argv = ["initiative", "comment", iid, "--via", "app"]
+            if isinstance(body.get("section"), str) and body["section"].strip():
+                argv += ["--section", body["section"].strip()[:200]]
+            return argv + ["-"], text.encode("utf-8")
+        if sub == "propose":
+            plan = body.get("plan")
+            if not isinstance(plan, str) or not plan.strip() or len(plan) > 200000:
+                raise ValueError("plan: the plan's text")
+            return ["initiative", "propose", iid, "-", "--via", "app"], plan.encode("utf-8")
+        if sub == "close":
+            return ["initiative", "close", iid, "--confirm", "--via", "app"], None
+        raise KeyError(action)
     if action == "request":
         title = body.get("title")
         if not isinstance(title, str) or not title.strip() or len(title) > 200:
@@ -647,6 +680,9 @@ def make_handler(hub, args, root, actions, prs):
             m = re.match(r"^/api/v1/homes/([^/]+)/tasks/([^/]+)$", path)
             if m:
                 return self.ticket(*[unquote(x) for x in m.groups()])
+            m = re.match(r"^/api/v1/homes/([^/]+)/initiatives/(in-[0-9a-f]{4,})$", path)
+            if m:
+                return self.initiative(*[unquote(x) for x in m.groups()])
             m = re.match(r"^/api/v1/homes/([^/]+)/tasks/([^/]+)/attachments/([^/]+)$", path)
             if m:
                 return self.attachment(*[unquote(x) for x in m.groups()])
@@ -691,6 +727,20 @@ def make_handler(hub, args, root, actions, prs):
             code, out, err = run([args.bin, "app", "task", tid, "--json"], h.path, timeout=60)
             if code != 0:
                 return self.json(500, {"error": last_line(err) or "could not read the task"})
+            tickets[key] = (time.time(), hub.version, out.encode("utf-8"))
+            return self.send(200, out, "application/json")
+
+        def initiative(self, home, iid):
+            h = hub.homes.get(home)
+            if not h or not os.path.isfile(os.path.join(h.path, "initiatives", iid, "initiative.json")):
+                return self.json(404, {"error": "no such initiative"})
+            key = (home, iid)
+            hit = tickets.get(key)
+            if hit and hit[1] == hub.version and time.time() - hit[0] < TICKET_CACHE:
+                return self.send(200, hit[2], "application/json")
+            code, out, err = run([args.bin, "initiative", "show", iid, "--json"], h.path, timeout=60)
+            if code != 0:
+                return self.json(500, {"error": last_line(err) or "could not read the initiative"})
             tickets[key] = (time.time(), hub.version, out.encode("utf-8"))
             return self.send(200, out, "application/json")
 
@@ -852,7 +902,7 @@ def make_handler(hub, args, root, actions, prs):
                 return self.upload(unquote(up.group(1)), unquote(up.group(2)))
             if not (h.get("Content-Type") or "").startswith("application/json"):
                 return self.json(403, {"error": "writes come from the app only"})
-            m = re.match(r"^/api/v1/homes/([^/]+)/([a-z]+)$", path)
+            m = re.match(r"^/api/v1/homes/([^/]+)/([a-z]+(?:-[a-z]+)?)$", path)
             if not m:
                 return self.json(404, {"error": "not found"})
             home = hub.homes.get(unquote(m.group(1)))

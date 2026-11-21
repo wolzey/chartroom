@@ -110,6 +110,21 @@
 .dt-empty { color: var(--text-3); }
 @media (max-width: 860px) { .dt-events li { grid-template-columns: 1fr; gap: 2px; } }
 
+/* initiatives (slice 4) */
+.ini-row { cursor: pointer; }
+.task-body > .tabs { margin-top: var(--s-6); }
+.approval { margin-top: var(--s-5); max-width: var(--w-text); }
+.ni-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.ni-story { display: grid; grid-template-columns: auto minmax(0, 1fr) 120px 190px auto; align-items: center; gap: 6px; }
+.ni-story.dropped .ni-title { text-decoration: line-through; color: var(--text-3); }
+.ni-story .input { height: 30px; padding: 4px 8px; font-size: var(--fs-sm); }
+.ni-move { display: inline-flex; }
+.plan-edit { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; line-height: 1.55; }
+.task-body .i-progress, .task-body .i-summary, .task-body .doc, .task-body .ms-list, .task-body .decisions { max-width: var(--w-text); }
+.ms-list { display: grid; gap: var(--s-3); }
+.nav-i .ring { flex: none; }
+@media (max-width: 860px) { .ni-story { grid-template-columns: auto minmax(0, 1fr); } .ni-story .ni-proj, .ni-story .ni-after { grid-column: 2; } }
+
 /* the board and the composer (slice 3) */
 .cmp-sel { border: 0; background: transparent; font: inherit; color: inherit; padding: 0 2px; outline: none; cursor: pointer; }
 .cmp-prio { display: inline-flex; gap: 6px; flex-wrap: wrap; }

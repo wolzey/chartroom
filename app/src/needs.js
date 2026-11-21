@@ -156,6 +156,10 @@ export function AskBody({ it, picks, setPick, note, setNote, busy, onAct, onDeta
         ${it.has_report ? html`<button class="btn ghost" onClick=${() => onDetails(it, "report")}>Read the report</button>` : null}
         ${snoozeBtn}
       </div>`;
+  } else if (it.kind === "stories") {
+    // approved on the initiative's page, where the whole checklist fits
+    body = html`<p class="a-detail-sum">${it.summary}</p>
+      <div class="a-detail-actions"><button class="btn primary" onClick=${() => onDetails(it)}>Review the stories <kbd>↵</kbd></button>${snoozeBtn}</div>`;
   } else if (it.kind === "artifact") {
     body = html`
       <p class="a-detail-sum">A ${it.sub || "draft"} for you to send or run, kept with ${it.owner}.</p>

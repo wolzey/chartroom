@@ -59,5 +59,21 @@ app_fixture() { # <dir> <project-repo>
                  {"text":"What counts as fast?","options":["p95 under 300ms","p95 under 800ms"],"recommended":"p95 under 300ms"},
                  {"text":"Anything out of scope?"}]}' |
     CHARTROOM_HOME="$a" "$CHARTROOM" ask - >/dev/null
+  # an initiative, shaped, with a plan, a milestone, a story linked to a task and two proposed
+  local in ms s1
+  in="$(CHARTROOM_HOME="$a" "$CHARTROOM" initiative new --name "Fast search" --intent "Search answers in under 300ms for every store.")"
+  ms="$(CHARTROOM_HOME="$a" "$CHARTROOM" initiative milestone add "$in" --name "Index")"
+  s1="$(CHARTROOM_HOME="$a" "$CHARTROOM" initiative story add "$in" --title "Pick a cache" --project proj --milestone "$ms")"
+  CHARTROOM_HOME="$a" "$CHARTROOM" initiative story link "$in" "$s1" "$(CHARTROOM_HOME="$a" "$CHARTROOM" status --json | jq -r '.[] | select(.title | test("Pick a cache")) | .id')" >/dev/null
+  CHARTROOM_HOME="$a" "$CHARTROOM" initiative story add "$in" --title "Build the index" --project proj --milestone "$ms" >/dev/null
+  CHARTROOM_HOME="$a" "$CHARTROOM" initiative story add "$in" --title "Switch the search box" --project proj >/dev/null
+  printf '## Intent\n\nSearch answers in under 300ms.\n\n## Goal and criteria\n\n- p95 under 300ms on the 40k catalogue\n\n## Risks\n\n- The index build may be slow on big stores.\n' >"$a/initiatives/$in/plan.md"
+  # it was shaped in a meeting: its shaping round is withdrawn, and the XO has read the setup's words
+  CHARTROOM_HOME="$a" "$CHARTROOM" ask withdraw "$(jq -r .card "$a/initiatives/$in/initiative.json")" "shaped in a meeting" >/dev/null
+  local told; told="$(CHARTROOM_HOME="$a" "$CHARTROOM" tell list --json | jq -r '.[].id')"
+  if [[ -n "$told" ]]; then
+    # shellcheck disable=SC2086 # one id per word
+    CHARTROOM_HOME="$a" "$CHARTROOM" tell ack $told >/dev/null
+  fi
   CHARTROOM_HOME="$g" "$CHARTROOM" ask --title "Ship the SDK as 2.0 or 1.9?" --option "2.0: the auth change breaks callers" --option "1.9 with a shim" --recommend 1 --project api >/dev/null
 }

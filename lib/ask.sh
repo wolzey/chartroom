@@ -284,6 +284,11 @@ ask_answer() {
       jq -c --arg t "$told" '.told = $t' "$f" >"$f.tmp" && mv "$f.tmp" "$f"
     fi
   fi
+  # an answered card of an initiative is one of its decisions, numbered, linked to the card
+  local init; init="$(jq -r '.initiative // empty' <<<"$card")"
+  if [[ "$init" =~ $CR_INIT_ID_RE && -f "$(init_file "$init")" ]]; then
+    initiative_decide "$init" --card "$id" -- "$words" >/dev/null || warn "answered $id, but could not record it as a decision of $init"
+  fi
   stamp_changed
   echo "answered $id${told:+ (told the XO: $told)}"
 }

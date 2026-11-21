@@ -181,6 +181,23 @@ test("board: every home's tasks and unbriefed requests, in the seven columns, fi
   assert.deepStrictEqual(M.boardFilter(all, { machine: "m5" }).map((x) => x.id), ["g1"]);
 });
 
+test("initiatives: milestones with progress, the current one open; approved stories without a task are Queued", () => {
+  const ini = { id: "in-1", created: "2026-01-01T00:00:00Z", milestones: [{ id: "ms-a", name: "Index" }, { id: "ms-b", name: "Box" }],
+    stories: [
+      { id: "st-1", title: "Cache", milestone: "ms-a", state: "approved", task: "t1", status: "done" },
+      { id: "st-2", title: "Index", milestone: "ms-a", state: "approved", task: "t2", status: "done" },
+      { id: "st-3", title: "Box", milestone: "ms-b", state: "approved", task: null, status: "queued" },
+      { id: "st-4", title: "Load test", milestone: "ms-b", state: "held", after: ["st-3"], task: null, status: "queued" },
+      { id: "st-5", title: "Maybe", state: "proposed", status: "drafting" },
+      { id: "st-6", title: "Dropped", state: "dropped", status: "dropped" }] };
+  const g = M.milestones(ini);
+  assert.deepStrictEqual(g.map((x) => [x.name, x.done, x.total, x.finished, x.current]), [["Index", 2, 2, true, false], ["Box", 0, 2, false, true]]);
+  const st = { homes: [{ name: "acme", snapshot: { machine: "m", tasks: [], initiatives: [ini] } }] };
+  const queued = M.boardItems(st).filter((x) => x.column === "queued");
+  assert.deepStrictEqual(queued.map((x) => [x.title, x.line]), [["Box", "Approved; the XO briefs it"], ["Load test", "Waits for Box"]]);
+  assert.strictEqual(M.initiatives(st)[0].key, "acme:in-1");
+});
+
 test("move, ago and search: the keyboard's selection, short times, the palette's matches", () => {
   assert.strictEqual(M.move(null, 1, 3), 0);
   assert.strictEqual(M.move(2, 1, 3), 2);

@@ -92,7 +92,7 @@ state() { # waits for both homes' first snapshot
   start --no-auth
   state
   [ "$(jq -r '[.homes[].name] | join(" ")' "$BATS_TEST_TMPDIR/state")" = "acme globex" ]
-  [ "$(jq -r '[.homes[].snapshot.counts.needs] | add' "$BATS_TEST_TMPDIR/state")" -eq 12 ]
+  [ "$(jq -r '[.homes[].snapshot.counts.needs] | add' "$BATS_TEST_TMPDIR/state")" -eq 13 ]
 }
 
 @test "writes: only from the app (its header, JSON, same origin)" {
@@ -102,7 +102,7 @@ state() { # waits for both homes' first snapshot
   [ "$(post /api/v1/homes/acme/tell '{"text":"hi"}' -H 'X-Chartroom-App: 1' -H 'Sec-Fetch-Site: cross-site')" = 403 ]
   [ "$(post /api/v1/homes/acme/tell '{"text":"hi"}' -H 'X-Chartroom-App: 1' -H 'Origin: http://evil.example')" = 403 ]
   [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'X-Chartroom-App: 1' -H 'Content-Type: text/plain' -d hi "http://127.0.0.1:$PORT/api/v1/homes/acme/tell")" = 403 ]
-  [ ! -s "$CHARTROOM_HOME/relays/inbox.ndjson" ]
+  [ "$(cr tell list --all --json | jq '[.[] | select(.text == "hi")] | length')" -eq 0 ]
   [ "$(post /api/v1/homes/acme/tell '{"text":"hi from the app","re":"i-1234"}' -H 'X-Chartroom-App: 1' -H 'X-Chartroom-Action: a-test-0001' -H "Origin: http://127.0.0.1:$PORT")" = 202 ]
   [ "$(outcome a-test-0001)" = "done	" ]
   [ "$(cr tell list --json | jq -r '.[0] | "\(.via) \(.re) \(.text)"')" = "app i-1234 hi from the app" ]
