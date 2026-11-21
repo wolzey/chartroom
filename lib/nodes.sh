@@ -7,10 +7,13 @@
 #
 # A node is any machine with a node file (CHARTROOM_NODE_CONFIG, default
 # ${XDG_CONFIG_HOME:-~/.config}/chartroom/node), written on that machine by `node init`. It has no
-# home and no XO. The other machines come from CHARTROOM_NODES ("label[=ssh-target] ...", or
-# "none"), else the radar's list (CHARTROOM_RADAR_MACHINES, else herdr's saved machines).
+# home and no XO. The other machines are, first, the devices enrolled here (lib/fleet.sh): each
+# one's row is its last heartbeat, read from disk, and nothing is sent to it. Then, until every
+# machine has enrolled, the ones in CHARTROOM_NODES ("label[=ssh-target] ...", or "none"), else the
+# radar's list (CHARTROOM_RADAR_MACHINES, else herdr's saved machines), leaving out any whose label
+# is an enrolled device's name or alias. `nodes --ssh` reads only those, as before devices.
 #
-# Other machines are only read. The one command run there is lib/nodeprobe.sh itself, sent as
+# A machine still read over ssh is only read. The one command run there is lib/nodeprobe.sh itself, sent as
 #   ssh -o BatchMode=yes <target> 'PATH="<CHARTROOM_RADAR_REMOTE_PATH>:$PATH" [CR_PROBE_PROJECT=<remote>] bash -s' < lib/nodeprobe.sh
 # so it needs nothing installed there and runs exactly this chartroom's probe. Every probe runs
 # side by side and is ended after CHARTROOM_NODES_TIMEOUT seconds (45).
@@ -159,21 +162,50 @@ nodes_settings() { # sets NODE_C, NODE_MG
 }
 
 # Every machine's row, as one JSON document: {nodes: [...], project, settings}.
-nodes_json() { # <remote to look for, or "">
-  local want="$1" machines dir n i now
+nodes_json() { # <remote to look for, or ""> [ssh: 1 for the ssh list alone]
+  local want="$1" ssh="${2:-0}" machines dir n i now devs='[]'
   nodes_settings
   machines="$(nodes_list_json)" || exit 1
+  if [[ "$ssh" != 1 ]]; then
+    devs="$(fleet_devices_json)"
+    # an enrolled device is read from its heartbeat, never over ssh as well
+    machines="$(jq -c --argjson d "$devs" '([$d[] | select(.status != "revoked") | .name, .aliases[]]) as $known
+      | map(select(.local or ((.machine | IN($known[])) | not)))' <<<"$machines")"
+  fi
   dir="$(mktemp -d)"
   nodes_probe_all "$machines" "$dir" "$want"
   now="$(date +%s)"; n="$(jq length <<<"$machines")"
-  for ((i = 0; i < n; i++)); do
-    node_contact "$dir/$i.out" "$dir/$i.err" "$dir/$i.rc"
-    jq -n --argjson m "$(jq -c --argjson i "$i" '.[$i]' <<<"$machines")" --rawfile probe "$dir/$i.out" \
-      --arg contact "$NODE_CONTACT" --arg err "$NODE_ERR" --arg want "$want" --argjson now "$now" \
-      --argjson c "$NODE_C" --argjson mg "$NODE_MG" "$NODES_ROW_JQ"
-  done | jq -s --arg want "$want" --argjson c "$NODE_C" --argjson mg "$NODE_MG" \
+  {
+    for ((i = 0; i < n; i++)); do
+      node_contact "$dir/$i.out" "$dir/$i.err" "$dir/$i.rc"
+      jq -n --argjson m "$(jq -c --argjson i "$i" '.[$i]' <<<"$machines")" --rawfile probe "$dir/$i.out" \
+        --arg contact "$NODE_CONTACT" --arg err "$NODE_ERR" --arg want "$want" --argjson now "$now" \
+        --argjson c "$NODE_C" --argjson mg "$NODE_MG" "$NODES_ROW_JQ"
+    done
+    n="$(jq length <<<"$devs")"
+    for ((i = 0; i < n; i++)); do nodes_device_row "$(jq -c --argjson i "$i" '.[$i]' <<<"$devs")" "$now"; done
+  } | jq -s --arg want "$want" --argjson c "$NODE_C" --argjson mg "$NODE_MG" \
     '{nodes: ., project: (if $want == "" then null else $want end), settings: {worker_cpu: $c, worker_mem_gb: $mg}}'
   rm -rf "$dir"
+}
+
+# One enrolled device's row, from its last heartbeat: online and stale devices show what they last
+# said (a stale one marked so); a lost, new, revoked or unheard one shows only why.
+nodes_device_row() { # <device json> <now>
+  local d="$1" st contact err probe at
+  st="$(jq -r .status <<<"$d")"
+  case "$st" in
+    online|stale) contact=ok; err="" ;;
+    lost) contact=lost; err="no heartbeat for $(jq -r '.seen_age_s // 0 | if . < 3600 then "\(. / 60 | floor)m" else "\(. / 3600 | floor)h" end' <<<"$d")" ;;
+    new) contact=new; err="enrolled; no heartbeat yet" ;;
+    revoked) contact=revoked; err="its token was revoked" ;;
+    *) contact=unknown; err="the app server is not running here, so no heartbeat is heard (chartroom app serve --daemon)" ;;
+  esac
+  probe="$(jq -r '.probe // ""' <<<"$d")"; at="$(jq -r --argjson now "$2" '.last_seen // $now' <<<"$d")"
+  jq -n --argjson m "$(jq -c '{machine: .name, local: false, target: null, via: "heartbeat",
+        device: {id, status, last_seen, seen_age_s, version, enrolled, aliases}}' <<<"$d")" \
+    --arg probe "$probe" --arg contact "$contact" --arg err "$err" --arg want "" --argjson now "$at" \
+    --argjson c "$NODE_C" --argjson mg "$NODE_MG" "$NODES_ROW_JQ"
 }
 
 # The terminal table.
@@ -186,7 +218,8 @@ NODES_TABLE_JQ='
   | (["NODE", "CONTACT", "ROLE", "CPU", "MEM", "DISK", "POWER", "IDLE", "CREW", "LOGINS", "TOOLS", "CHECKOUTS", "UTIL"] + (if $p then ["PROJECT"] else [] end)),
     (.nodes[] |
       [ .machine + (if .local then " (here)" else "" end),
-        .contact + (if .error then ": " + (.error | .[0:60]) else "" end) ]
+        (if .device and .contact == "ok" then "\(.device.status) \(.device.seen_age_s | ago)"
+         else .contact + (if .error then ": " + (.error | .[0:60]) else "" end) end) ]
       + (if .contact != "ok" then ["-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-"] + (if $p then ["-"] else [] end) else
         [ (if .role == "node" then "node: \(.budgets.max_workers | d)w cpu\(.budgets.cpu | d)% mem\(.budgets.mem | d)%" else .role end),
           "\(.cores | d)" + (if .cores_perf then " (\(.cores_perf)P+\(.cores_eff | d)E)" else "" end) + " load \(.load[0] | d)",
@@ -204,17 +237,18 @@ NODES_TABLE_JQ='
           | "\($ok) ok" + (if $bad == "" then "" else " " + $bad end),
           (if .checkouts_scanned then (.checkouts | d) else "- (no roots)" end),
           (if .util == null then "-" elif .util.max > 1 then "\(.util.max | two) (full)" else (.util.max | two) end) ]
-        + (if $p then [if .project then .project.path elif .checkouts_scanned then "no checkout" else "no roots" end] else [] end)
+        + (if $p then [if .device then "- (not in a heartbeat yet)" elif .project then .project.path elif .checkouts_scanned then "no checkout" else "no roots" end] else [] end)
       end))
   | @tsv'
 
 cmd_nodes() {
-  local json=0 project="" want="" url doc
+  local json=0 project="" want="" url doc ssh=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --json) json=1; shift ;;
+      --ssh) ssh=1; shift ;;
       --project) [[ $# -ge 2 ]] || die "--project needs a path"; project="$2"; shift 2 ;;
-      *) die "nodes: unknown arg $1 (usage: chartroom nodes [--json] [--project PATH])" ;;
+      *) die "nodes: unknown arg $1 (usage: chartroom nodes [--json] [--project PATH] [--ssh])" ;;
     esac
   done
   if [[ -n "$project" ]]; then
@@ -223,7 +257,7 @@ cmd_nodes() {
     [[ "$want" =~ $CR_NODE_REMOTE_RE ]] || die "nodes: cannot read '$url' as host/owner/repo"
   fi
   nodes_settings # (its refusal, here: nodes_json runs in a subshell)
-  doc="$(nodes_json "$want")" || exit 1
+  doc="$(nodes_json "$want" "$ssh")" || exit 1
   if [[ $json -eq 1 ]]; then printf '%s\n' "$doc"; return; fi
   [[ -z "$want" ]] || echo "project: $want"
   jq -r "$NODES_TABLE_JQ" <<<"$doc" | table
@@ -261,6 +295,9 @@ cmd_node_init() {
   done
   f="$(node_config_path)"
   [[ ! -e "$f" || $force -eq 1 ]] || die "node init: $f exists; edit it, or run again with --force to rewrite it"
+  # this machine's id, minted once and kept across --force (a device is known by it: lib/fleet.sh)
+  local nid=""; [[ -f "$f" ]] && nid="$(cfg_value_in "$f" CHARTROOM_NODE_ID)"
+  [[ "$nid" =~ $CR_DEVICE_ID_RE ]] || nid="n-$(fleet_rand_hex 6)"
   probe="$(node_probe_local)"
   cores="$(awk -F'\t' '$1 == "cores" {print $2}' <<<"$probe")"; perf="$(awk -F'\t' '$1 == "cores_perf" {print $2}' <<<"$probe")"
   bat="$(awk -F'\t' '$1 == "battery_pct" {print $2}' <<<"$probe")"
@@ -287,6 +324,7 @@ cmd_node_init() {
     echo "CHARTROOM_NODE_PRIORITY=$priority"
     echo "CHARTROOM_NODE_PROJECT_ROOTS=$roots"
     echo "CHARTROOM_NODE_ACCEPT=on"
+    echo "CHARTROOM_NODE_ID=$nid"
   } >"$tmp" && mv "$tmp" "$f"
   echo "this machine is a node: $f"
   echo "  max workers $workers, cpu $cpu%, memory $mem%, on battery: $battery, priority: $priority, project roots: ${roots:-(none: no checkouts are counted)}"
@@ -310,7 +348,11 @@ cmd_node() {
         *) die "usage: chartroom node probe [--json]" ;;
       esac ;;
     init) cmd_node_init "$@" ;;
-    *) die "usage: chartroom node probe [--json] | node init [--max-workers N] [--cpu PCT] [--mem PCT] [--battery pause|allow] [--priority normal|nice|background] [--project-roots DIRS] [--force]" ;;
+    add) cmd_node_add "$@" ;;
+    rename) cmd_node_rename "$@" ;;
+    revoke) cmd_node_revoke "$@" ;;
+    rotate) cmd_node_rotate "$@" ;;
+    *) die "usage: chartroom node probe [--json] | node init [--max-workers N] [--cpu PCT] [--mem PCT] [--battery pause|allow] [--priority normal|nice|background] [--project-roots DIRS] [--force] | node add [--name N] [--alias A]... [--replace NAME|ID] | node rename <name|id> <new> | node revoke <name|id> | node rotate <name|id>" ;;
   esac
 }
 

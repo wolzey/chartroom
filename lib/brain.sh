@@ -35,7 +35,7 @@ BRAIN_BIN_RE='^[A-Za-z0-9_./~$-]+$' # (in a variable: a bare $- inside [[ =~ ]] 
 # (runs here), refuse. A test fails when a command of bin/chartroom's dispatcher is not listed.
 brain_class() { # <command>
   case "$1" in
-    version|help|-h|--help|-v|--version|homes|node|install-skills|brain) echo local ;;
+    version|help|-h|--help|-v|--version|homes|node|fleet|device|install-skills|brain) echo local ;;
     join|hook) echo refuse ;;
     watch|attach|dashboard|doctor|artifact|init|sweep|rule|new|project) echo hybrid ;;
     worktree|dispatch|event|listen|status|ls|board|resolve|show|todo|inbox|relay|focus|peek|steer|stop|park|accept|close|radar|nodes|tell|ask|snooze|link|brief|set|request|initiative|store|remove|restore|done|removed|permit) echo forward ;;

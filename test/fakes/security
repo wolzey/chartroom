@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# fake macOS `security` for lib/device.sh: generic passwords kept as files in $FAKE_KEYCHAIN_DIR
+# (<service>/<account>). Supports `-i` (commands on stdin, as device.sh sends the token, off the
+# command line), add-generic-password -U -s S -a A -w W, find-generic-password -s S -a A -w, and
+# delete-generic-password -s S -a A. Every call is logged to $FAKE_LOG without the secret.
+d="${FAKE_KEYCHAIN_DIR:?}"
+one() {
+  local cmd="$1" s="" a="" w=""; shift
+  while [[ $# -gt 0 ]]; do case "$1" in -s) s="$2"; shift 2 ;; -a) a="$2"; shift 2 ;; -w) w="${2:-}"; shift; [[ $# -gt 0 ]] && shift ;; *) shift ;; esac; done
+  echo "security $cmd $s $a" >>"${FAKE_LOG:-/dev/null}"
+  [[ ! -f "$d/refuse" ]] || { echo "security: SecKeychainItemCreateFromContent: User interaction is not allowed." >&2; return 36; }
+  case "$cmd" in
+    add-generic-password) mkdir -p "$d/$s"; printf '%s' "$w" >"$d/$s/$a" ;;
+    find-generic-password) [[ -f "$d/$s/$a" ]] || { echo "security: The specified item could not be found in the keychain." >&2; return 44; }; cat "$d/$s/$a"; echo ;;
+    delete-generic-password) [[ -f "$d/$s/$a" ]] || { echo "security: The specified item could not be found in the keychain." >&2; return 44; }; rm -f "$d/$s/$a"; echo "password has been deleted." ;;
+    *) echo "fake security: unsupported $cmd" >&2; return 2 ;;
+  esac
+}
+if [[ "${1:-}" == -i ]]; then
+  rc=0; while read -r -a words; do [[ ${#words[@]} -gt 0 ]] && { one "${words[@]}" || rc=$?; }; done; exit "$rc"
+fi
+one "$@"

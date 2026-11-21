@@ -6,6 +6,13 @@ read-only discovery plus each node's own budgets); stages 2 to 4 are designed he
 built. "Studio" and "m3" below are example labels: an always-on desktop that holds the home of
 record, and a laptop used headlessly.
 
+**Devices push to the brain** (the commander's direction, superseding the ssh protocol below where
+they differ): each machine runs chartroom's device agent, keeps the one connection, outbound, and
+the brain never reaches out to it, holds no key to it, and asks it to open no port.
+[§12](#12-devices-the-brain-never-reaches-out) describes what is built of that: enrolment, the
+device's own revocable token, and heartbeats that Fleet and `chartroom nodes` read. Work is not
+placed on a device yet.
+
 ## 1. Goals and shape
 
 The commander uses one XO in one **home of record**: an always-on desktop (the "Studio"). They reach it from whichever
@@ -282,3 +289,48 @@ stop placing there). It never kills a worker.
 
 **Later, not planned:** `chartroom adopt <id>` would let another home take over a task's record by moving its
 `origin-key` on the lease and copying the record. The lease and spool keys are shaped for it, but nothing is built.
+
+## 12. Devices: the brain never reaches out
+
+Built: enrolment and heartbeats (lib/fleet.sh on the brain, lib/device.sh on a device, the device
+routes in lib/app/server.py). No work is placed on a device yet.
+
+```
+ device (m3, the M5)                                    brain (the Studio): its app server
+ chartroom device run (a LaunchAgent in the login       POST /api/v1/device/join       a one-time code
+   session, dev.chartroom.device)                       POST /api/v1/device/heartbeat  every 15 s
+   every 15 s: its probe (lib/nodeprobe.sh) ──HTTPS──▶  POST /api/v1/device/rotate     a new token
+                                    (Tailscale Serve)   devices/<id>.json, <id>.seen.json
+```
+
+- **Enrolling.** On the brain, `chartroom node add --name m3` prints a code: single use, 10 minutes,
+  only its sha256 is stored. On the device, after `install.sh --device` (no home is made there),
+  `chartroom device join <brain-url> <code>`. The device sends its node id (`CHARTROOM_NODE_ID`,
+  minted once by `node init` and kept across `--force`), host name and hardware id; the brain
+  answers with a token of 32 random bytes and keeps only its sha256. A second entry for the same
+  hardware is refused, naming the first; `node add --replace <name|id>` makes a code that replaces
+  it (the old entry is revoked, its name carried over).
+- **Where the token lives.** On macOS, `join` writes the code to a 0600 file and loads the agent;
+  the agent makes the join itself, in the login session, so the token goes into the login
+  keychain (an ssh session often cannot open it): service `chartroom-device`, account the node id.
+  Where there is no keychain (Linux, `CHARTROOM_KEYCHAIN=none`) it is a 0600 file. It is sent only
+  as a header through curl's config on stdin, never on a command line, and never logged.
+- **Its scope.** The device routes open by a device token alone, and only that device's own; the
+  Tailscale login is ignored there (every device carries the owner's). A device token opens no app
+  route. Ten wrong codes in a minute close the join route for the rest of it.
+- **Revoke, rotate, rename.** `node revoke` drops the hash: the device's next request gets 401, its
+  agent logs it and stops (exit 0, so launchd's `KeepAlive: SuccessfulExit=false` leaves it
+  stopped) and nothing else there is touched. `node rotate` asks for a new token in the next
+  heartbeat's answer: the device makes one and sends it, and the old one stays good for 10 minutes
+  in case the answer is lost. Names are display only (`node rename`; the old one stays an alias).
+- **What the brain makes of the silence.** Decided at read time in lib/fleet.sh, never in the
+  server: `online` (heard within 45 s), `stale` (longer; shown with what it last said), `lost` (10
+  minutes of the endpoint's own uptime), `new`, `revoked`, `unknown` (the app server is not
+  running). The server records when it started (`fleet/endpoint`); a device's silence while it was
+  down is not counted, and after a restart every device is `stale` until it speaks.
+- **Fleet and `chartroom nodes`.** A device's row is its last heartbeat, read from disk: nothing is
+  sent to it. A machine in `CHARTROOM_NODES` whose label is an enrolled device's name or alias is
+  not probed over ssh as well; `chartroom nodes --ssh` reads the ssh list alone, as before.
+- **Leaving.** `chartroom device leave` stops the agent and deletes the token there; revoke it on
+  the brain too.
+

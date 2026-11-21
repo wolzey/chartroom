@@ -23,6 +23,10 @@ common_setup() {
   # Never the real login shell and its rc files (lib/core.sh login_path, lib/nodeprobe.sh): a test
   # that wants one names a fake.
   export CHARTROOM_LOGIN_SHELL=none
+  # Never the real keychain, launchd or hardware id (lib/device.sh): a device's token goes to a
+  # 0600 file and its agent is run by the test itself.
+  export CHARTROOM_KEYCHAIN=none CHARTROOM_LAUNCHCTL=none CHARTROOM_HW_UUID=test-hw-0001
+  unset CHARTROOM_FLEET_DIR CHARTROOM_BRAIN_URL CHARTROOM_DEVICE_HEARTBEAT CHARTROOM_NODE_STALE_SECONDS CHARTROOM_NODE_LOST_MINUTES
   # (A runner's own would move herdr's socket away from this test's HOME: see herdr_sock_up.)
   unset XDG_CONFIG_HOME
   # The doorbell's FIFOs (lib/core.sh), here instead of /tmp/chartroom-<uid>.

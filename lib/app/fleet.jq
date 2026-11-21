@@ -1,10 +1,12 @@
 # fleet.jq - the machines as the app's Fleet shows them (slice 5), from `chartroom nodes --json`
-# (lib/nodes.sh: each node's probe, read over ssh for the others). Input: that JSON. The brain is
-# the machine `nodes` ran on (its .local node): every worker runs there until remote dispatch.
+# (lib/nodes.sh: this machine's probe, each enrolled device's last heartbeat, and over ssh any
+# machine not enrolled yet). Input: that JSON. The brain is the machine `nodes` ran on (its .local
+# node): every worker runs there until remote dispatch.
 # What a machine's health means is decided here, never in the server:
 #   healthy   reached, no sign-in found signed out, the crew's tools answer, disk free >= 15%
-#   degraded  reached, with a check failing (signed out, a tool missing or broken, low disk)
-#   down      not reached (its contact failed)
+#   degraded  reached, with a check failing (signed out, a tool missing or broken, low disk), or a
+#             device whose heartbeat is late (stale: what it last said is shown)
+#   down      not reached (its contact failed; for a device: lost, revoked, or not heard yet)
 # A signed-out tool is also a Needs me item: only the commander can sign in again (one brain: an
 # expired login goes to the inbox). A sign-in that cannot be told is shown, never counted.
 
@@ -28,8 +30,12 @@ def login_check($tools):
         | check(.value | tool_ok; .key; (.value.version // .value.status))) ] as $tools
     | ($n.disk_free_pct // null) as $disk
     | ([$logins[], $tools[]] | map(select(.ok == false))) as $failing
+    | ($n.device // null) as $dev
+    | (if $dev != null and $dev.status == "stale" then ["no heartbeat for \($dev.seen_age_s)s"] else [] end) as $late
     | {name: ($n.machine // $n.target // "?"), role: ($n.role // "node"), brain: (($n.machine // "") == $brain),
-       state: (if ($up | not) then "down" elif ($failing | length) > 0 or ($disk != null and $disk < 15) then "degraded" else "healthy" end),
+       state: (if ($up | not) then "down" elif ($failing | length) > 0 or ($late | length) > 0 or ($disk != null and $disk < 15) then "degraded" else "healthy" end),
+       # how the brain knows: "this machine", "heartbeat" (an enrolled device), else the ssh list
+       source: ($n.via // null), device: $dev,
        error: ($n.error // null), contact: ($n.contact // null),
        power: ($n.power // null), battery_pct: ($n.battery_pct // null), idle_s: ($n.hid_idle_s // null),
        cores: ($n.cores // null), load: ($n.load // null), mem_free_pct: ($n.mem_free_pct // null), disk_free_pct: $disk,
@@ -38,7 +44,7 @@ def login_check($tools):
        # null crew: an hc with no event stream, where every live agent is all that can be told
        crew_live: ($n.crew_live // null), other_agents: ($n.other_agents // null), path_source: ($n.path_source // null),
        logins: $logins, tools: $tools,
-       failing: ([$failing[] | .label] + (if $disk != null and $disk < 15 then ["disk below 15% free"] else [] end)),
+       failing: ($late + [$failing[] | .label] + (if $disk != null and $disk < 15 then ["disk below 15% free"] else [] end)),
        on_battery: (($n.power // "") == "battery")}]
 | {machines: (sort_by([(if .brain then 0 else 1 end), .name])),
    needs: [.[] | . as $m | $m.logins[] | select(.ok == false)

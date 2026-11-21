@@ -10,6 +10,19 @@ const M = window.AppModel;
 const STATE = { healthy: "Healthy", degraded: "Needs a look", down: "Unreachable" };
 
 function pct(n) { return n == null ? "—" : Math.round(n) + "%"; }
+function secs(s) { return s == null ? "" : s < 60 ? s + "s" : s < 3600 ? Math.floor(s / 60) + "m" : Math.floor(s / 3600) + "h"; }
+// How the brain knows a machine: itself, an enrolled device's heartbeat (pushed by the device; the
+// brain never reaches out), or, until it enrols, the probe over ssh.
+function via(m) {
+  if (m.brain) return "this machine";
+  if (m.device) {
+    const d = m.device;
+    return d.status === "online" || d.status === "stale" ? d.status + " · heartbeat " + secs(d.seen_age_s) + " ago"
+      : d.status === "lost" ? "lost · last heartbeat " + secs(d.seen_age_s) + " ago"
+      : d.status === "new" ? "enrolled · no heartbeat yet" : d.status === "revoked" ? "revoked" : "not heard (the brain's endpoint is down)";
+  }
+  return "read over ssh (not enrolled)";
+}
 // The slots are chartroom's own workers there; an XO or a person's own agent is shown apart. An hc
 // with no event stream cannot tell them apart, so then every live agent counts.
 function crew(m) { return m.crew_live != null ? m.crew_live : m.agents_live || 0; }
@@ -33,7 +46,7 @@ export function FleetPage({ fleet, workers, sel, setSel, onRefresh }) {
   const ms = (fleet && fleet.machines) || [];
   if (!fleet) {
     return html`<main class="a-main"><header class="a-head"><div class="a-head-l"><h1>Fleet</h1></div></header>
-      <div class="page-body"><p class="dt-empty">Reading the machines… (every machine's probe, over ssh for the others: up to a minute)</p></div></main>`;
+      <div class="page-body"><p class="dt-empty">Reading the machines… (this one's probe and each device's last heartbeat; a machine not enrolled yet over ssh, up to a minute)</p></div></main>`;
   }
   const bad = ms.filter((m) => m.state !== "healthy");
   const live = workers.length;
@@ -52,6 +65,7 @@ export function FleetPage({ fleet, workers, sel, setSel, onRefresh }) {
       ${tab === "machines" ? html`<div class="m-list">${ms.map((m) => html`<div key=${m.name} class=${"m-row" + (sel === m.name ? " sel" : "")} onClick=${() => setSel(m.name)}>
           <div class="m-l1"><span class=${"glyph " + (m.state === "healthy" ? "ok" : "blocked")}></span><span class="m-name">${m.name}</span>
             <span class="m-role faint">${m.brain ? "brain" : m.role}</span><span class=${m.state === "healthy" ? "faint" : "warn-t"}>${STATE[m.state]}</span>
+            <span class="m-via faint">${via(m)}</span>
             <span class="grow"></span>
             <span class="m-power faint">${m.power === "battery" ? "on battery" + (m.battery_pct != null ? " " + m.battery_pct + "%" : "") : m.power === "ac" ? "plugged in" : ""}</span>
             ${m.budgets && m.budgets.max_workers ? html`<span class="m-slots faint" title=${slotsTitle(m)}><span class="slots">${Array.from({ length: m.budgets.max_workers }, (_, i) =>
@@ -79,6 +93,7 @@ export function MachineDetail({ m, workers, names }) {
     <h2 class="a-detail-title">${m.name} <span class="m-role faint">${m.brain ? "the brain" : m.role}</span></h2>
     <dl class="sp">
       <dt>Health</dt><dd>${STATE[m.state]}</dd>
+      <dt>Connection</dt><dd>${via(m)}${m.device && m.device.version ? html` <span class="faint">· chartroom ${m.device.version}</span>` : null}</dd>
       ${m.failing.length ? html`<dt>To fix</dt><dd><ul class="checks">${m.failing.map((f) => html`<li key=${f}><span class="glyph blocked"></span><span><b>${f}</b>
         ${fixes[f] ? html`<br /><span class="faint">on ${m.name}: <code>${fixes[f]}</code></span>` : null}</span></li>`)}</ul></dd>` : null}
       <dt>Load</dt><dd>${m.load ? m.load.map((x) => x.toFixed(1)).join(" · ") : "—"}${m.cores ? html` <span class="faint">on ${m.cores} cores</span>` : null}</dd>

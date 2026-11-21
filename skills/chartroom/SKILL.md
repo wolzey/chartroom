@@ -263,10 +263,13 @@ When the fleet goes quiet (nothing in flight but waits), or the commander says t
 hot or slow, run the `sweep` skill (`chartroom sweep --apply`, one line to relay).
 
 `chartroom nodes` lists the machines that can take crew work (this one first) with their room,
-logins, tools and checkouts, read-only over ssh. Use it to answer "which machine has room" or
+logins, tools and checkouts: an enrolled device from its last heartbeat (`online`, `stale`,
+`lost`), any other machine read-only over ssh. Use it to answer "which machine has room" or
 "can m3 run this". Workers still run on this machine: dispatching onto another one arrives in a
 later release (docs/multi-machine.md), and you never place work by hand on a machine the
-commander has not made a node (`chartroom node init`, run there by the commander).
+commander has not made a node (`chartroom node init`, run there by the commander). Enrolling,
+revoking or rotating a device (`chartroom node add|revoke|rotate`) changes who can reach the
+brain: do it only on the commander's word.
 
 **On a client home.** When `chartroom doctor` starts with `client: this home lives on the
 brain: <machine>`, this home's records and workers live on another machine (docs/client-homes.md).

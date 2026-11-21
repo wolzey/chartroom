@@ -97,6 +97,10 @@ source "$CR_ROOT/lib/park.sh"
 source "$CR_ROOT/lib/permit.sh"
 # shellcheck source=../lib/nodes.sh
 source "$CR_ROOT/lib/nodes.sh"
+# shellcheck source=../lib/fleet.sh
+source "$CR_ROOT/lib/fleet.sh"
+# shellcheck source=../lib/device.sh
+source "$CR_ROOT/lib/device.sh"
 # shellcheck source=../lib/stuck.sh
 source "$CR_ROOT/lib/stuck.sh"
 # shellcheck source=../lib/brain.sh
@@ -1714,6 +1718,8 @@ cmd_doctor() {
     dashboard_doctor_json | jq -r '"dashboard: port \(.port), bind \(.bind)\(if .bind | startswith("127.") then "" else " (on the network)" end), access token \(if .token_set then "set" else "not set" end), \(if .running then "running on " + .running else "not running" end)"'
     page_doctor_json | jq -r 'if .chrome then "pdf:      \(.chrome) (chartroom artifact pdf)" else "pdf:      - \(.why)" end'
     node_doctor_line
+    fleet_doctor_line
+    device_doctor_line
     echo
     printf '%s\n' "${rows[@]}" | jq -r '[.backend, (if .available then "ok" else "-" end), .steering, .reason] | @tsv' |
       { printf 'BACKEND\tOK\tSTEERING\tWHY NOT\n'; cat; } | table
@@ -2023,15 +2029,27 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           plus each home's XO from herdr. radar machines lists
                                           the machines (CHARTROOM_RADAR_MACHINES, else herdr's
                                           saved ones); CHARTROOM_MACHINE_NAME labels this one
-  chartroom nodes [--json] [--project PATH]
+  chartroom nodes [--json] [--project PATH] [--ssh]
                                           the machines that can take crew work, this one first:
                                           contact, role and budgets, cores and load, memory,
-                                          power, idle time, live agents, logins, tools,
-                                          checkouts and UTIL (projected use with one more
-                                          worker). Other machines are only read: the probe
-                                          script runs there over ssh. Machines come from
-                                          CHARTROOM_NODES, else the radar's list. --project:
-                                          which of them have a checkout of that project
+                                          power, idle time, crew, logins, tools, checkouts and
+                                          UTIL (projected use with one more worker). An enrolled
+                                          device's row is its last heartbeat; a machine not yet
+                                          enrolled (CHARTROOM_NODES, else the radar's list) is
+                                          read with the probe script over ssh. --project: which
+                                          have a checkout of that project; --ssh: the ssh list
+                                          alone, as before devices
+  chartroom node add [--name N] [--alias A]... [--replace NAME|ID]
+                                          a one-time code (10 min) a device joins this brain
+                                          with: chartroom device join <brain-url> <code> there
+  chartroom node rename|revoke|rotate <name|id> [new name]
+                                          an enrolled device: a new display name (the old one
+                                          stays an alias); revoke its token (its agent stops,
+                                          nothing on it is touched); a new token
+  chartroom device join <brain-url> <code> | run [--once] | status [--json] | leave
+                                          on a device: enrol with a brain and run its agent (a
+                                          LaunchAgent on macOS) that sends a heartbeat every
+                                          15 s; it opens no port and the brain never reaches it
   chartroom node probe [--json]           this machine's facts, as `nodes` reads them
   chartroom node init [--max-workers N] [--cpu PCT] [--mem PCT] [--battery pause|allow]
                       [--priority normal|nice|background] [--project-roots DIRS] [--force]
@@ -2089,7 +2107,7 @@ if [[ "$cmd" =~ ^(status|ls|board|todo|inbox|relay)$ ]]; then
   done
 fi
 case "$cmd" in
-  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|steer|stop|attach|park|accept|close|sweep|watch|dashboard|radar|node|nodes|doctor|homes|brain|tell|ask|snooze|app|attachment|link|brief|set|request|initiative|permit|version|help|store|remove|restore|done|removed) "cmd_$cmd" "$@" ;;
+  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|steer|stop|attach|park|accept|close|sweep|watch|dashboard|radar|node|nodes|fleet|device|doctor|homes|brain|tell|ask|snooze|app|attachment|link|brief|set|request|initiative|permit|version|help|store|remove|restore|done|removed) "cmd_$cmd" "$@" ;;
   install-skills) cmd_install_skills "$@" ;;
   ls) cmd_status "$@" ;;
   show) cmd_show "$@" ;;

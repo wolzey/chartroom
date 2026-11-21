@@ -515,6 +515,29 @@ CREW is chartroom's workers against max workers (XOs and other agents shown apar
 - **On macOS, budgets are admission control,** not hard caps: there are no cgroups. A worker's own
   builds can still push a node past its share; placement then sends new work elsewhere.
 
+#### Devices: machines that report to the brain
+
+A machine can instead **report** to the brain: it runs chartroom's device agent, which sends its
+probe to the brain's app server every 15 seconds. The brain never reaches out to it, holds no key
+to it, and asks it to open no port. Its row in `nodes` and Fleet is its last heartbeat. Work is not
+placed on a device yet ([docs/multi-machine.md §12](docs/multi-machine.md#12-devices-the-brain-never-reaches-out)).
+
+```bash
+chartroom node add --name m3                 # on the brain: a one-time code (10 minutes)
+curl -fsSL https://raw.githubusercontent.com/wolzey/chartroom/main/install.sh | bash -s -- --device
+chartroom device join https://<brain>.ts.net <code>   # on the device: enrol and start its agent
+chartroom device status                      # on the device: joined to what, its last heartbeat
+chartroom node rename m3 m3-mini             # on the brain: names are display only
+chartroom node rotate m3 | node revoke m3    # a new token; or none (its agent stops)
+```
+
+- **Its own revocable token.** Only the token's sha256 is kept on the brain. On macOS the agent is a
+  LaunchAgent in the login session, and the token is in the login keychain; elsewhere a 0600
+  file. A token opens that device's routes only, never the app.
+- **Status:** `online`, `stale` (no heartbeat for 45 s), `lost` (10 minutes, counted only while
+  the brain's app server is up), `new`, `revoked`. `chartroom doctor` lists the devices on the
+  brain, and the join and the agent on a device.
+
 ### Client homes: one brain
 
 A home can live on another machine, the **brain** (an always-on desktop), while you keep talking
@@ -1397,6 +1420,11 @@ machine), then `~/.config/chartroom/config` (`KEY=VALUE`, no shell evaluation;
 | `CHARTROOM_RADAR_MACHINES` | herdr's saved machines | the other machines the radar reads, read-only over ssh: `label[=ssh-target] ...`, or `none` |
 | `CHARTROOM_NODES` | the radar's list | the other machines `chartroom nodes` reads: `label[=ssh-target] ...`, or `none` ([nodes](#several-machines-nodes)) |
 | `CHARTROOM_NODES_TIMEOUT` | `45` | seconds `chartroom nodes` waits for a machine's probe |
+| `CHARTROOM_BRAIN_URL` | the app's Tailscale Serve URL | the URL `chartroom node add` tells a device to join ([devices](#devices-machines-that-report-to-the-brain)) |
+| `CHARTROOM_NODE_STALE_SECONDS` / `CHARTROOM_NODE_LOST_MINUTES` | `45` / `10` | a device's heartbeat older than this is `stale`; silent this long while the brain's app server is up, `lost` |
+| `CHARTROOM_DEVICE_HEARTBEAT` | `15` | on a device: seconds between its agent's heartbeats |
+| `CHARTROOM_KEYCHAIN` / `CHARTROOM_LAUNCHCTL` | `/usr/bin/security` / `/bin/launchctl` on macOS | on a device: where its token is kept and how its agent is run; `none` for a 0600 file and an agent you run yourself (`chartroom device run`) |
+| `CHARTROOM_FLEET_DIR` | `fleet/` beside the config file | environment only: the brain's device registry (beside the app server's own state) |
 | `CHARTROOM_LOGIN_SHELL` | `$SHELL` | the shell whose interactive login PATH (`-lic`) the probe checks tools on and what the brain's gate runs gets; `none` keeps the caller's PATH (`CHARTROOM_BRAIN_LOGIN_SHELL` still counts) |
 | `CHARTROOM_WORKER_CPU` / `CHARTROOM_WORKER_MEM_GB` | `1.5` / `1.5` | a worker's assumed cost in cores and GB, in a node's UTIL |
 | `CHARTROOM_NODE_CONFIG` | `~/.config/chartroom/node` | environment only: this machine's node file (`chartroom node init`), with `CHARTROOM_NODE_MAX_WORKERS`, `_CPU_BUDGET`, `_MEM_BUDGET` (percent), `_ON_BATTERY` (`pause`/`allow`), `_PRIORITY` (`normal`/`nice`/`background`), `_PROJECT_ROOTS` and `_ACCEPT` (`on`/`off`) |

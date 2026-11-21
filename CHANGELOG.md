@@ -6,6 +6,13 @@ are stable from 0.1.0.
 
 ## [Unreleased]
 
+### Added
+- **Devices report to the brain.** A machine runs chartroom's device agent and sends the brain its probe every 15 seconds. The brain never reaches out to it, holds no key to it, and asks it to open no port. No work is placed on a device yet.
+  - **Enrolling:** `chartroom node add` on the brain prints a one-time code (10 minutes). `install.sh --device`, then `chartroom device join <brain-url> <code>`, on the device. Its agent is a LaunchAgent in the login session.
+  - **Its own revocable token:** the brain keeps only its sha256; the device keeps it in its login keychain (a 0600 file where there is none). It opens that device's routes only. `node revoke` stops the agent; `node rotate` swaps the token; `node rename` changes the display name.
+  - **Fleet and `chartroom nodes`** show a device from its last heartbeat (`online`, `stale`, `lost`, counted only while the brain's app server is up) and no longer probe it over ssh. `nodes --ssh` reads the ssh list alone.
+  - **`chartroom doctor`** lists the devices on the brain, and the join and the agent on a device.
+
 ### Changed
 - chartroom cleans up after itself. The rule "branches are never deleted" becomes "**chartroom never deletes unlanded work**".
   - **At close:** the task's branch is deleted once its work has landed: merged into its base, on origin at that very commit, or a merged pull request at it (asked of `gh`, so a squash merge counts). Otherwise it is kept, and close says why. A branch checked out elsewhere is kept, and a branch that moved during the check is left alone.

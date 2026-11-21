@@ -61,6 +61,21 @@ setup() { common_setup; }
   [[ "$output" == *"exists and is not a symlink; not replacing it"* ]]
 }
 
+@test "install.sh --device: the checkout and the link, no home, and the join to run next" {
+  src="$BATS_TEST_TMPDIR/src"
+  git clone -q --no-local "$REPO_ROOT" "$src"
+  git -C "$src" checkout -q -B main
+  export CHARTROOM_REPO="$src" CHARTROOM_REF=main
+  run bash "$REPO_ROOT/install.sh" --device
+  [ "$status" -eq 0 ]
+  [ -L "$HOME/.local/bin/chartroom" ]
+  [[ "$output" == *"chartroom device join <brain-url> <code>"* ]]
+  [ ! -e "$CHARTROOM_HOME" ]
+  run bash "$REPO_ROOT/install.sh" --devise
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unknown arg --devise"* ]]
+}
+
 @test "install.sh refuses to overwrite a non-checkout" {
   mkdir -p "$HOME/.local/share/chartroom"; echo x >"$HOME/.local/share/chartroom/file"
   CHARTROOM_REPO="$REPO_ROOT" run bash "$REPO_ROOT/install.sh"

@@ -233,6 +233,8 @@ cmd_app() {
   [[ $noauth -eq 1 || -n "$user" ]] || die "app serve: set CHARTROOM_APP_USER=<your Tailscale login> in $CR_CONFIG_FILE first (only that person gets in), or --no-auth for this machine's own browser"
   mkdir -p "$(app_state_dir)"
   local args=("$CR_ROOT/lib/app/server.py" --port "$port" --pidfile "$(app_pidfile)" --bin "$CR_BIN" --root "$CR_ROOT")
+  # the device routes (lib/fleet.sh): devices push their heartbeats here, under this machine's registry
+  args+=(--fleet-dir "$(fleet_dir)")
   if [[ $noauth -eq 1 ]]; then args+=(--no-auth); else args+=(--user "$user"); fi
   # Web Push (slice 6): off unless the brain's config turns it on; it sends through the browser
   # maker's push service, encrypted end to end

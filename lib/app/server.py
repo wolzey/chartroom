@@ -22,9 +22,19 @@ stdin), so the CLI stays the one writer of the records and a client home's rules
   POST /api/v1/homes/<home>/<tell|answer|accept|close|snooze|unsnooze|done|remove|restore>   (JSON body)
                             202 at once: the verb runs in the background, in order per home;
                             X-Chartroom-Action names it, so a retry is never a second run
+  POST /api/v1/device/join       a device enrols with a one-time code: `chartroom fleet join`
+  POST /api/v1/device/heartbeat  a device's probe, every 15 s (Authorization: Bearer <its token>)
+  POST /api/v1/device/rotate     a device swaps its token for one it made: `chartroom fleet rotate`
+                            The device routes (lib/fleet.sh, lib/device.sh) open by a device's own
+                            token alone: the Tailscale login is ignored there (every device carries
+                            the owner's), and a device token opens nothing else. The server writes
+                            only what a device said (devices/<id>.seen.json); who a device is, its
+                            token's hash, and what its silence means are the CLI's.
 Python 3.9+ (macOS /usr/bin/python3 is 3.9).
 """
 import argparse
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -396,7 +406,7 @@ class Actions:
             return {i: {k: self.recs[i].get(k) for k in ("state", "error", "at", "done_at", "home", "action")} for i in self.order[-200:]}
 
 
-FLEET_EVERY = 300.0  # one brain: health checks every 5 minutes (while someone looks)
+FLEET_EVERY = 60.0  # while someone looks: devices' heartbeats are read from disk; a machine still probed over ssh is asked this often
 
 
 class Fleet:
@@ -429,6 +439,91 @@ class Fleet:
                 self.value = v
                 self.hub.bump()
             self.wake.wait(5)
+
+
+DEVICE_ID = re.compile(r"^n-[0-9a-f]{12}$")
+DEVICE_TOKEN = re.compile(r"^[0-9a-f]{64}$")
+DEVICE_PROTOCOL = 1
+DEVICE_BODY_MAX = 256 * 1024
+DEVICE_EXIT = {0: 200, 2: 400, 3: 401, 4: 409}  # lib/fleet.sh's exit codes
+JOIN_FAILS = 10  # failed codes a minute before joins are refused for the rest of it
+
+
+class Devices:
+    """The device routes' state: the registry's directory (lib/fleet.sh owns it), the endpoint's own
+    uptime (so a device's silence while this server was down is never held against it), and the
+    seen files this server writes."""
+
+    def __init__(self, cli, fleet_dir, fleet):
+        self.cli, self.dir, self.fleet = cli, fleet_dir, fleet
+        self.since = int(time.time())
+        self.fails = []
+        self.lock = threading.Lock()
+
+    def start(self):
+        os.makedirs(os.path.join(self.dir, "devices"), mode=0o700, exist_ok=True)
+        self.write(os.path.join(self.dir, "endpoint"), "%d %d\n" % (os.getpid(), self.since))
+
+    def stop(self):
+        try:
+            with open(os.path.join(self.dir, "endpoint")) as fh:
+                if fh.read().split()[:1] == [str(os.getpid())]:
+                    os.remove(os.path.join(self.dir, "endpoint"))
+        except OSError:
+            pass
+
+    @staticmethod
+    def write(path, text):
+        tmp = "%s.tmp.%d.%d" % (path, os.getpid(), threading.get_ident())
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+
+    def read(self, did, suffix=".json"):
+        try:
+            with open(os.path.join(self.dir, "devices", did + suffix)) as fh:
+                v = json.load(fh)
+            return v if isinstance(v, dict) else None
+        except (OSError, ValueError):
+            return None
+
+    def auth(self, did, token):
+        """(the sha256 that let it in, or None; its record)"""
+        rec = self.read(did)
+        if not rec or rec.get("revoked"):
+            return None, rec
+        h = hashlib.sha256(token.encode()).hexdigest()
+        cur, prev = rec.get("token_sha256") or "", rec.get("prev_sha256") or ""
+        if cur and hmac.compare_digest(h, cur):
+            return h, rec
+        if prev and (rec.get("prev_until") or 0) > time.time() and hmac.compare_digest(h, prev):
+            return h, rec
+        return None, rec
+
+    def heartbeat(self, did, body, addr):
+        now = int(time.time())
+        before = self.read(did, ".seen.json")
+        clock = body.get("clock")
+        probe = body.get("probe")
+        doc = {"last_seen": now, "clock": clock if isinstance(clock, int) else None,
+               "version": str(body.get("version") or "")[:80] or None, "protocol": body.get("protocol"),
+               "probe": probe if isinstance(probe, str) else None, "addr": addr,
+               "agent_started": body.get("started") if isinstance(body.get("started"), int) else None}
+        self.write(os.path.join(self.dir, "devices", did + ".seen.json"), json.dumps(doc, separators=(",", ":")) + "\n")
+        # a device that (re)appears: Fleet reads the machines again now, not at its next turn
+        if not before or now - int(before.get("last_seen") or 0) > 45:
+            self.fleet.wake.set()
+
+    def join_refused(self):
+        with self.lock:
+            now = time.time()
+            self.fails = [t for t in self.fails if now - t < 60]
+            return len(self.fails) >= JOIN_FAILS
+
+    def join_failed(self):
+        with self.lock:
+            self.fails.append(time.time())
 
 
 PUSH_DEVICES = 20  # subscriptions kept at most (each device that turned notifications on)
@@ -929,7 +1024,7 @@ def verb_for(action, body):
     raise KeyError(action)
 
 
-def make_handler(hub, args, root, actions, prs, fleet, pusher):
+def make_handler(hub, args, root, actions, prs, fleet, pusher, devices=None):
     app_dir = os.path.join(root, "app")
     shared_dir = os.path.join(root, "lib", "dashboard")
     user = (args.user or "").strip().lower()
@@ -1213,8 +1308,63 @@ def make_handler(hub, args, root, actions, prs, fleet, pusher):
             except (BrokenPipeError, ConnectionResetError, OSError):
                 return
 
+        def device(self, path):
+            """A device's request: its own token, never the Tailscale login (lib/fleet.sh)."""
+            h = self.headers
+            try:
+                n = int(h.get("Content-Length") or "0")
+            except ValueError:
+                n = -1
+            if n < 0 or n > DEVICE_BODY_MAX:
+                return self.json(413, {"error": "the request is too large"})
+            try:
+                body = json.loads(self.rfile.read(n) or b"{}")
+            except ValueError:
+                return self.json(400, {"error": "the body is not JSON"})
+            if not isinstance(body, dict):
+                return self.json(400, {"error": "the body is a JSON object"})
+            if devices is None:
+                return self.json(404, {"error": "this server takes no devices"})
+            route = path[len("/api/v1/device/"):]
+            if route == "join":
+                if devices.join_refused():
+                    return self.json(429, {"error": "too many wrong codes this minute; wait one"})
+                keep = {k: body.get(k) for k in ("code", "id", "host", "hw_uuid", "version", "protocol")}
+                code, out, err = run([devices.cli, "fleet", "join"], None, stdin=json.dumps(keep).encode(), timeout=30)
+                if code == 3:
+                    devices.join_failed()
+                if code != 0:
+                    return self.json(DEVICE_EXIT.get(code, 500), {"error": last_line(err) or "the join failed"})
+                return self.send(200, out.strip() + "\n", "application/json")
+            if route not in ("heartbeat", "rotate"):
+                return self.json(404, {"error": "not found"})
+            auth = h.get("Authorization") or ""
+            token = auth[7:].strip() if auth.startswith("Bearer ") else ""
+            did = body.get("id")
+            if not isinstance(did, str) or not DEVICE_ID.match(did) or not DEVICE_TOKEN.match(token):
+                return self.json(401, {"error": "unauthorized"})
+            used, rec = devices.auth(did, token)
+            if not used:
+                return self.json(401, {"error": "revoked" if rec and rec.get("revoked") else "unauthorized"})
+            if body.get("protocol") != DEVICE_PROTOCOL:
+                return self.json(409, {"error": "this brain speaks device protocol %d; update chartroom on the device" % DEVICE_PROTOCOL})
+            if route == "heartbeat":
+                devices.heartbeat(did, body, self.client_address[0])
+                return self.json(200, {"ok": True, "name": rec.get("name"), "rotate": bool(rec.get("rotate")),
+                                       "brain_time": int(time.time()), "protocol": DEVICE_PROTOCOL})
+            new = body.get("token")
+            if not isinstance(new, str) or not DEVICE_TOKEN.match(new):
+                return self.json(400, {"error": "a new token is 64 hex characters"})
+            code, out, err = run([devices.cli, "fleet", "rotate"], None,
+                                 stdin=json.dumps({"id": did, "auth_sha256": used, "token": new}).encode(), timeout=30)
+            if code != 0:
+                return self.json(DEVICE_EXIT.get(code, 500), {"error": last_line(err) or "the rotate failed"})
+            return self.json(200, {"ok": True})
+
         def do_POST(self):
             path = urlsplit(self.path).path
+            if path.startswith("/api/v1/device/"):
+                return self.device(path)
             if not self.who():
                 return self.json(403, {"error": "forbidden"})
             h = self.headers
@@ -1307,6 +1457,7 @@ def main():
     ap.add_argument("--push", choices=("on", "off"), default="off", help="Web Push for new Needs me items (CHARTROOM_APP_PUSH)")
     ap.add_argument("--push-subject", default="mailto:chartroom@example.com", help="the VAPID contact (CHARTROOM_APP_PUSH_SUBJECT)")
     ap.add_argument("--push-hold", type=int, default=120, help="seconds a worker's card or decision waits for the XO before it is pushed (CHARTROOM_APP_PUSH_HOLD)")
+    ap.add_argument("--fleet-dir", help="the device registry (lib/fleet.sh): device routes are served only with it")
     args = ap.parse_args()
     if not args.no_auth and not (args.user or "").strip():
         sys.exit("chartroom app: --user (CHARTROOM_APP_USER) or --no-auth")
@@ -1325,9 +1476,16 @@ def main():
     prs = Prs(hub)
     fleet = Fleet(hub, args.bin)
     pusher = Pusher(hub, fleet, args.root, os.path.dirname(args.pidfile) if args.pidfile else None, args.push, args.push_subject, args.push_hold)
-    httpd.RequestHandlerClass = make_handler(hub, args, args.root, actions, prs, fleet, pusher)
+    devices = None
+    if args.fleet_dir:
+        os.environ["CHARTROOM_FLEET_DIR"] = args.fleet_dir  # the fleet verbs this server runs read the same registry
+        devices = Devices(args.bin, args.fleet_dir, fleet)
+        devices.start()
+    httpd.RequestHandlerClass = make_handler(hub, args, args.root, actions, prs, fleet, pusher, devices)
 
     def cleanup(*_):
+        if devices:
+            devices.stop()
         if args.pidfile:
             try:
                 with open(args.pidfile) as fh:

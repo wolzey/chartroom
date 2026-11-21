@@ -7,7 +7,19 @@
 # your agents' skill directories; it prints the `chartroom install-skills` command instead.
 #   CHARTROOM_REPO     git URL or local path to install from (default: the GitHub repo)
 #   CHARTROOM_REF      branch or tag (default: main)
+#
+# install.sh --device  for a machine that only takes crew work from a brain (docs/multi-machine.md,
+#                      Devices): the same checkout and link, no `chartroom init` (a device has no
+#                      home), and curl is required. Then: chartroom device join <brain-url> <code>.
+#                      It installs nothing else; a missing dependency stops it.
 set -euo pipefail
+DEVICE=0
+for a in "$@"; do
+  case "$a" in
+    --device) DEVICE=1 ;;
+    *) printf 'chartroom-install: unknown arg %s (usage: install.sh [--device])\n' "$a" >&2; exit 2 ;;
+  esac
+done
 
 REPO="${CHARTROOM_REPO:-https://github.com/wolzey/chartroom.git}"
 REF="${CHARTROOM_REF:-main}"
@@ -39,6 +51,7 @@ has_bash4() {
 has_bash4 || fail "bash >= 4 is required (found $(bash --version | head -1)). On macOS: brew install bash"
 command -v git >/dev/null || fail "git is required"
 command -v jq >/dev/null || fail "jq is required (macOS: brew install jq; Debian/Ubuntu: apt install jq)"
+[[ $DEVICE -eq 0 ]] || command -v curl >/dev/null || fail "curl is required on a device (it reaches the brain with it)"
 
 if [[ -d "$DIR/.git" ]]; then
   say "updating $DIR"
@@ -59,9 +72,18 @@ if [[ -L "$link" || ! -e "$link" ]]; then
   say "linked $link"
 else fail "$link exists and is not a symlink; not replacing it"; fi
 
-"$DIR/bin/chartroom" init
+[[ $DEVICE -eq 1 ]] || "$DIR/bin/chartroom" init
 case ":$PATH:" in *":$BIN_DIR:"*) ;; *) say "add $BIN_DIR to your PATH" ;; esac
 say "installed $("$DIR/bin/chartroom" version)"
+if [[ $DEVICE -eq 1 ]]; then
+  cat <<MSG
+
+Next, on this device (with a code from \`chartroom node add\` on the brain):
+  chartroom device join <brain-url> <code>   # enrols it and starts its agent
+  chartroom device status                    # what it last told the brain
+MSG
+  exit 0
+fi
 cat <<MSG
 
 Next:
