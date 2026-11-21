@@ -63,7 +63,7 @@ dashboard_inbox() {
        | ([.text | capture("^\\[(?<p>[^\\]]+)\\] +(?<rest>.*)$")] | first) as $proj
        | if $proj and $proj.p != "breaking" then .project = $proj.p | .text = $proj.rest else .project = null end),
        ($store[] | {section, text, short_id: .id, date, project})
-       | select(.short_id == null or ($marks[.short_id] // {}) as $m | ($m.removed == null and $m.done == null))]
+       | select(.short_id == null or (($marks[.short_id] // {}) as $m | $m.removed == null and $m.done == null))]
       | {waiting: map(select(.section == "waiting") | del(.section) | . + focus_marks($focus; "inbox"; .text | startswith("[breaking] "))),
          approvals: map(select(.section == "approvals") | del(.section))}'
 }
