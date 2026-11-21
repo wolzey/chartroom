@@ -175,7 +175,7 @@ item() { snap | jq -c --arg t "$1" '[.needs[] | select(.title | test($t))][0]'; 
   [ ! -e "$CHARTROOM_HOME/questions/$card.answer.json" ]
   # the newest ask, once the XO has answered it in the terminal (steer logs "steered:"), is closed too
   card="$(item "Pick a cache" | jq -r .card)"
-  printf '%s steered: use a 5 minute TTL\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$CHARTROOM_HOME/tasks/$task/events.log"
+  printf '%s steered: use a 5 minute TTL\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$(log_of "$task")"
   run cr ask answer "$card" --via app --note "10 minutes"
   [ "$status" -ne 0 ]
   [[ "$output" == *"has moved on since that question (it is working now)"* ]]

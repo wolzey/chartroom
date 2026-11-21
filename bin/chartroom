@@ -1103,20 +1103,6 @@ cmd_resolve() {
 
 table() { if command -v column >/dev/null 2>&1; then column -t -s $'\t'; else cat; fi; }
 
-# A task's settings, before dispatch: what the skill once had the XO edit in meta.json by hand.
-CR_SET_KEYS='model|effort|sandbox|permission'
-cmd_set() {
-  [[ $# -ge 2 ]] || die "usage: chartroom set <id> key=value... (keys: ${CR_SET_KEYS//|/, })"
-  local id="$1" a k; shift
-  need_task "$id"
-  for a in "$@"; do
-    [[ "$a" == *=* ]] || die "set: '$a' is not key=value"
-    k="${a%%=*}"
-    [[ "$k" =~ ^($CR_SET_KEYS)$ ]] || die "set: '$k' is not a setting (keys: ${CR_SET_KEYS//|/, })"
-  done
-  for a in "$@"; do meta_set "$id" "${a%%=*}" "${a#*=}"; echo "$id: ${a%%=*}=${a#*=}"; done
-}
-
 cmd_peek() {
   local id="${1:-}" n="${2:-15}"; [[ -n "$id" ]] || die "usage: chartroom peek <id> [n]"; need_task "$id"
   local d r; d="$(tdir "$id")"; r="$(backend_runner "$id")"

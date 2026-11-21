@@ -57,7 +57,7 @@ ask_kind() { # <id>
 # A worker's ask at <task> <offset>: prints "<kind>\t<line>" when the events.log line starting at
 # that byte offset is one the commander answers; fails otherwise.
 ask_event_at() { # <task> <offset>
-  local f; f="$(tdir "$1")/events.log"
+  local f; events_path "$1"; f="$EVENTS_PATH"
   [[ -f "$f" ]] || return 1
   local line
   line="$(tail -c +"$(($2 + 1))" "$f" | head -n 1)"
@@ -115,7 +115,7 @@ ask_post() { # <file|-> | quick flags
       --recommend) [[ $# -ge 2 ]] || die "$(ask_usage)"; rec="$2"; shift 2 ;;
       --project) [[ $# -ge 2 ]] || die "$(ask_usage)"; project="$(inbox_project "$2")" || exit 1; shift 2 ;;
       --task) [[ $# -ge 2 ]] || die "$(ask_usage)"; task="$(cmd_resolve "$2")" || exit 1
-        [[ -f "$(tdir "$task")/meta.json" ]] || die "ask: --task $2 is not a task"; shift 2 ;;
+        task_exists "$task" || die "ask: --task $2 is not a task"; shift 2 ;;
       -) src=-; shift ;;
       -*) die "ask: unknown flag $1"$'\n'"$(ask_usage)" ;;
       *) [[ -z "$src" ]] || die "$(ask_usage)"; src="$1"; shift ;;

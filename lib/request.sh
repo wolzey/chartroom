@@ -84,7 +84,7 @@ cmd_request() {
     done)
       shift; local id="${1:-}" task=""; shift || true
       [[ "$id" =~ $CR_REQUEST_ID_RE && -f "$(request_dir)/$id.json" ]] || die "request done: no request $id"
-      if [[ "${1:-}" == --task ]]; then task="${2:-}"; [[ -f "$(tdir "$task")/meta.json" ]] || die "request done: no task $task"; fi
+      if [[ "${1:-}" == --task ]]; then task="${2:-}"; task_exists "$task" || die "request done: no task $task"; fi
       local f; f="$(request_dir)/$id.json"
       jq --arg at "$(now)" --arg t "$task" '.done_at = $at | .task = (if $t == "" then null else $t end)' "$f" >"$f.tmp" && mv "$f.tmp" "$f"
       stamp_changed; echo "request $id done${task:+ (task $task)}" ;;

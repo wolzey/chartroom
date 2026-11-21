@@ -237,6 +237,11 @@ store_meta_set() { # <id> <key> <value>
   store_py meta-set "${STORE_HOME_ARGS[@]}" --id "$1" --key "$2" --value "$3" || exit 1
   store_reset; store_stamp
 }
+store_meta_set_json() { # <id> <key> <json value | "">: "" takes the key out
+  if [[ -z "$3" ]]; then store_py meta-set "${STORE_HOME_ARGS[@]}" --id "$1" --key "$2" --delete || exit 1
+  else store_py meta-set "${STORE_HOME_ARGS[@]}" --id "$1" --key "$2" --json "$3" || exit 1; fi
+  store_reset; store_stamp
+}
 # A store write changes nothing under tasks/, which a view may watch (the Herdr panel watches the
 # folder: mods/herdr-chartroom/schedule.js), so each one rewrites tasks/.store-stamp; the home's
 # own change stamp (.changed) moves as for every write.

@@ -122,9 +122,12 @@ are stable from 0.1.0.
     `meta.json` or `events.log`. A process outside chartroom (a launch wrapper's `exited:`, the
     brief's fallback) appends to `tasks/<id>/events.spool`, which the store takes in once.
   - An event the store cannot take (locked past 10 s, a damaged database) waits in the spool.
-  - `chartroom store doctor|check|legacy|events|meta`, and `chartroom set <id> key=value` for the
-    settings the skill had the XO edit in `meta.json` (model, effort, sandbox, permission).
-  - The dashboard refreshes on the home's change stamp and shows a store task's events.
+  - `chartroom store doctor|check|legacy|events|meta`. `chartroom set <id> key=value` also takes
+    the settings the skill had the XO edit in `meta.json` (model, effort, sandbox, permission),
+    beside the ticket's priority, labels, initiative and milestone, for either kind of task.
+  - The dashboard refreshes on the home's change stamp and shows a store task's events. The app
+    reads a store task's record, events and asks through the same seams (its own records, the
+    relays and the commander's words move into the store in the next stage).
   - `status`, `board` and `todo` read every store task in one call to the store (its state, the
     board's PR links, files and last event,
     waiting window, last line, breaking mark and mentions by the same rules as a file task's,

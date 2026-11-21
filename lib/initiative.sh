@@ -63,7 +63,7 @@ initiative_json() { # <id>
   f="$(init_file "$id")"
   local tasks; tasks="$(jq -r '[.stories[]?.task | select(. != null)] | unique | .[]' "$f")"
   if [[ -n "$tasks" ]]; then
-    rows="$(for t in $tasks; do [[ -f "$(tdir "$t")/meta.json" ]] && status_rows --id "$t"; done | jq -s -c 'map({key: .id, value: {state, short_id, title, last: (.last // null)}}) | from_entries')"
+    rows="$(for t in $tasks; do task_exists "$t" && status_rows --id "$t"; done | jq -s -c 'map({key: .id, value: {state, short_id, title, last: (.last // null)}}) | from_entries')"
   fi
   local decisions comments
   decisions="$( { [[ -f "$(init_dir "$id")/decisions.ndjson" ]] && cat "$(init_dir "$id")/decisions.ndjson"; true; } | jq -R -s -c '[split("\n")[] | fromjson? | select(type == "object")]')"

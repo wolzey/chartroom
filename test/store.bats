@@ -192,6 +192,32 @@ db() { python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); [print("|
   [ "$(jq -r .model "$CHARTROOM_HOME/tasks/$f/meta.json")" = sonnet ]
 }
 
+@test "the app reads a store task: its ticket, its ask, its events file; set takes its properties" {
+  store_on
+  id="$(new_task)"
+  set_meta "$id" '.dispatched = "2026-01-02T10:00:00Z"'
+  cr event "$id" decision "which way? (a) left (b) right" >/dev/null
+  run cr set "$id" priority=high labels=bug,ui initiative=in-abc1 model=opus
+  [ "$status" -eq 0 ]
+  [ "$(cr store meta "$id" | jq -c '[.priority, .labels, .initiative, .model]')" = '["high",["bug","ui"],"in-abc1","opus"]' ]
+  cr set "$id" priority=none labels= initiative=none >/dev/null
+  [ "$(cr store meta "$id" | jq -c '[has("priority"), has("labels"), has("initiative")]')" = '[false,false,false]' ]
+  run cr set "$id" labels='Not OK'
+  [ "$status" -ne 0 ]
+  j="$(cr app task "$id" --json)"
+  [ "$(jq -r .status <<<"$j")" = needs ]
+  # The ask's id is the decision line's byte offset in the rendered events.log, and answers it.
+  ask="$(jq -r .ask.id <<<"$j")"
+  off="${ask##*-}"
+  [ "$(cr store events "$id" | tail -c +"$((off + 1))" | head -n 1 | cut -d' ' -f2-)" = "decision: which way? (a) left (b) right" ]
+  [ "$(jq -r '.events | map(select(test("decision: which way"))) | length' <<<"$j")" = 1 ]
+  [ "$(cr app snapshot --json | jq -r --arg id "$id" '.needs[] | select(.task == $id) | .card')" = "$ask" ]
+  run cr ask answer "$ask" --note "right"
+  [ "$status" -eq 0 ]
+  [ "$(cr app task "$id" --json | jq -r '.answer.answers[0].note')" = right ]
+  [ ! -e "$CHARTROOM_HOME/tasks/$id/meta.json" ]; [ ! -e "$CHARTROOM_HOME/tasks/$id/events.log" ]
+}
+
 @test "store on without python's sqlite3: refused loudly, nothing born" {
   store_on
   run env CHARTROOM_PYTHON="$BATS_TEST_TMPDIR/no-python" "$CHARTROOM" new --project "$PROJECT" --title "no python" --id nopy
@@ -267,6 +293,8 @@ has no events\.log of its own
 ^bin/chartroom:.*\[\[ -f "\$d/meta\.json" \]\] \|\| continue
 ^bin/chartroom:.*for f in "\$CR_HOME"/tasks/\*/meta\.json; do \[\[ "\$f" -ot
 ^lib/dashboard/server\.py:.*glob\.glob\(os\.path\.join\(base, "events\.log"\)\)
+^lib/app/server\.py:.*GET  /api/v1/homes/<home>/tasks/<id>/files/
+^lib/app/server\.py:.*FILE_RECORD = "meta\.json"
 PATTERNS
   cd "$REPO_ROOT"
   shopt -s nullglob

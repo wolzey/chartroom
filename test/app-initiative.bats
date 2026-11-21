@@ -58,7 +58,7 @@ last_told() { cr tell list --json | jq -r '.[-1].text'; }
   s="$(cr initiative story add "$id" --title "Pick a cache")"
   task="$(cr status --json | jq -r '.[] | select(.title | test("stock badge")) | .id')"
   cr initiative story link "$id" "$s" "$task" >/dev/null
-  [ "$(jq -r .initiative "$CHARTROOM_HOME/tasks/$task/meta.json")" = "$id" ]
+  [ "$(meta_of "$task" initiative)" = "$id" ]
   [ "$(cr initiative show "$id" --json | jq -r '.stories[0] | "\(.state) \(.status)"')" = "approved review" ]
   cr accept "$task" >/dev/null
   [ "$(cr initiative show "$id" --json | jq -r '"\(.progress.done)/\(.progress.total)"')" = "1/1" ]

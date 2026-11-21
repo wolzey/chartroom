@@ -259,6 +259,14 @@ meta_set() { # meta_set <id> <key> <string-value>
   if is_store_task "$1"; then store_meta_set "$@"; stamp_changed; return; fi
   jq --arg k "$2" --arg v "$3" '.[$k]=$v | .updated=(now|todate)' "$f" >"$f.tmp" && mv "$f.tmp" "$f" && stamp_changed
 }
+# One key set to a JSON value (a list, a number), or taken out with "": the app's properties.
+meta_set_json() { # <id> <key> <json value | "">
+  local f; f="$(tdir "$1")/meta.json"
+  unset "MC[$1/]"
+  if is_store_task "$1"; then store_meta_set_json "$@"; stamp_changed; return; fi
+  if [[ -z "$3" ]]; then jq --arg k "$2" 'del(.[$k]) | .updated=(now|todate)' "$f" >"$f.tmp"
+  else jq --arg k "$2" --argjson v "$3" '.[$k]=$v | .updated=(now|todate)' "$f" >"$f.tmp"; fi && mv "$f.tmp" "$f" && stamp_changed
+}
 # One line per event, always: newlines in the text become spaces. Rings the home's watches.
 log_event() {
   if is_store_task "$1"; then store_event "$1" "$2" "${3//$'\n'/ }"

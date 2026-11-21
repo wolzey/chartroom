@@ -16,7 +16,7 @@ setup() {
 
 teardown() { cr app stop >/dev/null 2>&1 || true; }
 
-steers() { grep -c ' steered: ' "$CHARTROOM_HOME/tasks/$T/events.log" || true; }
+steers() { events "$T" | grep -c ' steered: ' || true; }
 
 @test "attachment: kept 0600 in the task's folder; the commander's steers the worker, --silent and a worker's do not" {
   printf 'a screenshot' >"$BATS_TEST_TMPDIR/shot.png"
@@ -29,7 +29,7 @@ steers() { grep -c ' steered: ' "$CHARTROOM_HOME/tasks/$T/events.log" || true; }
   [ "$(stat -f %Lp "$f" 2>/dev/null || stat -c %a "$f")" = 600 ]
   [ "$(cr attachment list "$T" --json | jq -r '.[0] | "\(.type) \(.size) \(.by) \(.caption)"')" = "image/png 12 commander before the fix" ]
   [ "$(steers)" -eq $((n0 + 1)) ]
-  grep -q "steered: The commander attached a file to this task: .*shot.png" "$CHARTROOM_HOME/tasks/$T/events.log"
+  events "$T" | grep -q "steered: The commander attached a file to this task: .*shot.png"
   cr attachment add "$T" --by commander --silent "$BATS_TEST_TMPDIR/shot.png" >/dev/null
   CHARTROOM_TASK="$T" cr attachment add "$T" "$BATS_TEST_TMPDIR/shot.png" >/dev/null
   [ "$(steers)" -eq $((n0 + 1)) ]
@@ -72,7 +72,7 @@ steers() { grep -c ' steered: ' "$CHARTROOM_HOME/tasks/$T/events.log" || true; }
   grep -q "^The badge says in stock when it is not.$" "$CHARTROOM_HOME/tasks/$T/brief.md"
   [ "$(ls "$CHARTROOM_HOME/tasks/$T/brief-history" | wc -l | tr -d ' ')" -eq 1 ]
   [ "$(steers)" -eq $((n0 + 1)) ]
-  grep -q 'steered: The commander edited your brief' "$CHARTROOM_HOME/tasks/$T/events.log"
+  events "$T" | grep -q 'steered: The commander edited your brief'
   run cr brief "$T" --sections - <<<'{"Nope":"x"}'
   [ "$status" -ne 0 ]
   [[ "$output" == *"no section '## Nope'"* ]]

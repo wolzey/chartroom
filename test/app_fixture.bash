@@ -12,8 +12,7 @@ app_fixture_task() { # <home> <project> <title> <intent> -> prints the id
   out="$(CHARTROOM_HOME="$1" "$CHARTROOM" new --project "$2" --title "$3" --backend command --command true)"
   id="$(sed -n 's/^id=//p' <<<"$out")"
   perl -0pi -e "s/(## Commander's intent\n\n)/\$1$4\n/" "$1/tasks/$id/brief.md"
-  jq --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.dispatched = $t | .worktree_created = "1"' "$1/tasks/$id/meta.json" >"$1/tasks/$id/meta.tmp" &&
-    mv "$1/tasks/$id/meta.tmp" "$1/tasks/$id/meta.json"
+  CHARTROOM_HOME="$1" set_meta "$id" ".dispatched = \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" | .worktree_created = \"1\""
   printf '%s' "$id"
 }
 

@@ -131,7 +131,7 @@ state() { # waits for both homes' first snapshot
   task="$(jq -r '.homes[0].snapshot.needs[] | select(.kind == "review") | .task' "$BATS_TEST_TMPDIR/state")"
   [ "$(act acme accept "{\"task\":\"$task\"}" a-test-0005)" = 202 ]
   [ "$(outcome a-test-0005)" = "done	" ]
-  grep -q ' note: accepted' "$CHARTROOM_HOME/tasks/$task/events.log"
+  events "$task" | grep -q ' note: accepted'
   inbox="$(jq -r '[.homes[0].snapshot.needs[] | select(.kind == "inbox") | .ref] | first' "$BATS_TEST_TMPDIR/state")"
   [ "$(act acme "done" "{\"ref\":\"$inbox\"}" a-test-0006)" = 202 ]
   [ "$(outcome a-test-0006)" = "done	" ]
@@ -151,6 +151,9 @@ state() { # waits for both homes' first snapshot
   task="$(jq -r '.homes[0].snapshot.tasks[0].id' "$BATS_TEST_TMPDIR/state")"
   [ "$(get "http://127.0.0.1:$PORT/api/v1/homes/acme/tasks/$task/files/brief.md")" = 200 ]
   [ "$(get "http://127.0.0.1:$PORT/api/v1/homes/acme/tasks/$task/files/meta.json")" = 404 ]
+  # its events, from its events.log or (a store task's) from the store
+  [ "$(get "http://127.0.0.1:$PORT/api/v1/homes/acme/tasks/$task/files/events.log")" = 200 ]
+  grep -q ' note: created' "$BATS_TEST_TMPDIR/body"
   plain="$(jq -r '.homes[0].snapshot.tasks[] | select(.title | test("Pick a cache")) | .id' "$BATS_TEST_TMPDIR/state")"
   [ "$(get "http://127.0.0.1:$PORT/api/v1/homes/acme/tasks/$plain/files/report.md")" = 204 ]
   [ "$(get "http://127.0.0.1:$PORT/api/v1/homes/acme/tasks/..%2F..%2Fx/files/brief.md")" = 404 ]
@@ -252,7 +255,7 @@ state() { # waits for both homes' first snapshot
   out="$(outcome a-bulk-0002)"
   [[ "$out" == "failed	refusing to close $dirty: uncommitted work in "* ]]
   [ -f "$wt/notes.txt" ]
-  [ -z "$(jq -r '.closed // empty' "$CHARTROOM_HOME/tasks/$dirty/meta.json")" ]
+  [ -z "$(meta_of "$dirty" closed)" ]
 }
 
 @test "delivery: the state says when the XOs' own chartroom cannot read what the app sends" {

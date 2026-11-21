@@ -30,6 +30,7 @@ usage: chartroom attachment add <id> [--name N] [--type MIME] [--caption C] [--b
        chartroom link <id> <url> [--title T]      chartroom link rm <id> <url>       chartroom link list <id> [--json]
        chartroom brief <id> --sections <file|->   replace sections of the brief: {"Commander's intent": "...", "Spec": "..."}
        chartroom set <id> priority=urgent|high|medium|low|none labels=a,b initiative=<id>|none milestone=<id>|none
+       chartroom set <id> model=<m> effort=<e> sandbox=<mode> permission=<mode>   (before dispatch)
 EOF
 }
 
@@ -141,7 +142,7 @@ cmd_attachment() {
 # purpose, without duplicates or removed ones: [{url, kind, title, by, at, source}].
 links_json() { # <id>
   local d f found; d="$(tdir "$1")"; f="$d/links.ndjson"
-  found="$(cat "$d/events.log" "$d/report.md" 2>/dev/null |
+  found="$({ task_events "$1"; cat "$d/report.md" 2>/dev/null; } |
     grep -oE 'https?://[^][ <>()"'"'"'`]+/(pull|pulls|merge_requests|pullrequest)/[0-9]+' | awk '!seen[$0]++' || true)"
   { [[ -f "$f" ]] && cat "$f"; true; } | jq -R -s -c --arg found "$found" '
     [split("\n")[] | fromjson? | select(type == "object" and (.url | type) == "string")] as $recs
@@ -230,30 +231,38 @@ cmd_brief() {
 $diff"
 }
 
-# set <id> key=value...: the ticket's planning properties, kept in meta.json.
+# set <id> key=value...: a task's settings before dispatch (what the skill once had the XO edit in
+# meta.json by hand) and the ticket's planning properties. Every pair is checked before any is
+# written; each goes through meta_set or meta_set_json, so a store task's row is set the same way.
+CR_SET_KEYS='model|effort|sandbox|permission|priority|labels|initiative|milestone'
 cmd_set() {
   local id="${1:-}"; need_task "$id"; shift
   [[ $# -ge 1 ]] || die "$(ticket_usage)"
-  local kv k v f; f="$(tdir "$id")/meta.json"
+  local kv k v l keys=() vals=() json=()
   for kv in "$@"; do
     [[ "$kv" == *=* ]] || die "set: '$kv' is not key=value"
     k="${kv%%=*}"; v="${kv#*=}"
     case "$k" in
+      model|effort|sandbox|permission) json+=(0) ;;
       priority)
         [[ "$v" =~ ^(urgent|high|medium|low|none)$ ]] || die "set: priority is urgent, high, medium, low or none"
-        jq --arg v "$v" 'if $v == "none" then del(.priority) else .priority = $v end | .updated = (now | todate)' "$f" >"$f.tmp" ;;
+        if [[ "$v" == none ]]; then v=""; json+=(1); else json+=(0); fi ;;
       labels)
-        local l; for l in ${v//,/ }; do [[ "$l" =~ $CR_LABEL_RE ]] || die "set: label '$l' is lowercase letters, digits, . _ - (32 at most)"; done
-        jq --arg v "$v" '.labels = ($v | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0)) | unique) | if .labels == [] then del(.labels) else . end | .updated = (now | todate)' "$f" >"$f.tmp" ;;
+        for l in ${v//,/ }; do [[ "$l" =~ $CR_LABEL_RE ]] || die "set: label '$l' is lowercase letters, digits, . _ - (32 at most)"; done
+        v="$(jq -n -c --arg v "$v" '$v | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0)) | unique | if . == [] then empty else . end')"
+        json+=(1) ;;
       initiative|milestone)
         [[ "$v" == none || "$v" =~ ^[a-z0-9][a-z0-9-]{0,63}$ ]] || die "set: $k is an id (or none)"
-        jq --arg k "$k" --arg v "$v" 'if $v == "none" then del(.[$k]) else .[$k] = $v end | .updated = (now | todate)' "$f" >"$f.tmp" ;;
-      *) die "set: unknown key '$k' (priority, labels, initiative, milestone)" ;;
+        if [[ "$v" == none ]]; then v=""; json+=(1); else json+=(0); fi ;;
+      *) die "set: '$k' is not a setting (keys: ${CR_SET_KEYS//|/, })" ;;
     esac
-    mv "$f.tmp" "$f"
+    keys+=("$k"); vals+=("$v")
   done
-  unset "MC[$id/]"
-  stamp_changed
+  local i
+  for i in "${!keys[@]}"; do
+    if [[ "${json[$i]}" == 1 ]]; then meta_set_json "$id" "${keys[$i]}" "${vals[$i]}"
+    else meta_set "$id" "${keys[$i]}" "${vals[$i]}"; fi
+  done
   echo "set $* on $id"
 }
 
@@ -264,17 +273,18 @@ ticket_json() { # <id>
   d="$(tdir "$id")"
   row="$(status_rows --id "$id" | jq -c '. + {}')"
   [[ -n "$row" ]] || die "no task $id"
+  meta_path "$id"; events_path "$id"
   if IFS=$'\t' read -r off line < <(app_last_ask "$id"); then
     ask="$(jq -n -c --arg id "ev-$id-$off" --arg line "$line" '{id: $id, line: $line,
       kind: ($line | capture("^[^ ]+ (?<k>[a-z-]+):") | if .k == "agent" then "awaiting-input" else .k end)}')"
   fi
   local answer=null
   [[ "$ask" != null && -f "$(ask_dir)/ev-$id-$off.answer.json" ]] && answer="$(cat "$(ask_dir)/ev-$id-$off.answer.json")"
-  jq -n -c --argjson row "$row" --argjson extra "$(dashboard_task_extra "$id")" --argjson meta "$(cat "$d/meta.json")" \
+  jq -n -c --argjson row "$row" --argjson extra "$(dashboard_task_extra "$id")" --argjson meta "$(cat "$META_PATH")" \
     --argjson sections "$(brief_sections_json "$id")" --argjson ask "$ask" --argjson answer "$answer" \
     --argjson attachments "$(attachments_json "$id")" --argjson links "$(links_json "$id")" \
     --argjson tells "$(tells_json --all | jq -c --arg id "$id" 'map(select(.re == $id))')" \
-    --rawfile events "$d/events.log" --arg plan "$(cat "$d/plan.md" 2>/dev/null || true)" \
+    --rawfile events "$EVENTS_PATH" --arg plan "$(cat "$d/plan.md" 2>/dev/null || true)" \
     --arg home "$(home_name_of "$CR_HOME")" '
     ($row.state) as $s
     | {id: $row.id, short_id: $row.short_id, title: $row.title, home: $home, project: $row.project, kind: $row.kind,

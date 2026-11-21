@@ -262,9 +262,13 @@ def meta_doc(row):
     return doc
 
 
-def meta_set(conn, home, tid, key, value):
+def meta_set(conn, home, tid, key, value, delete=False):
+    """One key of a task's record. value is any JSON value (a column takes a scalar only);
+    delete takes the key out, as jq's del(.[$k]) does a file task's."""
     if not KEY_RE.match(key or "") or key == "id":
         raise Fail("meta-set: '%s' is not a key chartroom sets" % key)
+    if key in META_COLS and isinstance(value, (list, dict)):
+        raise Fail("meta-set: '%s' takes a string or a number" % key)
     with Tx(conn):
         hid = home.hid(conn, create=True)
         row = task_row(conn, hid, tid)
@@ -272,10 +276,13 @@ def meta_set(conn, home, tid, key, value):
             raise Fail("no such task: %s" % tid, 3)
         stamp = now()
         if key in META_COLS:
-            conn.execute("UPDATE tasks SET %s = ?, updated = ? WHERE hid = ? AND id = ?" % key, (value, stamp, hid, tid))
+            conn.execute("UPDATE tasks SET %s = ?, updated = ? WHERE hid = ? AND id = ?" % key, (None if delete else value, stamp, hid, tid))
         else:
             extra = json.loads(row["extra"] or "{}")
-            extra[key] = value
+            if delete:
+                extra.pop(key, None)
+            else:
+                extra[key] = value
             conn.execute("UPDATE tasks SET extra = ?, updated = ? WHERE hid = ? AND id = ?", (json.dumps(extra), stamp, hid, tid))
 
 
@@ -898,7 +905,7 @@ def legacy(home):
 def parse(argv):
     """--key value pairs (repeatable --events), and bare flags."""
     opts = {"events": [], "meta": []}
-    flags = {"--meta-all", "--events-open", "--events-all", "--all", "--pool-stdin", "--with-removed", "--extras"}
+    flags = {"--meta-all", "--events-open", "--events-all", "--all", "--pool-stdin", "--with-removed", "--extras", "--delete"}
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -940,7 +947,16 @@ def main(argv):
         task_new(connect(True), home, json.loads(opts.get("json", "null")))
         return 0
     if cmd == "meta-set":
-        meta_set(connect(True), home, opts.get("id", ""), opts.get("key", ""), opts.get("value", ""))
+        if opts.get("delete"):
+            meta_set(connect(True), home, opts.get("id", ""), opts.get("key", ""), None, delete=True)
+        elif "json" in opts:
+            try:
+                value = json.loads(opts["json"])
+            except ValueError:
+                raise Fail("meta-set: --json is not JSON")
+            meta_set(connect(True), home, opts.get("id", ""), opts.get("key", ""), value)
+        else:
+            meta_set(connect(True), home, opts.get("id", ""), opts.get("key", ""), opts.get("value", ""))
         return 0
     if cmd == "event":
         add_event(connect(True), home, opts.get("id", ""), opts.get("kind", ""), opts.get("text", ""), opts.get("src", "cli"))

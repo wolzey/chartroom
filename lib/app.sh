@@ -27,7 +27,7 @@ app_port() { cfg APP_PORT '' "$CR_APP_PORT_DEFAULT"; }
 # A worker's latest ask in a task's events.log: "<byte offset>\t<line>" for the newest decision,
 # blocked, failed or agent awaiting-input line; nothing when there is none.
 app_last_ask() { # <task>
-  local f; f="$(tdir "$1")/events.log"
+  local f; events_path "$1"; f="$EVENTS_PATH"
   [[ -f "$f" ]] || return 0
   LC_ALL=C awk '{ if ($2 ~ /^(decision|blocked|failed):$/ || ($2 == "agent:" && $3 ~ /^awaiting-input/)) { off = pos; line = $0 }
                   pos += length($0) + 1 }
@@ -74,8 +74,9 @@ app_snapshot_json() {
         fi
         intent="$(app_intent "$id")" ;;
     esac
+    meta_path "$id"
     rows+=("$(jq -c --argjson x "$extra" --argjson ask "$ask" --arg intent "$intent" \
-      --argjson links "$(links_json "$id")" --slurpfile meta "$(tdir "$id")/meta.json" \
+      --argjson links "$(links_json "$id")" --slurpfile meta "$META_PATH" \
       '. + $x + {ask: $ask, intent: (if $intent == "" then null else $intent end),
         prs: ([$links[] | select(.kind == "pr") | .url]), links: $links,
         priority: ($meta[0].priority // null), labels: ($meta[0].labels // []),

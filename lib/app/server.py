@@ -96,6 +96,25 @@ def run(argv, home, stdin=None, timeout=VERB_TIMEOUT):
         return 127, "", str(exc)
 
 
+# A file task's own record. A store task has none: its record is in the store (lib/store.sh), so
+# whether it exists, and its events, are asked of chartroom.
+FILE_RECORD = "meta.json"
+
+
+def task_known(bin_, home, tid):
+    """Whether <tid> is a task of <home>, file-born or store-born."""
+    d = os.path.join(home, "tasks", tid)
+    if os.path.isfile(os.path.join(d, FILE_RECORD)):
+        return True
+    return os.path.isdir(d) and run([bin_, "store", "meta", tid], home, timeout=30)[0] == 0
+
+
+def store_task_events(bin_, home, tid):
+    """A store task's event lines (it has no events.log of its own), or None."""
+    code, out, _ = run([bin_, "store", "events", tid], home, timeout=30)
+    return out.encode("utf-8") if code == 0 else None
+
+
 def last_line(text):
     """What went wrong, from a verb's stderr: its first "chartroom: ..." line (the reason; what
     follows is advice), else its last line."""
@@ -912,9 +931,13 @@ def make_handler(hub, args, root, actions, prs, fleet, pusher):
             h = hub.homes.get(home)
             if not h or not TASK_ID.match(tid) or name not in TASK_FILES:
                 return self.send(404, "not found\n", "text/plain; charset=utf-8")
-            if not os.path.isfile(os.path.join(h.path, "tasks", tid, "meta.json")):
+            if not task_known(args.bin, h.path, tid):
                 return self.send(404, "not found\n", "text/plain; charset=utf-8")
             f = os.path.join(h.path, "tasks", tid, name)
+            if name == "events.log" and not os.path.isfile(f):  # a store task's, from the store
+                data = store_task_events(args.bin, h.path, tid)
+                if data:
+                    return self.send(200, data[:4 * 1024 * 1024], "text/plain; charset=utf-8")
             if not os.path.isfile(f):  # a known task without that file (yet): nothing to show
                 return self.send(204, b"", "text/plain; charset=utf-8")
             with open(f, "rb") as fh:
@@ -923,7 +946,7 @@ def make_handler(hub, args, root, actions, prs, fleet, pusher):
 
         def ticket(self, home, tid):
             h = hub.homes.get(home)
-            if not h or not TASK_ID.match(tid) or not os.path.isfile(os.path.join(h.path, "tasks", tid, "meta.json")):
+            if not h or not TASK_ID.match(tid) or not task_known(args.bin, h.path, tid):
                 return self.json(404, {"error": "no such task"})
             key = (home, tid)
             hit = tickets.get(key)
@@ -1017,7 +1040,7 @@ def make_handler(hub, args, root, actions, prs, fleet, pusher):
             """A file the commander attaches: the raw body, at most 25 MB, streamed to a temporary file
             in the task's folder, then `chartroom attachment add`, which keeps it and steers the worker."""
             h = hub.homes.get(home)
-            if not h or not TASK_ID.match(tid) or not os.path.isfile(os.path.join(h.path, "tasks", tid, "meta.json")):
+            if not h or not TASK_ID.match(tid) or not task_known(args.bin, h.path, tid):
                 return self.json(404, {"error": "no such task"})
             try:
                 n = int(self.headers.get("Content-Length") or "-1")
