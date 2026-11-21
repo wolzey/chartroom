@@ -161,6 +161,25 @@ item() { snap | jq -c --arg t "$1" '[.needs[] | select(.title | test($t))][0]'; 
   cr stop "$id" >/dev/null 2>&1 || true
 }
 
+@test "a worker's ask answered from the app: a steer still waiting after the bound leaves the XO told it is under way" {
+  id="$(TITLE="Parked worker" new_task --backend hc:claude)"
+  set_meta "$id" '.dispatched = "2026-01-02T10:00:00Z"'
+  cr event "$id" decision "Which bucket?" >/dev/null
+  card="$(item "Parked worker" | jq -r .card)"
+  [[ "$card" == ev-$id-* ]]
+  # its task lock held by a live process (a park in progress): the steer waits for it
+  sleep 30 & holder=$!
+  ln -s "$holder" "$CHARTROOM_HOME/tasks/$id/.lock"
+  start=$SECONDS
+  CR_ASK_STEER_WAIT=1 run cr ask answer "$card" --via app --note "the blue one"
+  [ "$status" -eq 0 ]
+  (( SECONDS - start < 20 ))
+  [[ "$output" == *"(a steer to the worker is under way)"* ]]
+  [[ "$(cr tell list --json | jq -r '.[-1].text')" == "Answered $id from the app; a steer of it to the worker is still being delivered, so check $id's events before relaying it. Answer to $id's decision (Which bucket?): the blue one" ]]
+  [ "$(cr ask show "$card" --json | jq -r '.answer.steered')" = pending ]
+  kill "$holder" 2>/dev/null || true
+}
+
 @test "snapshot: a worker at a prompt is the XO's to handle, never a card in Needs me" {
   # the state comes from a live backend (a prompt up in its terminal): a status row says so
   s="$(jq -n -c '{home: "/h", home_name: "acme", machine: "m", version: "x", inbox: {waiting: [], approvals: []}, artifacts: [],

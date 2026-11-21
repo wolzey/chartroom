@@ -347,14 +347,27 @@ ask_answer() {
     [[ -n "$project" ]] || { [[ "$re" == "$id" ]] || project="$(project_label "$re" 2>/dev/null || true)"; }
     local say="$words"
     if [[ "$(jq -r .kind <<<"$card")" == event ]]; then
-      if "$CR_BIN" steer "$re" "The commander answered your $(jq -r .event_kind <<<"$card") from the app. $words" >/dev/null 2>&1; then
-        steered=true
-        say="Answered $re directly from the app: the worker has it already (steered), so there is nothing to relay. $words"
+      # (bounded: the app runs this verb under a time limit, and a steer can wait on a park or a
+      # resume. One still going after CR_ASK_STEER_WAIT seconds carries on by itself; the XO is
+      # told it is under way, so the XO is told in any case.)
+      local sp i rc=0 wait_s="${CR_ASK_STEER_WAIT:-40}"
+      "$CR_BIN" steer "$re" "The commander answered your $(jq -r .event_kind <<<"$card") from the app. $words" </dev/null >/dev/null 2>&1 &
+      sp=$!
+      for ((i = 0; i < wait_s * 4; i++)); do kill -0 "$sp" 2>/dev/null || break; sleep 0.25; done
+      if kill -0 "$sp" 2>/dev/null; then
+        steered='"pending"'
+        say="Answered $re from the app; a steer of it to the worker is still being delivered, so check $re's events before relaying it. $words"
+      else
+        wait "$sp" || rc=$?
+        if (( rc == 0 )); then
+          steered=true
+          say="Answered $re directly from the app: the worker has it already (steered), so there is nothing to relay. $words"
+        fi
       fi
     fi
     told="$(tell_send --via app --re "$re" ${project:+--project "$project"} -- "$say")" ||
       warn "answered $id, but could not tell the XO; the answer is kept (chartroom ask show $id)"
-    if [[ -n "$told" || "$steered" == true ]]; then
+    if [[ -n "$told" || "$steered" != false ]]; then
       rec="$(jq -c --arg t "$told" --argjson s "$steered" '.told = (if $t == "" then null else $t end) | .steered = $s' <<<"$rec")"
       ask_answer_set "$id" "$rec"
     fi
@@ -365,7 +378,7 @@ ask_answer() {
     initiative_decide "$init" --card "$id" -- "$words" >/dev/null || warn "answered $id, but could not record it as a decision of $init"
   fi
   stamp_changed
-  echo "answered $id$([[ "$steered" == true ]] && echo " (steered to the worker)")${told:+ (told the XO: $told)}"
+  echo "answered $id$(case "$steered" in true) echo " (steered to the worker)" ;; '"pending"') echo " (a steer to the worker is under way)" ;; esac)${told:+ (told the XO: $told)}"
 }
 
 ask_withdraw() {
