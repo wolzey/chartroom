@@ -12,7 +12,7 @@
 #                                             card offers the commander to allow a retry
 # The policy is lib/permit.jq, the one place its rules live. Its record sits under
 # $CR_HOME/permits/<task>/, outside every directory the worker is given:
-#   grants.json          the task's grants (push-branch, open-pr, merge-auto, comment-pr)
+#   grants.json          the task's grants (push-branch, open-pr, merge-auto, comment-pr, prod-read)
 #   <p-id>.json          a card: the call, why, the rule that sent it, the "always" pattern
 #   <p-id>.answer.json   its answer, written once (noclobber): the first answer wins
 #   <p-id>.late.json     an answer given after the card expired (a one-time pre-approval)
@@ -21,7 +21,7 @@
 # Every outcome is a `permit:` line in the task's events.log, so the trail says who allowed what.
 # close moves the directory into the task's record (tasks/<id>/permits), where nothing trusts it.
 
-PERMIT_GRANTS='push-branch|open-pr|merge-auto|comment-pr'
+PERMIT_GRANTS='push-branch|open-pr|merge-auto|comment-pr|prod-read'
 PERMIT_ANSWERS='once|always|deny'
 
 permit_root() { printf '%s/permits' "$CR_HOME"; }
@@ -464,7 +464,8 @@ permit_grants_text() { # <json array>
     def say: {"push-branch": "push the task branch to its remote (never --force, never another branch)",
               "open-pr": "open or edit the pull request for the task branch",
               "merge-auto": "turn on squash auto-merge for the task branch'"'"'s pull request (gh pr merge --squash --auto)",
-              "comment-pr": "comment on the task branch'"'"'s pull request"}[.] // .;
+              "comment-pr": "comment on the task branch'"'"'s pull request",
+              "prod-read": "read production and the feature-flag service (curl GETs, kubectl get/describe/logs, gcloud describe/list/get-credentials; never a write, a secret'"'"'s value or a shell on a production machine; wget, aws, az, helm and MCP tools still ask)"}[.] // .;
     map(say) | join("; ")' <<<"$1"
 }
 

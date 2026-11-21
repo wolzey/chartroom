@@ -1794,7 +1794,7 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           agents: claude codex), command, subagent, or auto
                                           (omit --backend: pick per CHARTROOM_BACKEND_ORDER).
                                           --grant (repeatable): push-branch, open-pr, merge-auto,
-                                          comment-pr, enforced by the permission hooks
+                                          comment-pr, prod-read, enforced by the permission hooks
   chartroom join [--title T] [--kind ship|scout] [--agent A]
                                           run INSIDE a running agent session (not launched by
                                           chartroom) from its directory: records it as a joined
@@ -1976,7 +1976,8 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           worker to run it again. A worker may not answer
   chartroom permit grant|revoke <id> <name>...
                                           change a task's enforced grants (push-branch, open-pr,
-                                          merge-auto, comment-pr); permit grants <id> lists them
+                                          merge-auto, comment-pr, prod-read); permit grants <id>
+                                          lists them
   chartroom focus <project>[,<project>...] [--scope WORD[,WORD...]] [--for 30m|4h|1d]
                                           focus mode: hold every other project's questions and
                                           results (tasks in decision, blocked, failed,

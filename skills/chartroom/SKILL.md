@@ -136,7 +136,9 @@ creates a record and a brief scaffold. Then edit the brief:
   open a PR into the default branch". A grant that has a name is also passed as
   `chartroom new --grant <name>` (or `chartroom permit grant <id> <name>` later), so a Claude
   worker's permission hooks let exactly that through: `push-branch`, `open-pr`, `merge-auto`
-  (squash auto-merge of the task's PR), `comment-pr`. Without it the call becomes a card.
+  (squash auto-merge of the task's PR), `comment-pr`, `prod-read` (read-only production and
+  feature-flag access: curl GETs, kubectl get/describe/logs, gcloud describe/list; pass it when
+  the commander allows read-only production access). Without it the call becomes a card.
 
 `chartroom dispatch` refuses a brief that has no commander's intent.
 

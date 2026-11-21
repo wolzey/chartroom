@@ -71,7 +71,8 @@ def strip_heredocs:
 def tokens: [scan("(?:\"(?:[^\"\\\\]|\\\\.)*\"|'[^']*'|\\$\\((?:[^()]|\\([^()]*\\))*\\)|\\$\\{[^{}]*\\}|[^[:space:];&|(){}`\"'$]+|\\$)+|[;&|(){}`\n]+")];
 def is_sep: test("^[;&|(){}`\n]+$");
 def unq: gsub("[\"']"; "");
-def subs: [scan("\\$\\(((?:[^()]|\\([^()]*\\))*)\\)") | .[0]] + [scan("`([^`]*)`") | .[0]];
+# (Not arithmetic: $((off + 100)) runs no command.)
+def subs: [scan("\\$\\(((?:[^()]|\\([^()]*\\))*)\\)") | .[0] | select(test("^\\([\\s\\S]*\\)$") | not)] + [scan("`([^`]*)`") | .[0]];
 # A word without its top-level single-quoted parts: the shell runs no $(...) or `...` inside
 # '...'. A $(...) piece is kept whole (its own quotes are read at the next level), and so is an
 # escaped character (don\'t).
@@ -95,7 +96,8 @@ def strip_wrappers:
 # The commands of a command line: [{env, sudo, xargs, path, head, args}].
 def fdredirs: gsub("[0-9]*>&[0-9-]+"; " ") | gsub("&>>?"; ">");
 def segments($depth):
-  strip_heredocs | fdredirs | tokens
+  # (An empty {} is a word, as in `xargs -I{} cmd {}` or `find -exec cmd {} \;`, not a group.)
+  strip_heredocs | fdredirs | gsub("\\{\\}"; "%braces%") | tokens
   | (reduce .[] as $x ({cur: [], segs: []};
        if ($x | is_sep) then (if (.cur | length) > 0 then .segs += [.cur] | .cur = [] else . end) else .cur += [$x] end)
      | .segs + (if (.cur | length) > 0 then [.cur] else [] end))
@@ -276,6 +278,72 @@ def grant_for($R; $grants): # one outward match -> the grant that covers it, or 
     elif $m.kind == "gh-pr-comment" and ($grants | index("comment-pr")) and ($s | gh_target_ok($b; $cur)) then "comment-pr"
     else null end;
 
+# ---------------------------------------------------------------- prod-read: calls that only read
+
+# The positional words of a command's args, past its flags and the values of <valued> flags.
+def pos_words($valued): reduce .[] as $w ({out: [], skip: false};
+  if .skip then .skip = false
+  elif ($w | startswith("-")) then (if ($w | contains("=") | not) and ($valued | index($w)) then .skip = true else . end)
+  else .out += [$w] end) | .out;
+# A word that is only a variable ($OPTS, ${M}): it could expand to anything, a method or a body.
+def bare_var: test("^\\$(\\{[^}]*\\}|[A-Za-z_][A-Za-z0-9_]*)$");
+
+# curl: no method but GET or HEAD, no body, no upload, no config file. Fails closed: a method or
+# word it cannot read is not a read.
+def curl_reads: .args as $a
+  | ([range(0; $a | length) as $i | select($a[$i] | test("^(-[A-Za-z]*X|--request)$")) | $a[$i + 1] // ""]
+     + [$a[] | select(test("^-[A-Za-z]*X.") or startswith("--request=")) | sub("^(-[A-Za-z]*X|--request=)"; "")]) as $methods
+  | ($methods | all(test("^(GET|HEAD)$"; "i")))
+    and ($a | any(test("^(--data|--data-[a-z]+|--form|--form-string|--upload-file|--json|--config|--post[0-9]*)(=|$)")
+                  or test("^-[A-Za-z]*[dFTK]") or bare_var) | not);
+# The files curl writes: -o/-D/-c and their long forms, --output-dir, and the like. (-O and -J
+# write into the current directory, which the local rule keeps inside the work roots.)
+def curl_out_files: .args as $a
+  | [range(0; $a | length) as $i | $a[$i] as $w
+     | if ($w | test("^-[A-Za-z]*[oDc]$")) then $a[$i + 1] // ""
+       elif ($w | test("^-[A-Za-z]*[oDc].")) and ($w | startswith("--") | not) then $w | sub("^-[A-Za-z]*?[oDc]"; "")
+       elif ($w | test("^--(output|dump-header|cookie-jar|output-dir|trace|trace-ascii|stderr|libcurl|etag-save|hsts|alt-svc)$")) then $a[$i + 1] // ""
+       elif ($w | test("^--(output|dump-header|cookie-jar|output-dir|trace|trace-ascii|stderr|libcurl|etag-save|hsts|alt-svc)=")) then $w | sub("^--[a-z-]+="; "")
+       else empty end];
+def kubectl_valued: ["-n","--namespace","--context","--cluster","--user","-s","--server","--kubeconfig","--token","--as","--as-group","-l","--selector","-o","--output","-c","--container","--field-selector","--since","--since-time","--tail","--sort-by","--request-timeout","--template","--chunk-size"];
+# kubectl: a verb that reads, past -n/--context and the like; never a secret's value or the raw
+# kubeconfig.
+def kubectl_reads: (.args | pos_words(kubectl_valued)) as $p | ($p[0] // "") as $v | ($p[1] // "") as $v1
+  | (($v | IN("get", "describe", "logs", "top", "explain", "version", "api-resources", "api-versions", "cluster-info", "events"))
+     or ($v == "config" and ($v1 | IN("view", "get-contexts", "current-context", "get-clusters", "get-users")))
+     or ($v == "auth" and $v1 == "can-i")
+     or ($v == "rollout" and ($v1 | IN("status", "history"))))
+    # never a secret, by name or by path (get --raw /api/v1/.../secrets/x), nor the raw kubeconfig
+    and (.args | any(test("secret"; "i") or startswith("--raw")) | not)
+    # a bare $X could name a secret or add --raw; after logs, top, events or rollout it cannot
+    and (($v | IN("logs", "top", "events", "rollout")) or (.args | any(bare_var) | not));
+# gcloud: groups, then a verb that reads (describe, list, get-credentials, logging read, ...), and
+# no word that changes anywhere on the line (run and deploy are also group names before the verb:
+# gcloud run services describe), nor a word before the verb the line cannot read (`gcloud $G list`
+# could be any command).
+def gcloud_reads: [.args[] | select((startswith("-") or test("[[:space:]]")) | not)] as $w
+  | ([range(0; $w | length) | select($w[.] | test("^(describe|list|list-[a-z-]+|get-credentials|get-iam-policy|get-value|read|tail)$"))] | first) as $i
+  | $i != null
+    and ([range(0; $w | length) as $k | $w[$k] | select(cloud_mutation and (($k < $i and IN("run", "deploy")) | not))] | length) == 0
+    and ($w[0:$i] | any(test("[$`]")) | not)
+    and (.args[0:(.args | index($w[$i]))] | any(bare_var) | not);
+# (Never a command fed its words by xargs, which could be anything. wget and httpie are not
+# covered: they save files by default.)
+def seg_reads:
+  if .sudo or .xargs then false
+  elif .head == "curl" then curl_reads
+  elif .head == "kubectl" then kubectl_reads
+  elif .head == "gcloud" then gcloud_reads
+  else false end;
+
+# The commands a production or flags match stands for: its own, or for a flag-service URL (a text
+# match, with no command of its own) every command whose URL names the service.
+def match_segs($segs): if .seg != null then [.seg] else [$segs[] | select(([.head] + urls) | join(" ") | flags_text)] end;
+# Under prod-read a kubectl or gcloud read is covered wherever it points (which cluster or project
+# is production is not on the line). A curl read is covered only as a production or flags match's
+# command: a GET to any host could carry data out in its URL.
+def cloud_reads($segs): [$segs[] | select(.head | IN("kubectl", "gcloud")) | select(seg_reads)];
+
 # ---------------------------------------------------------------- local
 
 def git_readonly:
@@ -313,7 +381,9 @@ def assign($v; $kv):
   ($kv | capture("^(?<k>[A-Za-z_][A-Za-z0-9_]*)=(?<v>.*)$")) as $a
   | if ($a.v | test("`|\\$\\(")) then .[$a.k] = null else .[$a.k] = ($a.v | expand_vars($v)) end;
 
-def bash_local($R):
+# Every command of the line is local, except the <covered> ones a grant already answers for (their
+# redirects are still checked).
+def bash_local($R; $covered):
   (work_roots($R)) as $wr
   | (.input.command // "") as $cmd
   | ($cmd | segments) as $segs
@@ -328,6 +398,9 @@ def bash_local($R):
       | if (.ok | not) then .
         elif ($s.redirs | any(expand_vars($vars) | (test("[$`]")) or (resolve($c0; $R.user_home) | under_any($wr + dev_roots) | not))) then .ok = false
         elif $s.head == "" or $s.head == "export" then .
+        # A command a grant covers: only the files it writes are still checked (curl -o).
+        elif any($covered[]; . == $s) then
+          (if ($s | curl_out_files | all(expand_vars($vars) | (test("[$`]") | not) and (resolve($c0; $R.user_home) | under_any($wr + dev_roots)))) then . else .ok = false end)
         else
           ($s | .path |= expand_vars($vars) | .args |= map(expand_vars($vars))) as $s
           | if false then .
@@ -368,6 +441,7 @@ def bash_local($R):
       elif (.cwd as $c | $s | path_args | all((test("[$`]") | not) and (resolve($c; $R.user_home) | under_any($wr + dev_roots)))) | not then .ok = false
       else . end
         end) | .ok);
+def bash_local($R): bash_local($R; []);
 
 # ---------------------------------------------------------------- the decision
 
@@ -399,6 +473,7 @@ def decide:
                 | select(test("[$`]") | not) | resolve($R.cwd; $R.user_home)]) as $wpaths
   # A script that names a control file (python3 - <<EOF ... meta.json): the commander's look.
   | ($tool == "Bash" and ($segs | any(.head | test("^(python3?|node|ruby|perl|bash|sh|zsh|jq)$")))) as $interp
+  | ((($q.grants // []) | index("prod-read")) != null) as $prodread
   # 1. guards
   | if ($R.permits // "") != "" and (($cmd | contains($R.permits)) or ($paths | any(under($R.permits))) or (($tool | startswith("mcp__")) and ($text | contains($R.permits))))
       then {verdict: "deny", rule: "guard:store", why: "touches chartroom's permit store"}
@@ -441,8 +516,17 @@ def decide:
             + (if ($redir | any(under_any(work_roots($R) + dev_roots) | not)) then [{class: "elsewhere", kind: "a write outside the worktree"}] else [] end)
           ) as $m
           | if ($m | length) > 0 then
-              [$m[] | if .class == "outward" then grant_for($R; $q.grants // []) else null end] as $g
-              | if ($m | all(.class == "outward")) and ($g | all(. != null)) then {verdict: "allow", rule: "grant:\($g | unique | join(","))", why: "the task's grant covers it"}
+              # Each match needs a grant that covers it: an outward one by its own grant, a production
+              # or flags one by prod-read when its commands only read. Then the line's other
+              # commands must be ones the local rule would pass, so a grant never carries an
+              # unread command along (`git push origin <branch>; rm -rf ~/x`).
+              [$m[] | if .class == "outward" then {g: grant_for($R; $q.grants // []), segs: [.seg]}
+                elif $tool == "Bash" and (.class | IN("production", "flags")) and (($q.grants // []) | index("prod-read"))
+                     and (match_segs($segs) as $ms | ($ms | length) > 0 and ($ms | all(seg_reads)))
+                  then {g: "prod-read", segs: match_segs($segs)}
+                else {g: null} end] as $c
+              | if ($c | all(.g != null)) and ($tool != "Bash" or ($q | bash_local($R; [$c[].segs[]] + (if $prodread then cloud_reads($segs) else [] end))))
+                  then {verdict: "allow", rule: "grant:\([$c[].g] | unique | join(","))", why: "the task's grant covers it"}
                 else ([$m[] | select(.class != "outward")] + [$m[] | select(.class == "outward")] | first) as $f
                   | {verdict: "card", rule: "commander:\($f.class)", why: $f.kind}
                 end
@@ -451,6 +535,8 @@ def decide:
             elif (file_tools | index($tool)) and ($paths | length) > 0 and ((write_tools | index($tool)) == null or ($paths | all(under_any(work_roots($R)))))
               then {verdict: "allow", rule: "local:files", why: "inside the worktree"}
             elif $tool == "Bash" and ($q | bash_local($R)) then {verdict: "allow", rule: "local:bash", why: "inside the worktree"}
+            elif $tool == "Bash" and $prodread and (cloud_reads($segs) | length) > 0 and ($q | bash_local($R; cloud_reads($segs)))
+              then {verdict: "allow", rule: "grant:prod-read", why: "the task's grant covers it"}
             elif $tool == "WebSearch" then {verdict: "allow", rule: "local:search", why: "a web search reads only"}
             else {verdict: "card", rule: "commander:unlisted", why: "no rule covers it"}
             end

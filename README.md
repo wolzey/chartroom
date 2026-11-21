@@ -1070,7 +1070,7 @@ A Claude worker's permission prompts come to chartroom. Every Claude worker carr
 `PreToolUse`, `PermissionRequest` and `PermissionDenied` hooks.
 
 - **The policy answers routine calls.** One file, `lib/permit.jq`, holds the rules. It allows work
-  inside the worktree, and what the task's grants (`new --grant push-branch|open-pr|merge-auto|comment-pr`)
+  inside the worktree, and what the task's grants (`new --grant push-branch|open-pr|merge-auto|comment-pr|prod-read`)
   let through.
 - **Everything else becomes a card.** That covers production, secrets, feature flags, money,
   anything outward-facing without a grant, and other places or machines. The card wakes the XO

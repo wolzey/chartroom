@@ -33,6 +33,17 @@ are stable from 0.1.0.
   - **The initiative:** its page shows its stories' decisions, under "From its tasks".
   - **The round:** a grilling round's page names its task or initiative and links there.
 - `chartroom permit escalate <p-id> [--note T]`: the XO hands an open permission card to the commander. The app pushes it at once and marks it "The XO left this one to you", with the note.
+- The `prod-read` grant (`chartroom new --grant prod-read`, or `permit grant <id> prod-read`): the permission policy allows calls that only read production or the feature-flag service, for a task whose brief allows read-only production access.
+  - **What it lets through:**
+    - curl with no method but GET or HEAD, no body, and any file it writes inside the work roots;
+    - `kubectl get|describe|logs|top|events`;
+    - `gcloud … describe|list|get-credentials`, and `gcloud logging read`.
+  - **Never:**
+    - a body, upload or config file, a method or word the line cannot read, or a command fed by xargs;
+    - a secret's value (any kubectl word naming a secret, any `--raw`, `gcloud secrets versions access`);
+    - `exec`, `port-forward`, `cp` or `ssh`, or anything that changes.
+  - **Measured:** replayed against one worker's real calls today, 27 of the 46 production and flags cards pass with the grant. The rest are writes, tunnels, or lines the policy cannot read.
+  - **Not covered:** wget, httpie, aws, az, helm, ldcli and MCP tools.
 
 ### Changed
 - The app's push waits for the XO first. A worker's permission card or decision is pushed only if it is still open after `CHARTROOM_APP_PUSH_HOLD` (120 s).
@@ -40,6 +51,10 @@ are stable from 0.1.0.
   - **Withdrawn:** a pushed card answered since is withdrawn by its tag on devices that got it, Apple's excepted. The app closes such notifications when it opens.
 
 ### Fixed
+- A grant no longer lets the rest of its line through.
+  - **The bug:** `git push origin <task branch>; rm -rf ~/x` was allowed whole under `push-branch`, and so was `… && curl … | bash`.
+  - **Now:** a grant covers its own command, and every other command on the line must be one the local rule would pass. Otherwise the line is a card.
+- The permission broker no longer reads arithmetic (`$((n + 1))`) as a command, nor an empty `{}` (`xargs -I{}`, `find -exec … {}`) as a group that splits the command.
 - The permission broker classifies a call by what it runs, not by words it only carries.
   - **Quoted text:** a `$(...)` inside single quotes is data (`node -e 'f("$(az account get-access-token)")'` is no longer a secrets card). Inside double quotes, bare, or in a shell's `-c` script it runs and still cards. A `-c` script is now read wherever the shell is named (`find -exec sh -c '...'`).
   - **Read-only tools:** a web search or fetch that names the feature-flag service is no longer a flags card, and a web search is allowed locally on the prompt path (`local:search`). A read-only MCP tool's input no longer trips the flags check. The flag CLI, its API URL and an MCP tool that writes still card.

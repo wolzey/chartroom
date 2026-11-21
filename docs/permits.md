@@ -73,9 +73,16 @@ chartroom permit grant <id> open-pr         # permit revoke <id> <name>; permit 
 | `open-pr` | `gh pr create` for the task branch, and `gh pr edit` / `gh pr ready` on its PR | `-R/--repo` |
 | `merge-auto` | `gh pr merge [<task branch>] --squash --auto` | `--admin`, `--merge`, `--rebase`, `--delete-branch`, a PR number, `-R` |
 | `comment-pr` | `gh pr comment [<task branch>]` | `-R` |
+| `prod-read` | Calls that only read production or the feature-flag service. **curl:** no method but `GET`/`HEAD`, and any file it writes (`-o`, `-D`, `-c`, `--output-dir`) inside the work roots or `/dev/null`. **kubectl:** `get`, `describe`, `logs`, `top`, `events`, `explain`, `config view\|get-contexts`, `rollout status\|history`. **gcloud:** `describe`, `list`, `get-credentials`, `logging read`, `get-iam-policy`. A kubectl or gcloud read is covered on any cluster or project. A curl read is covered only when the call is a production or flags match, since a GET to any other host could carry data out. | A body or upload (`-d`, `--json`, `-F`, `-T`, even with `-G`), a config file (`-K`), a method or word the line cannot read (`-X "$M"`, `curl $OPTS`), a command fed by `xargs`, a secret (any kubectl word naming one, any `--raw`, `gcloud secrets versions access`), `exec`, `port-forward`, `cp`, `ssh`, and anything that changes |
 
-A grant only covers an outward-facing match. A command that also touches production, secrets,
-the feature-flag service, money or another machine is still a card.
+A grant covers its own matches only. Production and flags matches are covered by `prod-read`;
+outward-facing ones by the other grants. A command that also touches secrets, money or another
+machine is still a card. So is a line whose other commands the local rule would not pass:
+`git push origin <task branch>; rm -rf ~/x` is a card even with `push-branch`. `prod-read`
+cannot tell which host is production; it judges what a call does, not where it goes. A word
+that is only a variable (`$OPTS`) is never trusted, but a variable inside a word
+(`https://…/x$EXTRA`) is read as part of a URL. wget, httpie, aws, az, helm, ldcli and MCP tools
+are not covered.
 
 ## The policy: `lib/permit.jq`
 
