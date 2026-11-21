@@ -173,6 +173,26 @@ are stable from 0.1.0.
   share, battery, priority, project roots) in `~/.config/chartroom/node`, defaults from its own
   probe. It makes no home. `chartroom node probe [--json]` prints what `nodes` reads, and
   `doctor` says whether this machine is a node.
+- Permission cards: a Claude worker's permission prompts come to chartroom instead of waiting on
+  its terminal (docs/permits.md).
+  - **Three hooks on every Claude worker** (hc, herdr, tmux, cmux, and now headless):
+    `PreToolUse` (`hook <id> pre-tool`, which replaces `pre-bash`, still accepted),
+    `PermissionRequest` and `PermissionDenied`.
+  - **One policy file, `lib/permit.jq`.** It allows routine work inside the worktree and what the
+    task's grants (`new --grant` or `permit grant`: push-branch, open-pr, merge-auto, comment-pr)
+    let through.
+  - **The rest becomes a card.** The card wakes the XO as `permit: asks p-xxxx: ...`, and the
+    worker's call waits `CHARTROOM_PERMIT_WAIT_SECONDS` (900), then is denied.
+  - **`chartroom permit ls|show|answer|grant|revoke|grants`.** Answers are `once`, `always` (until
+    the task closes) or `deny` with a note. The first answer wins, and a late allow is kept as a
+    one-time pre-approval plus a steer.
+  - **Auto mode's classifier refusals** are recorded, with a retry card.
+  - **The audit trail.** Every outcome is a `permit:` event, a new core kind that
+    `chartroom event` refuses.
+  - **A worker cannot answer its own card.** The verbs refuse it, by its environment or a worker
+    ancestor, and the hook denies its tool calls that touch the record.
+  - **Watch and state.** An open card makes the task `decision`, and the prompt it shows does not
+    wake the XO twice. `close` archives the record into the task.
 - A Bash guard for Claude workers: a pattern kill is refused. A worker's `pkill -f` stopped the
   commander's dev server and other workers' servers, since theirs match the same pattern. Every
   Claude worker chartroom launches with `--settings` (hc, herdr, tmux, cmux) now gets a `PreToolUse`

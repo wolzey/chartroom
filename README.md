@@ -1050,6 +1050,27 @@ a minute (`CHARTROOM_LOOK_INTERVAL`), with one read of its terminal or output fi
 `skills/chartroom/references/backends.md` has the table of each stuck state per backend. A joined
 session (your own) and a subagent (the host's) are not looked at.
 
+## Permission cards: no prompt only a terminal can answer
+
+A Claude worker's permission prompts come to chartroom. Every Claude worker carries
+`PreToolUse`, `PermissionRequest` and `PermissionDenied` hooks.
+
+- **The policy answers routine calls.** One file, `lib/permit.jq`, holds the rules. It allows work
+  inside the worktree, and what the task's grants (`new --grant push-branch|open-pr|merge-auto|comment-pr`)
+  let through.
+- **Everything else becomes a card.** That covers production, secrets, feature flags, money,
+  anything outward-facing without a grant, and other places or machines. The card wakes the XO
+  as `permit: asks p-xxxx: <call> (<rule>)`. The worker's call waits up to 15 minutes, then is
+  denied, and the worker posts a `decision`.
+- **Answering.** `chartroom permit answer <p-id> once|always|deny [--note ...]`: the first answer
+  wins. "always" lasts until the task closes, and a late allow is kept as a one-time pre-approval.
+- **Auto mode's refusals** are recorded too, with a card that can allow a retry.
+- **The audit trail.** Each outcome is a `permit:` line in the task's events.
+- **A worker cannot answer its own card or forge an allow.** The record lives outside its
+  directories, and the verbs refuse a worker.
+
+[docs/permits.md](docs/permits.md) has the details and the limits.
+
 ## Idle workers park
 
 A Claude Code worker that has finished its turn still holds its agent and that agent's MCP
@@ -1292,6 +1313,10 @@ change before 1.0.
   Tighten them with `CHARTROOM_CODEX_SHIP_SANDBOX`, `CHARTROOM_CLAUDE_ALLOWED_TOOLS`,
   `CHARTROOM_CLAUDE_HEADLESS_PERMISSION`, or per task with `new --permission` / `meta.sandbox`.
 - Interactive workers use your agent's own settings unless the task sets `--permission`.
+- A Claude worker's permission prompts go through chartroom's policy and cards (see Permission
+  cards): routine calls inside its worktree are allowed, grants are enforced by name, and the rest
+  waits on the commander, then is denied. The worker cannot answer its own cards. This is layered
+  defence against the same Unix user, not a sandbox.
 - A relay from another home is delivered, never acted on: chartroom runs nothing because one
   arrived, and the XO treats its text as data to weigh.
 - A page is crew-written HTML, so it is treated as untrusted everywhere: kept with a policy that

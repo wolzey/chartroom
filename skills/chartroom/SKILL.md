@@ -133,7 +133,10 @@ creates a record and a brief scaffold. Then edit the brief:
   pointers such as files, tickets, and docs. Keep it concrete and short, with no speculative scope.
 - **Authority**: leave the default (commit on the task branch, no push) unless the commander
   granted more *for this task*. If they did, write the exact grant, for example "may push and
-  open a PR into the default branch".
+  open a PR into the default branch". A grant that has a name is also passed as
+  `chartroom new --grant <name>` (or `chartroom permit grant <id> <name>` later), so a Claude
+  worker's permission hooks let exactly that through: `push-branch`, `open-pr`, `merge-auto`
+  (squash auto-merge of the task's PR), `comment-pr`. Without it the call becomes a card.
 
 `chartroom dispatch` refuses a brief that has no commander's intent.
 
@@ -178,6 +181,9 @@ wake, as `[<id>] [<project>] <event>`; keep the project when you relay it:
 - `agent: turn-ended (stopped its turn without reporting)`: a session worker went idle silently.
   A turn (or run) that ends right after a `waiting` event is not a wake.
 - `waiting overdue: ...`: a stopped worker's `waiting` window ran out (once per wait).
+- `permit: asks p-xxxx: <call> (<rule>, <what>) ...`: a Claude worker's permission hook raised a
+  card the policy could not answer, and the worker's call waits on it (15 min, then denied). See
+  **permit asks** below.
 - `agent: awaiting-input: ...`: on any live backend, an approval or question prompt is up, or a
   startup dialog chartroom would not answer: a folder trust dialog, or Codex's "Hooks need review".
 - `stalled: no output or events for N min ... Last output: ...`: a task in flight has gone quiet:
@@ -211,7 +217,17 @@ On a wake:
   decision. If it went quiet mid-task, nudge it with `chartroom steer <id> "continue; remember to
   record events"`. Codex sessions can report an intermediate turn end while still working, so peek
   before you nudge.
-- **awaiting input**: peek. A routine in-worktree action (tests, installs, local git) may be
+- **permit asks**: relay it to the commander as it is, with its call, why and rule, and the
+  three answers: Allow once, Always for this task, Deny (with an optional note). It is theirs:
+  the policy already answered everything routine (lib/permit.jq). On their word only, answer it:
+  `chartroom permit answer <p-id> once|always|deny [--note "<their words>"] --via xo`. Never
+  answer a card on your own judgment, and never relax the policy to make cards go away. A card
+  that runs out denies the call and the worker posts a `decision`; an allow given after that is
+  still kept (`permit answer` pre-approves the call and tells the worker to run it again). A
+  `refused: a worker tried to answer ...` wake is a worker forging its own approval: tell the
+  commander.
+- **awaiting input**: peek. While a permission card is open for the task, its prompt does not
+  wake you again (the card is the wake). A routine in-worktree action (tests, installs, local git) may be
   approved by typing into the worker's terminal (`chartroom attach <id>`, or the runner's own
   send-keys), but only when the highlighted option is the allow option. Anything outside the
   worktree, or anything outward-facing, goes to the commander. `steer` refuses while a Codex
