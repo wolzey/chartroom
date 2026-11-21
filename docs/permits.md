@@ -95,7 +95,9 @@ All the rules live in one file. **First match wins:**
    - **secrets:** `.env*` (not `.env.example`); `~/.ssh`, cloud credentials, `.netrc`, `.npmrc`,
      keychains; `op`, `vault`, `security`, `gh auth token`, `gh secret`; printing the
      environment.
-   - **flags:** the feature-flag service (`ldcli`, its API and MCP tools).
+   - **flags:** the feature-flag service (`ldcli`, its API's URL, and MCP tools named for it or
+     sent to it). Words that only name it are not a use: a web search, a fetched page, the
+     input of an MCP tool whose name says it only reads.
    - **money:** Stripe, cloud billing.
    - **outward:**
      - git: `git push`, `git remote add|set-url`;
@@ -109,7 +111,7 @@ All the rules live in one file. **First match wins:**
    - **controls:** the worktree's `.claude/`, `.mcp.json`, `.git/config`, `.git/hooks`, and
      `git config`.
 6. **`local:*` → allow**, only for a prompt Claude would show:
-   - reads anywhere, since secrets were carded already;
+   - reads anywhere, since secrets were carded already, and a web search (`local:search`);
    - writes, tests, installs, local git, a dev server on localhost and scratch files inside the
      worktree, the task dir, the scratchpad and `/tmp`.
 7. **Otherwise:** a card for a prompt (`commander:unlisted`). For `PreToolUse`, no opinion:
@@ -118,7 +120,11 @@ All the rules live in one file. **First match wins:**
 **How Bash is read.**
 - The command is split into commands at `; & | ( ) { }`, backticks and newlines, respecting
   quotes.
-- `$(...)`, `` `...` ``, `sh -c '...'` and `eval` are read too.
+- `$(...)`, `` `...` ``, `sh -c '...'` and `eval` are read too. A shell's `-c` script is read
+  wherever the shell is named (`find -exec sh -c '...'`, `docker exec x bash -c '...'`).
+- Text inside single quotes is data: the shell runs no `$(...)` there, so
+  `node -e 'f("$(az account get-access-token)")'` names a token command without running it.
+  Inside double quotes it runs, and is read.
 - Heredoc bodies are skipped unless they are fed to a shell.
 - `cd` is followed, and so are the line's own `VAR=value` assignments (`S=/tmp/x; cat $S/a`).
 - A word it cannot resolve (`$X`, `$(...)`) is never trusted in a command that writes.

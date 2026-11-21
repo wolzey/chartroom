@@ -18,15 +18,16 @@
 #                          elsewhere (other places and machines, sudo), controls (the worker's own
 #                          settings, hooks, git config); except that when every match is
 #                          `outward` and a task grant covers each one: grant:<name> allow
-#   5. local:*      allow  only for "permission" (a prompt Claude would show): reads anywhere, and
-#                          writes, tests, installs, local git, a dev server, scratch files inside
-#                          the worktree, the task dir, the scratchpad and /tmp
+#   5. local:*      allow  only for "permission" (a prompt Claude would show): reads anywhere, a
+#                          web search, and writes, tests, installs, local git, a dev server,
+#                          scratch files inside the worktree, the task dir, the scratchpad and /tmp
 #   6. otherwise    card for "permission"; none for "pre-tool" (Claude's own flow decides)
 #
 # Bash is read as quoted words split into commands at ; & | ( ) { } backticks and newlines, with
-# $(...), `...`, `sh -c '...'` and `eval` read too, heredoc bodies skipped (unless fed to a shell),
-# each command named by its first word past VAR=value and wrappers (env, timeout, xargs, ...). It
-# is a classifier for routine work, not a sandbox: what it cannot read never becomes an allow.
+# $(...) and `...` (not inside '...', where the shell runs nothing), `sh -c '...'` and `eval` read
+# too, heredoc bodies skipped (unless fed to a shell), each command named by its first word past
+# VAR=value and wrappers (env, timeout, xargs, ...). It is a classifier for routine work, not a
+# sandbox: what it cannot read never becomes an allow.
 
 def lc: ascii_downcase;
 def esc: gsub("(?<c>[.+?^$()\\[\\]{}|\\\\*])"; "\\\(.c)");
@@ -71,6 +72,12 @@ def tokens: [scan("(?:\"(?:[^\"\\\\]|\\\\.)*\"|'[^']*'|\\$\\((?:[^()]|\\([^()]*\
 def is_sep: test("^[;&|(){}`\n]+$");
 def unq: gsub("[\"']"; "");
 def subs: [scan("\\$\\(((?:[^()]|\\([^()]*\\))*)\\)") | .[0]] + [scan("`([^`]*)`") | .[0]];
+# A word without its top-level single-quoted parts: the shell runs no $(...) or `...` inside
+# '...'. A $(...) piece is kept whole (its own quotes are read at the next level), and so is an
+# escaped character (don\'t).
+def unsq: [scan("\\\\[\\s\\S]|\"(?:[^\"\\\\]|\\\\.)*\"|'[^']*'|\\$\\((?:[^()]|\\([^()]*\\))*\\)|[^\"'\\\\$]+|[\\s\\S]")]
+  | map(select(startswith("'") | not)) | join("");
+def shells: ["bash", "sh", "zsh", "dash", "ksh"];
 def is_redirect: test("^[0-9]*[<>]");
 
 def wrappers: ["sudo","doas","exec","command","builtin","env","nohup","nice","time","timeout","setsid","xargs","do","then","else","elif","if","while","until","!","caffeinate","gtimeout"];
@@ -107,12 +114,16 @@ def segments($depth):
             redirs: [$parts.r[] | select(. != "" and (startswith("&") | not))]}) as $s
       | $s,
         (if $depth < 3 then
-           ($toks[] | subs[] | segments($depth + 1)[]),
-           (if ($s.head | IN("bash", "sh", "zsh", "dash", "ksh")) then
-              ($s.args | to_entries[] | select(.value | test("^-[A-Za-z]*c$")) | .key) as $k
-              | ($s.args[$k + 1] // "") | segments($depth + 1)[]
-            elif $s.head == "eval" then ($s.args | join(" ")) | segments($depth + 1)[]
-            else empty end)
+           ($toks[] | unsq | subs[] | segments($depth + 1)[]),
+           # A shell's -c script, wherever the shell is named (`find -exec sh -c '...'`, `docker
+           # exec x bash -c '...'`), and eval's words.
+           (([$s.path] + $s.args) as $w
+            | range(0; $w | length) as $i
+            | select(($w[$i] | split("/") | last) | IN(shells[]))
+            | ($w[$i + 1:] | until(length == 0 or (.[0] | test("^-[A-Za-z]*c$")); .[1:])) as $r
+            | select(($r | length) > 1)
+            | $r[1] | segments($depth + 1)[]),
+           (if $s.head == "eval" then ($s.args | join(" ")) | segments($depth + 1)[] else empty end)
          else empty end) ];
 def segments: segments(0);
 
@@ -222,6 +233,9 @@ def write_tools: ["Write","Edit","MultiEdit","NotebookEdit"];
 def tool_paths($R):
   [(.input.file_path // .input.notebook_path // .input.path // empty) | strings | select(. != "") | resolve($R.cwd; $R.user_home)];
 
+# An MCP tool whose name says it reads, and does not say it writes.
+def mcp_read_only: lc | test("(^|_)(get|list|search|read|query|view|fetch|show|describe|status|logs|health|snapshot|traffic)(_|$)")
+  and (test("(^|_)(send|post|create|update|delete|remove|comment|publish|deploy|merge|upload|write|set|add|schedule|invite|share|transfer|pay|charge|refund|edit|draft|reply|forward|trash|archive|label|move|rename|revoke|rollback|promote|unset|apply|self|request|call|run|exec|execute)(_|$)") | not);
 def mcp_classes:
   (.tool | lc) as $n
   | [ (if ($n | test("launch[-_ ]?darkly")) then {class: "flags", kind: .tool} else empty end),
@@ -365,16 +379,16 @@ def decide:
   | (if $tool == "Bash" then ($in.command // "") else "" end) as $cmd
   | (if $tool == "Bash" then ($cmd | segments) else [] end) as $segs
   # What the text checks (secrets, flags, money) read: for Bash the commands, their words and
-  # URLs, never quoted phrases or heredoc bodies (a commit message, a script's text).
+  # URLs, never quoted phrases or heredoc bodies (a commit message, a script's text). A web search
+  # or fetch reads and changes nothing, so the words it carries are never a class.
   | (if $tool == "Bash" then [$segs[] | .path, (.args[] | select(test("[[:space:]]") | not)), .redirs[]] | join(" ")
      elif (file_tools | index($tool)) then $paths | join(" ")
      elif ($tool | startswith("mcp__")) then ($in | tostring)
-     elif ($tool | IN("WebFetch", "WebSearch")) then ($in.url // $in.query // "" | tostring)
      else "" end) as $text
-  # The flag service is reached by its CLI, its API's URL or an MCP tool, not by a path or a search
-  # pattern that names it.
+  # The flag service is reached by its CLI, its API's URL or an MCP tool, not by a path, a search
+  # pattern or a read-only MCP tool's input that names it.
   | (if $tool == "Bash" then [$segs[] | .head, (urls[])] | join(" ")
-     elif ($tool | startswith("mcp__")) or ($tool | IN("WebFetch", "WebSearch")) then $text
+     elif ($tool | startswith("mcp__")) and ($tool | mcp_read_only | not) then $text
      else "" end) as $utext
   | ([$segs[] | .redirs[] | select(test("[$`]") | not) | resolve($R.cwd; $R.user_home)]) as $redir
   # What a Bash line writes: its redirects, and the paths of commands that change files.
@@ -437,6 +451,7 @@ def decide:
             elif (file_tools | index($tool)) and ($paths | length) > 0 and ((write_tools | index($tool)) == null or ($paths | all(under_any(work_roots($R)))))
               then {verdict: "allow", rule: "local:files", why: "inside the worktree"}
             elif $tool == "Bash" and ($q | bash_local($R)) then {verdict: "allow", rule: "local:bash", why: "inside the worktree"}
+            elif $tool == "WebSearch" then {verdict: "allow", rule: "local:search", why: "a web search reads only"}
             else {verdict: "card", rule: "commander:unlisted", why: "no rule covers it"}
             end
         end

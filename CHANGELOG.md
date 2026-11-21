@@ -20,6 +20,10 @@ are stable from 0.1.0.
   - **Withdrawn:** a pushed card answered since is withdrawn by its tag on devices that got it, Apple's excepted. The app closes such notifications when it opens.
 
 ### Fixed
+- The permission broker classifies a call by what it runs, not by words it only carries.
+  - **Quoted text:** a `$(...)` inside single quotes is data (`node -e 'f("$(az account get-access-token)")'` is no longer a secrets card). Inside double quotes, bare, or in a shell's `-c` script it runs and still cards. A `-c` script is now read wherever the shell is named (`find -exec sh -c '...'`).
+  - **Read-only tools:** a web search or fetch that names the feature-flag service is no longer a flags card, and a web search is allowed locally on the prompt path (`local:search`). A read-only MCP tool's input no longer trips the flags check. The flag CLI, its API URL and an MCP tool that writes still card.
+  - Inline code stays never-local: when Claude itself would ask about a `node -e` line, it is still a `commander:unlisted` card.
 - The app: a grilling round works on the phone.
   - **The cause:** a later stylesheet kept its two desktop columns at every width, so the question was squeezed to one word a line.
   - **Now:** one column, with the question full width and its options as large targets. The question list becomes a progress row ("Question 1 of 3", a dot per question, previous and next); picking an option moves on to the next question.

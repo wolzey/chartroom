@@ -113,6 +113,22 @@ pre-tool|[]|card commander:controls|sqlite3 ~/.local/state/chartroom/chartroom.d
 pre-tool|[]|none none|grep -rn CHARTROOM_DB lib/
 pre-tool|[]|none none|CHARTROOM_DB=/tmp/t/chartroom.db bats test/store.bats
 pre-tool|[]|none none|bats -f "permit answer" test/permit.bats
+# text in single quotes is data (p-61a0): the shell runs no $(...) there; elsewhere it does
+pre-tool|[]|none none|node -e 'console.log(M.firstLine("TOKEN=$(az account get-access-token) az pipelines runs list"))' ./lib/first-line.js
+permission|[]|card commander:unlisted|node -e 'console.log(M.firstLine("TOKEN=$(az account get-access-token)"))'
+pre-tool|[]|card commander:secrets|TOKEN=$(az account get-access-token) node x.js
+pre-tool|[]|card commander:secrets|echo "token: $(az account get-access-token)"
+pre-tool|[]|card commander:secrets|docker exec app bash -e -c 'az account get-access-token'
+pre-tool|[]|card commander:outward|find . -name x -exec sh -c 'git push origin main' \;
+pre-tool|[]|card commander:flags|curl -s https://app.launch-darkly.example/api/v2/flags/default
+pre-tool|[]|card commander:outward|bash -euo pipefail -c 'git push origin main'
+pre-tool|[]|card commander:secrets|bash -o pipefail -c 'az account get-access-token'
+pre-tool|[]|card commander:outward|echo $(bash -c 'git push origin main')
+pre-tool|[]|card commander:secrets|K=$(cat '.env')
+pre-tool|[]|card commander:production|X=$(kubectl --context 'prod' get pods)
+pre-tool|[]|card commander:outward|echo don\\'t $(git push origin main) won\\'t
+pre-tool|[]|card commander:outward|echo 'a'"$(git push origin main)"'b'
+pre-tool|[]|none none|printf '%s' '`git push origin main`'
 EOF
   [ "$bad" -eq 0 ]
   # Not Bash: the files a write tool may touch, and questions.
@@ -124,6 +140,13 @@ EOF
   [ "$(verdict pre-tool [] mcp__slack__slack_send_message '{"channel":"x","text":"hi"}')" = "card commander:outward" ]
   [ "$(verdict pre-tool [] mcp__slack__slack_read_channel '{"channel":"x"}')" = "none none" ]
   [ "$(verdict permission [] AskUserQuestion '{"questions":[]}')" = "none question" ]
+  # a web search reads only, whatever it names (p-b7c1); the flag service's own tool is still a card
+  [ "$(verdict pre-tool [] WebSearch '{"query":"Launch Darkly tag syntax for prerequisites"}')" = "none none" ]
+  [ "$(verdict permission [] WebSearch '{"query":"Launch Darkly tag syntax for prerequisites"}')" = "allow local:search" ]
+  [ "$(verdict pre-tool [] WebFetch '{"url":"https://docs.launch-darkly.example/docs/flags","prompt":"tags"}')" = "none none" ]
+  [ "$(verdict pre-tool [] mcp__slack__slack_search_public '{"query":"launch darkly"}')" = "none none" ]
+  [ "$(verdict pre-tool [] mcp__fetch__http_request '{"url":"https://app.launch-darkly.example/api/v2/flags/x","method":"PATCH"}')" = "card commander:flags" ]
+  [ "$(verdict pre-tool [] mcp__launch_darkly__update_flag '{"key":"x","on":true}')" = "card commander:flags" ]
   # git's global options before push are not the task branch's push
   [ "$(verdict pre-tool '["push-branch"]' Bash '{"command":"git -c remote.origin.pushurl=/x push origin cap/x"}')" = "card commander:outward" ]
   [ "$(verdict pre-tool '["push-branch"]' Bash '{"command":"git -C /other push origin cap/x"}')" = "card commander:outward" ]
