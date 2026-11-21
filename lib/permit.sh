@@ -70,14 +70,15 @@ permit_desc() { # <tool> <input json>
 }
 
 # The policy's input for one hook payload (lib/permit.jq's header says what each field is). It runs
-# before every tool call of every worker, so it reads the payload and meta.json once each, and the
+# before every tool call of every worker, so it reads the payload and the task's record once each, and the
 # call's signature only when a pre-approval or an "always" record could need it.
 permit_query() { # <id> <event> <payload>
   local id="$1" ev="$2" payload="$3" tool cmd cur="" wt branch sig="" pre="" pd
   pd="$(permit_tdir "$id")"
   { IFS= read -r tool; IFS= read -r cmd; } < <(jq -r '(.tool_name // ""), ((.tool_input.command | strings) // "" | gsub("\n"; " ") | .[0:4000])' <<<"$payload") || return 1
   [[ -n "$tool" ]] || return 1
-  { IFS= read -r wt; IFS= read -r branch; } < <(jq -r '(.worktree // ""), (.branch // "")' "$(tdir "$id")/meta.json") || return 1
+  meta_path "$id"; [[ -n "$META_PATH" ]] || return 1
+  { IFS= read -r wt; IFS= read -r branch; } < <(jq -r '(.worktree // ""), (.branch // "")' "$META_PATH") || return 1
   # The worktree's branch, only when a grant could need it.
   if [[ "$tool" == Bash && -s "$pd/grants.json" && -n "$wt" && -d "$wt" && "$cmd" =~ (^|[^A-Za-z0-9_-])(git|gh)[[:space:]] ]]; then
     cur="$(git -C "$wt" branch --show-current 2>/dev/null || true)"
@@ -87,11 +88,11 @@ permit_query() { # <id> <event> <payload>
     [[ -f "$pd/pre/$sig" ]] && pre="$(cat "$pd/pre/$sig" 2>/dev/null || true)"
   fi
   jq -c --arg ev "$ev" --arg sig "$sig" \
-    --arg wt "$wt" --arg td "$(tdir "$id")" --arg permits "$(permit_root)" --arg uh "$HOME" \
+    --arg wt "$wt" --arg td "$(tdir "$id")" --arg permits "$(permit_root)" --arg uh "$HOME" --arg db "${STORE_DB:-$CR_DB}" \
     --arg branch "$branch" --arg cur "$cur" --argjson grants "$(permit_grants_json "$id")" \
     --argjson always "$(permit_always_json "$id")" --arg pre "$pre" '
     {event: $ev, tool: .tool_name, input: (.tool_input // {}), sig: $sig, cwd: (.cwd // $wt),
-     roots: {worktree: $wt, task_dir: $td, scratch: (.scratchpad_dir // ""), permits: $permits, user_home: $uh},
+     roots: {worktree: $wt, task_dir: $td, scratch: (.scratchpad_dir // ""), permits: $permits, user_home: $uh, db: $db},
      branch: $branch, current_branch: $cur, grants: $grants, always: $always, pre: (if $pre == "" then null else $pre end)}' <<<"$payload"
 }
 
@@ -265,8 +266,8 @@ permit_denied() { # <id> <payload> <query> <desc>
 # ---------------------------------------------------------------- answers and grants
 
 # 0 when this process runs under a chartroom worker: its environment says so, or an ancestor is a
-# claude started with a task's claude-settings.json (every launched Claude worker is), in any home
-# whose task record exists. Neither the environment nor the config decides it, since a worker sets
+# claude started with a task's claude-settings.json (every launched Claude worker is), in any home,
+# while that file exists (a store task has no meta.json beside it). Neither the environment nor the config decides it, since a worker sets
 # both. The XO, the app and the commander's terminal have no such ancestor. A process that detaches
 # itself from its worker (a double fork) escapes this check: the PreToolUse guard, which refuses
 # any tool call that answers a permit or touches the record, is the first line.
@@ -276,7 +277,7 @@ permit_from_worker() {
   for i in $(seq 1 40); do
     args="$(ps -o args= -p "$p" 2>/dev/null || true)"
     if [[ "$args" =~ ^[^[:space:]]*claude[^[:space:]/]*[[:space:]](.*[[:space:]])?--settings[[:space:]=]([^[:space:]]*/tasks/[^/[:space:]]+)/claude-settings\.json ]]; then
-      [[ -f "${BASH_REMATCH[2]}/meta.json" ]] && return 0
+      [[ -f "${BASH_REMATCH[2]}/claude-settings.json" || -f "${BASH_REMATCH[2]}/meta.json" ]] && return 0
     fi
     p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ' || true)"
     [[ -n "$p" && "$p" -gt 1 ]] || break
@@ -284,7 +285,7 @@ permit_from_worker() {
   return 1
 }
 permit_refuse_worker() { # <what> <task id or ""> -> dies
-  if [[ -n "$2" && -f "$(tdir "$2")/meta.json" ]]; then
+  if [[ -n "$2" ]] && task_exists "$2"; then
     permit_log "$2" "refused: a worker tried to $1 (guard:self-answer)"
     log_event "$2" decision "[breaking] a worker tried to $1; chartroom refused it. Need: the commander's look at what the worker was doing (chartroom peek $2)" >/dev/null 2>&1 || true
   fi

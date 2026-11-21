@@ -481,16 +481,25 @@ def first_word(text):
     return w[0] if w else ""
 
 
+PERMIT_RETRY = re.compile(r" asks p-[0-9a-f]+: allow a retry of ")
+PERMIT_ANSWERED = re.compile(r" by (commander|app) | \(expired\)")
+
+
 def state_of(lines):
     """state_of's awk, for a dispatched task that is not closed."""
-    s = ""
+    s, pa = "", False
     for line in lines:
         f = line.split()
         k, w = (f[1] if len(f) > 1 else ""), (f[2] if len(f) > 2 else "")
         if (k == "note:" and w == "dispatched") or k == "steered:":
-            s = "working"
+            s, pa = "working", False
         if k in ("decision:", "blocked:", "failed:"):
-            s = k[:-1]
+            s, pa = k[:-1], False
+        # A permission card waits on the commander (lib/permit.sh); its answer, or its expiry, ends it.
+        if k == "permit:" and w == "asks" and not PERMIT_RETRY.search(line) and (s != "decision" or pa):
+            s, pa = "decision", True
+        if k == "permit:" and pa and ((w in ("allowed", "denied") and PERMIT_ANSWERED.search(line)) or w == "closed"):
+            s, pa = "working", False
         if k == "done:":
             s = "review"
         if k == "note:" and w == "accepted" and s == "review":

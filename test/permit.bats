@@ -37,7 +37,7 @@ answer() { as_commander permit answer "$@"; }
 # One policy verdict, straight from lib/permit.jq.
 verdict() { # <event> <grants json> <tool> <input json> [current branch]
   jq -n --arg ev "$1" --argjson g "$2" --arg t "$3" --argjson in "$4" --arg cur "${5:-cap/x}" '{event: $ev, tool: $t, input: $in, sig: "s", cwd: "/w/wt",
-    roots: {worktree: "/w/wt", task_dir: "/h/tasks/x", scratch: "/tmp/scr", permits: "/h/permits", user_home: "/u/me"},
+    roots: {worktree: "/w/wt", task_dir: "/h/tasks/x", scratch: "/tmp/scr", permits: "/h/permits", user_home: "/u/me", db: "/s/chartroom.db"},
     branch: "cap/x", current_branch: $cur, grants: $g, always: $always, pre: null}' --argjson always "${ALWAYS:-[]}" | jq -r -f "$REPO_ROOT/lib/permit.jq" | jq -r '"\(.verdict) \(.rule)"'
 }
 
@@ -107,6 +107,9 @@ pre-tool|[]|deny guard:self-answer|chartroom permit answer p-1234 once
 pre-tool|[]|deny guard:store|ls /h/permits/x
 pre-tool|[]|deny guard:controls|echo x > /h/tasks/x/meta.json
 pre-tool|[]|none none|cat /h/tasks/x/meta.json
+pre-tool|[]|deny guard:controls|cp /tmp/x.db /s/chartroom.db
+pre-tool|[]|card commander:controls|sqlite3 /s/chartroom.db "UPDATE tasks SET worktree = '/'"
+pre-tool|[]|card commander:controls|sqlite3 ~/.local/state/chartroom/chartroom.db .dump
 pre-tool|[]|none none|bats -f "permit answer" test/permit.bats
 EOF
   [ "$bad" -eq 0 ]
@@ -198,7 +201,7 @@ EOF
 
 @test "permission: a card Claude goes on without (its terminal answered, or the worker stopped) closes at once" {
   task_with_worktree --backend command --command "$STUB {id}"
-  f="$CHARTROOM_HOME/tasks/$id/meta.json"; jq '.dispatched = "2026-01-01T00:00:00Z"' "$f" >"$f.tmp" && mv "$f.tmp" "$f"
+  set_meta "$id" '.dispatched = "2026-01-01T00:00:00Z"'
   payload Bash "$(bash_in 'git push origin HEAD')" >"$BATS_TEST_TMPDIR/p.json"
   "$CHARTROOM" hook "$id" permission <"$BATS_TEST_TMPDIR/p.json" >/dev/null 3>&- &
   hp=$!
@@ -221,7 +224,7 @@ EOF
   "$CHARTROOM" hook "$id" permission <"$BATS_TEST_TMPDIR/p.json" >"$BATS_TEST_TMPDIR/out" 3>&- &
   wait_card; p="$(card_id)"
   sleep 2
-  [ -z "$(grep "closed $p" "$CHARTROOM_HOME/tasks/$id/events.log")" ]
+  [ -z "$(events "$id" | grep "closed $p")" ]
   jq -cn '{type: "user", message: {content: [{type: "tool_result", tool_use_id: "toolu_1", content: "pushed"}]}}' >>"$t"
   wait_event "$id" "permit: closed $p: the worker went on" 10
   wait
@@ -246,6 +249,8 @@ EOF
   run env CHARTROOM_TASK="$id" "$CHARTROOM" permit answer "$p" once
   [ "$status" -ne 0 ]; [[ "$output" == *"a worker may not answer"* ]]
   # a process started under a worker's claude (an ancestor launched with a task's settings)
+  # (A store task has no meta.json: its settings file, which every Claude worker has, marks it.)
+  [[ -f "$CHARTROOM_HOME/tasks/$id/claude-settings.json" ]] || printf '{}\n' >"$CHARTROOM_HOME/tasks/$id/claude-settings.json"
   ln -s "$(type -P bash)" "$BIN/claude"
   run "$BIN/claude" -c '"$0" permit answer "$1" once; rc=$?; exit $rc' "$CHARTROOM" "$p" --settings "$CHARTROOM_HOME/tasks/$id/claude-settings.json"
   [ "$status" -ne 0 ]
@@ -294,7 +299,7 @@ EOF
 
 @test "denied: auto mode's refusal is recorded and a retry card pre-approves the call once" {
   task_with_worktree --backend command --command "$STUB {id}"
-  f="$CHARTROOM_HOME/tasks/$id/meta.json"; jq '.dispatched = "2026-01-01T00:00:00Z"' "$f" >"$f.tmp" && mv "$f.tmp" "$f"
+  set_meta "$id" '.dispatched = "2026-01-01T00:00:00Z"'
   out="$(payload Bash "$(bash_in 'gh api repos/o/r/issues -f title=x')" | jq -c '. + {reason: "[Unsanctioned Communication]"}' | cr hook "$id" denied)"
   [ -z "$out" ]
   # a retry card holds no call: the worker carries on, so the task stays working
@@ -309,11 +314,11 @@ EOF
 
 @test "state and watch: an open card is a decision, its answer resumes work, and its prompt wakes once" {
   task_with_worktree --backend command --command "$STUB {id}"
-  f="$CHARTROOM_HOME/tasks/$id/meta.json"; jq '.dispatched = "2026-01-01T00:00:00Z"' "$f" >"$f.tmp" && mv "$f.tmp" "$f"
+  set_meta "$id" '.dispatched = "2026-01-01T00:00:00Z"'
   hook permission Bash "$(bash_in 'git push origin HEAD')" >/dev/null &
   wait_card; p="$(card_id)"
   [ "$(cr status --json --all | jq -r --arg i "$id" '.[]? // . | select(.id == $i) | .state')" = decision ]
-  printf '%s agent: awaiting-input: hc: agent is waiting on an approval or question prompt\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$CHARTROOM_HOME/tasks/$id/events.log"
+  printf '%s agent: awaiting-input: hc: agent is waiting on an approval or question prompt\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$(log_of "$id")"
   run cr watch --once
   [[ "$output" == *"permit: asks $p"* ]]
   [[ "$output" != *"awaiting-input"* ]]

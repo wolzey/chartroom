@@ -64,6 +64,23 @@ same() {
   [ "$(same | jq -r .state)" = stopped-silent ]
 }
 
+@test "parity: a permission card is a decision until it is answered, expires or closes; a retry card is not" {
+  twin '2026-03-01T10:00:00Z progress: half way'
+  # (The twin's agent has exited, so a task back at work shows as stopped-silent.)
+  local l st=() want=(decision stopped-silent decision decision stopped-silent stopped-silent)
+  for l in '2026-03-01T10:01:00Z permit: asks p-0a1b: Bash "git push origin main" (commander:outward, git-push); waits 15m, then denies.' \
+           '2026-03-01T10:02:00Z permit: allowed p-0a1b once by commander (via xo): Bash "git push origin main"' \
+           '2026-03-01T10:03:00Z permit: asks p-0a1c: Bash "git push origin main" (commander:outward, git-push); waits 15m, then denies.' \
+           '2026-03-01T10:04:00Z permit: asks p-0a1d: allow a retry of Bash "curl -X POST x" (classifier, refused)' \
+           '2026-03-01T10:20:00Z permit: denied p-0a1c: no answer within 15m (expired)' \
+           '2026-03-01T10:21:00Z permit: asks p-0a1e: allow a retry of Bash "curl -X POST x" (classifier, refused)'; do
+    printf '%s\n' "$l" >>"$CHARTROOM_HOME/tasks/$F/events.log"; printf '%s\n' "$l" >>"$CHARTROOM_HOME/tasks/$S/events.spool"
+    st+=("$(same | jq -r .state)")
+  done
+  echo "${st[*]}"
+  [ "${st[*]}" = "${want[*]}" ]
+}
+
 @test "parity: waiting with an until, past and future, and a report that closes the wait" {
   twin '2026-03-01T10:00:00Z waiting: CI on PR 12 until 2099-01-05T15:30Z'
   out="$(same)"

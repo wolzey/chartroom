@@ -2,14 +2,15 @@
 #
 # lib/permit.sh feeds it one request and acts on the verdict. Input:
 #   {event: "pre-tool"|"permission"|"denied", tool, input (the tool's input object), sig, cwd,
-#    roots: {worktree, task_dir, scratch, permits, user_home},
+#    roots: {worktree, task_dir, scratch, permits, user_home, db},
 #    branch (the task's branch), current_branch (the worktree's; "" when not looked up),
 #    grants: [name], always: [{tool, pattern, from}], pre: <p-id of a one-time pre-approval> | null}
 # Output: {verdict: "allow"|"deny"|"card"|"none", rule, why}
 #
 # The rules, first match wins:
 #   1. guard:*      deny   touching the permit store, answering or granting a permit, rewriting
-#                          the task's own control files (meta.json, claude-settings.json, launch.sh)
+#                          the task's own control files (meta.json, claude-settings.json, launch.sh,
+#                          and the machine's task store)
 #   -  question     none   AskUserQuestion and ExitPlanMode are questions, not permissions
 #   2. preapproved  allow  a one-time pre-approval for exactly this call (a late or retry answer)
 #   3. always:*     allow  an "Always for this task" pattern the commander chose
@@ -45,7 +46,8 @@ def tmp_roots: ["/tmp", "/private/tmp", "/var/folders", "/private/var/folders"];
 def work_roots($R): [$R.worktree, $R.task_dir, $R.scratch] + tmp_roots | map(select(. != null and . != ""));
 def dev_roots: ["/dev/null", "/dev/stdout", "/dev/stderr", "/dev/stdin", "/dev/tty", "/dev/fd"];
 
-def control_files($R): [$R.task_dir + "/meta.json", $R.task_dir + "/claude-settings.json", $R.task_dir + "/launch.sh"];
+def control_files($R): [$R.task_dir + "/meta.json", $R.task_dir + "/claude-settings.json", $R.task_dir + "/launch.sh"]
+  + (if ($R.db // "") != "" then [$R.db, $R.db + "-wal", $R.db + "-journal"] else [] end);
 def control_tree($R): [$R.worktree + "/.claude", $R.worktree + "/.mcp.json", $R.worktree + "/.git/config", $R.worktree + "/.git/hooks"];
 
 # ---------------------------------------------------------------- reading Bash
@@ -416,6 +418,8 @@ def decide:
             + (if (write_tools | index($tool)) and ($paths | any(under_any(control_tree($R)))) then [{class: "controls", kind: "the worker's own settings or hooks"}] else [] end)
             + (if ($wpaths | any(under_any(control_tree($R)))) then [{class: "controls", kind: "the worker's own settings or hooks"}] else [] end)
             + (if $interp and (control_files($R) | any(. as $f | $cmd | contains($f))) and ($cmd | test(">|write|dump|open\\([^)]*[\"']w")) then [{class: "controls", kind: "a script that may rewrite the task's control files"}] else [] end)
+            # The machine's task store (lib/store.sh), which holds a store task's record.
+            + (if $tool == "Bash" and ((($R.db // "") != "" and ($cmd | contains($R.db))) or ($cmd | test("chartroom/chartroom\\.db|CHARTROOM_DB"))) then [{class: "controls", kind: "chartroom's task store"}] else [] end)
             + (if (write_tools | index($tool)) and ($paths | any(under_any(work_roots($R)) | not)) then [{class: "elsewhere", kind: "a file outside the worktree"}] else [] end)
             + (if ($redir | any(under_any(work_roots($R) + dev_roots) | not)) then [{class: "elsewhere", kind: "a write outside the worktree"}] else [] end)
           ) as $m

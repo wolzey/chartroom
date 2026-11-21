@@ -84,7 +84,8 @@ All the rules live in one file. **First match wins:**
 1. **`guard:*` → deny.**
    - `guard:store`: the permit store (`$CR_HOME/permits`).
    - `guard:self-answer`: `permit answer|grant|revoke`.
-   - `guard:controls`: the task's `meta.json`, `claude-settings.json` or `launch.sh`.
+   - `guard:controls`: the task's `meta.json`, `claude-settings.json` or `launch.sh`, or the machine's
+     task store (`CHARTROOM_DB`); a Bash line that names the store is a `commander:controls` card.
 2. **Questions** (`AskUserQuestion`, `ExitPlanMode`) get no opinion. They are not permissions.
 3. **`preapproved:<p-id>` → allow**, once.
 4. **`always:<p-id>` → allow.**
