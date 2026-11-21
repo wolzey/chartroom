@@ -69,6 +69,7 @@ EOF
 }
 
 @test "todo done removes an inbox line or marks an artifact done; a task is never ticked; add" {
+  files_only "inbox.md's own lines (test/store-marks.bats: the same as store rows)"
   task t-decision 600 "decision: pick A or B"
   local a b ref
   a="$(cr todo add --project shop "renew the cert")"
