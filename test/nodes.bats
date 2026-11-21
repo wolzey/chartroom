@@ -50,11 +50,12 @@ tools() {
 }
 
 # hc on PATH, and its core answering on a socket its core.lock names (a listener held for the
-# test, at a short path: socket paths are limited to ~100 bytes).
+# test, at a short path: socket paths are limited to ~100 bytes). It never accepts, so its
+# backlog is what lets each probe in a test connect.
 hc_core_up() {
   use_fake hc; export FAKE_HC_DIR="$BATS_TEST_TMPDIR/hc"; mkdir -p "$FAKE_HC_DIR"
   CORE_SOCK="/tmp/crnd.$$.$RANDOM"
-  perl -MIO::Socket::UNIX -e '$s = IO::Socket::UNIX->new(Local => $ARGV[0], Listen => 5) or die "$!"; sleep 120' "$CORE_SOCK" 3>&- &
+  perl -MIO::Socket::UNIX -e '$s = IO::Socket::UNIX->new(Local => $ARGV[0], Listen => 128) or die "$!"; sleep 120' "$CORE_SOCK" 3>&- &
   CORE_PID=$!
   local i; for i in $(seq 1 40); do [[ -S "$CORE_SOCK" ]] && break; sleep 0.05; done
   mkdir -p "$XDG_STATE_HOME/herdr-core/default"; echo "$CORE_SOCK" >"$XDG_STATE_HOME/herdr-core/default/core.lock"
@@ -146,6 +147,90 @@ remote_probe() { # <target> [initialised 0|1]
   mkdir -p "$BATS_TEST_TMPDIR/old"; ln -sf "$BATS_TEST_TMPDIR/oldbash" "$BATS_TEST_TMPDIR/old/bash"
   run env PATH="$BATS_TEST_TMPDIR/old:$PATH" "$(type -P bash)" "$REPO_ROOT/lib/nodeprobe.sh"
   [ "$(tool_line bash)" = $'old\t3.2.57' ]
+}
+
+@test "node probe: tools are checked on the login shell's PATH, where a worker's tools come from" {
+  # a node only the login shell's PATH finds (mise and the like are set up in .zshrc only)
+  mkdir -p "$BATS_TEST_TMPDIR/mise/bin" "$FAKE_NODE_DIR/tools/node"
+  ln -sf "$REPO_ROOT/test/fakes/nodetool" "$BATS_TEST_TMPDIR/mise/bin/node"; echo 24.22.1 >"$FAKE_NODE_DIR/tools/node/version"
+  printf '#!/bin/sh\n[ "$1" = -lic ] || exit 1\nprintf "\\036%%s:%%s\\036" "%s" "$PATH"\n' "$BATS_TEST_TMPDIR/mise/bin" >"$BIN/loginsh"; chmod +x "$BIN/loginsh"
+  run cr node probe
+  [ "$(probe_val path_source)" = inherited ]
+  [ "$(tool_line node)" = $'missing\t-' ]
+  export CHARTROOM_LOGIN_SHELL="$BIN/loginsh"
+  run cr node probe
+  [ "$status" -eq 0 ]
+  [ "$(probe_val path_source)" = login ]
+  [ "$(tool_line node)" = $'ok\t24.22.1' ]
+  # the same from an ssh session (no core), and inside an hc core, which gets that PATH too
+  run env SSH_CONNECTION="10.0.0.1 5000 10.0.0.2 22" "$CHARTROOM" node probe
+  [ "$(probe_val context)" = ssh ]
+  [ "$(tool_line node)" = $'ok\t24.22.1' ]
+  hc_core_up
+  run cr node probe
+  [ "$(probe_val context)" = core ]
+  [ "$(tool_line node)" = $'ok\t24.22.1' ]
+  grep -q "^exec .*PATH=$BATS_TEST_TMPDIR/mise/bin:" "$FAKE_HC_DIR/calls.log"
+  # chartroom's own cache of it is read when fresh, so the shell is not asked again
+  mkdir -p "$XDG_STATE_HOME/chartroom"; printf '%s' "/cached/bin:$PATH" >"$XDG_STATE_HOME/chartroom/login-path"
+  run cr node probe
+  [ "$(tool_line node)" = $'missing\t-' ]
+  # a shell that answers nothing usable leaves the probe's own PATH
+  rm -f "$XDG_STATE_HOME/chartroom/login-path"; printf '#!/bin/sh\necho no path here\n' >"$BIN/loginsh"
+  run cr node probe
+  [ "$(probe_val path_source)" = inherited ]
+}
+
+@test "node probe: a broken tool says which binary and why, not just that it failed" {
+  tools node=22.1.0 codex=0.171.0
+  printf 'dyld[123]: Library not loaded: /opt/homebrew/opt/simdjson/lib/libsimdjson.34.dylib\n  Referenced from: node\n' >"$FAKE_NODE_DIR/tools/node/broken"
+  run cr node probe
+  [ "$status" -eq 0 ]
+  [ "$(tool_line node)" = "error	$BIN/node: dyld[123]: Library not loaded: /opt/homebrew/opt/simdjson/lib/libsimdjson.34.dylib" ]
+  [ "$(tool_line codex)" = $'ok\t0.171.0' ]
+  # silent and failing: its exit status
+  printf '' >"$FAKE_NODE_DIR/tools/node/broken"
+  run cr node probe
+  [ "$(tool_line node)" = "error	$BIN/node: exited 134 with no output" ]
+  # the table names it under the machine
+  export CHARTROOM_NODES=none
+  run cr nodes
+  [ "$status" -eq 0 ]
+  grep -q "^studio: node is broken: $BIN/node: exited 134 with no output" <<<"$output"
+}
+
+@test "node probe: the crew is chartroom's workers; XOs and other agents are counted apart" {
+  hc_core_up; export FAKE_HC_EVENTS=1
+  term() { # <address> <state> <labels json> <status json>
+    jq -n --arg a "$1" --arg s "$2" --argjson l "$3" --argjson st "$4" '{address: $a, state: $s, labels: $l, status: $st, agent: "claude-code"}' >"$FAKE_HC_DIR/terms/$1.json"
+  }
+  mkdir -p "$FAKE_HC_DIR/terms"
+  term t1 live '{"chartroom.task": "a-1111"}' '{"app": "claude-code", "state": "working"}'
+  term t2 live '{"chartroom.task": "b-2222"}' 'null'
+  term t3 finished '{"chartroom.task": "c-3333"}' 'null'
+  term t4 live '{"where": "XO"}' '{"app": "claude-code", "state": "done"}'
+  term t5 live '{}' 'null'
+  term m3_t6 live '{"chartroom.task": "d-4444"}' '{"app": "claude-code"}'
+  jq '.address = "m3/t6"' "$FAKE_HC_DIR/terms/m3_t6.json" >"$FAKE_HC_DIR/x" && mv "$FAKE_HC_DIR/x" "$FAKE_HC_DIR/terms/m3_t6.json"
+  run cr node probe
+  [ "$status" -eq 0 ]
+  # two live crew here (a finished one is parked or gone; a linked machine's is its own), one XO
+  [ "$(probe_val crew_live)" = 2 ]
+  [ "$(probe_val other_agents)" = 1 ]
+  # placement's slot count is the crew, and the table shows the others apart
+  cr node init --max-workers 4 --cpu 100 --battery allow --project-roots "" >/dev/null
+  run cr node probe --json
+  [ "$(jq -c '[.crew_live, .other_agents, .util.slots]' <<<"$output")" = '[2,1,0.75]' ]
+  run cr nodes
+  [ "$status" -eq 0 ]
+  grep -q $'2/4 +1 other' <<<"$output"
+  grep -q "nothing enforces it until placement ships" <<<"$output"
+  # an hc with no event stream cannot tell them apart: every live agent counts, and says so
+  unset FAKE_HC_EVENTS
+  run cr node probe
+  [ "$(probe_val crew_live)" = - ]
+  run cr nodes
+  grep -q "(all agents)" <<<"$output"
 }
 
 @test "node probe: degrades on a machine without sysctl, pmset or ioreg (Linux)" {

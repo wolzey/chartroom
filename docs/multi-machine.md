@@ -130,7 +130,7 @@ messages go on **stdin as JSON**, never interpolated into the shell line. Remote
 | `R` | RAM |
 | `L` | 1-minute load average |
 | `F` | free memory fraction (macOS `kern.memorystatus_level`) |
-| `w` | live workers (stage 1 counts every live agent in the node's hc core, crew or not: honest about resources, generous with slots) |
+| `w` | live crew workers: the node's hc terminals carrying `chartroom.task` (from the first frame of `hc events --json`, which carries labels; `hc ls` does not). An XO or a person's own agent is not a slot, though its load counts through `L` and `F`. An hc with no event stream falls back to every live agent |
 | `r` | reservations younger than 180 s (the node's own, plus the dispatcher's in-flight placements) |
 
 A worker's cost is `c` = `CHARTROOM_WORKER_CPU` (default 1.5 cores) and `m` = `CHARTROOM_WORKER_MEM_GB` (default 1.5;

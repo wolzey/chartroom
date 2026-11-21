@@ -543,7 +543,7 @@ brain_gate() {
   CR_HOME="$GATE_HOME"
   local tok; tok="$(jq -r '.token // empty' <<<"$header")"
   case "$verb" in
-    hello) jq -cn --argjson p "$BRAIN_PROTOCOL" --arg v "$CR_VERSION" --arg h "$GATE_HOME" --arg lp "$(gate_login_path)" \
+    hello) jq -cn --argjson p "$BRAIN_PROTOCOL" --arg v "$CR_VERSION" --arg h "$GATE_HOME" --arg lp "$(login_path)" \
              '{protocol: $p, version: $v, path: $h, login_path: (if $lp == "" then null else $lp end)}'; gate_trailer "$start" "$tok" ;;
     exec) gate_exec "$header" "$start" "$tok" ;;
     put) gate_put "$header"; local rc=$?; gate_trailer "$start" "$tok"; return $rc ;;
@@ -686,29 +686,15 @@ brain_gate_rsync() { # <rsync server args...>
 gate_env() { # <header> -> sets GATE_ENV
   local harness lp
   GATE_ENV=("CHARTROOM_HOME=$GATE_HOME" CHARTROOM_GATE=1 "CHARTROOM_CLIENT=$(jq -r '.client.machine // "a client"' <<<"$1")" CHARTROOM_OPENER=true)
-  lp="$(gate_login_path)"; [[ -n "$lp" ]] && GATE_ENV+=("PATH=$lp")
+  lp="$(login_path)"; [[ -n "$lp" ]] && GATE_ENV+=("PATH=$lp")
   harness="$(jq -r '.env.CHARTROOM_HARNESS // empty' <<<"$1")"
   if [[ -n "$harness" && "$harness" =~ ^[a-z]{1,16}$ ]]; then GATE_ENV+=("CHARTROOM_HARNESS=$harness"); fi
   return 0
 }
 
 # An ssh session's PATH is the thin one of a non-interactive shell, and a worker dispatched or
-# revived from it would carry it in its launcher (no version managers' shims, no package
-# managers' bins). So what the gate runs gets the PATH of this user's interactive login shell
-# ($SHELL -lic, or CHARTROOM_BRAIN_LOGIN_SHELL), read at most every 10 minutes and kept in the
-# state dir; with none to read, the session's own.
-gate_login_path() {
-  local f="${XDG_STATE_HOME:-$HOME/.local/state}/chartroom/gate-login-path" sh out p
-  if [[ -f "$f" && -n "$(find "$f" -mmin -10 2>/dev/null)" ]]; then cat "$f"; return 0; fi
-  sh="$(cfg BRAIN_LOGIN_SHELL '' "${SHELL:-}")"
-  [[ -n "$sh" && -x "$sh" ]] || return 0
-  out="$(perl -e 'alarm 10; exec @ARGV' "$sh" -lic 'printf "\036%s\036" "$PATH"' </dev/null 2>/dev/null || true)"
-  p="${out#*$'\036'}"; [[ "$p" != "$out" ]] || return 0
-  p="${p%%$'\036'*}"
-  [[ "$p" == /* && "$p" != *$'\n'* ]] || return 0
-  mkdir -p "${f%/*}" 2>/dev/null && printf '%s' "$p" >"$f.$$" && mv "$f.$$" "$f"
-  printf '%s' "$p"
-}
+# revived from it would carry it in its launcher. So what the gate runs gets the PATH of this
+# user's interactive login shell (login_path, lib/core.sh); with none to read, the session's own.
 
 # ---------------------------------------------------------------- watch
 

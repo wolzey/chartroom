@@ -6,6 +6,14 @@ are stable from 0.1.0.
 
 ## [Unreleased]
 
+### Fixed
+- `chartroom nodes` and the app's Fleet count a machine honestly.
+  - **The crew is counted apart.** A machine's slots are chartroom's own workers (hc terminals carrying a task), not every agent in its hc core. XOs and your own sessions show apart (`11/20 +3 other`), and placement's UTIL counts only the crew. An hc with no event stream still counts every agent, and says so.
+  - **The cap is shown, not enforced.** `nodes` and Fleet say that nothing holds work back by max workers until placement ships.
+  - **Tools are checked on the PATH a worker gets:** your interactive login shell's (`$SHELL -lic`, where mise and the like live), not an ssh session's. `path_source` says which. One reader, `login_path` (lib/core.sh), serves the probe and the brain's gate. `CHARTROOM_LOGIN_SHELL` replaces `CHARTROOM_BRAIN_LOGIN_SHELL`, which still counts.
+  - **A broken tool says why:** its binary and the first line it printed, such as a library dyld cannot load.
+  - **Disk:** `nodes` has a DISK column.
+
 ### Changed
 - The app's cards read like a person wrote them.
   - **What the app tidies, for display only:** chartroom's own ids, paths, page refs and carry notes are dropped; an inbox line's first sentence is its title and never repeats as its body; several questions or steps show as a list.

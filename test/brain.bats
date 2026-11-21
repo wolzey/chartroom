@@ -19,7 +19,7 @@ setup() {
   # The brain's login shell, whose PATH what the gate runs gets: this test's PATH plus a marker
   # (never the real machine's shell and rc files).
   printf '#!/bin/sh\nprintf "\\036%%s:/login-shell-bin\\036" "$PATH"\n' >"$BIN/loginsh"; chmod +x "$BIN/loginsh"
-  export CHARTROOM_BRAIN_LOGIN_SHELL="$BIN/loginsh"
+  export CHARTROOM_LOGIN_SHELL="$BIN/loginsh"
   BRAIN="$BH/chartroom/acme"
   brain_cr init --name acme >/dev/null
   cr brain link studio --as acme >/dev/null 2>&1

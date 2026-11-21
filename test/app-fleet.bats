@@ -34,6 +34,13 @@ teardown() { cr app stop >/dev/null 2>&1 || true; }
   [ "$(jq -r '.machines[] | select(.name == "mini") | .logins[] | select(.label == "codex sign-in") | "\(.ok) \(.detail)"' <<<"$j")" = "null cannot tell: codex itself does not answer" ]
 }
 
+@test "the crew and the other agents are apart: the slots are chartroom's own workers" {
+  j="$(cr app fleet --json)"
+  [ "$(jq -c '.machines[] | select(.name == "studio") | [.crew_live, .other_agents, .agents_live, .path_source]' <<<"$j")" = '[2,2,4,"login"]' ]
+  # a probe from before the crew count: no crew number, and Fleet falls back to every agent
+  [ "$(jq -c '.machines[] | select(.name == "mini") | [.crew_live, .agents_live]' <<<"$j")" = '[null,1]' ]
+}
+
 @test "the probe reports the share of disk free" {
   run cr node probe
   [ "$status" -eq 0 ]

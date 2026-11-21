@@ -34,6 +34,9 @@ def login_check($tools):
        power: ($n.power // null), battery_pct: ($n.battery_pct // null), idle_s: ($n.hid_idle_s // null),
        cores: ($n.cores // null), load: ($n.load // null), mem_free_pct: ($n.mem_free_pct // null), disk_free_pct: $disk,
        budgets: ($n.budgets // null), util: ($n.util // null), agents_live: ($n.agents_live // null),
+       # the crew (chartroom's workers, the slots against max_workers) and the other agents apart;
+       # null crew: an hc with no event stream, where every live agent is all that can be told
+       crew_live: ($n.crew_live // null), other_agents: ($n.other_agents // null), path_source: ($n.path_source // null),
        logins: $logins, tools: $tools,
        failing: ([$failing[] | .label] + (if $disk != null and $disk < 15 then ["disk below 15% free"] else [] end)),
        on_battery: (($n.power // "") == "battery")}]

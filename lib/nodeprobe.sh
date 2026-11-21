@@ -10,6 +10,12 @@
 # Written for bash 3.2 (a Mac's /bin/bash, which a non-interactive ssh shell finds first) and
 # without jq: no associative arrays, no mapfile, no ${x,,}.
 #
+# Tools are checked on the PATH a worker would get: the user's interactive login shell's
+# ($SHELL -lic, as lib/core.sh login_path reads it: mise, asdf and the like are set up only
+# there), read from chartroom's 10-minute cache when it is fresh, else asked here (bounded at
+# 10 s; the probe still writes nothing). CHARTROOM_LOGIN_SHELL names another shell, or "none"
+# to keep the probe's own PATH. `path_source` says which: login or inherited.
+#
 # Logins are checked where a worker would run. A Mac's login keychain is closed to an ssh
 # session, so claude, codex and gh read as logged out there even when they are not: with an hc
 # core answering, the checks run inside it (`hc exec`, a core started in the login session, given
@@ -22,7 +28,11 @@
 #   power ac|battery|- | battery_pct N | hid_idle_s N
 #   initialised 0|1 | config PATH | budget KEY VALUE (max_workers cpu mem on_battery priority project_roots accept)
 #   runner hc up|down|none VERSION | context core|shell|ssh | agents_live N
-#   tool NAME ok|old|down|missing|error VERSION-OR-WHY
+#   crew_live N | other_agents N   (hc terminals here that carry chartroom.task, and the other
+#                                   agents: an XO, a session chartroom did not start; "-" on an hc
+#                                   without an event stream, where agents_live is all there is)
+#   path_source login|inherited
+#   tool NAME ok|old|down|missing|error VERSION-OR-WHY  (error: the binary and its first line)
 #   login NAME ok|no|unknown|missing DETAIL
 #   checkouts N | checkout CANONICAL-REMOTE PATH FETCH-AGE-SECONDS  (the latter only for $CR_PROBE_PROJECT)
 # Settings it reads: CHARTROOM_NODE_CONFIG (default ${XDG_CONFIG_HOME:-~/.config}/chartroom/node),
@@ -47,6 +57,12 @@ checks() {
   local logins="$1" t b v out rc
   ck_kv() { local IFS=$'\t'; printf '%s\n' "$*"; }
   ck_ver() { grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1; }
+  # Why a tool failed: its binary and the first line it printed (a broken install says why, such
+  # as a library dyld cannot load), else its exit status.
+  ck_why() { # <binary> <output> <rc>
+    local l; l="$(printf '%s\n' "$2" | tr '\t' ' ' | grep -v '^[[:space:]]*$' | head -1 | cut -c1-200)"
+    printf '%s: %s' "$1" "${l:-exited $3 with no output}"
+  }
   ck_run() { # <seconds> <cmd...>
     local s="$1"; shift
     if command -v perl >/dev/null 2>&1; then perl -e 'alarm shift; exec @ARGV or exit 127' "$s" "$@"; else "$@"; fi
@@ -62,11 +78,14 @@ checks() {
         # The daemon has to answer, not just the client be installed.
         if out="$(ck_run 15 "$b" info --format '{{.ServerVersion}}' 2>&1)" && [[ -n "$out" ]]; then ck_kv tool docker ok "$(ck_ver <<<"$out")"
         else ck_kv tool docker down "daemon not answering"; fi ;;
-      ruby) v="$(ck_run 10 "$b" -e 'print RUBY_VERSION' 2>/dev/null)"; if [[ -n "$v" ]]; then ck_kv tool ruby ok "$v"; else ck_kv tool ruby error "ruby -e failed"; fi ;;
-      go) v="$(ck_run 10 "$b" version 2>/dev/null | ck_ver)"; if [[ -n "$v" ]]; then ck_kv tool go ok "$v"; else ck_kv tool go error "go version failed"; fi ;;
+      ruby) rc=0; out="$(ck_run 10 "$b" -e 'print RUBY_VERSION' 2>&1)" || rc=$?
+        if [[ $rc -eq 0 && -n "$out" ]]; then ck_kv tool ruby ok "$out"; else ck_kv tool ruby error "$(ck_why "$b" "$out" "$rc")"; fi ;;
+      go) rc=0; out="$(ck_run 10 "$b" version 2>&1)" || rc=$?; v="$(ck_ver <<<"$out")"
+        if [[ $rc -eq 0 && -n "$v" ]]; then ck_kv tool go ok "$v"; else ck_kv tool go error "$(ck_why "$b" "$out" "$rc")"; fi ;;
       tmux) v="$(ck_run 10 "$b" -V 2>/dev/null | ck_ver)"; ck_kv tool tmux ok "${v:--}" ;;
       chartroom) v="$(ck_run 10 "$b" version 2>/dev/null | ck_ver)"; ck_kv tool chartroom ok "${v:--}" ;;
-      *) v="$(ck_run 10 "$b" --version 2>/dev/null | ck_ver)"; if [[ -n "$v" ]]; then ck_kv tool "$t" ok "$v"; else ck_kv tool "$t" error "--version failed"; fi ;;
+      *) rc=0; out="$(ck_run 10 "$b" --version 2>&1)" || rc=$?; v="$(ck_ver <<<"$out")"
+        if [[ $rc -eq 0 && -n "$v" ]]; then ck_kv tool "$t" ok "$v"; else ck_kv tool "$t" error "$(ck_why "$b" "$out" "$rc")"; fi ;;
     esac
   done
   for t in claude codex gh; do
@@ -99,6 +118,30 @@ canon() { # <remote url>
 }
 # (GNU stat first: its -f is the file system's status, which takes %m and prints no mtime)
 mtime() { local m; m="$(stat -c %Y "$1" 2>/dev/null)" || m="$(stat -f %m "$1" 2>/dev/null)"; [[ "$m" =~ ^[0-9]+$ ]] && printf '%s' "$m"; }
+
+# The login shell's PATH (see the header), or nothing.
+login_path_probe() {
+  local sh="${CHARTROOM_LOGIN_SHELL:-${SHELL:-}}" f out p
+  [[ -n "$sh" && "$sh" != none && -x "$sh" ]] || return 0
+  f="${XDG_STATE_HOME:-$HOME/.local/state}/chartroom/login-path"
+  if [[ -f "$f" && -n "$(find "$f" -mmin -10 2>/dev/null)" ]]; then cat "$f"; return 0; fi
+  out="$(bounded 10 "$sh" -lic 'printf "\036%s\036" "$PATH"' </dev/null 2>/dev/null || true)"
+  p="${out#*$'\036'}"; [[ "$p" != "$out" ]] || return 0
+  p="${p%%$'\036'*}"
+  case "$p" in /*) ;; *) return 0 ;; esac
+  case "$p" in *$'\n'*) return 0 ;; esac
+  printf '%s' "$p"
+}
+
+# The first line of a command's output, then the command ended (for `hc events`, a stream that
+# never ends on its own): at most <seconds>.
+first_line() { # <seconds> <cmd...>
+  local s="$1"; shift
+  have perl || return 1
+  perl -e 'my $s = shift; my $pid = open(my $fh, "-|", @ARGV) or exit 127;
+    local $SIG{ALRM} = sub { kill "TERM", $pid; exit 1 }; alarm $s;
+    my $l = <$fh>; kill "TERM", $pid; print $l if defined $l; exit 0' "$s" "$@"
+}
 
 # The whole probe is one function, read in full before any of it runs: under `bash -s` the
 # script is stdin, which a command reading stdin would otherwise eat (hence </dev/null too).
@@ -200,18 +243,35 @@ probe_main() {
   fi
   kv agents_live "$(num_or_dash "$agents")"
 
+  # The crew among them: terminals carrying chartroom.task (hc ls shows no labels; the first
+  # frame of hc's event stream does). The rest are other agents: an XO, a person's own session.
+  crew=- others=-
+  if [[ "$hc_state" == up ]] && have jq; then
+    frame="$(first_line 10 env -u HC_TERMINAL_ID "$hcb" events --json 2>/dev/null || true)"
+    if [[ -n "$frame" ]]; then
+      counts="$(jq -r 'select((.terminals | type) == "array") | [.terminals[] | select((.address | tostring | contains("/")) | not) | select(.state == "live")]
+        | [(map(select((.labels // {})["chartroom.task"] != null)) | length),
+           (map(select((.labels // {})["chartroom.task"] == null and ((.status // {}).app // null) != null)) | length)] | @tsv' <<<"$frame" 2>/dev/null || true)"
+      if [[ -n "$counts" ]]; then crew="${counts%%$'\t'*}"; others="${counts#*$'\t'}"; fi
+    fi
+  fi
+  kv crew_live "$(num_or_dash "$crew")"
+  kv other_agents "$(num_or_dash "$others")"
+
   # ---------------------------------------------------------------- tools and logins
+  # (on the login shell's PATH when there is one: the tools a worker launched here would run)
+  lp="$(login_path_probe)"
+  if [[ -n "$lp" ]]; then kv path_source login; else kv path_source inherited; lp="$PATH"; fi
   if [[ "$hc_state" == up ]]; then
     kv context core
-    # (the PATH this probe runs with, so the tools are the ones a launcher from here would find)
-    bounded 90 env -u HC_TERMINAL_ID "$hcb" exec --timeout 80 --env "PATH=$PATH" -- /bin/bash -c "$(declare -f checks); checks 1" 2>/dev/null ||
+    bounded 90 env -u HC_TERMINAL_ID "$hcb" exec --timeout 80 --env "PATH=$lp" -- /bin/bash -c "$(declare -f checks); checks 1" 2>/dev/null ||
       kv login - unknown "hc exec failed"
   elif [[ -n "${SSH_CONNECTION:-}${SSH_CLIENT:-}" ]]; then
     kv context ssh
-    checks 0
+    ( PATH="$lp"; checks 0 )
   else
     kv context shell
-    checks 1
+    ( PATH="$lp"; checks 1 )
   fi
 
   # ---------------------------------------------------------------- project checkouts

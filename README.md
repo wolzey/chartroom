@@ -473,9 +473,11 @@ chartroom node probe [--json]        # this machine's facts, as `nodes` reads th
 ```
 
 ```
-NODE           CONTACT  ROLE                    CPU                    MEM           POWER              IDLE  AGENTS  LOGINS                    TOOLS                       CHECKOUTS  UTIL
-studio (here)  ok       node: 10w cpu80% mem75%  28 (20P+8E) load 6.0  96G 79% free  AC                 2m    4/10    claude:ok codex:ok gh:ok  13 ok                       42         0.34
-m3             ok       node: 6w cpu100% mem75%  16 (12P+4E) load 1.2  48G 92% free  AC (battery 100%)  1h    0/6     claude:ok codex:ok gh:ok  11 ok missing:go down:docker  131        0.17
+NODE           CONTACT  ROLE                     CPU                    MEM           DISK      POWER              IDLE  CREW          LOGINS                    TOOLS                       CHECKOUTS  UTIL
+studio (here)  ok       node: 10w cpu80% mem75%  28 (20P+8E) load 6.0  96G 79% free  22% free  AC                 2m    4/10 +3 other claude:ok codex:ok gh:ok  13 ok                       42         0.5
+m3             ok       node: 6w cpu100% mem75%  16 (12P+4E) load 1.2  48G 92% free  26% free  AC (battery 100%)  1h    0/6           claude:ok codex:ok gh:ok  11 ok error:node down:docker   131        0.17
+m3: node is broken: /opt/homebrew/bin/node: dyld[812]: Library not loaded: /opt/homebrew/opt/simdjson/lib/libsimdjson.34.dylib
+CREW is chartroom's workers against max workers (XOs and other agents shown apart); nothing enforces it until placement ships
 ```
 
 - **Which machines.** `CHARTROOM_NODES` (`label[=ssh-target] ...`, or `none`), else the radar's
@@ -493,12 +495,20 @@ m3             ok       node: 6w cpu100% mem75%  16 (12P+4E) load 1.2  48G 92% f
   `timeout` (its ssh is ended; the probe there stops by its own bounds, at most about 90 seconds). ssh's own failures read `unreachable`, or `auth` when ssh would need you (a key, a
   host key, a Tailscale check).
 - **Tools and logins are checked where a worker would run.** A tool counts when it works, not
-  when its binary is there (`docker` needs its daemon to answer). On a Mac, an ssh session cannot
+  when its binary is there (`docker` needs its daemon to answer), and a broken one is named with
+  its binary and the first line it printed. Tools are looked up on the PATH of your interactive
+  login shell (`$SHELL -lic`: version managers such as mise set theirs up only there), the one a
+  worker launched there gets, not the thin PATH of an ssh session; `path_source` says which was
+  used (`CHARTROOM_LOGIN_SHELL` names another shell, or `none`). On a Mac, an ssh session cannot
   read the login keychain, so claude, codex and gh would all read logged out: the probe runs those
   checks inside the machine's hc core (`hc exec`), which runs in the login session, and only when
   that core already answers (it never starts one). With no core, logins read `unknown` over ssh.
+- **CREW** is chartroom's own workers there (hc terminals carrying a task), against the node's
+  max workers. An XO or your own agent session is shown apart (`+3 other`): it is not a slot,
+  though its load still counts. **Nothing enforces max workers yet**: until placement ships, a
+  machine at its budget still takes what is dispatched to it.
 - **UTIL** is what the node's use would be with one more worker, against its own budgets:
-  the largest of (agents + 1) / max workers, (load + `CHARTROOM_WORKER_CPU`) / (cores × cpu share),
+  the largest of (crew + 1) / max workers, (load + `CHARTROOM_WORKER_CPU`) / (cores × cpu share),
   and (memory in use + `CHARTROOM_WORKER_MEM_GB`) / (memory × memory share). Placement will put
   each new task where it is lowest, so the machines fill evenly, each against its own budget.
   Above 1 the node is full.
@@ -1379,6 +1389,7 @@ machine), then `~/.config/chartroom/config` (`KEY=VALUE`, no shell evaluation;
 | `CHARTROOM_RADAR_MACHINES` | herdr's saved machines | the other machines the radar reads, read-only over ssh: `label[=ssh-target] ...`, or `none` |
 | `CHARTROOM_NODES` | the radar's list | the other machines `chartroom nodes` reads: `label[=ssh-target] ...`, or `none` ([nodes](#several-machines-nodes)) |
 | `CHARTROOM_NODES_TIMEOUT` | `45` | seconds `chartroom nodes` waits for a machine's probe |
+| `CHARTROOM_LOGIN_SHELL` | `$SHELL` | the shell whose interactive login PATH (`-lic`) the probe checks tools on and what the brain's gate runs gets; `none` keeps the caller's PATH (`CHARTROOM_BRAIN_LOGIN_SHELL` still counts) |
 | `CHARTROOM_WORKER_CPU` / `CHARTROOM_WORKER_MEM_GB` | `1.5` / `1.5` | a worker's assumed cost in cores and GB, in a node's UTIL |
 | `CHARTROOM_NODE_CONFIG` | `~/.config/chartroom/node` | environment only: this machine's node file (`chartroom node init`), with `CHARTROOM_NODE_MAX_WORKERS`, `_CPU_BUDGET`, `_MEM_BUDGET` (percent), `_ON_BATTERY` (`pause`/`allow`), `_PRIORITY` (`normal`/`nice`/`background`), `_PROJECT_ROOTS` and `_ACCEPT` (`on`/`off`) |
 | `CHARTROOM_RADAR_REMOTE_PATH` | `$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin` | put first on PATH on another machine (its non-interactive ssh shell lacks them) |

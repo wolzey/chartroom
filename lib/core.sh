@@ -128,6 +128,32 @@ cfg_set() { # <VAR> <SUFFIX> <legacy CAP_ name or ""> <default>
 }
 cfg() { local value; cfg_set value "$@"; printf '%s' "$value"; } # <SUFFIX> <legacy CAP_ name or ""> <default>
 
+# ---------------------------------------------------------------- the login PATH
+# The PATH this user's interactive login shell sets ($SHELL -lic: what a person's terminal has,
+# version managers such as mise and their shims included). A non-interactive shell (ssh, launchd,
+# an hc core started at login) has a thinner one, and a tool found there may not be the one a
+# person's terminal runs. Read at most every 10 minutes (bounded at 10 s) and kept in the state
+# dir, where lib/nodeprobe.sh reads it too. The shell is CHARTROOM_LOGIN_SHELL (the older
+# CHARTROOM_BRAIN_LOGIN_SHELL still counts), else $SHELL; "none" reads none. Prints nothing when
+# there is none to read.
+login_shell() {
+  local sh; sh="$(cfg LOGIN_SHELL '' '')"
+  [[ -n "$sh" ]] || sh="$(cfg BRAIN_LOGIN_SHELL '' "${SHELL:-}")"
+  printf '%s' "${sh:-none}"
+}
+login_path() {
+  local f="${XDG_STATE_HOME:-$HOME/.local/state}/chartroom/login-path" sh out p
+  sh="$(login_shell)"
+  [[ "$sh" != none && -x "$sh" ]] || return 0
+  if [[ -f "$f" && -n "$(find "$f" -mmin -10 2>/dev/null)" ]]; then cat "$f"; return 0; fi
+  out="$(perl -e 'alarm 10; exec @ARGV' "$sh" -lic 'printf "\036%s\036" "$PATH"' </dev/null 2>/dev/null || true)"
+  p="${out#*$'\036'}"; [[ "$p" != "$out" ]] || return 0
+  p="${p%%$'\036'*}"
+  [[ "$p" == /* && "$p" != *$'\n'* ]] || return 0
+  mkdir -p "${f%/*}" 2>/dev/null && printf '%s' "$p" >"$f.$$" && mv "$f.$$" "$f"
+  printf '%s' "$p"
+}
+
 # The registered homes, one "<name><TAB><path>" line each (~ expanded, no trailing slash; the
 # last line for a name wins). Prints nothing without a homes file.
 homes_entries() {

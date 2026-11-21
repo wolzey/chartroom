@@ -5,8 +5,11 @@
 #   daemon    docker: "up" answers `docker info`; anything else (or none) fails, as with no daemon
 #   login     claude/codex/gh: "yes" logged in, "no" not, "core" only inside an hc core
 #             (FAKE_IN_HC_CORE=1), as a Mac's keychain is closed to an ssh session
+#   broken    a broken install: every call prints this file's text on stderr and exits 134 (as a
+#             binary whose library dyld cannot load)
 name="${0##*/}"; d="${FAKE_NODE_DIR:-/nonexistent}/tools/$name"
 v="$(cat "$d/version" 2>/dev/null || echo 1.0.0)"
+if [[ -f "$d/broken" ]]; then cat "$d/broken" >&2; exit 134; fi
 logged_in() {
   case "$(cat "$d/login" 2>/dev/null)" in yes) return 0 ;; core) [[ "${FAKE_IN_HC_CORE-}" == 1 ]] ;; *) return 1 ;; esac
 }

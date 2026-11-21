@@ -2,7 +2,7 @@
   "nodes": [
     {"machine": "studio", "target": "studio", "local": true, "role": "node", "contact": "ok", "error": null,
      "power": "ac", "battery_pct": null, "hid_idle_s": 40, "cores": 16, "load": [3.2, 2.9, 2.5], "mem_free_pct": 72, "disk_free_pct": 48,
-     "budgets": {"max_workers": 6, "cpu": 80, "mem": 75, "on_battery": "pause"}, "util": {"slots": 0.5, "cpu": 0.37, "mem": 0.45, "max": 0.5}, "agents_live": 2,
+     "budgets": {"max_workers": 6, "cpu": 80, "mem": 75, "on_battery": "pause"}, "util": {"slots": 0.5, "cpu": 0.37, "mem": 0.45, "max": 0.5}, "agents_live": 4, "crew_live": 2, "other_agents": 2, "path_source": "login",
      "logins": {"claude": {"status": "ok", "detail": "claude.ai"}, "codex": {"status": "ok", "detail": null}, "gh": {"status": "ok", "detail": null}},
      "tools": {"git": {"status": "ok", "version": "2.50.0"}, "jq": {"status": "ok", "version": "1.7.1"}, "bash": {"status": "ok", "version": "5.2.37"},
                "claude": {"status": "ok", "version": "2.1.0"}, "codex": {"status": "ok", "version": "0.150.0"}, "gh": {"status": "ok", "version": "2.100.0"},

@@ -17,8 +17,13 @@
 #
 # UTIL is the projected utilisation if one more worker landed there, against that node's own
 # budgets, the score placement will rank by (docs/multi-machine.md, Placement):
-#   max((agents + 1) / max_workers, (load1 + c) / (cores * cpu%), (used memory + m) / (RAM * mem%))
-# with c = CHARTROOM_WORKER_CPU cores (1.5) and m = CHARTROOM_WORKER_MEM_GB (1.5).
+#   max((crew + 1) / max_workers, (load1 + c) / (cores * cpu%), (used memory + m) / (RAM * mem%))
+# with c = CHARTROOM_WORKER_CPU cores (1.5) and m = CHARTROOM_WORKER_MEM_GB (1.5). The crew is the
+# workers chartroom started there (hc terminals carrying chartroom.task); an XO or a person's own
+# agent is not a slot, though its load still counts through load1 and memory. On an hc with no
+# event stream the crew cannot be told apart, and every live agent counts. Nothing enforces
+# max_workers yet: until placement ships, a machine "at its budget" still takes what is
+# dispatched to it.
 
 CR_NODE_LABEL_RE='^[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}$'
 CR_NODE_TARGET_RE='^[A-Za-z0-9][A-Za-z0-9_.@:-]{0,253}$'
@@ -127,6 +132,8 @@ NODES_ROW_JQ='
          | with_entries(if (.key | IN("max_workers", "cpu", "mem")) then .value |= n else . end)),
        runner: {hc: (one("runner")[2] | s), hc_version: (one("runner")[3] | s)},
        context: (one("context")[1] | s), agents_live: (one("agents_live")[1] | n),
+       crew_live: (one("crew_live")[1] | n), other_agents: (one("other_agents")[1] | n),
+       path_source: (one("path_source")[1] | s),
        tools: ([$r[] | select(.[0] == "tool") | {key: .[1], value: {status: .[2], version: (.[3] | s)}}] | from_entries),
        logins: ([$r[] | select(.[0] == "login" and .[1] != "-") | {key: .[1], value: {status: .[2], detail: (.[3] | s)}}] | from_entries),
        checkouts: (one("checkouts")[1] | n), checkouts_scanned: (one("checkouts")[1] != "-"),
@@ -138,7 +145,7 @@ NODES_ROW_JQ='
                  else "node" end)
       | .util = (if .initialised and .cores and .budgets.cpu and .budgets.max_workers and .budgets.mem and .mem_bytes
                     and .load[0] != null and .mem_free_pct != null then
-                   {slots: (((.agents_live // 0) + 1) / .budgets.max_workers),
+                   {slots: (((.crew_live // .agents_live // 0) + 1) / .budgets.max_workers),
                     cpu: ((.load[0] + $c) / (.cores * .budgets.cpu / 100)),
                     mem: (((1 - .mem_free_pct / 100) * .mem_bytes + $mg * 1073741824) / (.mem_bytes * .budgets.mem / 100))}
                    | .max = ([.slots, .cpu, .mem] | max) | map_values(r3)
@@ -176,18 +183,21 @@ NODES_TABLE_JQ='
   def gb: if . == null then "-" else "\(. / 1073741824 | floor)G" end;
   def two: if . == null then "-" else (. * 100 + 0.5 | floor) / 100 | tostring end;
   .project as $p
-  | (["NODE", "CONTACT", "ROLE", "CPU", "MEM", "POWER", "IDLE", "AGENTS", "LOGINS", "TOOLS", "CHECKOUTS", "UTIL"] + (if $p then ["PROJECT"] else [] end)),
+  | (["NODE", "CONTACT", "ROLE", "CPU", "MEM", "DISK", "POWER", "IDLE", "CREW", "LOGINS", "TOOLS", "CHECKOUTS", "UTIL"] + (if $p then ["PROJECT"] else [] end)),
     (.nodes[] |
       [ .machine + (if .local then " (here)" else "" end),
         .contact + (if .error then ": " + (.error | .[0:60]) else "" end) ]
-      + (if .contact != "ok" then ["-", "-", "-", "-", "-", "-", "-", "-", "-", "-"] + (if $p then ["-"] else [] end) else
+      + (if .contact != "ok" then ["-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-"] + (if $p then ["-"] else [] end) else
         [ (if .role == "node" then "node: \(.budgets.max_workers | d)w cpu\(.budgets.cpu | d)% mem\(.budgets.mem | d)%" else .role end),
           "\(.cores | d)" + (if .cores_perf then " (\(.cores_perf)P+\(.cores_eff | d)E)" else "" end) + " load \(.load[0] | d)",
           "\(.mem_bytes | gb) \(.mem_free_pct | d)% free",
+          (if .disk_free_pct == null then "-" else "\(.disk_free_pct)% free" + (if .disk_free_pct < 15 then " (low)" else "" end) end),
           (if .power == "ac" then "AC" + (if .battery_pct then " (battery \(.battery_pct)%)" else "" end)
            elif .power == "battery" then "battery \(.battery_pct | d)%" else "-" end),
           (.hid_idle_s | ago),
-          "\(.agents_live | d)" + (if .budgets.max_workers then "/\(.budgets.max_workers)" else "" end),
+          (if .crew_live != null then "\(.crew_live)" else "\(.agents_live | d)" end)
+          + (if .budgets.max_workers then "/\(.budgets.max_workers)" else "" end)
+          + (if .crew_live != null and (.other_agents // 0) > 0 then " +\(.other_agents) other" elif .crew_live == null and .agents_live != null then " (all agents)" else "" end),
           ([.logins | to_entries[] | "\(.key):\(.value.status)"] | join(" ") | if . == "" then "-" else . end),
           ([.tools | to_entries[] | select(.value.status == "ok")] | length) as $ok
           | ([.tools | to_entries[] | select(.value.status != "ok") | "\(.value.status):\(.key)"] | join(" ")) as $bad
@@ -217,6 +227,12 @@ cmd_nodes() {
   if [[ $json -eq 1 ]]; then printf '%s\n' "$doc"; return; fi
   [[ -z "$want" ]] || echo "project: $want"
   jq -r "$NODES_TABLE_JQ" <<<"$doc" | table
+  # why a tool is broken (the binary and its first line), and what the budget means today
+  jq -r '.nodes[] | select(.contact == "ok") | .machine as $m | (.tools // {}) | to_entries[]
+    | select(.value.status == "error") | "\($m): \(.key) is broken: \(.value.version // "no detail")"' <<<"$doc"
+  if jq -e 'any(.nodes[]; .budgets.max_workers != null)' <<<"$doc" >/dev/null; then
+    echo "CREW is chartroom's workers against max workers (XOs and other agents shown apart); nothing enforces it until placement ships"
+  fi
 }
 
 # ---------------------------------------------------------------- node probe / node init

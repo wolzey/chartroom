@@ -10,6 +10,14 @@ const M = window.AppModel;
 const STATE = { healthy: "Healthy", degraded: "Needs a look", down: "Unreachable" };
 
 function pct(n) { return n == null ? "—" : Math.round(n) + "%"; }
+// The slots are chartroom's own workers there; an XO or a person's own agent is shown apart. An hc
+// with no event stream cannot tell them apart, so then every live agent counts.
+function crew(m) { return m.crew_live != null ? m.crew_live : m.agents_live || 0; }
+function slotsTitle(m) {
+  return m.crew_live != null
+    ? m.crew_live + " crew worker(s) against a budget of " + m.budgets.max_workers + (m.other_agents ? "; " + m.other_agents + " other agent(s) (XOs, your own sessions) not counted" : "")
+    : "every live agent (this hc cannot tell the crew apart)";
+}
 
 function Checks({ m }) {
   const all = [{ ok: m.state !== "down", label: "network", detail: m.state === "down" ? m.error || "not reached" : "reached" }]
@@ -46,10 +54,10 @@ export function FleetPage({ fleet, workers, sel, setSel, onRefresh }) {
             <span class="m-role faint">${m.brain ? "brain" : m.role}</span><span class=${m.state === "healthy" ? "faint" : "warn-t"}>${STATE[m.state]}</span>
             <span class="grow"></span>
             <span class="m-power faint">${m.power === "battery" ? "on battery" + (m.battery_pct != null ? " " + m.battery_pct + "%" : "") : m.power === "ac" ? "plugged in" : ""}</span>
-            ${m.budgets && m.budgets.max_workers ? html`<span class="m-slots faint"><span class="slots">${Array.from({ length: m.budgets.max_workers }, (_, i) =>
-              html`<i key=${i} class=${i < (m.agents_live || 0) ? "on" : ""}></i>`)}</span> ${m.agents_live || 0}/${m.budgets.max_workers}</span>` : null}</div>
+            ${m.budgets && m.budgets.max_workers ? html`<span class="m-slots faint" title=${slotsTitle(m)}><span class="slots">${Array.from({ length: m.budgets.max_workers }, (_, i) =>
+              html`<i key=${i} class=${i < crew(m) ? "on" : ""}></i>`)}</span> ${crew(m)}/${m.budgets.max_workers}${m.other_agents ? " · " + m.other_agents + " other" : ""}</span>` : null}</div>
           <${Checks} m=${m} />
-          ${m.util ? html`<div class="m-l3"><span class=${m.util.max >= 1 ? "warn-t" : "faint"}>${m.util.max >= 1 ? "At its budget: it takes no new worker. " : ""}With one more worker:
+          ${m.util ? html`<div class="m-l3"><span class=${m.util.max >= 1 ? "warn-t" : "faint"}>${m.util.max >= 1 ? "At its budget (not enforced yet: work still lands here until placement ships). " : ""}With one more worker:
             CPU ${pct(m.util.cpu * 100)}, memory ${pct(m.util.mem * 100)} of its budget</span></div>` : null}
         </div>`)}</div>`
       : tab === "workers" ? html`<div class="w-table">${workers.length ? workers.map((t) => html`<div key=${t.key} class="w-row">
@@ -76,6 +84,7 @@ export function MachineDetail({ m, workers, names }) {
       <dt>Load</dt><dd>${m.load ? m.load.map((x) => x.toFixed(1)).join(" · ") : "—"}${m.cores ? html` <span class="faint">on ${m.cores} cores</span>` : null}</dd>
       <dt>Memory free</dt><dd>${pct(m.mem_free_pct)}</dd>
       <dt>Disk free</dt><dd>${pct(m.disk_free_pct)}</dd>
+      <dt>Agents</dt><dd>${m.crew_live != null ? html`${m.crew_live} crew${m.other_agents ? html` <span class="faint">· ${m.other_agents} other (XOs, your own sessions)</span>` : null}` : m.agents_live != null ? html`${m.agents_live} <span class="faint">(crew and others together)</span>` : "—"}</dd>
       <dt>Budgets</dt><dd>${m.budgets ? html`${m.budgets.max_workers} workers · CPU ${m.budgets.cpu}% · memory ${m.budgets.mem}%${m.budgets.on_battery ? " · on battery: " + m.budgets.on_battery : ""}` : html`<span class="faint">Not a node yet (chartroom node init)</span>`}</dd>
       <dt>Power</dt><dd>${m.power === "battery" ? "On battery" + (m.battery_pct != null ? " (" + m.battery_pct + "%)" : "") : m.power === "ac" ? "Plugged in" : "—"}</dd>
       <dt>Workers</dt><dd>${mine.length ? html`<div class="sp-ms">${mine.map((w) => html`<div key=${w.key} class="sp-m"><${Status} status="working" only=${true} /><span class="grow truncate">${w.title}</span></div>`)}</div>` : html`<span class="faint">None</span>`}</dd>
