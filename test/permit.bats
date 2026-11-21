@@ -37,7 +37,7 @@ answer() { as_commander permit answer "$@"; }
 # One policy verdict, straight from lib/permit.jq.
 verdict() { # <event> <grants json> <tool> <input json> [current branch]
   jq -n --arg ev "$1" --argjson g "$2" --arg t "$3" --argjson in "$4" --arg cur "${5:-cap/x}" '{event: $ev, tool: $t, input: $in, sig: "s", cwd: "/w/wt",
-    roots: {worktree: "/w/wt", task_dir: "/h/tasks/x", scratch: "/tmp/scr", permits: "/h/permits", user_home: "/u/me", db: "/s/chartroom.db"},
+    roots: {worktree: "/w/wt", task_dir: "/h/tasks/x", scratch: "/tmp/scr", permits: "/h/permits", user_home: "/u/me", db: "/u/me/.local/state/chartroom/chartroom.db"},
     branch: "cap/x", current_branch: $cur, grants: $g, always: $always, pre: null}' --argjson always "${ALWAYS:-[]}" | jq -r -f "$REPO_ROOT/lib/permit.jq" | jq -r '"\(.verdict) \(.rule)"'
 }
 
@@ -107,9 +107,11 @@ pre-tool|[]|deny guard:self-answer|chartroom permit answer p-1234 once
 pre-tool|[]|deny guard:store|ls /h/permits/x
 pre-tool|[]|deny guard:controls|echo x > /h/tasks/x/meta.json
 pre-tool|[]|none none|cat /h/tasks/x/meta.json
-pre-tool|[]|deny guard:controls|cp /tmp/x.db /s/chartroom.db
-pre-tool|[]|card commander:controls|sqlite3 /s/chartroom.db "UPDATE tasks SET worktree = '/'"
+pre-tool|[]|deny guard:controls|cp /tmp/x.db /u/me/.local/state/chartroom/chartroom.db
+pre-tool|[]|card commander:controls|sqlite3 /u/me/.local/state/chartroom/chartroom.db "UPDATE tasks SET worktree = '/'"
 pre-tool|[]|card commander:controls|sqlite3 ~/.local/state/chartroom/chartroom.db .dump
+pre-tool|[]|none none|grep -rn CHARTROOM_DB lib/
+pre-tool|[]|none none|CHARTROOM_DB=/tmp/t/chartroom.db bats test/store.bats
 pre-tool|[]|none none|bats -f "permit answer" test/permit.bats
 EOF
   [ "$bad" -eq 0 ]

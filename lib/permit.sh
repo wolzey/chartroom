@@ -78,6 +78,7 @@ permit_query() { # <id> <event> <payload>
   { IFS= read -r tool; IFS= read -r cmd; } < <(jq -r '(.tool_name // ""), ((.tool_input.command | strings) // "" | gsub("\n"; " ") | .[0:4000])' <<<"$payload") || return 1
   [[ -n "$tool" ]] || return 1
   meta_path "$id"; [[ -n "$META_PATH" ]] || return 1
+  store_uid_of # STORE_DB: the database the home's records went into (the policy guards it)
   { IFS= read -r wt; IFS= read -r branch; } < <(jq -r '(.worktree // ""), (.branch // "")' "$META_PATH") || return 1
   # The worktree's branch, only when a grant could need it.
   if [[ "$tool" == Bash && -s "$pd/grants.json" && -n "$wt" && -d "$wt" && "$cmd" =~ (^|[^A-Za-z0-9_-])(git|gh)[[:space:]] ]]; then

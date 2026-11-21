@@ -419,7 +419,10 @@ def decide:
             + (if ($wpaths | any(under_any(control_tree($R)))) then [{class: "controls", kind: "the worker's own settings or hooks"}] else [] end)
             + (if $interp and (control_files($R) | any(. as $f | $cmd | contains($f))) and ($cmd | test(">|write|dump|open\\([^)]*[\"']w")) then [{class: "controls", kind: "a script that may rewrite the task's control files"}] else [] end)
             # The machine's task store (lib/store.sh), which holds a store task's record.
-            + (if $tool == "Bash" and ((($R.db // "") != "" and ($cmd | contains($R.db))) or ($cmd | test("chartroom/chartroom\\.db|CHARTROOM_DB"))) then [{class: "controls", kind: "chartroom's task store"}] else [] end)
+            # (Its own path, or that path under ~: never the bare name, which code and tests use.)
+            + (if $tool == "Bash" and ($R.db // "") != "" and (($cmd | contains($R.db))
+                 or (($R.user_home // "") != "" and ($R.db | startswith($R.user_home + "/")) and ($cmd | contains("~" + ($R.db | ltrimstr($R.user_home))))))
+               then [{class: "controls", kind: "chartroom's task store"}] else [] end)
             + (if (write_tools | index($tool)) and ($paths | any(under_any(work_roots($R)) | not)) then [{class: "elsewhere", kind: "a file outside the worktree"}] else [] end)
             + (if ($redir | any(under_any(work_roots($R) + dev_roots) | not)) then [{class: "elsewhere", kind: "a write outside the worktree"}] else [] end)
           ) as $m
