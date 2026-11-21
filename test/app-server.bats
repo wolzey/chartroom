@@ -49,11 +49,11 @@ outcome() {
 state() { # waits for both homes' first snapshot
   local i
   for i in $(seq 1 100); do
-    curl -s "http://127.0.0.1:$PORT/api/v1/state" >"$BATS_TEST_TMPDIR/state"
-    jq -e '[.homes[] | select(.snapshot != null)] | length == 2' "$BATS_TEST_TMPDIR/state" >/dev/null 2>&1 && return 0
+    curl -s "http://127.0.0.1:$PORT/api/v1/state" >"$BATS_TEST_TMPDIR/app-state"
+    jq -e '[.homes[] | select(.snapshot != null)] | length == 2' "$BATS_TEST_TMPDIR/app-state" >/dev/null 2>&1 && return 0
     sleep 0.2
   done
-  cat "$BATS_TEST_TMPDIR/state"; return 1
+  cat "$BATS_TEST_TMPDIR/app-state"; return 1
 }
 
 @test "serve: without CHARTROOM_APP_USER it refuses to start, unless --no-auth" {
@@ -91,8 +91,8 @@ state() { # waits for both homes' first snapshot
   cr homes add client "$BATS_TEST_TMPDIR/h/client" >/dev/null
   start --no-auth
   state
-  [ "$(jq -r '[.homes[].name] | join(" ")' "$BATS_TEST_TMPDIR/state")" = "acme globex" ]
-  [ "$(jq -r '[.homes[].snapshot.counts.needs] | add' "$BATS_TEST_TMPDIR/state")" -eq 13 ]
+  [ "$(jq -r '[.homes[].name] | join(" ")' "$BATS_TEST_TMPDIR/app-state")" = "acme globex" ]
+  [ "$(jq -r '[.homes[].snapshot.counts.needs] | add' "$BATS_TEST_TMPDIR/app-state")" -eq 13 ]
 }
 
 @test "writes: only from the app (its header, JSON, same origin)" {
@@ -111,7 +111,7 @@ state() { # waits for both homes' first snapshot
 @test "writes: an answer runs ask answer in that home; a second answer is refused" {
   start --no-auth
   state
-  card="$(jq -r '.homes[] | select(.name == "globex") | .snapshot.needs[] | select(.title | test("Rate limits")) | .card' "$BATS_TEST_TMPDIR/state")"
+  card="$(jq -r '.homes[] | select(.name == "globex") | .snapshot.needs[] | select(.title | test("Rate limits")) | .card' "$BATS_TEST_TMPDIR/app-state")"
   [ "$(act globex answer "{\"card\":\"$card\",\"answers\":[{\"q\":1,\"choice\":\"Per partner\"}]}" a-test-0002)" = 202 ]
   [ "$(outcome a-test-0002)" = "done	" ]
   [ -f "$BATS_TEST_TMPDIR/h/globex/questions/$card.answer.json" ]
@@ -124,15 +124,15 @@ state() { # waits for both homes' first snapshot
 @test "writes: snooze, accept and mark done go through their verbs" {
   start --no-auth
   state
-  ref="$(jq -r '.homes[0].snapshot.needs[] | select(.title | test("Gift cards")) | .ref' "$BATS_TEST_TMPDIR/state")"
+  ref="$(jq -r '.homes[0].snapshot.needs[] | select(.title | test("Gift cards")) | .ref' "$BATS_TEST_TMPDIR/app-state")"
   [ "$(act acme snooze "{\"ref\":\"$ref\",\"for\":\"1h\"}" a-test-0004)" = 202 ]
   [ "$(outcome a-test-0004)" = "done	" ]
   [ "$(cr snooze list --json | jq -r --arg r "$ref" '.[$r] != null')" = true ]
-  task="$(jq -r '.homes[0].snapshot.needs[] | select(.kind == "review") | .task' "$BATS_TEST_TMPDIR/state")"
+  task="$(jq -r '.homes[0].snapshot.needs[] | select(.kind == "review") | .task' "$BATS_TEST_TMPDIR/app-state")"
   [ "$(act acme accept "{\"task\":\"$task\"}" a-test-0005)" = 202 ]
   [ "$(outcome a-test-0005)" = "done	" ]
   events "$task" | grep -q ' note: accepted'
-  inbox="$(jq -r '[.homes[0].snapshot.needs[] | select(.kind == "inbox") | .ref] | first' "$BATS_TEST_TMPDIR/state")"
+  inbox="$(jq -r '[.homes[0].snapshot.needs[] | select(.kind == "inbox") | .ref] | first' "$BATS_TEST_TMPDIR/app-state")"
   [ "$(act acme "done" "{\"ref\":\"$inbox\"}" a-test-0006)" = 202 ]
   [ "$(outcome a-test-0006)" = "done	" ]
   run grep -q "$inbox" "$CHARTROOM_HOME/inbox.md"
@@ -148,13 +148,13 @@ state() { # waits for both homes' first snapshot
   [ "$(get --path-as-is "http://127.0.0.1:$PORT/app/../lib/app/server.py")" = 404 ]
   [ "$(get "http://127.0.0.1:$PORT/app/%2e%2e/lib/app/server.py")" = 404 ]
   [ "$(get "http://127.0.0.1:$PORT/shared/server.py")" = 404 ]
-  task="$(jq -r '.homes[0].snapshot.tasks[0].id' "$BATS_TEST_TMPDIR/state")"
+  task="$(jq -r '.homes[0].snapshot.tasks[0].id' "$BATS_TEST_TMPDIR/app-state")"
   [ "$(get "http://127.0.0.1:$PORT/api/v1/homes/acme/tasks/$task/files/brief.md")" = 200 ]
   [ "$(get "http://127.0.0.1:$PORT/api/v1/homes/acme/tasks/$task/files/meta.json")" = 404 ]
   # its events, from its events.log or (a store task's) from the store
   [ "$(get "http://127.0.0.1:$PORT/api/v1/homes/acme/tasks/$task/files/events.log")" = 200 ]
   grep -q ' note: created' "$BATS_TEST_TMPDIR/body"
-  plain="$(jq -r '.homes[0].snapshot.tasks[] | select(.title | test("Pick a cache")) | .id' "$BATS_TEST_TMPDIR/state")"
+  plain="$(jq -r '.homes[0].snapshot.tasks[] | select(.title | test("Pick a cache")) | .id' "$BATS_TEST_TMPDIR/app-state")"
   [ "$(get "http://127.0.0.1:$PORT/api/v1/homes/acme/tasks/$plain/files/report.md")" = 204 ]
   [ "$(get "http://127.0.0.1:$PORT/api/v1/homes/acme/tasks/..%2F..%2Fx/files/brief.md")" = 404 ]
 }
@@ -162,7 +162,7 @@ state() { # waits for both homes' first snapshot
 @test "stream: a write in a home reaches the stream as a new version" {
   start --no-auth
   state
-  v0="$(jq -r .version "$BATS_TEST_TMPDIR/state")"
+  v0="$(jq -r .version "$BATS_TEST_TMPDIR/app-state")"
   ( curl -s -N --max-time 8 "http://127.0.0.1:$PORT/api/v1/stream" >"$BATS_TEST_TMPDIR/sse" 3>&- & )
   sleep 0.5
   cr tell "a new note" >/dev/null
@@ -264,9 +264,9 @@ state() { # waits for both homes' first snapshot
   chmod +x "$BIN/old-chartroom"
   CHARTROOM_XO_BIN="$BIN/old-chartroom" start --no-auth
   state
-  [ "$(jq -r '.xo.reads_app' "$BATS_TEST_TMPDIR/state")" = false ]
+  [ "$(jq -r '.xo.reads_app' "$BATS_TEST_TMPDIR/app-state")" = false ]
   cr app stop >/dev/null
   CHARTROOM_XO_BIN="$CHARTROOM" start --no-auth
   state
-  [ "$(jq -r '.xo.reads_app' "$BATS_TEST_TMPDIR/state")" = true ]
+  [ "$(jq -r '.xo.reads_app' "$BATS_TEST_TMPDIR/app-state")" = true ]
 }
