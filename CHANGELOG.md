@@ -6,6 +6,13 @@ are stable from 0.1.0.
 
 ## [Unreleased]
 
+### Changed
+- The app's cards read like a person wrote them.
+  - **What the app tidies, for display only:** chartroom's own ids, paths, page refs and carry notes are dropped; an inbox line's first sentence is its title and never repeats as its body; several questions or steps show as a list.
+  - **Finished tasks:** they wait in their own group, "Finished, waiting for your nod", with Accept all. Accept all leaves out any whose report still asks something.
+  - **The permission card:** it leads with what the worker wants and why it came, in plain words, with no rule code. The command is folded to its first line, the answers sit on one row, what Always covers is said in a few words, and the repo replaces the path.
+  - **The writers:** the XO skill, the brief's worker protocol and the inbox template now ask XOs and workers to write for the commander.
+
 ### Added
 - The app: a task's page lists its Decisions, every answered card of the task.
   - **What each shows:** each question in its own words, with the answer, the note, when, and where it was answered.

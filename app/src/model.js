@@ -19,17 +19,20 @@ var AppModel = (function () {
     blocked: { label: "Blocked", glyph: "blocked" },
     failed: { label: "Failed", glyph: "blocked" },
     input: { label: "Needs input", glyph: "blocked" },
-    review: { label: "Review", glyph: "read" },
+    review: { label: "Finished", glyph: "read" },
     artifact: { label: "To send", glyph: "tidy" },
     stories: { label: "Stories", glyph: "approve" },
     login: { label: "Sign-in", glyph: "login" },
     permission: { label: "Permission", glyph: "blocked" },
   };
+  // A finished task waiting to be accepted is not a question: its own group, last, apart from what
+  // asks the commander something (the snapshot says "read"; the app splits it off by kind).
   const GROUPS = [
     { id: "decide", label: "Decide", hint: "Questions and choices waiting on you" },
     { id: "approve", label: "Approve", hint: "Plans ready for a yes" },
     { id: "unblock", label: "Unblock", hint: "Work that can't move without you" },
-    { id: "read", label: "Read", hint: "Reports, PRs and drafts" },
+    { id: "read", label: "Read", hint: "Drafts to send or run" },
+    { id: "finished", label: "Finished", hint: "Done, waiting for your nod", heading: "Finished, waiting for your nod" },
   ];
   const STATUS = {
     drafting: "Drafting", queued: "Queued", working: "Working", waiting: "Waiting",
@@ -41,14 +44,23 @@ var AppModel = (function () {
   // Every home's items, each tagged with its home (and the home's hue, 1-5 in the order homes come).
   function items(state) {
     const out = [];
+    const ids = taskIds(state);
     ((state && state.homes) || []).forEach((h, i) => {
       const snap = h.snapshot;
       if (!snap || !Array.isArray(snap.needs)) return;
-      for (const it of snap.needs) out.push(Object.assign({}, it, { home: h.name, hue: (i % 5) + 1, key: h.name + ":" + it.id }));
+      for (const it of snap.needs) {
+        const x = Object.assign({}, it, { home: h.name, hue: (i % 5) + 1, key: h.name + ":" + it.id }, it.kind === "review" ? { group: "finished" } : {});
+        x.view = view(x, ids);
+        out.push(x);
+      }
     });
     // the fleet's own: a failed sign-in on a machine belongs to no home (only the commander can fix it)
     const fl = state && state.fleet;
-    for (const it of (fl && fl.needs) || []) out.push(Object.assign({}, it, { home: "fleet", hue: 0, key: "fleet:" + it.id, at: it.at || fl.checked_at }));
+    for (const it of (fl && fl.needs) || []) {
+      const x = Object.assign({}, it, { home: "fleet", hue: 0, key: "fleet:" + it.id, at: it.at || fl.checked_at });
+      x.view = view(x, ids);
+      out.push(x);
+    }
     return out;
   }
 
@@ -452,11 +464,232 @@ var AppModel = (function () {
         tag: it.key, url: "/#/n/" + encodeURIComponent(it.key) };
     }
     const g = (GROUPS.find((x) => x.id === it.group) || {}).label || "Needs you";
-    return { title: String(it.title || "Chartroom").slice(0, 100), body: (it.home + " · " + g + (it.summary ? ": " + it.summary : "")).slice(0, 180),
+    // the body says what the title does not: never the same words again
+    const v = it.view;
+    const rest = v ? (v.lead || (v.list && v.list.length ? v.list.join(" · ") : v.more) || "") : it.summary || "";
+    return { title: String((v && v.title) || it.title || "Chartroom").slice(0, 100), body: (it.home + " · " + g + (rest ? ": " + rest : "")).slice(0, 180),
       tag: it.key, url: "/#/n/" + encodeURIComponent(it.key) };
   }
 
-  return { KINDS, GROUPS, STATUS, kind, items, homes, standing, visible, ordered, counts, projects, questions, details,
+  // ---- Plain words (the commander, 2026-11-21: cards "feel way too computer generated") ----
+  // The real fix is the writers (skills/chartroom/SKILL.md, "Writing for the app", and the brief's
+  // worker protocol). This only tidies, for display, what still reads machine-written: chartroom's
+  // own ids and paths out, an event's kind word off the front, the title never repeated as the
+  // body, several questions or steps as a list. What is sent back (an answer's question words, a
+  // card or ref) is never this text.
+
+  // Every task's id and short id, across homes: in a card's text they are chartroom's, not the reader's.
+  function taskIds(state) {
+    const s = new Set();
+    for (const h of (state && state.homes) || []) {
+      for (const t of (h.snapshot && h.snapshot.tasks) || []) { if (t.id) s.add(t.id); if (t.short_id) s.add(t.short_id); }
+    }
+    return s;
+  }
+
+  const ID_TOKEN = /\b(?:i|q|p|r|cm|rq|st|ms|in)-[0-9a-f]{4,}\b|\bev-[a-z0-9-]+-\d+\b|\bQ\d{2,}\b/g;
+  // A path on this machine, or one inside a home: never something the reader opens by its path.
+  const PATH = /(?:~\/|\/(?:Users|home|private|tmp|var|opt)\/)[^\s'"`<>),;]*|\btasks\/[\w.-]+(?:\/[^\s'"`<>),;]*)?/g;
+  function pathWords(p) {
+    const clean = p.replace(/[.:]+$/, "");
+    const tail = clean.replace(/\/+$/, "").split("/").pop() || clean;
+    if (/^report\.md$/i.test(tail)) return "the report";
+    if (/^plan\.md$/i.test(tail)) return "the plan";
+    if (/^brief\.md$/i.test(tail)) return "the brief";
+    return /^tasks$/.test(tail) || /\/tasks\/[\w.-]+$/.test(clean) ? "the task's folder" : tail;
+  }
+  function plain(text, ids, project) {
+    let s = askText(text);
+    s = s.replace(/^(?:done|decision|blocked|failed|progress|waiting|review|awaiting-input|note):\s*/i, "");
+    // a leading "<project>:" says what the card's project tag already says
+    if (project) s = s.replace(new RegExp("^" + String(project).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ":\\s+", "i"), "");
+    s = s.replace(/\s*\((?:see )?pages? [^()]*\)/gi, "").replace(/\s*\(carried[^()]*\)/gi, "");
+    s = s.replace(PATH, (p) => { const end = /[.:]$/.exec(p); return pathWords(p) + (end ? end[0] : ""); });
+    s = s.replace(ID_TOKEN, "");
+    if (ids && ids.size) {
+      // a task's short id or full id as a word (a ref "c1e7/slug" goes with it)
+      s = s.replace(/\b[0-9a-z-]*[0-9a-f]{4}(?:\/[\w.-]+)?\b/g, (w) => (ids.has(w.split("/")[0]) ? "" : w));
+    }
+    // "Report: the report" says nothing once the path is gone
+    s = s.replace(/\b(?:Report|Plan|Details):\s*the (?:report|plan)\b\s*[.;,]?\s*/g, "");
+    s = s.replace(/\(\s*[,;:]?\s*\)/g, "").replace(/\(\s*[,;]\s*/g, "(").replace(/\s*[,;]\s*\)/g, ")")
+      .replace(/\s+([,;:.?!)])/g, "$1").replace(/\(\s+/g, "(").replace(/([,;:])(?=[,;:])/g, "").replace(/\s{2,}/g, " ").trim()
+      .replace(/^[,;:.\-–—\s]+/, "");
+    // a sentence starts with a capital; a lowercase name or ref ("mcp:", "shop#12") stays as written
+    return /^[a-z]+(?:\s|$)/.test(s) ? s[0].toUpperCase() + s.slice(1) : s;
+  }
+
+  // Sentences, without breaking after an abbreviation, a number's point or a domain's dot.
+  function sentences(text) {
+    const out = [];
+    let cur = "";
+    for (const part of String(text).split(/(?<=[.?!])\s+(?=["'(A-Z0-9])/)) {
+      cur = cur ? cur + " " + part : part;
+      if (/\b(?:e\.g|i\.e|vs|etc|approx|incl|cf|no|Mr|Ms|Dr|St|v)\.$/i.test(cur)) continue;
+      out.push(cur.trim()); cur = "";
+    }
+    if (cur.trim()) out.push(cur.trim());
+    return out;
+  }
+
+  // "(1) a; (2) b" or "A) a; B) b" in one sentence: the text before it, and the steps. null when it
+  // is not a run of numbered parts from the first.
+  function steps(text) {
+    for (const [re, first] of [[/\((\d{1,2})\)\s+/g, "1"], [/(?:^|\s)([A-H])\)\s+/g, "A"]]) {
+      const marks = [...text.matchAll(re)];
+      if (marks.length < 2 || marks[0][1] !== first) continue;
+      const seq = marks.every((m, k) => m[1] === (first === "1" ? String(k + 1) : String.fromCharCode(65 + k)));
+      if (!seq) continue;
+      const items = marks.map((m, k) => text.slice(m.index + m[0].length, k + 1 < marks.length ? marks[k + 1].index : text.length)
+        .replace(/^[\s,;]+|[\s,;]+$/g, "").replace(/\s*(?:,|;)?\s*(?:and|or)$/i, "").trim()).filter(Boolean);
+      return { before: text.slice(0, marks[0].index).replace(/[\s,;:]+$/, "").trim(), items };
+    }
+    return null;
+  }
+
+  // "Also: a, b, c": each part a question of its own, when the parts are short; else one line.
+  function alsoList(text) {
+    const m = /^(.*?)\s*\bAlso:\s+(.+)$/i.exec(text);
+    if (!m) return null;
+    const rest = m[2].trim();
+    const parts = rest.replace(/[.]$/, "").split(/,\s+(?:and\s+|or\s+)?/);
+    const list = parts.length >= 2 && parts.length <= 6 && parts.every((p) => p.length <= 70) ? parts : [rest];
+    return { before: m[1].trim(), items: list.map((p) => p[0].toUpperCase() + p.slice(1)) };
+  }
+
+  // One text as a card reads it: {lead, list, more}. lead: the first sentence, the one a person
+  // would say first; list: several questions or steps, one a line; more: the rest, only when it
+  // adds something.
+  function shape(text, ids, project) {
+    const t = plain(text, ids, project);
+    const d = /\s*\bDetails?:\s*/.exec(t);
+    const head = d ? t.slice(0, d.index) : t;
+    const rest = d ? t.slice(d.index + d[0].length).trim() : "";
+    const ss = sentences(head);
+    let lead = ss.shift() || "";
+    let list = [], intro = null;
+    const more = [];
+    const al = alsoList(lead);
+    if (al && al.before) { lead = al.before; list = list.concat(al.items); intro = "Also"; }
+    const st = steps(lead);
+    if (st && st.before) { lead = st.before.replace(/[:]$/, "") + ":"; list = list.concat(st.items); }
+    for (const s of ss) {
+      const a = alsoList(s), p = steps(s);
+      if (/\?$/.test(s)) { list.push(s); intro = intro || (list.length > 1 ? null : "Also"); }
+      else if (a) { if (a.before) more.push(a.before); list = list.concat(a.items); intro = intro || "Also"; }
+      // steps in a later sentence: that sentence's opening introduces them
+      else if (p && list.length === 0) { list = list.concat(p.items); intro = p.before ? p.before.replace(/[:]$/, "") : null; }
+      else more.push(s);
+    }
+    if (rest) more.push(rest);
+    const same = (a, b) => norm(a) === norm(b);
+    return { lead, intro: list.length ? intro : null, list: list.filter((x) => !same(x, lead)), more: more.filter((x) => x && !same(x, lead)).join(" ") || null };
+  }
+  function norm(s) { return String(s || "").toLowerCase().replace(/[…."'?!:\s]+/g, " ").trim(); }
+  // Text that is cut ("…") or tidied still counts as the same words: the body never repeats the title.
+  function repeats(title, text) {
+    const a = norm(title), b = norm(text);
+    if (!a || !b) return false;
+    return a === b || b.startsWith(a) || a.startsWith(b);
+  }
+
+  // A done report that still asks the commander something: never accepted in bulk.
+  const ASKS = /\?|\bneeds? (?:a |your )?(?:call|decision|answer|go|word|ok)\b|\bplease (?:confirm|decide|answer|check)\b|\bdecisions? (?:for|from) (?:you|the commander|[A-Z][a-z]+)\b|\bon (?:your|the commander's|[A-Z][a-z]+'s) (?:word|go)\b|\bawaits? (?:you|your|the commander)\b|\bNeed:/i;
+  function asks(text) { return ASKS.test(String(text || "")); }
+
+  // What a card shows, worked out once per state: {title, lead, list, more, asks}.
+  function view(it, ids) {
+    if (it.kind === "permission") return { title: plain(it.title, ids) || it.title, lead: null, list: [], more: null, asks: true };
+    const own = it.type === "inbox" || it.type === "approval";
+    if (own) {
+      // an inbox line is all one text: its first sentence is the title, the rest the body
+      const s = shape(it.text || it.summary || it.title, ids, it.project);
+      return { title: s.lead || it.title, lead: null, intro: s.intro, list: s.list, more: s.more, asks: true };
+    }
+    const title = plain(it.title, ids, it.project) || it.title;
+    if (it.kind === "review") {
+      const s = shape(it.summary || "", ids, it.project);
+      // a done line's clauses ("PR open; tests green; nothing merged"), one a line when there are several
+      let lead = s.lead, list = s.list;
+      const parts = lead.split(/;\s+/);
+      let intro = s.intro;
+      if (parts.length >= 3 && lead.length > 90) { lead = parts[0]; list = parts.slice(1).concat(list); intro = null; }
+      // what a finished report still asks is said as such, not as "Also"
+      if (list.length && list.every((x) => /\?$/.test(x))) intro = "It still asks";
+      return { title, lead: lead || null, intro, list, more: s.more, asks: asks(it.summary) };
+    }
+    return { title, lead: null, list: [], more: null, asks: true };
+  }
+
+  // ---- The permission card in plain words ----
+  // The broker's rule ("commander:<class>") and reason, said the way a person would.
+  const LOGINS = { az: "Azure", gcloud: "Google Cloud", aws: "AWS", gh: "GitHub", op: "1Password", vault: "Vault",
+    heroku: "Heroku", vercel: "Vercel", fly: "Fly", flyctl: "Fly", doctl: "DigitalOcean", stripe: "Stripe", kubectl: "Kubernetes",
+    npm: "npm", docker: "Docker", firebase: "Firebase", wrangler: "Cloudflare" };
+  function permitReason(it) {
+    const rule = String(it.rule || ""), r = String(it.reason || "");
+    const cls = rule.startsWith("commander:") ? rule.slice(10) : null;
+    const head = (r.match(/^[\w-]+/) || [""])[0].replace(/-.*$/, "");
+    const login = LOGINS[head];
+    if (cls === "secrets") return login ? "it uses your " + login + " login" : r === "a secret's path" ? "it reads a secret" : "it uses a password, key or token";
+    if (cls === "outward") {
+      if (/^git-push/.test(r)) return "it pushes code to a shared repository";
+      if (/^git-(remote|mail)/.test(r)) return r === "git-mail" ? "it sends email from git" : "it changes where git pushes to";
+      if (/^gh[- ]pr/.test(r)) return "it changes a pull request on GitHub";
+      if (/^gh /.test(r)) return "it changes something on GitHub";
+      if (/^message/.test(r)) return "it sends a message" + (/\((\w+)\)/.test(r) ? " (" + r.match(/\((\w+)\)/)[1] + ")" : "");
+      if (/^deploy/.test(r)) return "it deploys" + (/\((\w+)\)/.test(r) ? " with " + r.match(/\((\w+)\)/)[1] : "");
+      if (/publish|docker push/.test(r)) return "it publishes a package or image";
+      if (/^http write/.test(r)) return "it writes to a web service";
+      if (/^az /.test(r)) return "it changes something in Azure";
+      return "it reaches outside this machine";
+    }
+    if (cls === "production") return "it touches production";
+    if (cls === "elsewhere") {
+      if (/another machine/.test(r)) return "it works on another machine";
+      if (/sudo/.test(r)) return "it runs as an administrator";
+      return "it touches files outside its own folder";
+    }
+    if (cls === "controls") return "it changes its own permissions or settings";
+    if (cls === "flags") return "it changes feature flags";
+    if (cls === "money") return "it touches billing or payments";
+    if (cls === "unlisted") return "chartroom has no rule for it yet";
+    return r ? r.replace(/\s*\([^)]*:[^)]*\)\s*$/, "") : "chartroom's policy would not answer it";
+  }
+  // "Wants to use your Azure login to read who can approve deploys."
+  function permitLead(it) {
+    const why = String(it.why || "").trim().replace(/[.\s]+$/, "");
+    const reason = permitReason(it);
+    const login = /^it uses your (.+) login$/.exec(reason);
+    // Claude's description is mostly an order ("Check the runs"): "Wants to check the runs". One that
+    // starts with a name or a number ("CI logs for main") is said as it was written.
+    const verb = /^[A-Z][a-z]+\b/.test(why) && !/^(?:The|A|An|This|That|These|Those|All|Some|Any|Each|Every|No|My|Our|Your|Its|Their)\b/.test(why);
+    const lc = why && verb ? why[0].toLowerCase() + why.slice(1) : why;
+    if (login) return lc ? (verb ? "Wants to use your " + login[1] + " login to " + lc + "." : "Uses your " + login[1] + " login: " + lc + ".") : "Wants to use your " + login[1] + " login.";
+    if (lc) return verb ? "Wants to " + lc + "." : lc + ".";
+    return it.tool === "Bash" ? "Wants to run a command that needs your OK." : "Wants to use " + (it.tool || "a tool") + ", which needs your OK.";
+  }
+  // What "Always for this task" covers, in a few words; never less than it allows.
+  function permitScope(it) {
+    const p = String(it.pattern || ""), cmd = it.command != null ? String(it.command) : null;
+    if (!p) return "this call, until the task closes";
+    if (/^sig:/.test(p) || (cmd != null && p === cmd)) return "this exact " + (it.tool === "Bash" ? "command" : "call") + ", until the task closes";
+    const pre = /^(.+?):\*$/.exec(p);
+    if (pre && pre[1].length <= 60) return { code: pre[1], text: "any command starting with", after: ", until the task closes" };
+    if (/^[~/]/.test(p)) return { code: pathWords(p), text: "any change to", after: ", until the task closes" };
+    return { code: p.length > 60 ? p.slice(0, 59) + "…" : p, text: "calls matching", after: ", until the task closes" };
+  }
+  // The call's first line that does something, for the collapsed view: a plain variable set to a
+  // path, a `set -e` or a comment says nothing about what the call does.
+  function firstLine(text) {
+    const lines = String(text || "").split("\n").map((l) => l.trim()).filter(Boolean);
+    const idle = (l) => /^#/.test(l) || /^set\s+[-+]/.test(l) || /^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=(?:"[^"$`]*"|'[^']*'|[^\s"'$`;|&]*)$/.test(l);
+    const line = lines.find((l) => !idle(l)) || lines[0] || "";
+    return { line, more: lines.length > 1 || line.length > 40 }; // a long line is cut in the card: it unfolds too
+  }
+
+  return { KINDS, GROUPS, STATUS, kind, items, homes, plain, shape, repeats, asks, view, taskIds,
+    permitReason, permitLead, permitScope, firstLine, standing, visible, ordered, counts, projects, questions, details,
     primary, answerBody, answered, move, ago, agoText, snoozes, search, askText, headline, bulkPlan, range, promote, linkParts, BOARD, boardItems, boardFilter, boardColumns, initiatives, milestones,
     freshItems, notice, noticeTarget, permitLeft };
 })();

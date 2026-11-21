@@ -89,9 +89,13 @@ The page never waits on a verb:
 
 A Claude worker's tool call that chartroom's policy would not answer by itself waits on the commander as a permission card (the permission broker: `lib/permit.sh`, `docs/permits.md`). In Needs me:
 
-- **What it shows.** The call in full (a Bash command in monospace, wrapped, never cut), where it runs, the worker's own why, and why it came to you ("Came to you because: <reason> (<rule>)").
+- **What it shows.**
+  - **The lead:** what the worker wants, in a sentence ("Wants to use your Azure login to read who can approve deploys"), from its own description and the rule.
+  - **Why it came to you, in plain words:** "Asked because it uses your Azure login", with the repo and the time left. It never shows the rule code.
+  - **The call:** its first line that does something; Show command unfolds the whole call, never cut.
+  - **An escalated card:** "The XO left this one to you", with the XO's note.
 - **The clock.** A countdown to the broker's deny (15 minutes by default). A retry card, for a call auto mode already refused, says so instead.
-- **The answers.** Allow once, Always for this task (with the pattern it allows until the task closes), Deny, and a note. The note goes to the worker with a deny, and with an allow on a retry card.
+- **The answers.** One row: Allow once, Always for this task, Deny, and a note. Under the row, what Always covers, in a few words ("any command starting with `git push`", or "this exact command"), never less than it allows. The note goes to the worker with a deny, and with an allow on a retry card.
   - The first answer wins. A second one fails with the broker's own words, which name the first.
 - **A missed card.** One whose wait ran out, or that the worker went on without, stays for an hour with "Allow now (the worker will retry)" and no Deny. The broker takes only a late allow, and then tells the worker to run the call again.
 - **Order and safety.** Live blocking cards come first, nearest expiry first; they are the only items with a clock. A task waiting on its card shows the card, not a bare "decision". No key press, bulk action or snooze answers one: Enter only puts the cursor in the note.

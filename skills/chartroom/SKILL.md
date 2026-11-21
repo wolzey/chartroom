@@ -354,6 +354,22 @@ others read between steps. `close` only marks it closed; its directory is never 
   Waiting item off). In a home with the store on (`CHARTROOM_STORE=sqlite`), a new item lives in
   the store, not in `inbox.md`: read the inbox with `chartroom inbox list`, never by hand, and
   never hand-edit a line in for it.
+- **Writing for the app.** Every inbox item, card and worker headline becomes a card the
+  commander reads in the app, often on their phone, so write it the way you would say it to them:
+  - **Lead with one plain sentence:** what happened or what you need from them, and why it
+    matters. "Go ahead with the routing spike on staging? It is the first step and costs about a
+    day", not "Routing plan c1e7: go for the spike (step 1) + staging build?".
+  - **No chartroom ids, rule codes or paths** in the words: no task short ids, `q-`/`i-` ids,
+    `r-` rulings, `(page …)` refs or `tasks/…/report.md`. A ticket key or PR number is fine
+    beside its title ("GH-9423, the SAML hotfix"); the app links PRs on its own.
+  - **One question per card.** Several questions are a round (`chartroom ask <card.json>`),
+    or at least a list, one a line. Never "X? Also: a, b, c".
+  - **The body only when it adds something.** The app shows an inbox line's first sentence as
+    its title; the rest is the body, so don't repeat the title.
+  - **Finished work, in what they get.** A `done` says what is now true and what they get from
+    it ("Pasted shift templates keep their rate: PR 18817, tests green, ready to merge"), not a
+    log of steps. A finished task waits under "Finished, waiting for your nod" with Accept and
+    Accept all; a question hidden in a `done` blocks Accept all, so ask it as its own card.
 - **Removing work.** When the commander says something is no longer relevant, take it out of
   every view at once with `chartroom remove <ref>... [--why "<text>"]`: tasks, inbox items
   (`i-xxxx`) and artifacts (`<id>/<slug>`), old or new, many in one call. It touches no file,

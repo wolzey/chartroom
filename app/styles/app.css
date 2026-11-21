@@ -195,21 +195,47 @@
 /* the permission card (a worker's call waiting on the commander) */
 .perm-clock { font-variant-numeric: tabular-nums; font-weight: 500; color: var(--amber); }
 .perm-clock.soon, .perm-clock.over { color: var(--rose); }
-.perm-head { font-size: var(--fs-sm); }
-.perm-cmd { margin: 0; padding: 10px 12px; border-radius: var(--r-md); background: var(--sunken); border: 1px solid var(--border);
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: var(--fs-sm); line-height: 1.5;
-  white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; max-height: 40vh; overflow: auto; }
-.perm-cmd-d { display: grid; gap: 6px; }
-.perm-cwd { font-size: var(--fs-xs); margin-top: -4px; overflow-wrap: anywhere; }
-.perm-why { font-size: var(--fs-sm); }
-.perm-late { font-size: var(--fs-sm); color: var(--rose); }
+.perm-lead { margin: 0; font-size: var(--fs-lg); line-height: 1.5; color: var(--text); font-weight: 500; }
+.a-detail .perm-why { margin: -4px 0 0; font-size: var(--fs-sm); line-height: 1.5; }
+.perm-repo b { font-weight: 500; color: var(--text-2); }
+.perm-note { margin: 0; font-size: var(--fs-xs); }
+/* the call: its first line, unfolded on request */
+.perm-call { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px var(--s-3);
+  padding: 7px 10px; border-radius: var(--r-md); background: var(--sunken); border: 1px solid var(--border); }
+.perm-line { font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: var(--fs-sm);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); background: none; padding: 0; }
+.perm-toggle { font-size: var(--fs-xs); white-space: nowrap; }
+.perm-call.open .perm-line { display: none; }
+.perm-call.open .perm-toggle { grid-column: 2; grid-row: 1; justify-self: end; }
+.perm-cmd { grid-column: 1 / -1; grid-row: 1; margin: 0; font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: var(--fs-sm); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; max-height: 40vh; overflow: auto; }
+.perm-call.open .perm-cmd { padding-right: 44px; }
+.perm-late { margin: 0; font-size: var(--fs-sm); color: var(--rose); }
+/* one row of answers: allow (primary), always (secondary), deny (danger); they share the row's width on a phone */
+.perm-acts { display: flex; gap: var(--s-2); flex-wrap: nowrap; }
+.perm-acts .btn { white-space: nowrap; }
+@media (max-width: 480px) { .perm-acts .btn { flex: 1 1 auto; justify-content: center; padding-inline: 10px; } }
+.perm-scope { margin: -4px 0 0; font-size: var(--fs-xs); line-height: 1.5; overflow-wrap: anywhere; }
+.perm-scope code { font-size: var(--fs-xs); }
+.btn.danger { color: var(--rose); border-color: color-mix(in srgb, var(--rose) 45%, var(--border)); background: transparent; }
+.btn.danger:hover { background: var(--rose-soft); }
 .perm-xo { margin: 0; padding: 8px 10px; border-radius: var(--r-md); background: var(--amber-soft); font-size: var(--fs-sm); line-height: 1.5; }
 .perm-xo b { font-weight: 600; }
-.perm-acts { flex-wrap: wrap; align-items: flex-start; }
-.perm-always { display: inline-flex; flex-direction: column; gap: 3px; max-width: 100%; }
-.perm-always .faint { font-size: var(--fs-xs); overflow-wrap: anywhere; }
 .btn.danger-ghost { color: var(--rose); border-color: color-mix(in srgb, var(--rose) 40%, var(--border)); background: transparent; }
 .btn.danger-ghost:hover { background: var(--rose-soft); }
+
+/* a card's body after its title: a short list of questions or steps, then the rest, folded when long */
+.qv-list { display: grid; gap: 4px; }
+.qv-list-h { font-size: var(--fs-xs); font-weight: 600; color: var(--text-3); text-transform: uppercase; letter-spacing: .04em; }
+.qv-list ul { margin: 0; padding-left: 1.15em; display: grid; gap: 4px; font-size: 14px; line-height: 1.5; color: var(--text); }
+.qv-list li { overflow-wrap: anywhere; }
+.qv-list li::marker { color: var(--text-3); }
+.a-detail .qv-more { margin: 0; overflow-wrap: anywhere; }
+.qv-asks { margin: 0; font-size: var(--fs-sm); color: var(--amber); }
+/* Finished, waiting for your nod: its heading carries Accept all */
+.a-group-finished { height: auto; min-height: 34px; flex-wrap: wrap; padding-block: 4px; }
+.a-group-finished .grow { flex: 1; }
+.a-group-note { font-weight: 500; }
 .ck.unk .ck-i { color: var(--text-3); }
 .sp .checks code { font-size: var(--fs-xs); }
 .a-detail.slim .a-detail-title { margin-bottom: var(--s-3); }

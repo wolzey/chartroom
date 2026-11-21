@@ -272,6 +272,12 @@ function App() {
       (plan.skip.length ? "; " + plan.skip.length + " left selected: " + plan.skip[0].why : "") +
       (verb === "close" ? ". A task with work it cannot keep refuses, and says why above." : ""));
   };
+  // Accept all: the finished tasks shown that ask nothing more, each through the outbox on its own.
+  const acceptAll = (items) => {
+    const plan = M.bulkPlan(items, "accept");
+    for (const r of plan.run) enqueue(r.item, r.action, r.body, "Accepted: " + ((r.item.view && r.item.view.title) || r.item.title));
+    toast("Accepted " + plan.run.length + (plan.run.length === 1 ? " finished task" : " finished tasks"));
+  };
   const retryFailed = (e) => setOutbox((o) => o.map((x) => (x.id === e.id ? OB.retry(x, Date.now()) : x)));
   const dismissFailed = (e) => setOutbox((o) => o.filter((x) => x.id !== e.id));
 
@@ -583,7 +589,7 @@ function App() {
   } else {
     main = html`<${NeedsList} all=${all} list=${list} tab=${tab} setTab=${setTab} filters=${filters} setFilters=${setFilters} homes=${homes}
       counts=${counts} sel=${sel} setSel=${setSel} ob=${obState} onQuick=${quick} notices=${notices}
-      picked=${picked} onPick=${onPick} onPickAll=${onPickAll} prs=${(data && data.prs) || {}} />`;
+      picked=${picked} onPick=${onPick} onPickAll=${onPickAll} prs=${(data && data.prs) || {}} onAcceptAll=${acceptAll} />`;
     const shown = cur && !cur.sent && local[cur.key] === "sent" ? Object.assign({}, cur, { sent: { at: new Date().toISOString(), via: "app", pending: obState[cur.key] === "pending" } }) : cur;
     aside = html`<${QuickView} it=${shown} open=${qvOpen} onClose=${() => setQvOpen(false)} undelivered=${undelivered}
       picks=${cur && picks[cur.key]} setPick=${(q, l) => pick(cur.key, q, l)}

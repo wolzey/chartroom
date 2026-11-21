@@ -53,7 +53,78 @@ test("visible: a group tab and the home and project filters narrow it", () => {
   assert.deepStrictEqual(M.visible(all, { tab: "all", filters: { home: "globex" } }).map((x) => x.id).sort(), ["ev-e-3", "q-77aa"]);
   assert.deepStrictEqual(M.visible(all, { tab: "all", filters: { project: "shop" } }).map((x) => x.id).sort(), ["ev-a-1", "fix-b"]);
   const c = M.counts(all, {});
-  assert.deepStrictEqual([c.all, c.decide, c.unblock, c.read, c.sent, c.snoozed], [4, 2, 1, 1, 1, 1]);
+  // a finished task waiting to be accepted is not something to read: its own group
+  assert.deepStrictEqual([c.all, c.decide, c.unblock, c.read, c.finished, c.sent, c.snoozed], [4, 2, 1, 0, 1, 1, 1]);
+  assert.strictEqual(all.find((x) => x.id === "fix-b").group, "finished");
+  assert.strictEqual(M.GROUPS[M.GROUPS.length - 1].heading, "Finished, waiting for your nod");
+});
+
+test("plain words: chartroom's ids and paths out, the title never repeated, several questions as a list", () => {
+  const ids = new Set(["c1e7", "plan-the-routing-c1e7"]);
+  // an inbox line: the short id goes, the first question is the title, "Also:" becomes the list
+  const v = M.view({ type: "inbox", kind: "inbox", title: "Routing plan c1e7: go for the spike (step 1) + staging build? Also: certificate…",
+    text: "Routing plan c1e7: go for the spike (step 1) + staging build? Also: certificate choice, pilot store list, any IP allow-lists on shop.example.com" }, ids);
+  assert.strictEqual(v.title, "Routing plan: go for the spike (step 1) + staging build?");
+  assert.deepStrictEqual(v.list, ["Certificate choice", "Pilot store list", "Any IP allow-lists on shop.example.com"]);
+  assert.strictEqual(v.intro, "Also");
+  assert.strictEqual(v.more, null);
+  // chartroom's own refs, paths and carry notes; a leading project label; numbers and $ amounts stay
+  assert.strictEqual(M.plain("mcp Q192: review the 12 admins (tasks/list-admins-558d/report.md) and say who comes off (carried, 2026-10-17)"),
+    "mcp: review the 12 admins (the report) and say who comes off");
+  assert.strictEqual(M.plain("shop: buy the 1-yr plan (~$790/mo savings; ruling r-af98) in PR 18404", null, "shop"),
+    "Buy the 1-yr plan (~$790/mo savings; ruling) in PR 18404");
+  assert.strictEqual(M.plain("done: plan finished (page c1e7/one-app-plan) --detail Report: ~/work/shop/tasks/x-c1e7/report.md. Key points: two", ids),
+    "Plan finished. Details: Key points: two");
+  // a word that only looks like an id stays
+  assert.strictEqual(M.plain("the cafe deal on 2026-11-02", ids), "The cafe deal on 2026-11-02");
+  // numbered steps in a later sentence: its opening introduces them
+  const s = M.shape("Templates PR 18404 is ready. Before merge, you (admin): (1) allow the build service to tag; (2) require pipeline 79; (3) optional: restrict tags. Then approve.");
+  assert.strictEqual(s.lead, "Templates PR 18404 is ready.");
+  assert.strictEqual(s.intro, "Before merge, you (admin)");
+  assert.deepStrictEqual(s.list, ["allow the build service to tag", "require pipeline 79", "optional: restrict tags."]);
+  assert.strictEqual(s.more, "Then approve.");
+  // a title that is the text cut short is the same words: never shown twice
+  assert.ok(M.repeats("Re-run the review on PR 18 only, or also his 7 earlier…", "Re-run the review on PR 18 only, or also his 7 earlier PRs?"));
+  assert.ok(!M.repeats("Pick a cache", "Which cache?"));
+});
+
+test("finished work: what got done first, its parts one a line; one that still asks is never accepted in bulk", () => {
+  const v = M.view({ type: "task", kind: "review", title: "Fix the badge c1e7",
+    summary: "done: PR 18817 into main keeps the rate when pasting; no schema change; 4 of 5 new tests fail on old code, 5 of 5 pass; build 33991 green" }, new Set(["c1e7"]));
+  assert.strictEqual(v.title, "Fix the badge");
+  assert.strictEqual(v.lead, "PR 18817 into main keeps the rate when pasting");
+  assert.deepStrictEqual(v.list, ["no schema change", "4 of 5 new tests fail on old code, 5 of 5 pass", "build 33991 green"]);
+  assert.strictEqual(v.asks, false);
+  for (const t of ["done: PR open. Needs a call: the date rule", "done: drafted; 11 decisions for the commander", "done: merged. Please confirm the portal rule", "done: ready, go?"]) {
+    assert.strictEqual(M.view({ type: "task", kind: "review", title: "T", summary: t }).asks, true, t);
+  }
+  // the notification's body never repeats its title
+  const n = M.notice(Object.assign({ key: "acme:i-1", home: "acme", group: "decide", summary: "Ship it? Also: the date" },
+    { view: M.view({ type: "inbox", kind: "inbox", title: "Ship it? Also…", text: "Ship it? Also: the date" }) }));
+  assert.deepStrictEqual([n.title, n.body], ["Ship it?", "acme · Decide: The date"]);
+});
+
+test("permission card in plain words: what it wants, why it came, what Always allows", () => {
+  const card = (extra) => Object.assign({ kind: "permission", tool: "Bash", blocking: true, rule: "commander:secrets", reason: "az token",
+    why: "Read who can approve deploys", command: "TOKEN=$(az account get-access-token)\ncurl -s https://dev.example.com/roles", pattern: "x" }, extra);
+  assert.strictEqual(M.permitLead(card()), "Wants to use your Azure login to read who can approve deploys.");
+  assert.strictEqual(M.permitReason(card()), "it uses your Azure login");
+  assert.strictEqual(M.permitLead(card({ rule: "commander:outward", reason: "git-push", why: "Push the sitemap branch" })), "Wants to push the sitemap branch.");
+  assert.strictEqual(M.permitReason(card({ rule: "commander:outward", reason: "git-push" })), "it pushes code to a shared repository");
+  assert.strictEqual(M.permitLead(card({ rule: "commander:outward", reason: "git-push", why: "CI logs for main" })), "CI logs for main.");
+  assert.strictEqual(M.permitLead(card({ rule: "commander:production", reason: "kubectl change", why: "" })), "Wants to run a command that needs your OK.");
+  assert.strictEqual(M.permitReason(card({ rule: "commander:unlisted", reason: "" })), "chartroom has no rule for it yet");
+  // no rule code ever shows
+  for (const c of ["outward", "secrets", "production", "elsewhere", "controls", "flags", "money", "unlisted"]) {
+    assert.ok(!/commander:|:/.test(M.permitReason(card({ rule: "commander:" + c, reason: "gh pr create" }))), c);
+  }
+  // Always never says less than it allows
+  assert.strictEqual(M.permitScope(card({ pattern: card().command })), "this exact command, until the task closes");
+  assert.deepStrictEqual(M.permitScope(card({ pattern: "git push:*" })), { code: "git push", text: "any command starting with", after: ", until the task closes" });
+  assert.deepStrictEqual(M.permitScope(card({ tool: "Write", command: null, pattern: "~/work/shop/.env" })).code, ".env");
+  // the call: its first line, and whether there is more
+  assert.deepStrictEqual(M.firstLine(card().command), { line: "TOKEN=$(az account get-access-token)", more: true });
+  assert.deepStrictEqual(M.firstLine("git push origin HEAD"), { line: "git push origin HEAD", more: false });
 });
 
 test("ordered: by group, then breaking first, then oldest first", () => {

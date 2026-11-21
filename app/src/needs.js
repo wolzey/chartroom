@@ -24,6 +24,24 @@ function quickLabel(it) {
   return "Answer";
 }
 
+// The title a person reads: tidied of chartroom's ids and paths (model.js, view).
+const titleOf = (it) => (it.view && it.view.title) || it.title;
+
+// The rest of a card after its title: what introduces the list, the list (several questions or
+// steps, one a line), and the remainder, folded when it is long.
+function ViewBody({ v, lead }) {
+  const [open, setOpen] = useState(false);
+  if (!v) return null;
+  const long = v.more && v.more.length > 220;
+  return html`
+    ${lead && v.lead ? html`<p class="a-detail-sum qv-ask"><${Linked} text=${v.lead} /></p>` : null}
+    ${v.list && v.list.length ? html`<div class="qv-list">${v.intro ? html`<div class="qv-list-h">${v.intro}</div>` : null}
+      <ul>${v.list.map((x, k) => html`<li key=${k}><${Linked} text=${x} /></li>`)}</ul></div>` : null}
+    ${v.more ? (long && !open
+      ? html`<p class="muted qv-more">${v.more.slice(0, 200).replace(/\s+\S*$/, "")}… <button class="link" onClick=${() => setOpen(true)}>Show more</button></p>`
+      : html`<p class="muted qv-more"><${Linked} text=${v.more} /></p>`) : null}`;
+}
+
 function sentLine(it) {
   if (!it.sent) return null;
   if (it.sent.withdrawn) return "withdrawn by the XO";
@@ -41,7 +59,7 @@ function Row({ it, i, sel, ob, picked, picking, onSelect, onQuick, onPick, prs }
     <span class="pick-cell"><${Glyph} kind=${it.kind} />
       <input type="checkbox" class="pick" aria-label=${"Select " + it.title} checked=${!!picked}
         onClick=${(e) => { e.stopPropagation(); onPick(it.key, e.shiftKey ? "range" : "toggle"); }} onChange=${() => {}} /></span>
-    <span class="a-row-title"><span class="truncate"><${Linked} text=${it.title} /></span><${PrBadges} urls=${it.prs} prs=${prs} max=${2} /></span>
+    <span class="a-row-title"><span class="truncate"><${Linked} text=${titleOf(it)} /></span><${PrBadges} urls=${it.prs} prs=${prs} max=${2} /></span>
     <span class="a-row-quick">${ob === "failed" ? html`<span class="sent-st failed">not sent · see above</span>` : sent
       ? html`<span class=${"sent-st" + (it.sent && it.sent.read_by_xo ? " read" : "")}>${sent}</span>`
       : html`<button class="btn sm" title="Enter" onClick=${(e) => { e.stopPropagation(); onQuick(it); }}>${quickLabel(it)}</button>`}</span>
@@ -61,30 +79,40 @@ function Clock({ it, short }) {
   return html`<span class=${"perm-clock" + (l.over ? " over" : l.secs != null && l.secs < 120 ? " soon" : "")} title=${l.text}>${text}</span>`;
 }
 
-// A worker's tool call waiting on the commander (the permission broker, lib/permit.sh). Nothing here
-// is allowed by a key: only these buttons answer it.
+// A worker's tool call waiting on the commander (the permission broker, lib/permit.sh). It leads
+// with what the worker wants, in plain words, and why it came to the commander; the call itself is
+// one line, unfolded on request. Nothing here is allowed by a key: only these buttons answer it.
 function PermitBody({ it, note, setNote, noteRef, busy, onAct }) {
   const [, tick] = useState(0);
+  const [showCmd, setShowCmd] = useState(false);
   useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 1000); return () => clearInterval(t); }, []);
+  useEffect(() => { setShowCmd(false); }, [it.key]);
   const l = M.permitLeft(it);
   const late = l && l.over;
   const act = (answer) => onAct(it, { type: "permit", answer });
+  const call = it.command != null ? it.command : it.input || it.desc || "";
+  const fl = M.firstLine(it.command != null ? it.command : it.desc || "");
+  const scope = M.permitScope(it);
   return html`
-    <div class="perm-head"><${Clock} it=${it} />${!it.blocking && it.reason_denied ? html`<span class="faint"> · ${it.reason_denied}</span>` : null}</div>
+    <p class="perm-lead">${M.permitLead(it)}</p>
+    <p class="muted perm-why">Asked because ${M.permitReason(it)}${it.project ? html`<span class="perm-repo"> · in <b>${it.project}</b></span>` : null}
+      <span class="perm-left"> · <${Clock} it=${it} /></span></p>
     ${it.escalated ? html`<p class="perm-xo"><b>The XO left this one to you.</b>${it.escalated.note ? " " + it.escalated.note : ""}</p>` : null}
-    ${it.command != null ? html`<pre class="perm-cmd">${it.command}</pre>` : html`<div class="perm-cmd-d"><b>${it.desc}</b>${it.input ? html`<pre class="perm-cmd">${it.input}</pre>` : null}</div>`}
-    ${it.cwd ? html`<div class="perm-cwd faint">in ${it.cwd}</div>` : null}
-    ${it.why ? html`<p class="a-detail-sum">${it.why}</p>` : null}
-    <p class="muted perm-why">Came to you because: ${it.reason || "chartroom's policy would not answer it"}${it.rule ? " (" + it.rule + ")" : ""}</p>
-    ${late ? html`<p class="perm-late">An allow still works: the worker is told to run it again.</p>` : null}
+    ${!it.blocking && it.reason_denied ? html`<p class="faint perm-note">Auto mode refused it first (${it.reason_denied.replace(/^\[|\]$/g, "")}).</p>` : null}
+    <div class=${"perm-call" + (showCmd ? " open" : "")}>
+      <code class="perm-line" title=${fl.line}>${fl.line}</code>
+      ${fl.more || it.command == null ? html`<button class="link perm-toggle" aria-expanded=${showCmd} onClick=${() => setShowCmd(!showCmd)}>${showCmd ? "Hide" : "Show command"}</button>` : null}
+      ${showCmd ? html`<pre class="perm-cmd">${call}</pre>` : null}
+    </div>
+    ${late ? html`<p class="perm-late">The wait ran out. An allow still works: the worker is told to run it again.</p>` : null}
     <textarea class="input note" rows="2" ref=${noteRef} data-note="1" placeholder=${late || !it.blocking ? "A note for the worker (optional)" : "A note for the worker, sent with a deny (optional)"}
       value=${note || ""} onInput=${(e) => setNote(e.target.value)} disabled=${busy}></textarea>
-    <div class="a-detail-actions perm-acts">
-      <button class="btn primary" disabled=${busy} onClick=${() => act("once")}>${late ? "Allow now (the worker will retry)" : "Allow once"}</button>
-      <span class="perm-always"><button class="btn" disabled=${busy} onClick=${() => act("always")}>Always for this task</button>
-        <span class="faint">allows <code>${it.pattern}</code> until the task closes</span></span>
-      ${late ? null : html`<button class="btn danger-ghost" disabled=${busy} onClick=${() => act("deny")}>Deny</button>`}
-    </div>`;
+    <div class="perm-acts">
+      <button class="btn primary" disabled=${busy} onClick=${() => act("once")}>${late ? "Allow now" : "Allow once"}</button>
+      <button class="btn" disabled=${busy} onClick=${() => act("always")}>Always for this task</button>
+      ${late ? null : html`<button class="btn danger" disabled=${busy} onClick=${() => act("deny")}>Deny</button>`}
+    </div>
+    <p class="faint perm-scope">“Always” allows ${typeof scope === "string" ? scope : html`${scope.text} <code>${scope.code}</code>${scope.after}`}.</p>`;
 }
 
 function Filters({ all, filters, setFilters, homes }) {
@@ -109,7 +137,25 @@ function Filters({ all, filters, setFilters, homes }) {
   </div>`;
 }
 
-export function NeedsList({ all, list, tab, setTab, filters, setFilters, homes, counts, sel, setSel, ob, onQuick, notices, picked, onPick, onPickAll, prs }) {
+// Finished tasks waiting for the commander's nod, apart from the questions, with Accept all: every
+// one shown that asks nothing more (one whose report still asks something is opened, not accepted
+// in bulk). Two clicks: the first says how many.
+function FinishedHead({ g, items, onAcceptAll }) {
+  const [confirm, setConfirm] = useState(false);
+  const ok = items.filter((it) => it.kind === "review" && !(it.view && it.view.asks) && !it.sent);
+  const asking = items.length - ok.length;
+  useEffect(() => { setConfirm(false); }, [items.length]);
+  return html`<div class="a-group a-group-finished" title=${g.hint}>
+    <span>${g.heading || g.label}</span><span class="count">${items.length}</span><span class="grow"></span>
+    ${asking ? html`<span class="faint a-group-note">${asking} still ${asking === 1 ? "asks" : "ask"} you something</span>` : null}
+    ${ok.length && onAcceptAll ? (confirm
+      ? html`<button class="btn sm primary" onClick=${() => { setConfirm(false); onAcceptAll(ok); }}>Accept ${ok.length}?</button>
+          <button class="btn sm ghost" onClick=${() => setConfirm(false)}>Cancel</button>`
+      : html`<button class="btn sm" onClick=${() => setConfirm(true)}>Accept all${ok.length !== items.length ? " " + ok.length : ""}</button>`) : null}
+  </div>`;
+}
+
+export function NeedsList({ all, list, tab, setTab, filters, setFilters, homes, counts, sel, setSel, ob, onQuick, notices, picked, onPick, onPickAll, prs, onAcceptAll }) {
   const picking = picked.size > 0;
   const allPicked = list.length > 0 && list.every((it) => picked.has(it.key));
   const tabs = [{ id: "all", label: "All", count: counts.all }]
@@ -129,7 +175,9 @@ export function NeedsList({ all, list, tab, setTab, filters, setFilters, homes, 
     for (const g of M.GROUPS) {
       const inG = list.filter((it) => it.group === g.id);
       if (!inG.length) continue;
-      rows.push(html`<div key=${"g-" + g.id} class="a-group" title=${g.hint}><span>${g.label}</span><span class="count">${inG.length}</span></div>`);
+      rows.push(g.id === "finished"
+        ? html`<${FinishedHead} key=${"g-" + g.id} g=${g} items=${inG} onAcceptAll=${onAcceptAll} />`
+        : html`<div key=${"g-" + g.id} class="a-group" title=${g.hint}><span>${g.heading || g.label}</span><span class="count">${inG.length}</span></div>`);
       for (const it of inG) {
         const k = i++;
         rows.push(html`<${Row} key=${it.key} it=${it} i=${k} sel=${k === sel} ob=${ob[it.key]} picked=${picked.has(it.key)} picking=${picking} onSelect=${setSel} onQuick=${onQuick} onPick=${onPick} prs=${prs} />`);
@@ -182,7 +230,8 @@ export function AskBody({ it, picks, setPick, note, setNote, busy, onAct, onDeta
       <div class="a-detail-actions"><button class="btn primary" onClick=${() => onDetails(it)}>Open grilling · ${qs.length} questions <kbd>↵</kbd></button>${snoozeBtn}</div>`;
   } else if (it.kind === "review") {
     body = html`
-      <p class="a-detail-sum qv-ask"><${Linked} text=${it.summary || "The worker reported done."} /></p>
+      ${it.view ? html`<${ViewBody} v=${it.view} lead=${true} />` : html`<p class="a-detail-sum qv-ask"><${Linked} text=${it.summary || "The worker reported done."} /></p>`}
+      ${it.view && it.view.asks ? html`<p class="qv-asks">The report still asks you something: read it before you accept.</p>` : null}
       ${(it.prs || []).length && !hidePrs ? html`<div class="q-prs"><div class="d-h">Pull requests <span class="count">${it.prs.length}</span></div>
         ${it.prs.map((u) => html`<${PrCard} key=${u} url=${u} pr=${(prs || {})[u]} compact=${true} />`)}</div>` : null}
       <div class="a-detail-actions">
@@ -226,14 +275,17 @@ export function AskBody({ it, picks, setPick, note, setNote, busy, onAct, onDeta
   } else {
     // decide, inbox, blocked, failed, input, approval: one question, options when it has them
     const prompt = it.kind === "input";
+    // an inbox line or an approval is one text: its title is the first sentence, the body the rest
+    const own = (it.type === "inbox" || it.type === "approval") && it.view && !q.options.length;
     body = html`
       ${prompt ? html`<div class="qv-sent"><span><b>The worker is stopped at a prompt in its terminal</b>: a permission or a question
         chartroom cannot read, so there is nothing to choose here. Open its terminal and answer it there:</span>
         <code class="qv-cmd">chartroom attach ${it.short_id || it.task}</code>
         <span>Or write below, and the XO will see to it.</span></div>` : null}
-      ${q.text && q.text !== it.title && !prompt ? html`<p class="a-detail-sum qv-ask"><${Linked} text=${q.text} /></p>` : null}
-      ${q.context ? html`<p class="muted"><${Linked} text=${q.context} /></p>` : null}
-      ${blocks.length ? html`<div class="qv-blocks">${blocks.map((b, k) => html`<p key=${k}>${b.label ? html`<b>${b.label}: </b>` : null}<${Linked} text=${b.text} /></p>`)}</div>` : null}
+      ${own ? html`<${ViewBody} v=${it.view} />` : html`
+        ${q.text && !M.repeats(titleOf(it), q.text) && !prompt ? html`<p class="a-detail-sum qv-ask"><${Linked} text=${M.plain(q.text, null, it.project)} /></p>` : null}
+        ${q.context ? html`<p class="muted"><${Linked} text=${M.plain(q.context, null, it.project)} /></p>` : null}
+        ${blocks.length ? html`<div class="qv-blocks">${blocks.map((b, k) => html`<p key=${k}>${b.label ? html`<b>${b.label}: </b>` : null}<${Linked} text=${M.plain(b.text)} /></p>`)}</div>` : null}`}
       ${q.options.length ? html`<${Options} options=${q.options} picked=${picks && picks[1]} onPick=${(l) => setPick(1, l)} />` : null}
       <${Why} text=${q.why} />
       ${noteBox(q.options.length ? "Add a note, or answer in your own words" : "Your answer, in your own words")}
@@ -265,7 +317,7 @@ export function QuickView(props) {
       ${it.task || it.kind === "round" ? html`<button class="btn ghost sm od" title="Open details (o)" onClick=${() => onDetails(it)}><span class="od-ic"></span>Open details</button>` : null}
       <button class="btn ghost icon qv-close" aria-label="Close" onClick=${onClose}>×</button>
     </div>
-    <h2 class="a-detail-title"><${Linked} text=${it.title} /></h2>
+    <h2 class="a-detail-title"><${Linked} text=${titleOf(it)} /></h2>
     <div class="a-detail-meta"><span class="meta"><${HomeTag} name=${it.home} hue=${it.hue} />${it.project ? html`<span class="dot-sep">${it.project}</span>` : null}</span></div>
     <${AskBody} ...${props} />
     <dl class="a-ctx">${ctx.map(([k, v]) => html`<${React.Fragment} key=${k}><dt>${k}</dt><dd class=${k === "Intent" ? "intent" : ""}>${v}</dd></${React.Fragment}>`)}</dl>

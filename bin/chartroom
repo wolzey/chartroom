@@ -378,6 +378,14 @@ brief_report_steps() { # <id>
    is needed. Details follow under labels the dashboard shows as blocks: \`Cause:\`,
    \`Options: (1) ... (2) ...\` (mark one RECOMMENDED), \`Need:\`, \`Report:\`; or pass them as
    \`--detail "<the rest>"\`, before the headline. Anything longer than a few lines goes in report.md.
+   The commander reads your headline as a card in their app, often on a phone. Write it as one
+   plain sentence a person would say: what happened, or what you need from them and why it
+   matters. No task ids, file paths or rule codes in it. One question per \`decision\`. A \`done\`
+   says what is now true and what they get from it (for example "Pasted templates keep their
+   rate: PR 18817, tests green, ready to merge"), never a log of steps, and asks nothing.
+   The description you give each Bash command is the first line of a permission card when one
+   needs the commander: say what it does for them in plain words ("Read who can approve deploys"),
+   not how.
 3. Before \`done\` or \`failed\`, write $d/report.md containing: outcome; what changed
    (files, commits) or what you found; validation you actually ran with real results (never claim
    a check you did not run); risks and open questions.
