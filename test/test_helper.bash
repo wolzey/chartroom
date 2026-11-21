@@ -77,6 +77,10 @@ new_task() {
 # it should).
 snapshot() { find "$@" -type f -exec cksum {} + | sort; }
 
+# A test of a file's own format (inbox.md, focus.json) runs with the switch off: with it on, those
+# records are store rows (test/store-marks.bats covers them there).
+files_only() { [[ "${CHARTROOM_STORE:-}" != sqlite ]] || skip "${1:-the format of a file the store replaces}"; }
+
 # A task's events and record, wherever it lives (a store task has no events.log or meta.json).
 events() {
   if [[ -f "$CHARTROOM_HOME/tasks/$1/meta.json" ]]; then cat "$CHARTROOM_HOME/tasks/$1/events.log"

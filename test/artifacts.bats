@@ -104,7 +104,7 @@ fake_clip() { # <name>: a clipboard tool that keeps its input in $CLIP and logs 
   local created; created="$(jq -r .created "$d/rotate-the-key.json")"
   run cr artifact done "$ref"
   [ "$status" -eq 0 ]; [ "$output" = "done $ref: Rotate the key" ]
-  [ "$(jq -r .done "$d/rotate-the-key.json")" != null ]
+  [ "$(cr artifact list --json --all | jq -r '.[0].done')" != null ]
   events "$id" | grep -qE ' note: artifact rotate-the-key done: Rotate the key$'
   [ "$(cr artifact list)" = "no open artifacts" ]
   [ "$(cr artifact list "$sid")" = "no open artifacts on $sid" ]
@@ -125,7 +125,8 @@ fake_clip() { # <name>: a clipboard tool that keeps its input in $CLIP and logs 
   [[ "$output" == *"replaced the text of $ref (was: Rotate the key)"* ]]
   [ "$(cr artifact show "$ref")" = "echo two" ]
   [ "$(jq -r .created "$d/rotate-the-key.json")" = "$created" ]
-  [ "$(jq -r '.done, (.updated > .created)' "$d/rotate-the-key.json" | tr '\n' ' ')" = "null true " ]
+  [ "$(jq -r '.updated > .created' "$d/rotate-the-key.json")" = true ]
+  [ "$(cr artifact list --json | jq -r '.[0].done')" = null ]
   events "$id" | grep -qE ' note: artifact rotate-the-key \(runbook\) updated: Rotate the key$'
 }
 
@@ -139,7 +140,7 @@ fake_clip() { # <name>: a clipboard tool that keeps its input in $CLIP and logs 
   [ "$(cr artifact list --json | jq -c '.[0] | [.ref, .owner_type, .owner, .project]')" = "[\"$ref\",\"inbox\",\"$tag\",\"webapp\"]" ]
   [ "$(cr artifact show "[$(tr '[:lower:]' '[:upper:]' <<<"$tag")]")" = "$(cat "$MSG")" ]
   # answered: the line goes, the draft stays until it is done
-  sed -i.bak "/\[$tag\]/d" "$CHARTROOM_HOME/inbox.md"
+  cr todo done "$tag" >/dev/null
   [ "$(cr artifact show "$ref")" = "$(cat "$MSG")" ]
   [[ "$(cr artifact list)" == *"$ref"* ]]
   run cr artifact done "$tag"

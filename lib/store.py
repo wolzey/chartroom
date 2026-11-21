@@ -655,6 +655,9 @@ def apply_marks(conn, home, op, by, why, items):
                 conn.execute("INSERT INTO marks(hid, kind, ref, done_at, done_by) VALUES (?, ?, ?, ?, ?) "
                              "ON CONFLICT(hid, kind, ref) DO UPDATE SET done_at = excluded.done_at, done_by = excluded.done_by",
                              (hid, kind, ref, stamp, by))
+            elif op == "reopen":
+                # (an artifact added again: open, as its sidecar's done goes back to null)
+                conn.execute("UPDATE marks SET done_at = NULL, done_by = NULL WHERE hid = ? AND kind = ? AND ref = ?", (hid, kind, ref))
             else:
                 raise Fail("mark: unknown op %s" % op)
             applied.append({"kind": kind, "ref": ref})
@@ -674,6 +677,7 @@ def marks_doc(conn, hid):
 # ------------------------------------------------------------------ inbox items and focus
 # An inbox item born in the store: {id, section (waiting), created (date), project, text}, read
 # beside inbox.md's lines (lib/dashboard.sh dashboard_inbox). Its id is unique across both.
+# They are listed in the order they were added (rowid), as inbox.md's lines are.
 
 INBOX_TAG = re.compile(r"^- \[(i-[0-9a-f]{4,})\] ", re.M)
 
@@ -709,7 +713,7 @@ def inbox_project(conn, home, tag, project):
 
 def inbox_rows(conn, hid):
     return [{"id": i, "section": s, "date": c, "project": p, "text": t}
-            for i, s, c, p, t in conn.execute("SELECT id, section, created, project, text FROM inbox WHERE hid = ? ORDER BY created, id", (hid,))]
+            for i, s, c, p, t in conn.execute("SELECT id, section, created, project, text FROM inbox WHERE hid = ? ORDER BY rowid", (hid,))]
 
 
 def focus_set(conn, home, doc):

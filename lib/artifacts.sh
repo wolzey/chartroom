@@ -197,6 +197,12 @@ artifact_add() { # <task-or-inbox-id> --kind K --title T [--description D] [--sl
       created: (if $created == "" then $now else $created end), updated: $now, done: null}' >"$m.tmp"
   mv "$f.tmp" "$f" && mv "$m.tmp" "$m"
   [[ -z "$mine" || "$mine" == "$f" ]] || rm -f -- "$mine"
+  # Added again: open again, a done mark in the store too (lib/marks.sh).
+  if [[ -n "$old" ]] && marks_in_store; then
+    store_home_ensure
+    printf 'artifact\t%s/%s\n' "$owner" "$slug" | store_py mark "${STORE_HOME_ARGS[@]}" --op reopen --by "${CHARTROOM_VIA:-terminal}" >/dev/null || exit 1
+    store_reset
+  fi
   stamp_changed # (an inbox item's artifact logs no event)
   ref="$(artifacts_json --owner "$type" "$owner" | jq -r --arg s "$slug" '.[] | select(.slug == $s) | .ref')"
   if [[ "$type" == task ]]; then log_event "$owner" note "artifact $slug ($kind) $([[ -n "$old" ]] && echo updated || echo added): $title"; fi

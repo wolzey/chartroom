@@ -103,8 +103,18 @@ store_load() {
 }
 
 # Read the store again on the next look (a watch round, a poll; after a write of this process).
-store_reset() { [[ -z "$STORE_D" ]] || rm -rf "$STORE_D"; STORE_UID_FOR=""; return 0; }
-store_forget_events() { [[ -z "$STORE_D" ]] || rm -f "$STORE_D/$1/events.log" "$STORE_D/.events-open" "$STORE_D/.events-all"; } # <id>
+# (The directory is found again here, not taken from STORE_D: a read in a subshell, $(...), fills
+# this process's cache without setting STORE_D out here.)
+store_reset() {
+  STORE_UID_FOR=""; store_uid_of
+  [[ -z "$STORE_UID" ]] || rm -rf "${STORE_RUN:?}/$STORE_UID"
+  STORE_D=""; STORE_UID_FOR=""; return 0
+}
+store_forget_events() { # <id>
+  store_uid_of; [[ -n "$STORE_UID" ]] || return 0
+  local d="$STORE_RUN/$STORE_UID"
+  rm -f "$d/$1/events.log" "$d/.events-open" "$d/.events-all"
+}
 
 # Where a task's record lives: TASK_KIND=file|db, or "" for no such task. One task is looked up
 # on its own (its record rendered, not every task's): store_load is for listing them all.

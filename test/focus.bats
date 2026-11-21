@@ -16,6 +16,7 @@ task_in() { # <project> <kind> [--breaking] <text>
 }
 
 @test "focus: on, show, change, off; names are checked" {
+  files_only "focus.json and inbox.md's own format"
   run cr focus
   [ "$output" = "focus: off" ]
   run cr focus shop
@@ -103,6 +104,7 @@ task_in() { # <project> <kind> [--breaking] <text>
 }
 
 @test "inbox add says when focus holds the item; --breaking is never held" {
+  files_only "focus.json and inbox.md's own format"
   cr focus shop >/dev/null
   run cr inbox add --project billing "which region?"
   [ "$status" -eq 0 ]
@@ -119,6 +121,7 @@ task_in() { # <project> <kind> [--breaking] <text>
 }
 
 @test "focus --for runs out by itself: past its end, nothing is held" {
+  files_only "focus.json and inbox.md's own format"
   task_in billing decision "pick one" >/dev/null
   cr focus shop --for 1h >/dev/null
   [ "$(cr board --json | jq '.focus.held')" -eq 1 ]
@@ -132,6 +135,7 @@ task_in() { # <project> <kind> [--breaking] <text>
 }
 
 @test "--scope narrows a focus to the items that mention it: a task's title or id, an inbox item's text" {
+  files_only "focus.json and inbox.md's own format"
   run cr watch --once --timeout 1
   a="$(TITLE="IR-006 containment checklist" task_in shop progress "starting")"
   b="$(TITLE="Checkout copy" task_in shop progress "starting")"

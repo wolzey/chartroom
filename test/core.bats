@@ -479,6 +479,7 @@ shorts() { cr status --all --json | jq -r 'map("\(.id)=\(.short_id)") | join(" "
 }
 
 @test "inbox ids: add and tag write stable ids; resolve finds items; ids survive edits" {
+  files_only "inbox.md's own lines"
   cr init >/dev/null
   run cr inbox add "which region for staging?"
   [ "$status" -eq 0 ]
@@ -513,6 +514,7 @@ shorts() { cr status --all --json | jq -r 'map("\(.id)=\(.short_id)") | join(" "
 }
 
 @test "inbox add: creates the Waiting section when the file has none" {
+  files_only "inbox.md's own lines"
   cr init >/dev/null
   printf '# Inbox\n\n## Notes\n- n\n' >"$CHARTROOM_HOME/inbox.md"
   id="$(cr inbox add "first question")"
@@ -521,6 +523,7 @@ shorts() { cr status --all --json | jq -r 'map("\(.id)=\(.short_id)") | join(" "
 }
 
 @test "inbox add: the text is stored verbatim (backslashes, quotes, ampersands)" {
+  files_only "inbox.md's own lines"
   cr init >/dev/null
   id="$(cr inbox add 'use C:\new\tdir & "quotes"?')"
   grep -qxF -- "- [$id] $(date +%F) — use C:\\new\\tdir & \"quotes\"?" "$CHARTROOM_HOME/inbox.md"
@@ -528,6 +531,7 @@ shorts() { cr status --all --json | jq -r 'map("\(.id)=\(.short_id)") | join(" "
 }
 
 @test "inbox add --project: labels the line; a path becomes its name; bad names fail" {
+  files_only "inbox.md's own lines"
   cr init >/dev/null
   run cr inbox add --project webapp "which region for staging?"
   [ "$status" -eq 0 ]
@@ -552,6 +556,7 @@ shorts() { cr status --all --json | jq -r 'map("\(.id)=\(.short_id)") | join(" "
 }
 
 @test "inbox: unlabelled items still read (project null); tag and project label them" {
+  files_only "inbox.md's own lines"
   cr init >/dev/null
   old="$(cr inbox add "an old question")"
   [ "$(cr resolve "$old" --json | jq -c '[.project, .text]')" = '[null,"an old question"]' ]

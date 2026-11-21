@@ -161,3 +161,16 @@ store_on() { printf 'CHARTROOM_STORE=sqlite\n' >>"$CHARTROOM_HOME/config"; }
   cr focus off >/dev/null
   [ "$(cr focus --json | jq -r .on)" = false ]
 }
+
+@test "store inbox items: the text verbatim, a project, a relabel, a resolve; inbox.md untouched" {
+  store_on
+  before="$(cat "$CHARTROOM_HOME/inbox.md")"
+  id="$(cr inbox add --project "$PROJECT" 'use C:\new\tdir & "quotes"?')"
+  [[ "$id" =~ ^i-[0-9a-f]{4}$ ]]
+  [ "$(cr inbox list --json | jq -c --arg i "$id" '.waiting[] | select(.short_id == $i) | [.project, .text]')" = '["proj","use C:\\new\\tdir & \"quotes\"?"]' ]
+  run cr inbox project "$id" webapp
+  [ "$status" -eq 0 ]; [[ "$output" == *"[$id]"*"[webapp] use C:"* ]]
+  [ "$(cr resolve "$id")" = "$id" ]
+  [[ "$(cr status)" == *"inbox: 1 waiting on the commander"* ]]
+  [ "$(cat "$CHARTROOM_HOME/inbox.md")" = "$before" ]
+}
