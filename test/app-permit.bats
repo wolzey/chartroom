@@ -16,6 +16,18 @@ teardown() { cr app stop >/dev/null 2>&1 || true; }
 
 has_broker() { cr help 2>/dev/null | grep -q 'chartroom permit'; }
 
+# Answers go through the app server, as the commander's do. (A `permit answer` run straight from a
+# worker's session, as this suite may be, is refused by the broker itself.)
+serve() {
+  run cr app serve --daemon --port 0 --no-auth
+  [ "$status" -eq 0 ]
+  PORT="$(awk '{print $2}' "$BATS_TEST_TMPDIR/app.pid")"
+  for _ in $(seq 1 100); do curl -s "http://127.0.0.1:$PORT/api/v1/state" | jq -e '[.homes[] | select(.snapshot)] | length == 2' >/dev/null && break; sleep 0.2; done
+}
+post() { curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -H 'X-Chartroom-App: 1' -H "X-Chartroom-Action: $1" -d "$2" "http://127.0.0.1:$PORT/api/v1/homes/acme/permit"; }
+outcome() { curl -s "http://127.0.0.1:$PORT/api/v1/state" | jq -r --arg a "$1" '.actions[$a] | "\(.state)\t\(.error // "")"'; }
+settle() { for _ in $(seq 1 100); do [[ "$(outcome "$1")" == done* || "$(outcome "$1")" == failed* ]] && break; sleep 0.1; done; }
+
 # A card as the broker writes it (permit_card in lib/permit.sh), in <home>/permits/<task>/<p-id>.json
 write_card() { # <home> <task> <p-id> <blocking true|false> <expires in s>
   local now; now="$(date +%s)"
@@ -69,19 +81,15 @@ write_card() { # <home> <task> <p-id> <blocking true|false> <expires in s>
   t="$(cr status --json | jq -r '.[] | select(.title | test("stock badge")) | .id')"
   write_card "$CHARTROOM_HOME" "$t" p-1a2b true 600
   [ "$(cr app snapshot --json | jq -r '.needs[0] | "\(.kind) \(.permit) \(.task)"')" = "permission p-1a2b $t" ]
-  run cr app serve --daemon --port 0 --no-auth
-  [ "$status" -eq 0 ]
-  PORT="$(awk '{print $2}' "$BATS_TEST_TMPDIR/app.pid")"
-  for _ in $(seq 1 100); do curl -s "http://127.0.0.1:$PORT/api/v1/state" | jq -e '[.homes[] | select(.snapshot)] | length == 2' >/dev/null && break; sleep 0.2; done
-  post() { curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -H 'X-Chartroom-App: 1' -H "X-Chartroom-Action: $1" -d "$2" "http://127.0.0.1:$PORT/api/v1/homes/acme/permit"; }
-  outcome() { curl -s "http://127.0.0.1:$PORT/api/v1/state" | jq -r --arg a "$1" '.actions[$a] | "\(.state)\t\(.error // "")"'; }
+  serve
   [ "$(post a-perm-00000 '{"id":"q-1234","answer":"once"}')" = 400 ]
   [ "$(post a-perm-00000 '{"id":"p-1a2b","answer":"sure"}')" = 400 ]
   [ "$(post a-perm-00001 '{"id":"p-1a2b","answer":"once","note":"ok, \nbut only this once"}')" = 202 ]
-  for _ in $(seq 1 100); do [[ "$(outcome a-perm-00001)" == done* ]] && break; sleep 0.1; done
+  settle a-perm-00001
+  [[ "$(outcome a-perm-00001)" == done* ]]
   [ "$(cr permit show p-1a2b | jq -r '"\(.state) \(.answer.answer) \(.answer.by) \(.answer.via) \(.answer.note)"')" = "answered once app app ok, but only this once" ]
   [ "$(post a-perm-00002 '{"id":"p-1a2b","answer":"deny"}')" = 202 ]
-  for _ in $(seq 1 100); do [[ "$(outcome a-perm-00002)" == failed* ]] && break; sleep 0.1; done
+  settle a-perm-00002
   [[ "$(outcome a-perm-00002)" == *"already answered: once by app via app"*"(the first answer wins)"* ]]
   # answered, it is out of Needs me
   [ "$(cr app snapshot --json | jq '[.needs[] | select(.kind == "permission")] | length')" -eq 0 ]
@@ -95,9 +103,15 @@ write_card() { # <home> <task> <p-id> <blocking true|false> <expires in s>
   write_card "$CHARTROOM_HOME" "$t" p-3c4d true -30
   jq -n '{answer: "expired", by: "chartroom", via: "", note: "", at: (now - 30 | todate)}' >"$CHARTROOM_HOME/permits/$t/p-3c4d.answer.json"
   [ "$(cr app snapshot --json | jq -r '.needs[] | select(.permit == "p-3c4d") | "\(.missed) \(.state_permit)"')" = "true expired" ]
-  run cr permit answer p-3c4d deny --by app
-  [ "$status" -ne 0 ]
-  cr permit answer p-3c4d once --by app >/dev/null
-  [ "$(cr permit show p-3c4d | jq -r '.late.answer')" = once ]
+  serve
+  [ "$(post a-perm-00003 '{"id":"p-3c4d","answer":"deny"}')" = 202 ]
+  settle a-perm-00003
+  [[ "$(outcome a-perm-00003)" == failed*"already answered: expired by chartroom"* ]]
+  [ "$(post a-perm-00004 '{"id":"p-3c4d","answer":"once"}')" = 202 ]
+  settle a-perm-00004
+  [[ "$(outcome a-perm-00004)" == done* ]]
+  [ "$(cr permit show p-3c4d | jq -r '"\(.late.answer) \(.late.by)"')" = "once app" ]
+  # recorded as a late allow (the broker then tells the worker to run it again), and out of Needs me
+  grep -rq "allowed p-3c4d once (late, after it expired) by app" "$CHARTROOM_HOME/tasks/$t"
   [ "$(cr app snapshot --json | jq '[.needs[] | select(.permit == "p-3c4d")] | length')" -eq 0 ]
 }

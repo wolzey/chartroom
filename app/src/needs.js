@@ -75,7 +75,7 @@ function PermitBody({ it, note, setNote, noteRef, busy, onAct }) {
     ${it.cwd ? html`<div class="perm-cwd faint">in ${it.cwd}</div>` : null}
     ${it.why ? html`<p class="a-detail-sum">${it.why}</p>` : null}
     <p class="muted perm-why">Came to you because: ${it.reason || "chartroom's policy would not answer it"}${it.rule ? " (" + it.rule + ")" : ""}</p>
-    ${late ? html`<p class="perm-late">${l.text}. An allow still works: the worker is told to run it again.</p>` : null}
+    ${late ? html`<p class="perm-late">An allow still works: the worker is told to run it again.</p>` : null}
     <textarea class="input note" rows="2" ref=${noteRef} data-note="1" placeholder=${late || !it.blocking ? "A note for the worker (optional)" : "A note for the worker, sent with a deny (optional)"}
       value=${note || ""} onInput=${(e) => setNote(e.target.value)} disabled=${busy}></textarea>
     <div class="a-detail-actions perm-acts">

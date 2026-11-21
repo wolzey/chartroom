@@ -66,6 +66,13 @@ are stable from 0.1.0.
   - Properties are in a slim column: status (Accept or Close), priority and labels.
   - A worker stopped at a prompt nothing can read says so, with the command that opens its
     terminal.
+- The chartroom app: permission cards in Needs me (the permission broker's, `chartroom permit`).
+  - **The card:** the call in full, where it runs, why, and why it came to the commander, with a countdown to the deny.
+  - **The answers:** Allow once, Always for this task (showing the pattern), Deny, and a note.
+  - **Missed cards** keep "Allow now (the worker will retry)".
+  - **Order:** live cards first, nearest expiry first.
+  - **Safety:** no key press, bulk action or snooze answers one.
+- The phone's top bar turns on notifications (on a phone, the sidebar's link was out of reach).
 - The chartroom app, slice 6: the phone and notifications.
   - **Installable:** a manifest and icons, and a service worker at `/sw.js` that keeps the shell and the last state. Offline, the app opens and says how old its state is; actions wait in the outbox.
   - **The phone:** a tab bar (Needs me, Board, Initiatives, Fleet) below 860 px, with the quick view as a bottom sheet.

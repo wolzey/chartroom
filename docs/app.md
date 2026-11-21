@@ -60,6 +60,7 @@ The server never writes a record itself. Each write runs one chartroom verb in t
 | New initiative, approve its stories | `initiative new --via app`, `initiative approve <id> - --via app` |
 | A comment on the plan, a proposed edit | `initiative comment <id> --section S --via app -`, `initiative propose <id> -` |
 | Confirm a close | `initiative close <id> --confirm --via app` |
+| A permission card: Allow once, Always for this task, Deny | `permit answer <p-id> once\|always\|deny --by app --via app [--note T]` (the permission broker, `lib/permit.sh`) |
 
 ### Instant, queued, never twice
 
@@ -69,6 +70,18 @@ The page never waits on a verb:
 - **On the server.** A write is answered `202` as soon as it is checked. The verb runs in the background, in order, one queue per home. `GET /api/v1/state` carries each action's outcome (`actions`): `done`, or `failed` with the verb's own reason, shown with a Retry.
 - **No double runs.** An id seen before is the same action, never a second run. The server keeps its actions in `app-actions.ndjson` beside the pid file (0600). After a restart, an action accepted but not finished runs, and a finished one is not repeated.
 - **Bulk actions.** These are the same thing, one entry per item, so each item succeeds or fails on its own.
+
+## Permission cards
+
+A Claude worker's tool call that chartroom's policy would not answer by itself waits on the commander as a permission card (the permission broker: `lib/permit.sh`, `docs/permits.md`). In Needs me:
+
+- **What it shows.** The call in full (a Bash command in monospace, wrapped, never cut), where it runs, the worker's own why, and why it came to you ("Came to you because: <reason> (<rule>)").
+- **The clock.** A countdown to the broker's deny (15 minutes by default). A retry card, for a call auto mode already refused, says so instead.
+- **The answers.** Allow once, Always for this task (with the pattern it allows until the task closes), Deny, and a note. The note goes to the worker with a deny, and with an allow on a retry card.
+  - The first answer wins. A second one fails with the broker's own words, which name the first.
+- **A missed card.** One whose wait ran out, or that the worker went on without, stays for an hour with "Allow now (the worker will retry)" and no Deny. The broker takes only a late allow, and then tells the worker to run the call again.
+- **Order and safety.** Live blocking cards come first, nearest expiry first; they are the only items with a clock. A task waiting on its card shows the card, not a bare "decision". No key press, bulk action or snooze answers one: Enter only puts the cursor in the note.
+- **Notifications.** A new card notifies (and pushes, when push is on) as "Allow <the call>?".
 
 ## Cards and answers
 
