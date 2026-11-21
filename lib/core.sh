@@ -323,6 +323,9 @@ run_bounded() { # <seconds> <cmd...>
   perl -e 'alarm shift; exec @ARGV or exit 127' "$s" "$@"
 }
 
+# gh as CHARTROOM_GH names it (as the dashboard reads it), else the one on PATH; nothing when absent.
+gh_bin() { bin_of "$(cfg GH '' gh)"; }
+
 declare -gA LANDED_SEEN=() LANDED_HEADS=() LANDED_PRS=()
 # A project's origin, fetched, with its branch heads ("<sha> <branch>" lines, or "?" when origin
 # did not answer) and its merged PRs (JSON, [] without gh), once per run.
@@ -336,7 +339,7 @@ landed_facts() { # <project>
   if out="$(GIT_TERMINAL_PROMPT=0 run_bounded 30 git -C "$p" ls-remote --heads origin </dev/null 2>/dev/null)"; then
     LANDED_HEADS[$p]="$(awk '{ sub("^refs/heads/", "", $2); print $1, $2 }' <<<"$out")"
   fi
-  gh="$(bin_of gh)"
+  gh="$(gh_bin)"
   if [[ -n "$gh" ]] && out="$(cd "$p" && run_bounded 30 "$gh" pr list --state merged --limit 300 --json number,headRefName,headRefOid </dev/null 2>/dev/null)" &&
     jq -e 'type == "array"' <<<"$out" >/dev/null 2>&1; then
     LANDED_PRS[$p]="$out"
@@ -358,7 +361,7 @@ branch_landed() { # <project> <branch> <sha> <base ref>
   n="$(jq -r --arg s "$sha" 'first(.[] | select(.headRefOid == $s) | .number) // empty' <<<"${LANDED_PRS[$project]}" 2>/dev/null || true)"
   if [[ "$n" =~ ^[0-9]+$ ]]; then LANDED_WHY="PR #$n merged"; return 0; fi
   LANDED_WHY="not in ${base:-its base}, not on origin"
-  if [[ -z "$(bin_of gh)" ]]; then LANDED_WHY+="; gh is not here to ask about a squash merge"; else LANDED_WHY+=", no merged PR at that commit"; fi
+  if [[ -z "$(gh_bin)" ]]; then LANDED_WHY+="; gh is not here to ask about a squash merge"; else LANDED_WHY+=", no merged PR at that commit"; fi
   return 1
 }
 

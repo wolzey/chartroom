@@ -9,6 +9,8 @@ setup() {
   common_setup
   cr init >/dev/null
   export CHARTROOM_SWEEP_SETTLE_MINUTES=0
+  # never the machine's own gh (a CI runner has one): a test that wants it puts the fake on
+  export CHARTROOM_GH="$BATS_TEST_TMPDIR/no-gh-here"
   # a real origin: a bare repo with main, so the base is origin/main
   ORIGIN="$BATS_TEST_TMPDIR/origin.git"
   git init -q --bare "$ORIGIN"
@@ -32,8 +34,11 @@ branch_of() { meta_of "$1" branch; }
 has_branch() { git -C "$PROJECT" rev-parse --verify -q "refs/heads/$1" >/dev/null; }
 
 @test "close: an unlanded branch is kept, and says why" {
+  # a gh on PATH (as on a CI runner) is not the one CHARTROOM_GH names: never called
+  printf '#!/bin/sh\ntouch "%s/real-gh-called"\necho "[]"\n' "$BATS_TEST_TMPDIR" >"$BIN/gh"; chmod +x "$BIN/gh"
   id="$(task_with_commits 2)"; b="$(branch_of "$id")"
   run cr close "$id"
+  [ ! -e "$BATS_TEST_TMPDIR/real-gh-called" ]
   [ "$status" -eq 0 ]
   [[ "$output" == *"branch $b kept (2 commit(s) ahead of base, not landed: not in origin/main, not on origin; gh is not here to ask about a squash merge)"* ]]
   has_branch "$b"
@@ -77,7 +82,7 @@ has_branch() { git -C "$PROJECT" rev-parse --verify -q "refs/heads/$1" >/dev/nul
 }
 
 @test "close: a squash-merged PR at that commit counts as landed, only when GitHub says so" {
-  use_fake gh
+  use_fake gh; export CHARTROOM_GH=gh
   id="$(task_with_commits 1)"; b="$(branch_of "$id")"; sha="$(git -C "$PROJECT" rev-parse "$b")"
   # merged, but at another commit (the branch moved on after): kept
   printf '[{"number": 41, "headRefName": "%s", "headRefOid": "%s"}]' "$b" 0123456789abcdef0123456789abcdef01234567 >"$BATS_TEST_TMPDIR/merged.json"
