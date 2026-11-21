@@ -1,0 +1,289 @@
+#!/usr/bin/env bats
+# The permission broker (lib/permit.sh, lib/permit.jq): a worker's permission prompts become
+# cards, the policy answers routine ones, and every outcome is in the task's events.
+
+load test_helper
+
+setup() {
+  common_setup
+  export CHARTROOM_PERMIT_WAIT_SECONDS=20
+}
+
+# A task with a worktree; sets id and WT.
+task_with_worktree() {
+  id="$(new_task "$@")"
+  WT="$(cr worktree "$id")"
+}
+
+# A hook payload for <tool> <input json> [cwd]; the event name is the hook's.
+payload() { jq -cn --arg t "$1" --argjson i "$2" --arg cwd "${3:-$WT}" '{tool_name: $t, tool_input: $i, cwd: $cwd, session_id: "s-1"}'; }
+bash_in() { jq -cn --arg c "$1" '{command: $c, description: "test call"}'; }
+# hook <what> <tool> <input json>: what the hook prints.
+hook() { payload "$2" "$3" | cr hook "$id" "$1"; }
+decision() { jq -r '.hookSpecificOutput | .permissionDecision // .decision.behavior // empty'; }
+card_file() { ls "$CHARTROOM_HOME/permits/$id"/p-*.json 2>/dev/null | grep -v -e '\.answer\.json$' -e '\.late\.json$' | head -n 1; }
+wait_card() { local i; for i in $(seq 1 40); do [[ -n "$(card_file)" ]] && return 0; sleep 0.25; done; echo "no card" >&2; return 1; }
+card_id() { basename "$(card_file)" .json; }
+# The commander's answer, from a process outside this one's tree, as their own terminal is: a test
+# run by a chartroom worker would otherwise be (rightly) refused as that worker.
+as_commander() {
+  local o="$BATS_TEST_TMPDIR/commander.$RANDOM" i
+  ( ( "$CHARTROOM" "$@" >"$o.out" 2>&1; echo $? >"$o.rc" ) 3>&- & )
+  for i in $(seq 1 100); do [[ -f "$o.rc" ]] && break; sleep 0.1; done
+  cat "$o.out"; return "$(cat "$o.rc" 2>/dev/null || echo 1)"
+}
+answer() { as_commander permit answer "$@"; }
+
+# One policy verdict, straight from lib/permit.jq.
+verdict() { # <event> <grants json> <tool> <input json> [current branch]
+  jq -n --arg ev "$1" --argjson g "$2" --arg t "$3" --argjson in "$4" --arg cur "${5:-cap/x}" '{event: $ev, tool: $t, input: $in, sig: "s", cwd: "/w/wt",
+    roots: {worktree: "/w/wt", task_dir: "/h/tasks/x", scratch: "/tmp/scr", permits: "/h/permits", user_home: "/u/me"},
+    branch: "cap/x", current_branch: $cur, grants: $g, always: [], pre: null}' | jq -r -f "$REPO_ROOT/lib/permit.jq" | jq -r '"\(.verdict) \(.rule)"'
+}
+
+@test "policy: the table of routine, commander and guarded calls" {
+  local line ev g c want got bad=0
+  while IFS='|' read -r ev g want c; do
+    [[ -z "$ev" || "$ev" == \#* ]] && continue
+    c="$(printf '%b' "$c")"
+    got="$(verdict "$ev" "$g" Bash "$(jq -cn --arg c "$c" '{command: $c}')")"
+    [[ "$got" == "$want"* ]] || { echo "want '$want', got '$got': $c"; bad=1; }
+  done <<'EOF'
+# event|grants|verdict and rule|command
+permission|[]|allow local:bash|npm test
+permission|[]|allow local:bash|rm -rf node_modules && npm ci
+permission|[]|allow local:bash|git rm -q --cached bash git jq && rm -f bash git jq; git status --short | head -20
+permission|[]|allow local:bash|python3 -m pytest tests/ -q 2>&1 | tail -20
+permission|[]|allow local:bash|cat /u/me/other/README.md
+permission|[]|allow local:bash|git commit -m "fix: one; two | three"
+permission|[]|card commander:unlisted|cd /etc && rm passwd
+permission|[]|card commander:unlisted|rm -rf $HOME/x
+permission|[]|card commander:unlisted|echo / | xargs rm -rf
+permission|[]|card commander:unlisted|cd sub && cd .. && cd .. && rm x
+permission|[]|card commander:elsewhere|echo hi > /u/me/other/x
+permission|[]|card commander:secrets|cat ~/.ssh/id_rsa
+permission|[]|card commander:controls|echo x >> .claude/settings.json
+permission|[]|card commander:controls|git config core.hooksPath /tmp/h
+pre-tool|[]|none none|npm test
+pre-tool|[]|none none|gh pr view 12
+pre-tool|[]|none none|curl -s http://localhost:3000/health
+pre-tool|[]|none none|git commit -F - <<EOF\nmention git push\nEOF
+pre-tool|[]|card commander:outward|git push origin cap/x
+pre-tool|[]|card commander:outward|echo "$(git push origin main)"
+pre-tool|[]|card commander:outward|bash -c 'git push origin main'
+pre-tool|[]|card commander:outward|curl -X POST https://hooks.example.com/x -d @f
+pre-tool|[]|card commander:production|kubectl get pods -n production
+pre-tool|[]|card commander:production|gcloud sql users assign-roles x --instance y
+pre-tool|[]|card commander:secrets|cp .env.example .env.local
+pre-tool|[]|card commander:flags|ldcli flags update --flag x
+pre-tool|[]|card commander:elsewhere|sudo rm -rf /
+pre-tool|[]|card commander:elsewhere|ssh studio uptime
+pre-tool|["push-branch"]|allow grant:push-branch|git push -u origin cap/x
+pre-tool|["push-branch"]|allow grant:push-branch|git push
+pre-tool|["push-branch"]|card commander:outward|git push --force origin cap/x
+pre-tool|["push-branch"]|card commander:outward|git push origin main
+pre-tool|["push-branch"]|card commander:production|git push origin cap/x && kubectl apply -n prod -f k.yaml
+pre-tool|["merge-auto"]|allow grant:merge-auto|gh pr merge --squash --auto
+pre-tool|["merge-auto"]|card commander:outward|gh pr merge 12 --squash --auto
+pre-tool|["merge-auto"]|card commander:outward|gh pr merge --squash --auto --admin
+pre-tool|["open-pr"]|allow grant:open-pr|gh pr create --title "x y" --body "a b"
+pre-tool|[]|deny guard:self-answer|chartroom permit answer p-1234 once
+pre-tool|[]|deny guard:store|ls /h/permits/x
+pre-tool|[]|deny guard:controls|echo x > /h/tasks/x/meta.json
+pre-tool|[]|none none|cat /h/tasks/x/meta.json
+pre-tool|[]|none none|bats -f "permit answer" test/permit.bats
+EOF
+  [ "$bad" -eq 0 ]
+  # Not Bash: the files a write tool may touch, and questions.
+  [ "$(verdict permission [] Edit '{"file_path":"/w/wt/lib/a.sh","old_string":"a","new_string":".env b"}')" = "allow local:files" ]
+  [ "$(verdict pre-tool [] Edit '{"file_path":"/w/wt/lib/a.sh","old_string":"a","new_string":".env b"}')" = "none none" ]
+  [ "$(verdict permission [] Write '{"file_path":"/u/me/other/a.sh","content":"x"}')" = "card commander:elsewhere" ]
+  [ "$(verdict permission [] Write '{"file_path":"/h/tasks/x/claude-settings.json","content":"{}"}')" = "deny guard:controls" ]
+  [ "$(verdict pre-tool [] Read '{"file_path":"/w/wt/.env"}')" = "card commander:secrets" ]
+  [ "$(verdict pre-tool [] mcp__slack__slack_send_message '{"channel":"x","text":"hi"}')" = "card commander:outward" ]
+  [ "$(verdict pre-tool [] mcp__slack__slack_read_channel '{"channel":"x"}')" = "none none" ]
+  [ "$(verdict permission [] AskUserQuestion '{"questions":[]}')" = "none question" ]
+}
+
+@test "permission: a prompt inside the worktree is allowed by policy and recorded" {
+  task_with_worktree --backend command --command "$STUB {id}"
+  out="$(hook permission Edit "$(jq -cn --arg f "$WT/README" '{file_path: $f, old_string: "hi", new_string: "ho"}')")"
+  [ "$(decision <<<"$out")" = allow ]
+  events "$id" | grep -qF "permit: allowed Edit $WT/README by policy (local:files)"
+}
+
+@test "permission: a push becomes a card that wakes the watch, and the commander's once allows it" {
+  task_with_worktree --backend command --command "$STUB {id}"
+  hook permission Bash "$(bash_in 'git push origin HEAD')" >"$BATS_TEST_TMPDIR/out" &
+  wait_card
+  p="$(card_id)"
+  events "$id" | grep -qF "permit: asks $p: Bash \"git push origin HEAD\" (commander:outward, git-push)"
+  run cr watch --once
+  [[ "$output" == *"[$id]"*"permit: asks $p"*"chartroom permit answer $p once|always|deny"* ]]
+  cr permit ls | grep -qF "$p  $id  open"
+  answer "$p" once --via terminal
+  wait
+  [ "$(decision <"$BATS_TEST_TMPDIR/out")" = allow ]
+  events "$id" | grep -qF "permit: allowed $p once by commander (via terminal): Bash \"git push origin HEAD\""
+  # once means once: the same call again is a new card
+  hook permission Bash "$(bash_in 'git push origin HEAD')" >"$BATS_TEST_TMPDIR/out2" &
+  for i in $(seq 1 40); do [ "$(ls "$CHARTROOM_HOME/permits/$id"/p-*.json | grep -vc answer)" -ge 2 ] && break; sleep 0.25; done
+  [ "$(ls "$CHARTROOM_HOME/permits/$id"/p-*.json | grep -vc answer)" -eq 2 ]
+  q="$(cr permit ls --json | jq -r '.[0].id')"
+  answer "$q" deny --note "not today"
+  wait
+  [ "$(decision <"$BATS_TEST_TMPDIR/out2")" = deny ]
+  jq -e '.hookSpecificOutput.decision.message | test("commander denied this.*not today")' "$BATS_TEST_TMPDIR/out2"
+}
+
+@test "permission: always for this task allows the pattern again, and close archives the record" {
+  task_with_worktree --backend command --command "$STUB {id}"
+  hook permission Bash "$(bash_in 'git push origin HEAD')" >"$BATS_TEST_TMPDIR/out" &
+  wait_card; p="$(card_id)"
+  answer "$p" always
+  wait
+  [ "$(decision <"$BATS_TEST_TMPDIR/out")" = allow ]
+  out="$(hook permission Bash "$(bash_in 'git push origin HEAD')")"
+  [ "$(decision <<<"$out")" = allow ]
+  events "$id" | grep -qF "permit: allowed Bash \"git push origin HEAD\" by the commander's always rule ($p)"
+  cr close "$id" >/dev/null
+  [ ! -e "$CHARTROOM_HOME/permits/$id" ]
+  [ -f "$CHARTROOM_HOME/tasks/$id/permits/always.ndjson" ]
+  # a closed task's hooks give no opinion
+  [ -z "$(hook permission Bash "$(bash_in 'git push origin HEAD')")" ]
+}
+
+@test "permission: an unanswered card is denied when its wait runs out, and a late allow is kept" {
+  export CHARTROOM_PERMIT_WAIT_SECONDS=2
+  task_with_worktree --backend command --command "$STUB {id}"
+  out="$(hook permission Bash "$(bash_in 'git push origin HEAD')")"
+  [ "$(decision <<<"$out")" = deny ]
+  jq -e '.hookSpecificOutput.decision.message | test("No answer from the commander.*Post a `decision` event")' <<<"$out"
+  p="$(card_id)"
+  events "$id" | grep -qF "permit: denied $p: no answer within 2s (expired)"
+  answer "$p" once
+  events "$id" | grep -qF "permit: allowed $p once (late, after it expired)"
+  # the late allow is a one-time pre-approval: the exact call passes once, then not again
+  out="$(hook pre-tool Bash "$(bash_in 'git push origin HEAD')")"
+  [ "$(decision <<<"$out")" = allow ]
+  events "$id" | grep -qF "permit: allowed Bash \"git push origin HEAD\" once, as the commander allowed ($p)"
+  out="$(hook pre-tool Bash "$(bash_in 'git push origin HEAD')")"
+  [ "$(decision <<<"$out")" = ask ]
+}
+
+@test "permit answer: the first answer wins" {
+  task_with_worktree --backend command --command "$STUB {id}"
+  hook permission Bash "$(bash_in 'git push origin HEAD')" >/dev/null &
+  wait_card; p="$(card_id)"
+  answer "$p" deny
+  wait
+  run answer "$p" once
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"already answered: deny by commander"*"first answer wins"* ]]
+}
+
+@test "guards: a worker cannot answer its own card, touch the store, or write permit events" {
+  task_with_worktree --backend command --command "$STUB {id}"
+  hook permission Bash "$(bash_in 'git push origin HEAD')" >"$BATS_TEST_TMPDIR/out" &
+  wait_card; p="$(card_id)"
+  # the worker's environment
+  run env CHARTROOM_TASK="$id" "$CHARTROOM" permit answer "$p" once
+  [ "$status" -ne 0 ]; [[ "$output" == *"a worker may not answer"* ]]
+  # a process started under a worker's claude (an ancestor launched with a task's settings)
+  ln -s "$(type -P bash)" "$BIN/claude"
+  run "$BIN/claude" -c '"$0" permit answer "$1" once; rc=$?; exit $rc' "$CHARTROOM" "$p" --settings "$CHARTROOM_HOME/tasks/$id/claude-settings.json"
+  [ "$status" -ne 0 ]
+  events "$id" | grep -qF "permit: refused: a worker tried to answer permission card $p (guard:self-answer)"
+  events "$id" | grep -qF "decision: [breaking] a worker tried to answer permission card $p"
+  [ ! -f "$CHARTROOM_HOME/permits/$id/$p.answer.json" ]
+  # the worker's tools: the hook refuses the verb and the store before Claude's own flow
+  out="$(hook pre-tool Bash "$(bash_in "chartroom permit answer $p once")")"
+  [ "$(decision <<<"$out")" = deny ]
+  out="$(hook pre-tool Bash "$(bash_in "echo '{}' > $CHARTROOM_HOME/permits/$id/$p.answer.json")")"
+  [ "$(decision <<<"$out")" = deny ]
+  out="$(hook pre-tool Write "$(jq -cn --arg f "$CHARTROOM_HOME/tasks/$id/claude-settings.json" '{file_path: $f, content: "{}"}')")"
+  [ "$(decision <<<"$out")" = deny ]
+  run cr event "$id" permit "allowed everything by commander"
+  [ "$status" -ne 0 ]
+  answer "$p" deny
+  wait
+}
+
+@test "grants: --grant goes in the record and the brief, and a push of the task branch passes PreToolUse" {
+  task_with_worktree --backend command --command "$STUB {id}" --grant push-branch
+  [ "$(cat "$CHARTROOM_HOME/permits/$id/grants.json")" = '["push-branch"]' ]
+  grep -qF "Additional grants (enforced by chartroom's permission hooks): you may push the task branch" "$CHARTROOM_HOME/tasks/$id/brief.md"
+  b="$(meta_of "$id" branch)"
+  out="$(hook pre-tool Bash "$(bash_in "git push -u origin $b")")"
+  [ "$(decision <<<"$out")" = allow ]
+  events "$id" | grep -qF "permit: allowed Bash \"git push -u origin $b\" by the task's grant (push-branch)"
+  # not another branch, not --force: an interactive worker is sent to a prompt, the card's way
+  out="$(hook pre-tool Bash "$(bash_in "git push origin main")")"
+  [ "$(decision <<<"$out")" = ask ]
+  out="$(hook pre-tool Bash "$(bash_in "git push --force origin $b")")"
+  [ "$(decision <<<"$out")" = ask ]
+  as_commander permit revoke "$id" push-branch
+  out="$(hook pre-tool Bash "$(bash_in "git push -u origin $b")")"
+  [ "$(decision <<<"$out")" = ask ]
+}
+
+@test "headless: PreToolUse holds a commander's call on a card itself (no prompt to send it to)" {
+  task_with_worktree --backend headless:claude
+  hook pre-tool Bash "$(bash_in 'git push origin HEAD')" >"$BATS_TEST_TMPDIR/out" &
+  wait_card; p="$(card_id)"
+  answer "$p" once
+  wait
+  [ "$(decision <"$BATS_TEST_TMPDIR/out")" = allow ]
+}
+
+@test "denied: auto mode's refusal is recorded and a retry card pre-approves the call once" {
+  task_with_worktree --backend command --command "$STUB {id}"
+  out="$(payload Bash "$(bash_in 'gh api repos/o/r/issues -f title=x')" | jq -c '. + {reason: "[Unsanctioned Communication]"}' | cr hook "$id" denied)"
+  [ -z "$out" ]
+  events "$id" | grep -qF 'permit: auto mode refused Bash "gh api repos/o/r/issues -f title=x". Reason: [Unsanctioned Communication]'
+  p="$(card_id)"
+  events "$id" | grep -qF "permit: asks $p: allow a retry of Bash"
+  answer "$p" once
+  out="$(hook pre-tool Bash "$(bash_in 'gh api repos/o/r/issues -f title=x')")"
+  [ "$(decision <<<"$out")" = allow ]
+}
+
+@test "state and watch: an open card is a decision, its answer resumes work, and its prompt wakes once" {
+  task_with_worktree --backend command --command "$STUB {id}"
+  f="$CHARTROOM_HOME/tasks/$id/meta.json"; jq '.dispatched = "2026-01-01T00:00:00Z"' "$f" >"$f.tmp" && mv "$f.tmp" "$f"
+  hook permission Bash "$(bash_in 'git push origin HEAD')" >/dev/null &
+  wait_card; p="$(card_id)"
+  [ "$(cr status --json --all | jq -r --arg i "$id" '.[]? // . | select(.id == $i) | .state')" = decision ]
+  printf '%s agent: awaiting-input: hc: agent is waiting on an approval or question prompt\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$CHARTROOM_HOME/tasks/$id/events.log"
+  run cr watch --once
+  [[ "$output" == *"permit: asks $p"* ]]
+  [[ "$output" != *"awaiting-input"* ]]
+  answer "$p" once
+  wait
+  [ "$(cr status --json --all | jq -r --arg i "$id" '.[]? // . | select(.id == $i) | .state')" = working ]
+}
+
+@test "hooks never fail the agent: bad input gives no opinion" {
+  task_with_worktree --backend command --command "$STUB {id}"
+  local what in
+  for what in pre-tool permission denied; do
+    for in in 'not json' '' '{}' '{"tool_input":{}}'; do
+      run bash -c 'printf "%s" "$1" | "$0" hook "$2" "$3"' "$CHARTROOM" "$in" "$id" "$what"
+      [ "$status" -eq 0 ]; [ -z "$output" ]
+    done
+    run bash -c '"$0" hook no-such-task "$1" </dev/null' "$CHARTROOM" "$what"
+    [ "$status" -eq 0 ]; [ -z "$output" ]
+  done
+}
+
+@test "settings: every mode carries the broker's hooks, timed to outlast the card's wait" {
+  id="$(new_task --backend headless:claude)"
+  run bash -c "source '$REPO_ROOT/lib/core.sh'; source '$REPO_ROOT/lib/agents.sh'; CR_BIN='$CHARTROOM'; load_config; claude_settings_file '$id' headless"
+  f="$CHARTROOM_HOME/tasks/$id/claude-settings.json"
+  [ "$(jq -c '.hooks | keys' "$f")" = '["PermissionDenied","PermissionRequest","PreToolUse"]' ]
+  [ "$(jq -r '.hooks.PermissionRequest[0].hooks[0].timeout' "$f")" = 80 ]
+  [ "$(jq -r '.hooks.PreToolUse[0].hooks[0].timeout' "$f")" = 80 ]
+  [ "$(jq -r '.hooks.PreToolUse[0].matcher // "all"' "$f")" = all ]
+  jq -e '.hooks.PermissionRequest[0].hooks[0].command | test("hook '"$id"' permission$")' "$f"
+  [ "$(bash -c "source '$REPO_ROOT/lib/brain.sh'; brain_class permit")" = forward ]
+}

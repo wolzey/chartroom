@@ -64,6 +64,9 @@ launch_claude_headless() { # <id> <wt> <prompt> [resume]
   args=(-p --input-format stream-json --output-format stream-json --verbose --replay-user-messages "${common[@]}")
   # shellcheck disable=SC2206
   [[ -n "$CR_CLAUDE_ALLOWED_TOOLS" ]] && args+=(--allowedTools $CR_CLAUDE_ALLOWED_TOOLS)
+  # The permission broker's hooks (lib/permit.sh): a headless worker has no prompt, so its
+  # PreToolUse hook holds a call the commander must see on a card itself.
+  args+=(--settings "$(claude_settings_file "$id" headless)")
   if [[ -n "$resume" ]]; then args+=(--resume "$sid"); else args+=(--session-id "$sid"); fi
   rm -f "$d/stdin.fifo"; mkfifo "$d/stdin.fifo"
   claude_user_line "$prompt" >"$d/stdin.first"

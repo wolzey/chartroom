@@ -42,19 +42,28 @@ codex_notify_args() { # <id>
 }
 
 # Claude Code hooks for interactive sessions (tmux, cmux): turn end, approval/idle
-# prompts and prompt receipt become events. Written per task, loaded with --settings.
+# prompts and prompt receipt become events. Written per task, loaded with --settings, and
+# rewritten at every launch and resume, so an edit to the file does not outlive the session.
 # "prompt" mode (herdr, which tracks turn state itself) adds only UserPromptSubmit, so
 # delivery can be checked against the submitted text without doubling herdr's wakes.
-# Both modes guard the Bash tool against pattern kills (pattern_kill, `hook <id> pre-bash`).
-claude_settings_file() { # <id> [all|prompt] -> path
+# "headless" (claude -p) has its own turn signals and gets only the permission hooks.
+# Every mode carries the permission broker (lib/permit.sh): PreToolUse on every tool (the pattern
+# kill guard and the policy's guards, grants and holds), PermissionRequest (a prompt becomes a
+# card) and PermissionDenied (auto mode's refusals are recorded). Their timeout outlasts the card's
+# wait, so chartroom always answers before Claude would give up on the hook: a PreToolUse hook that
+# times out does not block the call.
+claude_settings_file() { # <id> [all|prompt|headless] -> path
   local id="$1" mode="${2:-all}" f h
   f="$(tdir "$id")/claude-settings.json"
   h="CHARTROOM_HOME=$(printf '%q' "$CR_HOME") $(printf '%q' "$CR_BIN") hook $id"
-  jq -n --arg stop "$h stop" --arg notif "$h notification" --arg sub "$h prompt-submit" --arg bash "$h pre-bash" --arg mode "$mode" '{hooks:(
+  jq -n --arg stop "$h stop" --arg notif "$h notification" --arg sub "$h prompt-submit" --arg pre "$h pre-tool" \
+    --arg perm "$h permission" --arg denied "$h denied" --arg mode "$mode" --argjson wait "$((CR_PERMIT_WAIT + 60))" '{hooks:(
     (if $mode == "all" then {Stop:[{hooks:[{type:"command",command:$stop}]}],
       Notification:[{hooks:[{type:"command",command:$notif}]}]} else {} end)
-    + {UserPromptSubmit:[{hooks:[{type:"command",command:$sub}]}],
-       PreToolUse:[{matcher:"Bash",hooks:[{type:"command",command:$bash}]}]})}' >"$f"
+    + (if $mode != "headless" then {UserPromptSubmit:[{hooks:[{type:"command",command:$sub}]}]} else {} end)
+    + {PreToolUse:[{hooks:[{type:"command",command:$pre,timeout:$wait}]}],
+       PermissionRequest:[{hooks:[{type:"command",command:$perm,timeout:$wait}]}],
+       PermissionDenied:[{hooks:[{type:"command",command:$denied,timeout:30}]}]})}' >"$f"
   printf '%s' "$f"
 }
 

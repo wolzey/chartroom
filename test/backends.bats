@@ -442,7 +442,7 @@ herdr_trust_screen() {
   id="$(new_task --backend herdr:claude)"
   run bash -c "source '$REPO_ROOT/lib/core.sh'; source '$REPO_ROOT/lib/agents.sh'; CR_BIN='$CHARTROOM'; load_config; interactive_argv '$id' claude prompt"
   [[ "$output" == *"--settings"* ]]
-  [ "$(jq -c '.hooks|keys' "$CHARTROOM_HOME/tasks/$id/claude-settings.json")" = '["PreToolUse","UserPromptSubmit"]' ]
+  [ "$(jq -c '.hooks|keys' "$CHARTROOM_HOME/tasks/$id/claude-settings.json")" = '["PermissionDenied","PermissionRequest","PreToolUse","UserPromptSubmit"]' ]
   run bash -c "source '$REPO_ROOT/lib/core.sh'; source '$REPO_ROOT/lib/agents.sh'; CR_BIN='$CHARTROOM'; load_config; interactive_argv '$id' claude 1"
-  [ "$(jq -c '.hooks|keys' "$CHARTROOM_HOME/tasks/$id/claude-settings.json")" = '["Notification","PreToolUse","Stop","UserPromptSubmit"]' ]
+  [ "$(jq -c '.hooks|keys' "$CHARTROOM_HOME/tasks/$id/claude-settings.json")" = '["Notification","PermissionDenied","PermissionRequest","PreToolUse","Stop","UserPromptSubmit"]' ]
 }

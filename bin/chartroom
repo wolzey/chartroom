@@ -93,6 +93,8 @@ source "$CR_ROOT/lib/relay.sh"
 source "$CR_ROOT/lib/radar.sh"
 # shellcheck source=../lib/park.sh
 source "$CR_ROOT/lib/park.sh"
+# shellcheck source=../lib/permit.sh
+source "$CR_ROOT/lib/permit.sh"
 # shellcheck source=../lib/nodes.sh
 source "$CR_ROOT/lib/nodes.sh"
 # shellcheck source=../lib/stuck.sh
@@ -293,7 +295,7 @@ cmd_project() {
 # ---------------------------------------------------------------- new / worktree
 
 cmd_new() {
-  local project="" title="" kind="ship" backend="" base="" id="" plan_gate=0 command="" permission="" model=""
+  local project="" title="" kind="ship" backend="" base="" id="" plan_gate=0 command="" permission="" model="" grants=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --project) project="$2"; shift 2 ;;
@@ -306,10 +308,11 @@ cmd_new() {
       --permission) permission="$2"; shift 2 ;;
       --model) model="$2"; shift 2 ;;
       --plan-gate) plan_gate=1; shift ;;
+      --grant) [[ "${2:-}" =~ ^($PERMIT_GRANTS)$ ]] || die "unknown grant '${2:-}' (names: ${PERMIT_GRANTS//|/, })"; grants+=("$2"); shift 2 ;;
       *) die "new: unknown arg $1" ;;
     esac
   done
-  [[ -n "$project" && -n "$title" ]] || die "usage: chartroom new --project PATH --title TEXT [--backend RUNNER:AGENT|command|subagent|auto] [--kind ship|scout] [--base REF] [--plan-gate] [--command TEMPLATE] [--permission MODE] [--model M]"
+  [[ -n "$project" && -n "$title" ]] || die "usage: chartroom new --project PATH --title TEXT [--backend RUNNER:AGENT|command|subagent|auto] [--kind ship|scout] [--base REF] [--plan-gate] [--command TEMPLATE] [--permission MODE] [--model M] [--grant NAME]..."
   [[ "$kind" =~ ^(ship|scout)$ ]] || die "kind must be ship or scout (got $kind)"
   local source=explicit
   if [[ -z "$backend" || "$backend" == auto ]]; then backend=""; source=auto
@@ -345,6 +348,11 @@ cmd_new() {
      + (if $model != "" then {model:$model} else {} end)')"
   task_record_new "$id" "$doc"
   log_event "$id" note "created ($kind via ${backend:-auto})"
+  if [[ ${#grants[@]} -gt 0 ]]; then
+    mkdir -p "$(permit_tdir "$id")"
+    jq -cn --args '$ARGS.positional | unique' "${grants[@]}" >"$(permit_tdir "$id")/grants.json"
+    log_event "$id" note "grants: $(jq -r 'join(", ")' "$(permit_tdir "$id")/grants.json")"
+  fi
   write_brief "$id"
   printf 'id=%s\nbrief=%s\n' "$id" "$d/brief.md"
 }
@@ -401,6 +409,11 @@ write_brief() {
   else
     delivery="This is a scout task: produce knowledge, not code. Do not commit, push, or change project files except throwaway experiments you revert. Your deliverable is the report."
   fi
+  local grants grants_line="- Additional grants: none."
+  grants="$(permit_grants_json "$id")"
+  if [[ "$grants" != '[]' ]]; then
+    grants_line="- Additional grants (enforced by chartroom's permission hooks): you may $(permit_grants_text "$grants"). These override the Delivery line for exactly these actions; nothing else."
+  fi
   cat >"$d/brief.md" <<EOF
 # $title
 
@@ -416,7 +429,7 @@ write_brief() {
 ## Authority
 
 - Delivery: $delivery$plan
-- Additional grants: none. Anything destructive, irreversible, outward-facing (push, PR, messages, tickets, deploys), or security-sensitive needs a \`decision\` event, not your judgment.
+$grants_line Anything destructive, irreversible, outward-facing (push, PR, messages, tickets, deploys), or security-sensitive needs a \`decision\` event, not your judgment.
 
 ## Worker protocol
 
@@ -655,6 +668,7 @@ cmd_event() {
   local id="$1" kind="$2" mark="" detail="" text; shift 2
   need_task "$id"
   [[ "$kind" =~ ^($EVENT_KINDS)$ ]] || die "event kind must be one of: ${EVENT_KINDS//|/, }"
+  [[ "$kind" != permit ]] || die "permit lines are written by chartroom's permission hooks and \`permit answer\` only"
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --breaking)
@@ -691,15 +705,24 @@ cmd_hook() {
     IFS=$'\t' read -r CR_HOME id _ <"$reg"
     [[ -n "$(meta "$id" closed 2>/dev/null)" ]] && exit 0
   fi
-  # The Bash tool's guard (claude_settings_file): it refuses a pattern kill whatever the task's
-  # record says, answering on stdout, and the deny goes out before anything that could fail.
-  if [[ "$what" == pre-bash ]]; then
+  # The tool guard (claude_settings_file): it refuses a pattern kill whatever the task's record
+  # says, answering on stdout, and the deny goes out before anything that could fail. pre-bash is
+  # its name in settings written before the permission broker.
+  if [[ "$what" == pre-bash || "$what" == pre-tool ]]; then
     [[ -n "$payload" ]] || payload="$(cat 2>/dev/null || true)"
-    msg="$(jq -r '.tool_input.command // empty' <<<"$payload" 2>/dev/null || true)"
+    msg="$(jq -r 'select(.tool_name == null or .tool_name == "Bash") | .tool_input.command // empty' <<<"$payload" 2>/dev/null || true)"
     if [[ -n "$msg" ]] && pattern_kill "$msg"; then
       jq -n --arg r "$PATTERN_KILL_ADVICE" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
       if [[ -n "$id" ]] && task_exists "$id"; then log_event "$id" note "blocked a pattern kill: ${msg:0:200}" >/dev/null 2>&1 || true; fi
+      exit 0
     fi
+  fi
+  # The permission broker (lib/permit.sh): the policy's answer, or a card for the commander.
+  if [[ "$what" =~ ^(pre-bash|pre-tool|permission|denied)$ ]]; then
+    [[ -n "$payload" ]] || payload="$(cat 2>/dev/null || true)"
+    [[ -n "$id" ]] && task_exists "$id" && [[ -z "$(meta "$id" closed 2>/dev/null)" ]] || exit 0
+    [[ "$what" == pre-bash ]] && what=pre-tool
+    permit_hook "$what" "$id" "$payload" || true
     exit 0
   fi
   [[ -n "$id" ]] && task_exists "$id" || exit 0
@@ -765,8 +788,11 @@ state_of() { # derived from the last wake-worthy event; a restart re-derives the
   [[ -n "$(meta "$id" closed)" ]] && { echo closed; return; }
   [[ -n "$(meta "$id" dispatched)" ]] || { echo drafting; return; }
   awk '
-    ($2=="note:" && $3=="dispatched") || $2=="steered:" { s="working" }
-    $2 ~ /^(decision|blocked|failed):$/ { k=$2; sub(/:$/, "", k); s=k }
+    ($2=="note:" && $3=="dispatched") || $2=="steered:" { s="working"; pa=0 }
+    $2 ~ /^(decision|blocked|failed):$/ { k=$2; sub(/:$/, "", k); s=k; pa=0 }
+    # A permission card waits on the commander (lib/permit.sh); its answer, or its expiry, ends it.
+    $2=="permit:" && $3=="asks" { if (s != "decision" || pa) { s="decision"; pa=1 } }
+    $2=="permit:" && pa && ($3=="allowed" || $3=="denied") && ($0 ~ / by (commander|app) | \(expired\)/) { s="working"; pa=0 }
     $2=="done:" { s="review" }
     $2=="note:" && $3=="accepted" && s=="review" { s="done" }
     END { print (s=="" ? "working" : s) }' "$(events_path "$id"; printf '%s' "$EVENTS_PATH")"
@@ -1227,6 +1253,7 @@ cmd_close() {
   fi
   if [[ -n "$r" && "$r" =~ ^($SESSION_RUNNERS|joined)$ ]]; then "${r}_close" "$id" || true; fi
   meta_set "$id" closed "$(now)"
+  permit_archive "$id"
   if [[ $discard -eq 1 ]]; then log_event "$id" note "closed (uncommitted work discarded on commander's order)"
   else log_event "$id" note "closed"; fi
   echo "closed $id"
@@ -1348,8 +1375,10 @@ watch_scan_lines() { # <id> <from-offset> <to-offset>
           *" agent: turn-ended"*)
             is_joined "$id" && listener_alive "$id" && continue
             reported_upto "$id" "$pos" || wake "$id" "$line (stopped its turn without reporting)" ;;
-          *" agent: awaiting-input"*) wake "$id" "$line" ;;
+          # A permission card already woke the XO for the prompt it shows (lib/permit.sh).
+          *" agent: awaiting-input"*) permit_open "$id" || wake "$id" "$line" ;;
         esac ;;
+      permit) if [[ "$line" == *" permit: asks "* || "$line" == *" permit: refused: a worker tried "* ]]; then wake "$id" "$line"; fi ;;
     esac
   done < <(head -c "$to" "$f" | tail -c +"$((from + 1))")
 }
@@ -1750,11 +1779,13 @@ chartroom - run a crew of coding agents from one agent session (the XO)
   chartroom doctor [--json]               what can run here: backends, why not, steering mode
   chartroom project <name|path>           resolve a repo: path, forge, default base, overrides
   chartroom new --project P --title T [--backend B] [--kind ship|scout] [--base REF] [--plan-gate]
-                [--command TEMPLATE] [--permission MODE] [--model M]
+                [--command TEMPLATE] [--permission MODE] [--model M] [--grant NAME]...
                                           create a task record + brief scaffold. B is
                                           <runner>:<agent> (runners: hc herdr cmux tmux headless;
                                           agents: claude codex), command, subagent, or auto
-                                          (omit --backend: pick per CHARTROOM_BACKEND_ORDER)
+                                          (omit --backend: pick per CHARTROOM_BACKEND_ORDER).
+                                          --grant (repeatable): push-branch, open-pr, merge-auto,
+                                          comment-pr, enforced by the permission hooks
   chartroom join [--title T] [--kind ship|scout] [--agent A]
                                           run INSIDE a running agent session (not launched by
                                           chartroom) from its directory: records it as a joined
@@ -1919,6 +1950,20 @@ chartroom - run a crew of coding agents from one agent session (the XO)
   chartroom rule import <map> [--apply]   import a map as rulings: dry run by default; --apply
                                           backs the file up to records/, appends the rulings,
                                           removes the imported bullets and renders the block
+  chartroom permit ls [<id>] [--all] [--json]
+                                          permission cards a Claude worker's hooks raised (open
+                                          ones; --all: answered, expired and lapsed too)
+  chartroom permit show <p-id>            one card as JSON: the call, why, the rule, the answer
+  chartroom permit answer <p-id> once|always|deny [--note T] [--by commander|app] [--via xo|terminal|app]
+                                          answer a card on the commander's word: once allows
+                                          that call, always allows its pattern until the task
+                                          closes, deny refuses it (the note reaches the worker).
+                                          The first answer wins; a late allow (after the card's
+                                          wait ran out) pre-approves the call and tells the
+                                          worker to run it again. A worker may not answer
+  chartroom permit grant|revoke <id> <name>...
+                                          change a task's enforced grants (push-branch, open-pr,
+                                          merge-auto, comment-pr); permit grants <id> lists them
   chartroom focus <project>[,<project>...] [--scope WORD[,WORD...]] [--for 30m|4h|1d]
                                           focus mode: hold every other project's questions and
                                           results (tasks in decision, blocked, failed,
@@ -2029,7 +2074,7 @@ if [[ "$cmd" =~ ^(status|ls|board|todo|inbox|relay)$ ]]; then
   done
 fi
 case "$cmd" in
-  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|steer|stop|attach|park|accept|close|sweep|watch|dashboard|radar|node|nodes|doctor|homes|brain|tell|ask|snooze|app|attachment|link|brief|set|request|initiative|version|help|store|remove|restore|done|removed) "cmd_$cmd" "$@" ;;
+  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|steer|stop|attach|park|accept|close|sweep|watch|dashboard|radar|node|nodes|doctor|homes|brain|tell|ask|snooze|app|attachment|link|brief|set|request|initiative|permit|version|help|store|remove|restore|done|removed) "cmd_$cmd" "$@" ;;
   install-skills) cmd_install_skills "$@" ;;
   ls) cmd_status "$@" ;;
   show) cmd_show "$@" ;;

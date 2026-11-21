@@ -10,7 +10,9 @@ WORKER_KINDS='progress|waiting|decision|blocked|done|failed'
 #   exited   a headless/command process ended (exit N)
 #   agent    an agent-native signal: "turn-ended", "awaiting-input: <why>", "prompt-cleared",
 #            "prompt-received"
-CORE_KINDS='note|steered|exited|agent'
+#   permit   the permission broker's record (lib/permit.sh): what the policy or the commander
+#            allowed or denied, and each card it raised ("asks p-xxxx: ...")
+CORE_KINDS='note|steered|exited|agent|permit'
 EVENT_KINDS="$WORKER_KINDS|$CORE_KINDS"
 TERMINAL_KINDS='decision|blocked|done|failed'
 
@@ -210,6 +212,9 @@ load_config() {
   cfg_set CR_STALL_BUSY_MAX STALL_BUSY_MAX_MINUTES '' 60
   [[ "$CR_STALL_MINUTES" =~ ^[0-9]+(\.[0-9]+)?$ && "$CR_STALL_BUSY_MAX" =~ ^[0-9]+(\.[0-9]+)?$ ]] || die "CHARTROOM_STALL_MINUTES and CHARTROOM_STALL_BUSY_MAX_MINUTES must be minutes, such as 10 (CHARTROOM_STALL_MINUTES=0: no stall wakes)"
   cfg_set CR_CODEX_HOOKS_DIALOG CODEX_HOOKS_DIALOG '' ask
+  # How long a permission card holds the worker's call before it is denied (lib/permit.sh).
+  cfg_set CR_PERMIT_WAIT PERMIT_WAIT_SECONDS '' 900
+  [[ "$CR_PERMIT_WAIT" =~ ^[0-9]+$ && "$CR_PERMIT_WAIT" -ge 1 ]] || die "CHARTROOM_PERMIT_WAIT_SECONDS must be whole seconds, such as 900"
   [[ "$CR_CODEX_HOOKS_DIALOG" =~ ^(ask|skip)$ ]] || die "CHARTROOM_CODEX_HOOKS_DIALOG must be ask or skip (got $CR_CODEX_HOOKS_DIALOG)"
 }
 
