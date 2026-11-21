@@ -411,6 +411,171 @@ class Fleet:
             self.wake.wait(5)
 
 
+PUSH_DEVICES = 20  # subscriptions kept at most (each device that turned notifications on)
+PUSH_GROUP = {"decide": "To decide", "approve": "To approve", "unblock": "Blocked", "read": "To read"}
+B64U = re.compile(r"^[A-Za-z0-9_-]+={0,2}$")
+
+
+class Pusher:
+    """Web Push for new Needs me items (slice 6). Off unless the brain's config says
+    CHARTROOM_APP_PUSH=on, and available only where node runs lib/app/push.mjs (node:crypto; its
+    self-test is the RFC 8291 vector). The VAPID keys and the devices' subscriptions live beside
+    the pid file, 0600. An item is pushed once, when it first appears: what is open when the server
+    starts, or when a home is first read, is only remembered. Payloads are encrypted end to end;
+    the browser maker's push service sees the endpoint, the size and the time, never the words."""
+
+    def __init__(self, hub, fleet, root, state_dir, mode, subject):
+        self.hub, self.fleet = hub, fleet
+        self.script = os.path.join(root, "lib", "app", "push.mjs")
+        self.keys = os.path.join(state_dir, "app-push-keys.json") if state_dir else None
+        self.subs_file = os.path.join(state_dir, "app-push-subs.json") if state_dir else None
+        self.on, self.subject = mode == "on", subject
+        # tests only: a fake push service on this machine (never a real one) may be plain http
+        self.allow_http = os.environ.get("CHARTROOM_APP_PUSH_ALLOW_HTTP") == "1"
+        self.public, self.reason, self.error = None, None, None
+        self.lock = threading.Lock()
+        self.subs = self.load()
+        self.seen, self.ready = set(), set()
+        self.sent = 0
+
+    def setup(self):
+        node = shutil.which("node")
+        if not self.on:
+            self.reason = "off: CHARTROOM_APP_PUSH=on in the brain's config turns it on"
+        elif not self.keys:
+            self.reason = "no state directory for its keys"
+        elif not node:
+            self.reason = "node is not installed on the brain"
+        else:
+            code, out, err = run([node, self.script, "selftest"], None, timeout=30)
+            if code != 0 or out.strip() != "ok":
+                self.reason = "node's crypto failed the push self-test: " + (last_line(err) or out.strip() or "exit %d" % code)
+            else:
+                old = os.umask(0o077)
+                try:
+                    code, out, err = run([node, self.script, "keys", self.keys], None, timeout=30)
+                finally:
+                    os.umask(old)
+                if code == 0 and out.strip():
+                    self.public, self.node = out.strip(), node
+                else:
+                    self.reason = "could not make the push keys: " + (last_line(err) or "exit %d" % code)
+
+    def info(self):
+        return {"available": bool(self.public), "on": self.on, "key": self.public, "reason": self.reason,
+                "devices": len(self.subs), "sent": self.sent, "error": self.error}
+
+    def load(self):
+        try:
+            with open(self.subs_file) as fh:
+                v = json.load(fh)
+            return [s for s in v if isinstance(s, dict) and s.get("endpoint")] if isinstance(v, list) else []
+        except (OSError, ValueError, TypeError):
+            return []
+
+    def save(self):
+        if not self.subs_file:
+            return
+        tmp = self.subs_file + ".tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            json.dump(self.subs, fh)
+        os.replace(tmp, self.subs_file)
+
+    def valid_endpoint(self, ep):
+        if not isinstance(ep, str) or len(ep) > 2048:
+            return False
+        u = urlsplit(ep)
+        if u.scheme == "https" and u.hostname:
+            return True
+        return self.allow_http and u.scheme == "http" and u.hostname == LOOPBACK
+
+    def subscribe(self, body):
+        keys = body.get("keys") if isinstance(body.get("keys"), dict) else {}
+        ep, p256dh, auth = body.get("endpoint"), keys.get("p256dh"), keys.get("auth")
+        if not self.public:
+            return 409, {"error": "push is not available on this brain: " + (self.reason or "unknown")}
+        if not self.valid_endpoint(ep):
+            return 400, {"error": "a push endpoint is an https URL"}
+        if not (isinstance(p256dh, str) and B64U.match(p256dh) and 80 <= len(p256dh) <= 100
+                and isinstance(auth, str) and B64U.match(auth) and 16 <= len(auth) <= 32):
+            return 400, {"error": "the subscription's keys are not valid"}
+        with self.lock:
+            self.subs = [s for s in self.subs if s["endpoint"] != ep][-(PUSH_DEVICES - 1):] + [
+                {"endpoint": ep, "keys": {"p256dh": p256dh, "auth": auth}, "at": iso()}]
+            self.save()
+        return 200, {"ok": True, "devices": len(self.subs)}
+
+    def unsubscribe(self, body):
+        with self.lock:
+            n = len(self.subs)
+            self.subs = [s for s in self.subs if s["endpoint"] != body.get("endpoint")]
+            if len(self.subs) != n:
+                self.save()
+        return 200, {"ok": True, "devices": len(self.subs)}
+
+    def scan(self):
+        """The open items now; those not seen before, from a source read before, are new."""
+        now, cur, read = iso(), {}, set()
+        for name in list(self.hub.order):
+            h = self.hub.homes.get(name)
+            if not h or h.snapshot is None:
+                continue
+            read.add(name)
+            for it in h.snapshot.get("needs") or []:
+                if it.get("held") or it.get("sent") or (it.get("snoozed_until") or "") > now:
+                    continue
+                cur[name + ":" + str(it.get("id"))] = (name, it)
+        fv = self.fleet.value
+        if fv is not None:
+            read.add("fleet")
+            for it in fv.get("needs") or []:
+                cur["fleet:" + str(it.get("id"))] = ("fleet", it)
+        new = [k for k in cur if k not in self.seen and cur[k][0] in self.ready]
+        self.ready |= read
+        self.seen = set(cur) | {k for k in self.seen if k.split(":", 1)[0] not in read}
+        return [(k, cur[k][0], cur[k][1]) for k in new]
+
+    def payload(self, key, home, it):
+        title = str(it.get("title") or "Chartroom")
+        body = home + " · " + PUSH_GROUP.get(it.get("group"), "Needs you")
+        if it.get("summary"):
+            body += ": " + str(it["summary"])
+        return {"title": title[:100], "body": body[:180], "tag": key, "url": "/#/n/" + quote(key, safe="")}
+
+    def send(self, payload):
+        for s in list(self.subs):
+            code, out, err = run([self.node, self.script, "send", self.keys, self.subject], None,
+                                 stdin=json.dumps({"subscription": s, "payload": payload, "ttl": 6 * 3600}).encode(), timeout=40)
+            try:
+                status = json.loads(out).get("status") if code == 0 else None
+            except ValueError:
+                status = None
+            if status in (404, 410):  # the device unsubscribed, or its subscription expired
+                with self.lock:
+                    self.subs = [x for x in self.subs if x["endpoint"] != s["endpoint"]]
+                    self.save()
+            elif status is None or status >= 400:
+                self.error = "%s: %s" % (urlsplit(s["endpoint"]).hostname, status or last_line(err) or "failed")
+            else:
+                self.sent += 1
+                self.error = None
+
+    def loop(self):
+        self.setup()
+        if not self.public:
+            return
+        last = -1
+        while True:
+            with self.hub.cond:
+                while self.hub.version == last:
+                    self.hub.cond.wait(30)
+                last = self.hub.version
+            for key, home, it in self.scan():
+                if self.subs:
+                    self.send(self.payload(key, home, it))
+
+
 class Prs:
     """GitHub PR states for the PRs the snapshots name, looked up with gh in the background while
     someone looks at the app. A merged or closed PR is final and never looked up again; an open one
@@ -643,7 +808,7 @@ def verb_for(action, body):
     raise KeyError(action)
 
 
-def make_handler(hub, args, root, actions, prs, fleet):
+def make_handler(hub, args, root, actions, prs, fleet, pusher):
     app_dir = os.path.join(root, "app")
     shared_dir = os.path.join(root, "lib", "dashboard")
     user = (args.user or "").strip().lower()
@@ -698,6 +863,11 @@ def make_handler(hub, args, root, actions, prs, fleet):
                 return self.send(403, "forbidden: this app opens only for its owner, over the tailnet\n", "text/plain; charset=utf-8")
             if path in ("/", "/index.html"):
                 return self.static(os.path.join(app_dir, "index.html"))
+            if path in ("/sw.js", "/manifest.webmanifest"):
+                # at the root, so the service worker's scope is the whole app
+                return self.static(os.path.join(app_dir, path[1:]))
+            if path == "/api/v1/push":
+                return self.json(200, pusher.info())
             if path.startswith("/app/"):
                 return self.static(self.inside(app_dir, path[len("/app/"):]))
             if path.startswith("/shared/") and path[len("/shared/"):] in SHARED:
@@ -937,6 +1107,21 @@ def make_handler(hub, args, root, actions, prs, fleet):
                 return self.upload(unquote(up.group(1)), unquote(up.group(2)))
             if not (h.get("Content-Type") or "").startswith("application/json"):
                 return self.json(403, {"error": "writes come from the app only"})
+            if path in ("/api/v1/push/subscribe", "/api/v1/push/unsubscribe"):
+                try:
+                    n = int(h.get("Content-Length") or "0")
+                except ValueError:
+                    n = -1
+                if n < 0 or n > 8192:
+                    return self.json(413, {"error": "the request is too large"})
+                try:
+                    body = json.loads(self.rfile.read(n) or b"{}")
+                except ValueError:
+                    return self.json(400, {"error": "the body is not JSON"})
+                if not isinstance(body, dict):
+                    return self.json(400, {"error": "the body is a JSON object"})
+                code, out = pusher.subscribe(body) if path.endswith("/subscribe") else pusher.unsubscribe(body)
+                return self.json(code, out)
             if path == "/api/v1/fleet/check":
                 # Check again: every machine's probe now (ssh to the others), so a write's checks.
                 # Its body is read (and ignored), or the next request on this connection starts inside it.
@@ -994,6 +1179,8 @@ def main():
     ap.add_argument("--root", required=True, help="the chartroom checkout (app/ and lib/ in it)")
     ap.add_argument("--user", help="the one Tailscale login let in")
     ap.add_argument("--no-auth", action="store_true", help="no identity: requests straight to 127.0.0.1 only")
+    ap.add_argument("--push", choices=("on", "off"), default="off", help="Web Push for new Needs me items (CHARTROOM_APP_PUSH)")
+    ap.add_argument("--push-subject", default="mailto:chartroom@example.com", help="the VAPID contact (CHARTROOM_APP_PUSH_SUBJECT)")
     args = ap.parse_args()
     if not args.no_auth and not (args.user or "").strip():
         sys.exit("chartroom app: --user (CHARTROOM_APP_USER) or --no-auth")
@@ -1011,7 +1198,8 @@ def main():
     actions = Actions(hub, args.bin, os.path.join(os.path.dirname(args.pidfile), "app-actions.ndjson") if args.pidfile else None)
     prs = Prs(hub)
     fleet = Fleet(hub, args.bin)
-    httpd.RequestHandlerClass = make_handler(hub, args, args.root, actions, prs, fleet)
+    pusher = Pusher(hub, fleet, args.root, os.path.dirname(args.pidfile) if args.pidfile else None, args.push, args.push_subject)
+    httpd.RequestHandlerClass = make_handler(hub, args, args.root, actions, prs, fleet, pusher)
 
     def cleanup(*_):
         if args.pidfile:
@@ -1041,6 +1229,7 @@ def main():
     threading.Thread(target=rediscover, daemon=True).start()
     threading.Thread(target=prs.loop, daemon=True).start()
     threading.Thread(target=fleet.loop, daemon=True).start()
+    threading.Thread(target=pusher.loop, daemon=True).start()
     httpd.serve_forever()
 
 

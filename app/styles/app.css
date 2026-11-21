@@ -171,6 +171,25 @@
 
 /* Fleet (slice 5): a machine's detail lists what to fix, each with its command under it */
 .sp .checks li { grid-template-columns: 14px 1fr; }
+/* slice 6: notifications in the sidebar's foot; the phone's tab bar */
+.a-side-foot { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.notif-state, .notif-btn { font-size: var(--fs-xs); }
+.a-tabbar { display: none; }
+@media (max-width: 860px) {
+  .a-tabbar { display: grid; grid-template-columns: repeat(4, 1fr); position: fixed; z-index: 30; left: 0; right: 0; bottom: 0;
+    padding: 6px 6px calc(6px + env(safe-area-inset-bottom)); border-top: 1px solid var(--border);
+    background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: blur(10px); }
+  .a-tabbar a { position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px; min-height: 44px; justify-content: center;
+    font-size: 11px; color: var(--text-2); border-radius: var(--r-md); }
+  .a-tabbar a:hover { text-decoration: none; color: var(--text); }
+  .a-tabbar a.on { color: var(--accent-text); }
+  .a-tabbar .tb-badge { position: absolute; top: 2px; left: calc(50% + 6px); min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
+    background: var(--accent); color: var(--on-accent); font-size: 10px; font-weight: 600; line-height: 16px; text-align: center; }
+  .a-app { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
+  .a-app:has(.a-tabbar) .bulk { bottom: calc(72px + env(safe-area-inset-bottom)); }
+  .a-app:has(.a-tabbar) .toasts { bottom: calc(76px + env(safe-area-inset-bottom)); }
+  .r-bar { bottom: calc(60px + env(safe-area-inset-bottom)); }
+}
 .ck.unk { color: var(--text-2); }
 .ck.unk .ck-i { color: var(--text-3); }
 .sp .checks code { font-size: var(--fs-xs); }

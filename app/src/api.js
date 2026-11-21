@@ -5,7 +5,10 @@ const WRITE = { "Content-Type": "application/json", "X-Chartroom-App": "1" };
 export async function getState() {
   const r = await fetch("/api/v1/state", { cache: "no-store", credentials: "same-origin" });
   if (!r.ok) throw new Error(r.status === 403 ? "This app opens only for its owner." : "The server answered " + r.status);
-  return r.json();
+  const s = await r.json();
+  // the service worker's last copy, when the brain cannot be reached (sw.js): say how old it is
+  s.offline = r.headers.get("X-Chartroom-Offline") || null;
+  return s;
 }
 
 // Fleet's Check again: the server reads every machine now (it answers at once; the state follows).

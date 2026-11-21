@@ -207,6 +207,26 @@ test("fleet: a failed sign-in is in Needs me, of no home, opened on Fleet", () =
   assert.strictEqual(M.items({ homes: [], fleet: null }).length, 0);
 });
 
+test("notifications: a home's first read is only remembered; then only new open items; a home not read keeps its keys", () => {
+  const it = (home, id, extra) => Object.assign({ home, id, key: home + ":" + id, title: "T " + id, group: "decide" }, extra);
+  // the page opens with only acme read
+  const first = M.freshItems(null, [it("acme", "q-1"), it("acme", "q-2", { sent: { at: "x" } })], ["acme"]);
+  assert.deepStrictEqual([first.fresh.length, first.next], [0, { seen: ["acme:q-1"], read: ["acme"] }]);
+  // globex is read for the first time: its items are remembered, not announced; acme's new one is
+  const second = M.freshItems(first.next, [it("acme", "q-1"), it("acme", "q-4"), it("globex", "q-3")], ["acme", "globex"]);
+  assert.deepStrictEqual(second.fresh.map((x) => x.key), ["acme:q-4"]);
+  // globex fails a read (its items are missing): its keys are kept, and do not come back as new
+  const third = M.freshItems(second.next, [it("acme", "q-1"), it("acme", "q-4")], ["acme"]);
+  assert.deepStrictEqual(third.next.seen.sort(), ["acme:q-1", "acme:q-4", "globex:q-3"]);
+  const fourth = M.freshItems(third.next, [it("acme", "q-1"), it("acme", "q-4"), it("globex", "q-3"), it("globex", "q-5")], ["acme", "globex"]);
+  assert.deepStrictEqual(fourth.fresh.map((x) => x.key), ["globex:q-5"]);
+  // held and snoozed are not announced
+  const r = M.freshItems({ seen: [], read: ["acme"] }, [it("acme", "h", { held: true }), it("acme", "s", { snoozed_until: "2999-01-01T00:00:00Z" })], ["acme"]);
+  assert.strictEqual(r.fresh.length, 0);
+  const n = M.notice(it("acme", "q-9", { summary: "Pick the cache" }));
+  assert.deepStrictEqual(n, { title: "T q-9", body: "acme · Decide: Pick the cache", tag: "acme:q-9", url: "/#/n/acme%3Aq-9" });
+});
+
 test("move, ago and search: the keyboard's selection, short times, the palette's matches", () => {
   assert.strictEqual(M.move(null, 1, 3), 0);
   assert.strictEqual(M.move(2, 1, 3), 2);

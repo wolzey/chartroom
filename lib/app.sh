@@ -138,6 +138,12 @@ app_doctor() {
   else echo "server: not running (chartroom app serve --daemon)"; port="$(app_port)"; fi
   if [[ -n "$user" ]]; then echo "allowed: $user (CHARTROOM_APP_USER)"
   else echo "allowed: nobody yet; set CHARTROOM_APP_USER=<your Tailscale login> in $CR_CONFIG_FILE"; fi
+  # notifications: local ones need only the HTTPS address; Web Push also needs node and the switch
+  if [[ "$(cfg APP_PUSH '' off)" != on ]]; then
+    echo "push: off (CHARTROOM_APP_PUSH=on turns on Web Push: new items reach a closed app through the browser maker's push service, encrypted end to end)"
+  elif ! command -v node >/dev/null 2>&1; then echo "push: on, but node is not installed, so it cannot send"
+  elif node "$CR_ROOT/lib/app/push.mjs" selftest >/dev/null 2>&1; then echo "push: on (node $(node --version))"
+  else echo "push: on, but node's crypto failed the push self-test"; fi
   ts="$(app_tailscale)"
   if [[ -z "$ts" ]]; then echo "tailscale: not found; the app stays on this machine (http://127.0.0.1:$port)"; return 0; fi
   serve="$("$ts" serve status 2>/dev/null || true)"
@@ -216,6 +222,11 @@ cmd_app() {
   mkdir -p "$(app_state_dir)"
   local args=("$CR_ROOT/lib/app/server.py" --port "$port" --pidfile "$(app_pidfile)" --bin "$CR_BIN" --root "$CR_ROOT")
   if [[ $noauth -eq 1 ]]; then args+=(--no-auth); else args+=(--user "$user"); fi
+  # Web Push (slice 6): off unless the brain's config turns it on; it sends through the browser
+  # maker's push service, encrypted end to end
+  local push; push="$(cfg APP_PUSH '' off)"
+  [[ "$push" == on ]] || push=off
+  args+=(--push "$push" --push-subject "$(cfg APP_PUSH_SUBJECT '' 'mailto:chartroom@example.com')")
   [[ $daemon -eq 1 ]] || exec "${CR_PY[@]}" "${args[@]}"
   local log; log="$(app_logfile)"
   ( umask 077; nohup "${CR_PY[@]}" "${args[@]}" >"$log" 2>&1 </dev/null & echo $! >"$log.pid" )

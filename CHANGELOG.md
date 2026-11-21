@@ -66,6 +66,11 @@ are stable from 0.1.0.
   - Properties are in a slim column: status (Accept or Close), priority and labels.
   - A worker stopped at a prompt nothing can read says so, with the command that opens its
     terminal.
+- The chartroom app, slice 6: the phone and notifications.
+  - **Installable:** a manifest and icons, and a service worker at `/sw.js` that keeps the shell and the last state. Offline, the app opens and says how old its state is; actions wait in the outbox.
+  - **The phone:** a tab bar (Needs me, Board, Initiatives, Fleet) below 860 px, with the quick view as a bottom sheet.
+  - **Local notifications:** one click turns them on. While the app is open in the background, each new Needs me item shows once; tapping it opens the app on that item (`#/n/<key>`).
+  - **Web Push, off by default:** `CHARTROOM_APP_PUSH=on` sends new items to a closed app through the browser maker's push service, encrypted end to end. The sender, `lib/app/push.mjs`, uses node's `node:crypto` only and is checked against the RFC 8291 vector. Keys and subscriptions are kept 0600 beside the pid file. `app doctor` reports push.
 - The chartroom app, slice 5: Fleet (`chartroom app fleet --json`, over `chartroom nodes`).
   - **Health per machine:** healthy, needs a look (a failed sign-in, a crew tool missing, disk
     under 15% free) or unreachable, with every check as a chip, the brain first.

@@ -390,7 +390,32 @@ var AppModel = (function () {
     }).filter(Boolean).sort((a, b) => a.rank - b.rank).map((x) => x.e).slice(0, 30);
   }
 
+  // Local notifications (slice 6). prev: {seen: the keys known, read: the homes read before}, or
+  // null the first time. -> {fresh: the items to announce, next: the new prev}. Only an item of a
+  // home read before is announced: a home's first read (the page opening, a home added) is only
+  // remembered. A key of a home not read this time is kept, so a home that failed a read and
+  // comes back does not announce its items again.
+  const SEEN_MAX = 600;
+  function freshItems(prev, all, readHomes) {
+    const read = new Set(readHomes || []);
+    const open = all.filter((it) => read.has(it.home) && standing(it) === "open");
+    const keys = open.map((it) => it.key);
+    const known = new Set((prev && prev.seen) || []);
+    const before = new Set((prev && prev.read) || []);
+    const fresh = open.filter((it) => before.has(it.home) && !known.has(it.key));
+    const kept = [...known].filter((k) => !read.has(k.split(":")[0]));
+    return { fresh, next: { seen: kept.concat(keys).slice(-SEEN_MAX), read: [...new Set([...before, ...read])] } };
+  }
+  // One notification: the item's key as its tag (the push of the same item replaces it), and a link
+  // that opens Needs me on it.
+  function notice(it) {
+    const g = (GROUPS.find((x) => x.id === it.group) || {}).label || "Needs you";
+    return { title: String(it.title || "Chartroom").slice(0, 100), body: (it.home + " · " + g + (it.summary ? ": " + it.summary : "")).slice(0, 180),
+      tag: it.key, url: "/#/n/" + encodeURIComponent(it.key) };
+  }
+
   return { KINDS, GROUPS, STATUS, kind, items, homes, standing, visible, ordered, counts, projects, questions, details,
-    primary, answerBody, answered, move, ago, agoText, snoozes, search, askText, headline, bulkPlan, range, promote, linkParts, BOARD, boardItems, boardFilter, boardColumns, initiatives, milestones };
+    primary, answerBody, answered, move, ago, agoText, snoozes, search, askText, headline, bulkPlan, range, promote, linkParts, BOARD, boardItems, boardFilter, boardColumns, initiatives, milestones,
+    freshItems, notice };
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = AppModel;

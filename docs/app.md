@@ -22,6 +22,14 @@ Then open `https://<brain>.<tailnet>.ts.net/` on any of your devices. HTTPS is n
 
 On the brain itself, before Serve is set up, `chartroom app serve --daemon --no-auth` and `chartroom app open` give this machine's browser the app without an identity.
 
+## On the phone, and notifications
+
+- **Install.** Open the HTTPS address and add it to the home screen (Safari: Share, Add to Home Screen; Chrome: Install). It opens full screen with a tab bar: Needs me, Board, Initiatives, Fleet. A selected item opens as a sheet from the bottom.
+- **Offline.** The service worker (`/sw.js`) keeps the shell and the last state. With the brain out of reach the app still opens, says how old what it shows is, and keeps your actions in the outbox until the brain is back. It always asks the network first, so a new version shows at once.
+- **Notifications, with no third party.** "Turn on notifications" (the sidebar's foot, or ⌘K) asks the browser once. While the app is open in the background, a new Needs me item shows a notification; tapping it opens the app on that item (`#/n/<home>:<id>`). Each item notifies once per device, and what is already open when the app loads never does.
+- **Web Push, for a closed app.** Off unless the brain's config says `CHARTROOM_APP_PUSH=on`. Then the server sends each new item through the push service of the browser's maker (Apple, Google, Mozilla). The payload is encrypted end to end (RFC 8291, `lib/app/push.mjs` with node's built-in `node:crypto`), so that service sees only the endpoint, the size and the time. It needs node on the brain; `chartroom app doctor` says whether push can send. `CHARTROOM_APP_PUSH_SUBJECT` is the contact the push services see (a `mailto:` or `https:` URL; the default is a placeholder). On iOS, push reaches only the installed app (iOS 16.4 or later).
+- **What the server keeps.** The VAPID keys and each device's subscription live beside the pid file (`app-push-keys.json`, `app-push-subs.json`, both 0600), never in a home. A subscription is a write (the same checks), only for an https endpoint, 20 devices at most; one the push service reports gone (404, 410) is dropped. An item is pushed once, when it first appears; what is open when the server starts, or when a home is first read, is only remembered.
+
 ## Who gets in
 
 - **Binding.** The server binds 127.0.0.1 only. Nothing on the network reaches it except through Tailscale Serve.
@@ -83,6 +91,10 @@ app/src/outbox.js       every action queued, sent in the background, retried (pu
 app/src/palette.js      ⌘K
 app/src/initiatives.js  initiatives: the list, the page (plan, stories, decisions, PRs), the approval checklist
 app/src/fleet.js        Fleet: the machines, their checks and budgets, the workers
+app/src/notify.js       the service worker's registration, notifications, the push subscription
+app/sw.js               the service worker: the offline shell and last state, notifications
+app/manifest.webmanifest, app/icons/   what makes it installable
+lib/app/push.mjs        the Web Push sender (node:crypto; RFC 8291 and 8292)
 app/styles/             tokens, base and layout from the approved prototypes; app.css adds to them
 app/vendor/             react 18.3.1, react-dom 18.3.1, htm 3.1.1 (LICENSES.md)
 lib/app.sh              chartroom app: serve, open, stop, status, doctor, snapshot
@@ -92,4 +104,4 @@ lib/app/fleet.jq        each machine's health, and its failed sign-ins as Needs 
 lib/tell.sh, lib/ask.sh, lib/snooze.sh, lib/initiative.sh
 ```
 
-There is no build step: the files in `app/` are what the browser loads. Tests: `test/app.bats` (the verbs and the snapshot), `test/app-server.bats` (access, writes, files, the stream, sweep), `test/app-ticket.bats`, `test/app-initiative.bats`, `test/app-fleet.bats` (over the invented machines in `test/fixtures/app-nodes.json`, read through `CHARTROOM_APP_NODES`) and `test/js/app-model.test.js`.
+There is no build step: the files in `app/` are what the browser loads. Tests: `test/app.bats` (the verbs and the snapshot), `test/app-server.bats` (access, writes, files, the stream, sweep), `test/app-ticket.bats`, `test/app-initiative.bats`, `test/app-fleet.bats` (over the invented machines in `test/fixtures/app-nodes.json`, read through `CHARTROOM_APP_NODES`), `test/app-push.bats` (pushes to a fake push service on this machine, `test/js/push-sink.js`, which decrypts them as a browser would; `CHARTROOM_APP_PUSH_ALLOW_HTTP=1` lets it be plain http on 127.0.0.1, for tests only), `test/js/app-push.test.js` (the sender, against the RFC 8291 vector) and `test/js/app-model.test.js`.

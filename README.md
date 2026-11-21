@@ -1282,6 +1282,8 @@ machine), then `~/.config/chartroom/config` (`KEY=VALUE`, no shell evaluation;
 | `CHARTROOM_DASHBOARD_HOST` | `127.0.0.1` | the IPv4 address the dashboard binds; `0.0.0.0` is every interface (`--host` / `--expose` override). Beyond loopback it needs the access token |
 | `CHARTROOM_APP_PORT` | `4516` | the port the [app](#the-chartroom-app) listens on, on 127.0.0.1 only (`--port` overrides) |
 | `CHARTROOM_APP_USER` | *(none)* | the one Tailscale login the app lets in; `app serve` refuses to start without it, unless `--no-auth` |
+| `CHARTROOM_APP_PUSH` | `off` | `on`: the app sends new Needs me items by Web Push (through the browser maker's push service, encrypted end to end) to the devices that turned it on; needs node on the brain |
+| `CHARTROOM_APP_PUSH_SUBJECT` | `mailto:chartroom@example.com` | the VAPID contact the push services see (a `mailto:` or `https:` URL) |
 | `CHARTROOM_GH` | `gh` | the gh binary the dashboard uses for PR states |
 | `CHARTROOM_MACHINE_NAME` | the host name | this machine's label on the [fleet radar](#the-fleet-radar-every-agent-on-every-machine) |
 | `CHARTROOM_RADAR_MACHINES` | herdr's saved machines | the other machines the radar reads, read-only over ssh: `label[=ssh-target] ...`, or `none` |

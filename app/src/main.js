@@ -12,6 +12,7 @@ import { BoardPage, BoardSummary, TaskQuick } from "./board.js";
 import { Composer } from "./composer.js";
 import { InitiativesList, InitiativePage, NewInitiative } from "./initiatives.js";
 import { FleetPage, MachineDetail } from "./fleet.js";
+import * as N from "./notify.js";
 
 const M = window.AppModel;
 const EF = window.EventFmt;
@@ -26,6 +27,7 @@ function parseRoute() {
   if (p[0] === "i" && p.length >= 3) return { name: "initiative", home: p[1], id: p[2] };
   if (p[0] === "i") return { name: "initiatives" };
   if (p[0] === "fleet") return { name: "fleet", machine: p[1] || null };
+  if (p[0] === "n" && p[1]) return { name: "needs", select: p[1] }; // a notification's link: Needs me on that item
   return { name: "needs" };
 }
 function go(path) { location.hash = path; }
@@ -34,7 +36,31 @@ function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch 
 const typing = (el) => el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT" || el.isContentEditable);
 const wide = () => window.matchMedia("(min-width: 1181px)").matches;
 
-function Sidebar({ homes, filters, setFilters, counts, onPalette, link, updated, theme, toggleTheme, route, inits, onNewInit, fleetBad }) {
+// Notifications: what this device can do, and the one click that turns them on.
+function NotifyButton({ notif, onEnable }) {
+  if (!notif) return null;
+  if (notif.perm === "unsupported") {
+    return html`<span class="notif-state faint" title="Notifications and install need the app's HTTPS address (Tailscale Serve)">No notifications here</span>`;
+  }
+  if (notif.perm === "denied") return html`<span class="notif-state faint" title="Allow them in the browser's site settings">Notifications blocked</span>`;
+  if (notif.perm === "granted") {
+    return html`<span class="notif-state faint" title=${notif.subscribed ? "New items reach this device even with the app closed (Web Push)"
+      : notif.push && notif.push.available ? "Only while the app is open: turn on push to get them with it closed" : "While the app is open in the background"}>
+      Notifications on${notif.subscribed ? " · push" : ""}</span>
+      ${!notif.subscribed && notif.push && notif.push.available ? html`<button class="link notif-btn" onClick=${onEnable}>Turn on push</button>` : null}`;
+  }
+  return html`<button class="link notif-btn" onClick=${onEnable}>Turn on notifications</button>`;
+}
+
+// The phone's tab bar (below 860 px, where the sidebar is hidden).
+function TabBar({ route, count, fleetBad }) {
+  const tabs = [["needs", "#/", "Needs me", count], ["board", "#/board", "Board"], ["initiatives", "#/i", "Initiatives"], ["fleet", "#/fleet", "Fleet", fleetBad ? "!" : null]];
+  const on = (id) => route.name === id || (id === "initiatives" && route.name === "initiative") || (id === "needs" && ["round", "task"].includes(route.name));
+  return html`<nav class="a-tabbar" aria-label="Sections">${tabs.map(([id, href, label, badge]) => html`<a key=${id} href=${href} class=${on(id) ? "on" : ""}>
+    <span class=${"nav-ic " + id} aria-hidden="true"></span><span>${label}</span>${badge ? html`<span class="tb-badge">${badge}</span>` : null}</a>`)}</nav>`;
+}
+
+function Sidebar({ homes, filters, setFilters, counts, onPalette, link, updated, theme, toggleTheme, route, inits, onNewInit, fleetBad, notif, onNotify }) {
   return html`<aside class="a-side">
     <div class="a-brand"><span class="a-logo" aria-hidden="true"></span><span class="grow">Chartroom</span>
       <button class="btn ghost icon" title=${"Switch to " + (theme === "dark" ? "light" : "dark") + " mode"} aria-label="Toggle dark mode" onClick=${toggleTheme}>${theme === "dark" ? "☀" : "☾"}</button></div>
@@ -57,7 +83,8 @@ function Sidebar({ homes, filters, setFilters, counts, onPalette, link, updated,
       <span class=${"home-dot hue-" + h.hue} aria-hidden="true"></span><span class="grow truncate">${h.name}</span>
       ${h.error ? html`<span class="home-err" aria-label="could not be read"></span>` : h.counts && h.counts.needs ? html`<span class="count">${h.counts.needs}</span>` : null}
     </button>`)}</div>
-    <div class="a-side-foot"><span class=${"sync" + (link ? "" : " off")}><i></i>${link ? "Live" : "Reconnecting"}${updated ? " · " + M.agoText(updated) : ""}</span></div>
+    <div class="a-side-foot"><span class=${"sync" + (link ? "" : " off")}><i></i>${link ? "Live" : "Reconnecting"}${updated ? " · " + M.agoText(updated) : ""}</span>
+      <${NotifyButton} notif=${notif} onEnable=${onNotify} /></div>
   </aside>
   <div class="a-mobilebar"><span class="a-logo" aria-hidden="true"></span><b class="grow">Chartroom</b>
     <button class="btn ghost icon" aria-label="Toggle dark mode" onClick=${toggleTheme}>${theme === "dark" ? "☀" : "☾"}</button>
@@ -364,6 +391,47 @@ function App() {
   const workers = useMemo(() => boardAll.filter((t) => t.type === "task" && t.status === "working"), [boardAll]);
   useEffect(() => { if (route.name === "fleet" && data && !data.fleet) checkFleet(); }, [route.name, !!data, !!(data && data.fleet)]);
 
+  // The installable app and its notifications (slice 6; notify.js, sw.js).
+  const [notif, setNotif] = useState(null);
+  const refreshNotif = async () => setNotif({ perm: N.permission(), push: await N.pushInfo(), subscribed: await N.subscribed() });
+  useEffect(() => { N.register().finally(refreshNotif); }, []);
+  const onNotify = async () => {
+    const p = N.permission() === "granted" ? "granted" : await N.enable();
+    if (p === "granted") {
+      const info = await N.pushInfo();
+      if (info && info.available) {
+        try { await N.subscribe(info.key); toast("Push is on for this device: new items reach it even with the app closed"); }
+        catch (e) { toast("Push could not be turned on: " + e.message); }
+      } else toast("Notifications are on while the app is open in the background" + (info && info.reason ? ". Push: " + info.reason : ""));
+    } else if (p === "denied") toast("Notifications are blocked; allow them in the browser's site settings");
+    else if (p === "unsupported") toast("Notifications need the app's HTTPS address (Tailscale Serve)");
+    refreshNotif();
+  };
+  const notifRef = useRef(notif); notifRef.current = notif;
+  // Local notifications: a new open item while the app is in the background, once per item; a
+  // device subscribed to push gets it from the server instead.
+  useEffect(() => {
+    if (!data || data.offline) return;
+    const read = (data.homes || []).filter((h) => h.snapshot).map((h) => h.name).concat(data.fleet ? ["fleet"] : []);
+    const r = M.freshItems(load("chartroom-notified", null), all, read);
+    save("chartroom-notified", r.next);
+    const n = notifRef.current;
+    if (!r.fresh.length || document.visibilityState === "visible" || !n || n.perm !== "granted" || n.subscribed) return;
+    for (const it of r.fresh.slice(0, 3)) N.show(M.notice(it));
+    if (r.fresh.length > 3) N.show({ title: r.fresh.length - 3 + " more need you", body: "Open Needs me", tag: "chartroom-more", url: "/#/" });
+  }, [all]);
+  // a notification's link (#/n/<key>): Needs me with that item selected, once; the address then
+  // becomes #/ so a later change to the list never pulls the selection back
+  // (only once every home is read: before that, an item may simply not be in the list yet)
+  const allRead = !!data && (data.homes || []).every((h) => h.snapshot || h.error) && (!route.select || !route.select.startsWith("fleet:") || !!data.fleet);
+  useEffect(() => {
+    if (!route.select || !allRead) return;
+    if (all.some((x) => x.key === route.select)) { setTab("all"); setSelKey(route.select); if (!wide()) setQvOpen(true); }
+    else toast("That item is no longer open; it was answered or closed");
+    history.replaceState(null, "", "#/");
+    setRoute(parseRoute());
+  }, [route.select, allRead]);
+
   const entries = useMemo(() => {
     const e = [
       { id: "c-needs", group: "Go to", label: "Needs me", run: () => { setTab("all"); go("#/"); } },
@@ -373,6 +441,7 @@ function App() {
       { id: "c-newi", group: "Commands", label: "New initiative", run: () => setNewInit(true) },
       { id: "c-inits", group: "Go to", label: "Initiatives", run: () => go("#/i") },
       { id: "c-fleet", group: "Go to", label: "Fleet", sub: "machines, sign-ins, workers", run: () => go("#/fleet") },
+      { id: "c-notify", group: "Commands", label: "Turn on notifications", sub: "this device", run: () => onNotify() },
       { id: "c-theme", group: "Commands", label: "Switch to " + (theme === "dark" ? "light" : "dark") + " mode", run: toggleTheme },
       { id: "c-clear", group: "Commands", label: "Clear filters", run: () => setFilters({}) },
     ];
@@ -405,6 +474,11 @@ function App() {
   const queued = outbox.filter((x) => x.state === "queued" && x.tries > 0).length;
   if (queued) notices.push(html`<div key="q" class="notice"><span>${queued} ${queued === 1 ? "action is" : "actions are"} waiting for the server; ${queued === 1 ? "it goes" : "they go"} as soon as it answers.</span></div>`);
   if (loadErr) notices.push(html`<div key="err" class="notice warn"><span>${loadErr}</span></div>`);
+  if (data && data.offline) {
+    const when = data.generated_at ? M.agoText(data.generated_at) : "last";
+    notices.push(html`<div key="off" class="notice warn"><span><b>Offline.</b> ${"The brain cannot be reached; this is what was read " + when + "."}
+      What you do here waits in the outbox and goes when it is back.</span></div>`);
+  }
   for (const h of (data && data.homes) || []) {
     if (h.error) notices.push(html`<div key=${"e" + h.name} class="notice warn"><span><b>${h.name}</b> could not be read: ${h.error}</span></div>`);
     else if (!h.snapshot) notices.push(html`<div key=${"r" + h.name} class="notice"><span>Reading <b>${h.name}</b>… the first read of a big home takes a few seconds.</span></div>`);
@@ -474,9 +548,10 @@ function App() {
       onAct=${perform} onDetails=${openDetails} snoozeAnchorRef=${snoozeAnchor} snoozeOpen=${snoozeOpen} setSnoozeOpen=${setSnoozeOpen} prs=${(data && data.prs) || {}} />`;
   }
   return html`<div class="a-app">
-    <${Sidebar} homes=${homes} filters=${filters} setFilters=${setFilters} counts=${counts} onPalette=${() => setPalette(true)} fleetBad=${fleetBad}
+    <${Sidebar} homes=${homes} filters=${filters} setFilters=${setFilters} counts=${counts} onPalette=${() => setPalette(true)} fleetBad=${fleetBad} notif=${notif} onNotify=${onNotify}
       link=${link} updated=${updated} theme=${theme} toggleTheme=${toggleTheme} route=${route} inits=${inits} onNewInit=${() => setNewInit(true)} />
     ${main}${aside}
+    <${TabBar} route=${route} count=${counts.all} fleetBad=${fleetBad} />
     ${newInit ? html`<${NewInitiative} homes=${homes} home=${filters.home || (homes[0] && homes[0].name)} onClose=${() => setNewInit(false)}
         onSend=${(h, body) => {
           setOutbox((o) => o.concat([OB.create(h, "initiative-new", body, null, "New initiative", Date.now())]));
