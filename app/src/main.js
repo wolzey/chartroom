@@ -87,6 +87,8 @@ function Sidebar({ homes, filters, setFilters, counts, onPalette, link, updated,
       <${NotifyButton} notif=${notif} onEnable=${onNotify} /></div>
   </aside>
   <div class="a-mobilebar"><span class="a-logo" aria-hidden="true"></span><b class="grow">Chartroom</b>
+    ${notif && (notif.perm === "default" || (notif.perm === "granted" && !notif.subscribed && notif.push && notif.push.available))
+      ? html`<button class="btn sm notif-mobile" onClick=${onNotify}>${notif.perm === "granted" ? "Turn on push" : "Notify me"}</button>` : null}
     <button class="btn ghost icon" aria-label="Toggle dark mode" onClick=${toggleTheme}>${theme === "dark" ? "☀" : "☾"}</button>
     <button class="btn ghost icon" aria-label="Search" onClick=${onPalette}><span class="s-ic"></span></button></div>`;
 }
