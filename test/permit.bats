@@ -38,7 +38,7 @@ answer() { as_commander permit answer "$@"; }
 verdict() { # <event> <grants json> <tool> <input json> [current branch]
   jq -n --arg ev "$1" --argjson g "$2" --arg t "$3" --argjson in "$4" --arg cur "${5:-cap/x}" '{event: $ev, tool: $t, input: $in, sig: "s", cwd: "/w/wt",
     roots: {worktree: "/w/wt", task_dir: "/h/tasks/x", scratch: "/tmp/scr", permits: "/h/permits", user_home: "/u/me"},
-    branch: "cap/x", current_branch: $cur, grants: $g, always: [], pre: null}' | jq -r -f "$REPO_ROOT/lib/permit.jq" | jq -r '"\(.verdict) \(.rule)"'
+    branch: "cap/x", current_branch: $cur, grants: $g, always: $always, pre: null}' --argjson always "${ALWAYS:-[]}" | jq -r -f "$REPO_ROOT/lib/permit.jq" | jq -r '"\(.verdict) \(.rule)"'
 }
 
 @test "policy: the table of routine, commander and guarded calls" {
@@ -56,6 +56,13 @@ permission|[]|allow local:bash|git rm -q --cached bash git jq && rm -f bash git 
 permission|[]|allow local:bash|python3 -m pytest tests/ -q 2>&1 | tail -20
 permission|[]|allow local:bash|cat /u/me/other/README.md
 permission|[]|allow local:bash|git commit -m "fix: one; two | three"
+permission|[]|allow local:bash|ls -la bash; git rm -q --cached bash && rm -f bash; scripts/privacy-gate.sh 2>&1 | tail -4
+permission|[]|allow local:bash|./gradlew test
+permission|[]|allow local:bash|S=/tmp/scr/x; mkdir -p $S && echo hi > "$S/a.txt"; cat ${S}/a.txt
+permission|[]|card commander:unlisted|S=/etc; rm -rf $S/x
+permission|[]|card commander:unlisted|S=$(pwd)/..; rm -rf $S
+permission|[]|allow local:bash|rm -f "$HOME/../../w/wt/x"
+permission|[]|card commander:unlisted|/opt/tool/run.sh
 permission|[]|card commander:unlisted|cd /etc && rm passwd
 permission|[]|card commander:unlisted|rm -rf $HOME/x
 permission|[]|card commander:unlisted|echo / | xargs rm -rf
@@ -103,6 +110,15 @@ EOF
   [ "$(verdict pre-tool [] mcp__slack__slack_send_message '{"channel":"x","text":"hi"}')" = "card commander:outward" ]
   [ "$(verdict pre-tool [] mcp__slack__slack_read_channel '{"channel":"x"}')" = "none none" ]
   [ "$(verdict permission [] AskUserQuestion '{"questions":[]}')" = "none question" ]
+  # git's global options before push are not the task branch's push
+  [ "$(verdict pre-tool '["push-branch"]' Bash '{"command":"git -c remote.origin.pushurl=/x push origin cap/x"}')" = "card commander:outward" ]
+  [ "$(verdict pre-tool '["push-branch"]' Bash '{"command":"git -C /other push origin cap/x"}')" = "card commander:outward" ]
+  # an always pattern covers one plain command: never one chained onto it
+  local npm_always='[{"tool":"Bash","pattern":"npm test:*","from":"p-1"}]'
+  [ "$(verdict pre-tool [] Bash '{"command":"npm test -- --watch=false"}')" = "none none" ]
+  [ "$(ALWAYS="$npm_always" verdict pre-tool [] Bash '{"command":"npm test -- --watch=false"}')" = "allow always:p-1" ]
+  [ "$(ALWAYS="$npm_always" verdict pre-tool [] Bash '{"command":"npm test && git push --force origin main"}')" = "card commander:outward" ]
+  [ "$(ALWAYS="$npm_always" verdict pre-tool [] Bash '{"command":"npm testing"}')" = "none none" ]
 }
 
 @test "permission: a prompt inside the worktree is allowed by policy and recorded" {
@@ -169,6 +185,37 @@ EOF
   events "$id" | grep -qF "permit: allowed Bash \"git push origin HEAD\" once, as the commander allowed ($p)"
   out="$(hook pre-tool Bash "$(bash_in 'git push origin HEAD')")"
   [ "$(decision <<<"$out")" = ask ]
+}
+
+@test "permission: a card Claude goes on without (its terminal answered, or the worker stopped) closes at once" {
+  task_with_worktree --backend command --command "$STUB {id}"
+  f="$CHARTROOM_HOME/tasks/$id/meta.json"; jq '.dispatched = "2026-01-01T00:00:00Z"' "$f" >"$f.tmp" && mv "$f.tmp" "$f"
+  payload Bash "$(bash_in 'git push origin HEAD')" >"$BATS_TEST_TMPDIR/p.json"
+  "$CHARTROOM" hook "$id" permission <"$BATS_TEST_TMPDIR/p.json" >/dev/null 3>&- &
+  hp=$!
+  wait_card; p="$(card_id)"
+  [ "$(cr status --json --all | jq -r --arg i "$id" '.[]? // . | select(.id == $i) | .state')" = decision ]
+  kill -TERM "$hp"; wait "$hp" || true
+  events "$id" | grep -qF "permit: closed $p: the worker went on without chartroom's answer"
+  [ "$(cr status --json --all | jq -r --arg i "$id" '.[]? // . | select(.id == $i) | .state')" = working ]
+  [ -z "$(cr permit ls)" ]
+  # an allow after that is kept as a pre-approval
+  answer "$p" once
+  events "$id" | grep -qF "permit: allowed $p once (late, after it lapsed)"
+}
+
+@test "permission: a card whose call the terminal answered closes once the transcript shows its result" {
+  task_with_worktree --backend command --command "$STUB {id}"
+  t="$BATS_TEST_TMPDIR/transcript.jsonl"
+  jq -cn '{type: "assistant", message: {content: [{type: "tool_use", id: "toolu_1", name: "Bash", input: {command: "git push origin HEAD", description: "test call"}}]}}' >"$t"
+  payload Bash "$(bash_in 'git push origin HEAD')" | jq -c --arg t "$t" '. + {transcript_path: $t}' >"$BATS_TEST_TMPDIR/p.json"
+  "$CHARTROOM" hook "$id" permission <"$BATS_TEST_TMPDIR/p.json" >"$BATS_TEST_TMPDIR/out" 3>&- &
+  wait_card; p="$(card_id)"
+  sleep 2
+  [ -z "$(grep "closed $p" "$CHARTROOM_HOME/tasks/$id/events.log")" ]
+  jq -cn '{type: "user", message: {content: [{type: "tool_result", tool_use_id: "toolu_1", content: "pushed"}]}}' >>"$t"
+  wait_event "$id" "permit: closed $p: the worker went on" 10
+  wait
 }
 
 @test "permit answer: the first answer wins" {

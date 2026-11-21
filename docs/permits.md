@@ -38,7 +38,16 @@ chartroom permit answer p-1a2b deny --note "use the staging project instead"
   that exact call, and the worker is steered to run it again.
 - **Retry cards.** A card raised by `PermissionDenied` works the same way, because the worker has
   already moved on.
-- **"Always for this task"** stores the pattern shown on the card. For Bash that is Claude's own
+- **A card Claude goes on without closes at once.** That happens when its terminal's dialog was
+  answered, or the worker stopped. Claude does not stop a waiting hook when the terminal answers,
+  so the hook watches for the call's result in the session transcript. It also closes the card on
+  a signal or when its parent claude is gone. Either way it logs
+  `permit: closed p-xxxx: the worker went on without chartroom's answer`, and the task is no longer
+  `decision`. An allow given later is kept as a pre-approval.
+- **"Always for this task"** stores the pattern shown on the card (also printed in the `asks` line
+  and in `permit ls`). A prefix or glob pattern covers one plain command only, never a line that
+  chains, substitutes or redirects something else onto it, so `npm test:*` does not cover
+  `npm test && git push`. For Bash that is Claude's own
   suggested rule (`npm run test:*`) when it gives one, otherwise the exact command. For a file
   tool it is the path; for any other tool, the exact call. The rule ends when the task closes.
   `close` moves the task's `permits/` record into `tasks/<id>/permits/`, where nothing reads it as
@@ -110,8 +119,9 @@ All the rules live in one file. **First match wins:**
   quotes.
 - `$(...)`, `` `...` ``, `sh -c '...'` and `eval` are read too.
 - Heredoc bodies are skipped unless they are fed to a shell.
-- `cd` is followed.
-- A path containing `$` is never trusted.
+- `cd` is followed, and so are the line's own `VAR=value` assignments (`S=/tmp/x; cat $S/a`).
+- A word it cannot resolve (`$X`, `$(...)`) is never trusted in a command that writes.
+- A grant never covers a command with git's global options before the subcommand (`-C`, `-c`).
 
 It is a policy classifier for routine work, not a sandbox. What it cannot read never becomes an
 allow, only a card or no opinion. To change a rule, edit `lib/permit.jq`. `test/permit.bats` has
@@ -140,6 +150,22 @@ permit: refused Bash "chartroom permit answer p-1a2b once" (guard:self-answer)
 ```
 
 `permit:` is a core event kind. `chartroom event <id> permit …` is refused.
+
+## Cost and volume (measured)
+
+- **Each hook call costs about 85 ms** on an M-series Mac (a bare `chartroom version` is 36 ms).
+  The policy's jq is 14 ms of that. It runs on every tool call of every Claude worker.
+- **Replayed against 45,775 Bash commands from 244 past worker transcripts,** `PreToolUse` gives no
+  opinion on 93% of them. The other 6.9% become cards:
+  - 1,902 outward: `git push` 931, Azure DevOps API writes and PR updates or creates about 510,
+    `gh pr` writes;
+  - 440 secrets: cloud access tokens, `.env` reads;
+  - 387 elsewhere: other machines, writes outside the worktree;
+  - 370 production; 21 controls; 14 flags; 2 money.
+
+  Grants (`push-branch`, `open-pr`, `merge-auto`) and "always" cover most of the outward ones.
+- **Replayed as prompts** (`PermissionRequest`, what Claude would ask about), 67% are allowed by
+  the `local:*` rules. Real prompts are rarer than every call: fluid's history has about 12.
 
 ## Security, and what it is not
 

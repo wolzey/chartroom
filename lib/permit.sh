@@ -69,25 +69,28 @@ permit_desc() { # <tool> <input json>
     else $t end' <<<"$2" 2>/dev/null || printf '%s' "$1"
 }
 
-# The policy's input for one hook payload (lib/permit.jq's header says what each field is).
+# The policy's input for one hook payload (lib/permit.jq's header says what each field is). It runs
+# before every tool call of every worker, so it reads the payload and meta.json once each, and the
+# call's signature only when a pre-approval or an "always" record could need it.
 permit_query() { # <id> <event> <payload>
-  local id="$1" ev="$2" payload="$3" tool input sig cmd cur="" wt pre=""
-  tool="$(jq -r '.tool_name // empty' <<<"$payload")" || return 1
+  local id="$1" ev="$2" payload="$3" tool cmd cur="" wt branch sig="" pre="" pd
+  pd="$(permit_tdir "$id")"
+  { IFS= read -r tool; IFS= read -r cmd; } < <(jq -r '(.tool_name // ""), (.tool_input.command // "" | gsub("\n"; " ") | .[0:4000])' <<<"$payload") || return 1
   [[ -n "$tool" ]] || return 1
-  input="$(jq -c '.tool_input // {}' <<<"$payload")"
-  sig="$(permit_sig "$tool" "$input")"
-  wt="$(meta "$id" worktree)"
-  if [[ "$tool" == Bash ]]; then
-    cmd="$(jq -r '.command // ""' <<<"$input")"
-    # The worktree's branch, only when a grant could need it.
-    if [[ -n "$wt" && -d "$wt" && "$cmd" =~ (^|[^A-Za-z0-9_-])(git|gh)[[:space:]] ]]; then cur="$(git -C "$wt" branch --show-current 2>/dev/null || true)"; fi
+  { IFS= read -r wt; IFS= read -r branch; } < <(jq -r '(.worktree // ""), (.branch // "")' "$(tdir "$id")/meta.json") || return 1
+  # The worktree's branch, only when a grant could need it.
+  if [[ "$tool" == Bash && -s "$pd/grants.json" && -n "$wt" && -d "$wt" && "$cmd" =~ (^|[^A-Za-z0-9_-])(git|gh)[[:space:]] ]]; then
+    cur="$(git -C "$wt" branch --show-current 2>/dev/null || true)"
   fi
-  [[ -f "$(permit_tdir "$id")/pre/$sig" ]] && pre="$(cat "$(permit_tdir "$id")/pre/$sig" 2>/dev/null || true)"
-  jq -c --arg ev "$ev" --arg tool "$tool" --argjson input "$input" --arg sig "$sig" \
+  if [[ -d "$pd/pre" || -s "$pd/always.ndjson" ]]; then
+    sig="$(permit_sig "$tool" "$(jq -c '.tool_input // {}' <<<"$payload")")"
+    [[ -f "$pd/pre/$sig" ]] && pre="$(cat "$pd/pre/$sig" 2>/dev/null || true)"
+  fi
+  jq -c --arg ev "$ev" --arg sig "$sig" \
     --arg wt "$wt" --arg td "$(tdir "$id")" --arg permits "$(permit_root)" --arg uh "$HOME" \
-    --arg branch "$(meta "$id" branch)" --arg cur "$cur" --argjson grants "$(permit_grants_json "$id")" \
+    --arg branch "$branch" --arg cur "$cur" --argjson grants "$(permit_grants_json "$id")" \
     --argjson always "$(permit_always_json "$id")" --arg pre "$pre" '
-    {event: $ev, tool: $tool, input: $input, sig: $sig, cwd: (.cwd // $wt),
+    {event: $ev, tool: .tool_name, input: (.tool_input // {}), sig: $sig, cwd: (.cwd // $wt),
      roots: {worktree: $wt, task_dir: $td, scratch: (.scratchpad_dir // ""), permits: $permits, user_home: $uh},
      branch: $branch, current_branch: $cur, grants: $grants, always: $always, pre: (if $pre == "" then null else $pre end)}' <<<"$payload"
 }
@@ -131,26 +134,50 @@ permit_card() { # <id> <event> <payload> <verdict json> <blocking 1|0>
     {id: $id, task: $task, created: ($now | todate), created_epoch: $now, expires_epoch: ($now + $wait),
      event: $ev, blocking: ($blocking == 1), tool: $tool, input: $input, sig: $sig, desc: $desc,
      cwd: ($p.cwd // ""), why: (($input.description // "") | cap(300)), rule: $v.rule, reason: $v.why,
-     pattern: $pattern, reason_denied: ($p.reason // null), session_id: ($p.session_id // null)}' >"$d/$pid.json.tmp" &&
+     pattern: $pattern, reason_denied: ($p.reason // null), session_id: ($p.session_id // null),
+     transcript: ($p.transcript_path // null), transcript_off: ($toff | tonumber)}' --arg toff "$(permit_size "$(jq -r '.transcript_path // ""' <<<"$payload")")" >"$d/$pid.json.tmp" &&
     mv "$d/$pid.json.tmp" "$d/$pid.json"
   if [[ "$blocking" == 1 ]]; then
-    permit_log "$id" "asks $pid: $desc ($(jq -r '.rule' <<<"$v"), $(jq -r '.why' <<<"$v")); waits $(permit_wait_text), then denies. Answer: chartroom permit answer $pid once|always|deny [--note <text>]"
+    permit_log "$id" "asks $pid: $desc ($(jq -r '.rule' <<<"$v"), $(jq -r '.why' <<<"$v")); waits $(permit_wait_text), then denies. Answer: chartroom permit answer $pid once|always|deny [--note <text>] (always allows \`${pattern:0:160}\` until the task closes)"
   else
-    permit_log "$id" "asks $pid: allow a retry of $desc, which auto mode refused ($(jq -r '.reason // "no reason given"' <<<"$payload" | tr '\n' ' ' | cut -c1-120)). Answer: chartroom permit answer $pid once|always|deny [--note <text>]"
+    permit_log "$id" "asks $pid: allow a retry of $desc, which auto mode refused ($(jq -r '.reason // "no reason given"' <<<"$payload" | tr '\n' ' ' | cut -c1-120)). Answer: chartroom permit answer $pid once|always|deny [--note <text>] (always allows \`${pattern:0:160}\` until the task closes)"
   fi
   printf '%s' "$pid"
+}
+
+permit_size() { if [[ -n "$1" && -f "$1" ]]; then wc -c <"$1" | tr -d ' '; else echo 0; fi; } # <file>
+
+# The transcript's id for the call a card waits on: the newest tool_use of that tool with that input.
+permit_tool_use_id() { # <card file>
+  local t; t="$(jq -r '.transcript // ""' "$1")"
+  [[ -n "$t" && -f "$t" ]] || return 0
+  tail -c 4000000 "$t" 2>/dev/null | jq -r --slurpfile c "$1" '
+    select(.type == "assistant") | .message.content[]? | select(type == "object" and .type == "tool_use")
+    | select(.name == $c[0].tool and .input == $c[0].input) | .id' 2>/dev/null | tail -n 1
 }
 
 # Write an answer once: 0 written, 1 there already.
 permit_write_once() { ( set -o noclobber; printf '%s\n' "$2" >"$1" ) 2>/dev/null; } # <file> <json>
 
-# Wait for a card's answer, up to its expiry; the answer JSON on stdout. An expired card is answered
-# "expired" by chartroom itself, unless an answer won the race.
+# Wait for a card's answer, up to its expiry, into PERMIT_ANSWER (in this shell, not a subshell, so
+# a signal is handled within a second). An expired card is answered "expired" by chartroom itself,
+# unless an answer won the race. If Claude goes on without it (its terminal's dialog was answered,
+# which cancels the hook, or the worker stopped), the card is closed as "lapsed" at once.
 permit_wait() { # <id> <p-id>
-  local id="$1" pid="$2" d ans exp
+  local id="$1" pid="$2" d ans exp parent="$PPID" tuid="" tr off n=0
   d="$(permit_tdir "$id")"; ans="$d/$pid.answer.json"
   exp="$(jq -r '.expires_epoch' "$d/$pid.json")"
+  tr="$(jq -r '.transcript // ""' "$d/$pid.json")"; off="$(jq -r '.transcript_off // 0' "$d/$pid.json")"
+  # shellcheck disable=SC2064 # the ids, now
+  trap "permit_lapse $(printf '%q %q' "$id" "$pid"); exit 0" TERM INT HUP
   while [[ ! -f "$ans" ]]; do
+    if [[ "$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ')" != "$parent" ]]; then permit_lapse "$id" "$pid"; break; fi
+    # Claude does not stop this hook when its terminal answers the prompt: its transcript shows the
+    # call's result instead (verified on 2.1.330), checked every few seconds.
+    if [[ -n "$tr" && $((n++ % 3)) -eq 0 ]]; then
+      [[ -n "$tuid" ]] || tuid="$(permit_tool_use_id "$d/$pid.json")"
+      if [[ -n "$tuid" ]] && tail -c +"$((off + 1))" "$tr" 2>/dev/null | grep -qF "\"tool_use_id\":\"$tuid\""; then permit_lapse "$id" "$pid"; break; fi
+    fi
     if [[ -n "$(meta_file "$id" closed 2>/dev/null)" ]]; then
       permit_write_once "$ans" "$(jq -cn '{answer: "deny", by: "chartroom", note: "the task was closed", at: (now | todate)}')" || true
       break
@@ -163,7 +190,12 @@ permit_wait() { # <id> <p-id>
     fi
     sleep 1
   done
-  cat "$ans" 2>/dev/null || echo '{"answer":"expired"}'
+  trap - TERM INT HUP
+  PERMIT_ANSWER="$(cat "$ans" 2>/dev/null || echo '{"answer":"expired"}')"
+}
+permit_lapse() { # <id> <p-id>
+  permit_write_once "$(permit_tdir "$1")/$2.answer.json" "$(jq -cn '{answer: "lapsed", by: "chartroom", at: (now | todate)}')" &&
+    permit_log "$1" "closed $2: the worker went on without chartroom's answer (its terminal answered the prompt, or it stopped)"
 }
 
 # The message a worker reads with a deny.
@@ -181,7 +213,8 @@ permit_hook() { # <event> <id> <payload>
   q="$(permit_query "$id" "$ev" "$payload" 2>/dev/null)" || return 0
   [[ -n "$q" ]] || return 0
   v="$(permit_decide "$q" 2>/dev/null)" || return 0
-  verdict="$(jq -r '.verdict // "none"' <<<"$v")"; rule="$(jq -r '.rule // ""' <<<"$v")"; why="$(jq -r '.why // ""' <<<"$v")"
+  IFS=$'\t' read -r verdict rule why < <(jq -r '[.verdict // "none", .rule // "", .why // ""] | @tsv' <<<"$v")
+  [[ "$verdict" == none && "$ev" != denied ]] && return 0 # the common case: nothing to say or log
   tool="$(jq -r '.tool' <<<"$q")"; input="$(jq -c '.input' <<<"$q")"; desc="$(permit_desc "$tool" "$input")"
   if [[ "$ev" == denied ]]; then permit_denied "$id" "$payload" "$q" "$desc"; return 0; fi
   case "$verdict" in
@@ -204,7 +237,7 @@ permit_hook() { # <event> <id> <payload>
         return 0
       fi
       pid="$(permit_card "$id" "$ev" "$payload" "$v" 1)" || return 0
-      ans="$(permit_wait "$id" "$pid")"
+      PERMIT_ANSWER=""; permit_wait "$id" "$pid"; ans="$PERMIT_ANSWER"
       a="$(jq -r '.answer // "expired"' <<<"$ans")"
       case "$a" in
         once|always) permit_reply "$ev" allow ;;
@@ -269,7 +302,7 @@ permit_rows() { # [<task id>] [--all] -> one JSON object per card
     jq -c --argjson now "$(date +%s)" --slurpfile a <(cat "$d.answer.json" 2>/dev/null || true) --slurpfile l <(cat "$d.late.json" 2>/dev/null || true) '
       . + {answer: ($a[0] // null), late: ($l[0] // null)}
       | .state = (if .answer == null then (if $now < .expires_epoch then "open" else "lapsed" end)
-                  elif .answer.answer == "expired" then "expired" else "answered" end)' "$f" 2>/dev/null
+                  elif .answer.answer == "expired" then "expired" elif .answer.answer == "lapsed" then "lapsed" else "answered" end)' "$f" 2>/dev/null
   done | if [[ "$all" == 1 ]]; then cat; else jq -c 'select(.state == "open")'; fi
 }
 permit_open() { [[ -n "$(permit_rows "$1" 0 | head -n 1)" ]]; } # <task id>
@@ -304,6 +337,7 @@ permit_cmd_ls() {
   permit_rows "$only" "$all" | jq -r --argjson now "$(date +%s)" '
     "\(.id)  \(.task)  \(.state)\(if .state == "open" then " (\(((.expires_epoch - $now) / 60) | floor)m left)" else "" end)  \(.desc)  [\(.rule)]"
     + (if .why != "" then "\n    why: \(.why)" else "" end)
+    + "\n    always would allow: \(.pattern)"
     + (if .answer != null then "\n    answer: \(.answer.answer) by \(.answer.by)\(if (.answer.via // "") != "" then " via \(.answer.via)" else "" end)\(if (.answer.note // "") != "" then ": \(.answer.note)" else "" end)" else "" end)'
 }
 
@@ -350,12 +384,12 @@ permit_cmd_answer() {
     return 0
   fi
   cur="$(cat "$d/$pid.answer.json")"
-  if [[ "$(jq -r '.answer' <<<"$cur")" == expired && "$ans" != deny ]]; then
+  if [[ "$(jq -r '.answer' <<<"$cur")" =~ ^(expired|lapsed)$ && "$ans" != deny ]]; then
     # Answered after the wait ran out: the worker was denied, so this becomes a pre-approval and a
     # word to it (the commander's ruling: a late allow is not lost).
     permit_write_once "$d/$pid.late.json" "$rec" || die "$pid was already answered late: $(jq -r '"\(.answer) by \(.by) at \(.at)"' "$d/$pid.late.json")"
     if [[ "$ans" == always ]]; then permit_always_add "$id" "$card" "$by"; else permit_preapprove "$id" "$card"; fi
-    permit_log "$id" "$word (late, after it expired) $who: $desc"
+    permit_log "$id" "$word (late, after it $(jq -r '.answer' <<<"$cur")) $who: $desc"
     permit_tell_worker "$id" "$ans" "$card" "$note"
     echo "$word (late): $desc; the worker is told to run it again"
     return 0

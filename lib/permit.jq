@@ -65,7 +65,7 @@ def strip_heredocs:
     end)
   | .out | join("\n");
 
-def tokens: [scan("(?:\"(?:[^\"\\\\]|\\\\.)*\"|'[^']*'|\\$\\((?:[^()]|\\([^()]*\\))*\\)|[^[:space:];&|(){}`\"'$]+|\\$)+|[;&|(){}`\n]+")];
+def tokens: [scan("(?:\"(?:[^\"\\\\]|\\\\.)*\"|'[^']*'|\\$\\((?:[^()]|\\([^()]*\\))*\\)|\\$\\{[^{}]*\\}|[^[:space:];&|(){}`\"'$]+|\\$)+|[;&|(){}`\n]+")];
 def is_sep: test("^[;&|(){}`\n]+$");
 def unq: gsub("[\"']"; "");
 def subs: [scan("\\$\\(((?:[^()]|\\([^()]*\\))*)\\)") | .[0]] + [scan("`([^`]*)`") | .[0]];
@@ -91,9 +91,18 @@ def segments($depth):
        if ($x | is_sep) then (if (.cur | length) > 0 then .segs += [.cur] | .cur = [] else . end) else .cur += [$x] end)
      | .segs + (if (.cur | length) > 0 then [.cur] else [] end))
   | [ .[] | . as $toks
-      | ({w: ($toks | map(select(is_redirect | not) | unq)), env: [], sudo: false, xargs: false} | strip_wrappers
-         | select((.w | length) > 0)
-         | {env, sudo, xargs, path: .w[0], head: (.w[0] | split("/") | last), args: .w[1:]}) as $s
+      # Redirects come from unquoted tokens only: an arrow inside quoted text is not one.
+      | (reduce range(0; $toks | length) as $i ({w: [], r: [], skip: false};
+           if .skip then .skip = false
+           elif ($toks[$i] | test("^[0-9]*>>?$")) then .r += [($toks[$i + 1] // "") | unq] | .skip = true
+           elif ($toks[$i] | test("^[0-9]*>>?[^>]")) then .r += [$toks[$i] | sub("^[0-9]*>>?"; "") | unq]
+           elif ($toks[$i] | test("^[0-9]*<+$")) then .skip = true
+           elif ($toks[$i] | test("^[0-9]*<[^<]")) then .
+           else .w += [$toks[$i] | unq] end)) as $parts
+      | ({w: $parts.w, env: [], sudo: false, xargs: false} | strip_wrappers
+         | select((.w | length) > 0 or (.env | length) > 0)
+         | {env, sudo, xargs, path: (.w[0] // ""), head: ((.w[0] // "") | split("/") | last // ""), args: .w[1:],
+            redirs: [$parts.r[] | select(. != "" and (startswith("&") | not))]}) as $s
       | $s,
         (if $depth < 3 then
            ($toks[] | subs[] | segments($depth + 1)[]),
@@ -105,10 +114,8 @@ def segments($depth):
          else empty end) ];
 def segments: segments(0);
 
-# Redirect targets: ">file", ">>file", or ">" then the file.
-def redirect_targets:
-  [strip_heredocs | fdredirs | scan("(?:^|[^0-9<>&])[0-9]*>>?[[:space:]]*([^[:space:];&|<>()]+)") | .[0] | unq]
-  | map(select(. != "" and (startswith("&") | not)));
+# Redirect targets: ">file", ">>file", or ">" then the file, of every command of a line.
+def redirect_targets: [segments[] | .redirs[]?];
 
 # The words of a command that name paths: absolute, ~, ./ ../ or with a slash (not a URL, a flag
 # or user@host:), and --opt=<path> values.
@@ -132,17 +139,22 @@ def urls: [.args[] | select(test("^[a-z]+://") or is_local_url)];
 def prod_word: test("(^|[^A-Za-z0-9])(prod|production|prd)([^A-Za-z0-9]|$)"; "i");
 def secret_text:
   (gsub("\\.env\\.(example|sample|template|dist|defaults)"; "") | test("(^|[/[:space:]=\"'])\\.env(\\.[A-Za-z0-9_-]+)?($|[[:space:]\"'/;|&)])"))
-  or test("\\.ssh/|(^|[/[:space:]])id_(rsa|ed25519|ecdsa|dsa)([^A-Za-z0-9]|$)|\\.aws/(credentials|config)|\\.config/gcloud|\\.netrc|\\.npmrc|\\.pypirc|\\.docker/config\\.json|\\.kube/config|credentials\\.json|service[-_]?account[^[:space:]]*\\.json|\\.(pem|p12|pfx)([^A-Za-z0-9]|$)|[Kk]eychain");
+  or test("\\.ssh/|(^|[/[:space:]])id_(rsa|ed25519|ecdsa|dsa)([^A-Za-z0-9]|$)|\\.aws/(credentials|config)|\\.config/gcloud|\\.netrc|\\.npmrc|\\.pypirc|\\.docker/config\\.json|\\.kube/config|credentials\\.json|service[-_]?account[^[:space:]]*\\.json|\\.(pem|p12|pfx)([^A-Za-z0-9]|$)|\\.keychain(-db)?([^A-Za-z0-9]|$)");
 def flags_text: test("launch[-_ ]?darkly|ldcli"; "i");
 def money_text: test("sk_live_|rk_live_|api\\.stripe\\.com|dashboard\\.stripe\\.com"; "i");
 
-def infra_heads: ["kubectl","helm","terraform","tofu","pulumi","gcloud","gsutil","bq","az","aws","doctl","flyctl","fly","heroku","vercel","netlify","psql","mysql","sqlcmd","pg_dump","pg_restore","redis-cli","mongosh","mongo","ssh","scp","rsync","sftp","curl","wget","http","https","xh","gh","docker","argocd","kustomize","ansible","ansible-playbook","firebase","wrangler","railway"];
-def cloud_mutation: test("^(create|delete|update|set|add|remove|deploy|assign|grant|revoke|patch|put|start|stop|restart|swap|import|attach|detach|rotate|enable|disable|set-iam-policy|add-iam-policy-binding|remove-iam-policy-binding|assign-roles|reset|rm|cp|mv|sync|invoke|publish|ssh|scp|apply|destroy|up|scale|resize|upgrade|rollback|purge|terminate|reboot|modify|tag|untag|execute|exec|run)$");
+def infra_heads: ["kubectl","helm","terraform","tofu","pulumi","gcloud","gsutil","bq","az","aws","doctl","flyctl","fly","heroku","vercel","netlify","psql","mysql","sqlcmd","pg_dump","pg_restore","redis-cli","mongosh","mongo","ssh","scp","rsync","sftp","curl","wget","http","https","xh","docker","argocd","kustomize","ansible","ansible-playbook","firebase","wrangler","railway"];
+def cloud_mutation: test("^(create|delete|update|set|add|remove|deploy|assign|grant|revoke|patch|put|start|stop|restart|swap|import|attach|detach|rotate|enable|disable|set-iam-policy|add-iam-policy-binding|remove-iam-policy-binding|assign-roles|reset|rm|cp|mv|sync|publish|ssh|scp|apply|destroy|up|scale|resize|upgrade|rollback|purge|terminate|reboot|modify|tag|untag|execute|exec|run)$");
 def publish_verbs: "^(publish|unpublish|deprecate|dist-tag|owner|access|login|adduser|logout|token|team|org|star)$";
 
 # Each commander match of one command, as {class, kind, seg}.
 def seg_classes:
   . as $s | (.args | join(" ")) as $line | .head as $h | (.args[0] // "") as $a0 | (.args[1] // "") as $a1
+  # the words that name things (a quoted phrase with spaces is text, not a target)
+  | ([.args[] | select(test("[[:space:]]") | not)] | join(" ")) as $names
+  # the subcommand words, up to the first flag
+  | ([.args[] | select(test("[[:space:]]") | not)]
+     | reduce .[] as $w ({v: [], stop: false}; if .stop or ($w | startswith("-")) then .stop = true else .v += [$w] end) | .v) as $verbs
   | [
       (if .sudo then {class: "elsewhere", kind: "sudo"} else empty end),
       (if $h == "git" then (git_sub as $g
@@ -179,10 +191,13 @@ def seg_classes:
       (if ($h | test("^(ssh|scp|sftp|mosh|telnet|nc|ncat|socat)$")) then {class: "elsewhere", kind: "another machine (\($h))"}
        elif $h == "rsync" and ($s.args | any(test("^[^/[:space:]]+:") and (test("://") | not))) then {class: "elsewhere", kind: "another machine (rsync)"}
        else empty end),
-      (if (infra_heads | index($h)) and (($line | prod_word) or ($s.env | any(prod_word))) then {class: "production", kind: "\($h) against production"} else empty end),
+      (if (infra_heads | index($h)) and (($names | prod_word) or ($s.env | any(prod_word))) then {class: "production", kind: "\($h) against production"} else empty end),
       (if ($h | test("^(kubectl|helm|terraform|tofu|pulumi|argocd|ansible)$")) and ($a0 | test("^(apply|create|delete|edit|patch|replace|scale|rollout|set|label|annotate|drain|cordon|uncordon|taint|untaint|exec|cp|install|upgrade|uninstall|rollback|destroy|import|state|force-unlock|up|refresh|stack|config|sync|run|app)$")) or $h == "ansible-playbook"
        then {class: "production", kind: "\($h) \($a0)"} else empty end),
-      (if ($h | test("^(gcloud|az|aws|gsutil|doctl)$")) and (.args | any(cloud_mutation)) or ($h == "bq" and ($a0 | test("^(query|load|rm|mk|update|insert|cp)$")))
+      (if $h == "az" and (($verbs[0] // "") | test("^(repos|boards|pipelines|devops|artifacts)$")) and (($verbs | any(cloud_mutation)) or (($verbs | index("invoke")) and ($line | test("--http-method[[:space:]=]*(POST|PUT|PATCH|DELETE)"; "i"))))
+       then {class: "outward", kind: "az \($verbs[0:3] | join(" "))"}
+       elif ($h | test("^(gcloud|az|aws|gsutil|doctl)$")) and (($verbs | any(cloud_mutation)) or (($verbs | index("invoke")) and ($line | test("--http-method[[:space:]=]*(POST|PUT|PATCH|DELETE)"; "i"))))
+          or ($h == "bq" and ($a0 | test("^(query|load|rm|mk|update|insert|cp)$")))
        then {class: "production", kind: "\($h) change"} else empty end),
       (if ($h | test("^(psql|mysql|sqlcmd|pg_dump|pg_restore|redis-cli|mongosh|mongo)$")) and ($line | test("(^|[[:space:]])(-h|-H|-S|--host|--uri)([[:space:]=]|$)|://|@")) and ($line | test("localhost|127\\.0\\.0\\.1|::1|0\\.0\\.0\\.0|/tmp/|\\.s\\.PGSQL") | not)
        then {class: "production", kind: "\($h) on a remote host"} else empty end),
@@ -195,9 +210,9 @@ def seg_classes:
     ]
   | map(. + {seg: $s});
 
-def text_classes($t):
+def text_classes($t; $u): # <names and paths> <URLs and command names>
   [ (if $t | secret_text then {class: "secrets", kind: "a secret's path"} else empty end),
-    (if $t | flags_text then {class: "flags", kind: "the feature-flag service"} else empty end),
+    (if $u | flags_text then {class: "flags", kind: "the feature-flag service"} else empty end),
     (if $t | money_text then {class: "money", kind: "Stripe"} else empty end) ];
 
 def file_tools: ["Write","Edit","MultiEdit","NotebookEdit","Read","Glob","Grep","LS"];
@@ -226,7 +241,7 @@ def gh_target_ok($b; $cur): (.args[2:] | positionals | first // "") as $t | no_r
 def push_ok($b; $cur):
   .g.sargs as $a
   | [$a[] | select(startswith("-"))] as $flags | [$a[] | select(startswith("-") | not)] as $pos
-  | $b != ""
+  | $b != "" and ((.seg.args[0] // "") == "push") # nothing before the subcommand: no -C, -c, --git-dir
     and ($flags | all(test("^(-u|--set-upstream|-q|--quiet|-v|--verbose|--porcelain|-n|--dry-run|--no-verify|--progress)$")))
     and (($pos | length) <= 2) and (($pos[0] // "origin") | test("^[A-Za-z0-9._-]+$"))
     and (if ($pos | length) < 2 then $cur == $b
@@ -275,29 +290,50 @@ def seg_readonly:
 def rw_heads: ["mkdir","touch","cp","mv","rm","rmdir","ln","chmod","tee","tar","zip","unzip","gzip","gunzip","bzip2","xz","zcat","patch","mktemp","sed","awk","gawk","base64","sqlite3","kill","git","node","npx","bunx","bun","npm","pnpm","yarn","deno","tsx","ts-node","tsc","python","python3","pip","pip3","uv","uvx","poetry","pytest","ruby","bundle","rake","go","cargo","rustc","make","cmake","ninja","bats","shellcheck","shfmt","eslint","prettier","vitest","jest","playwright","dotnet","java","javac","mvn","gradle","swift","perl","curl","wget","open","pbcopy","pbpaste","yes","envsubst"];
 def mutating: ["rm","mv","cp","ln","chmod","tee","touch","mkdir","rmdir","patch","sed","perl"];
 
+# $VAR and ${VAR} replaced by the values a line assigned before (S=/tmp/x; cat $S/a), $HOME and
+# $PWD; what is left with a $ in it is not trusted.
+def expand_vars($v): reduce ($v | keys[]) as $k (.; if $v[$k] == null then . else gsub("\\$\\{?" + $k + "\\}?(?![A-Za-z0-9_])"; $v[$k]) end);
+def assign($v; $kv):
+  ($kv | capture("^(?<k>[A-Za-z_][A-Za-z0-9_]*)=(?<v>.*)$")) as $a
+  | if ($a.v | test("`|\\$\\(")) then .[$a.k] = null else .[$a.k] = ($a.v | expand_vars($v)) end;
+
 def bash_local($R):
   (work_roots($R)) as $wr
   | (.input.command // "") as $cmd
   | ($cmd | segments) as $segs
-  | ($cmd | redirect_targets) as $redir
   | ($R.cwd | under_any($wr)) and ($segs | length) > 0
-    and ($redir | all((test("[$`]") | not) and (resolve($R.cwd; $R.user_home) | under_any($wr + dev_roots))))
-    and (reduce $segs[] as $s ({cwd: $R.cwd, ok: true};
-      if (.ok | not) then .
+    and (reduce $segs[] as $s ({cwd: $R.cwd, ok: true, v: {HOME: $R.user_home}};
+      .v.PWD = .cwd
+      # assignments: VAR=value on its own (not a VAR=value prefix, which its own words do not see),
+      # or after export
+      | reduce (($s.env[]? | select($s.head == "")), (if $s.head == "export" then $s.args[] | select(test("^[A-Za-z_][A-Za-z0-9_]*=")) else empty end)) as $kv (.; .v = (.v | assign(.; $kv)))
+      | (.v) as $vars | (.cwd) as $c0
+      # its redirects, with the line's variables
+      | if (.ok | not) then .
+        elif ($s.redirs | any(expand_vars($vars) | (test("[$`]")) or (resolve($c0; $R.user_home) | under_any($wr + dev_roots) | not))) then .ok = false
+        elif $s.head == "" or $s.head == "export" then .
+        else
+          ($s | .path |= expand_vars($vars) | .args |= map(expand_vars($vars))) as $s
+          | if false then .
       elif ($s.head | IN("cd", "pushd")) then
         ($s.args | map(select(startswith("-") | not)) | first // "~") as $d | .cwd as $c
         | if ($d | test("[$`]")) or $d == "-" then .ok = false
           else ($d | resolve($c; $R.user_home)) as $n | if ($n | under_any($wr)) then .cwd = $n else .ok = false end end
       elif ($s.head == "popd") or ($s.path | test("[$`]")) then .ok = false
       elif ($s | seg_readonly) then .
-      elif (rw_heads | index($s.head)) == null then .ok = false
+      # A command that changes things, given a word the line cannot resolve ($X, $(...)): unknown.
+      elif ($s.args | any(test("[$`]") and (test("[[:space:]]") | not))) then .ok = false
+      # A script or binary inside the work roots (scripts/check.sh, ./gradlew, bin/tool): the
+      # worktree's own code, like `node script.js`; its path arguments are still checked below.
+      elif (.cwd as $c | ($s.path | test("/")) and ($s.path | resolve($c; $R.user_home) | under_any($wr)) and ($R.worktree != "")) | not and (rw_heads | index($s.head)) == null then .ok = false
       elif $s.xargs and (mutating | index($s.head)) then .ok = false
       elif $s.head == "git" and ($s | git_sub | .sub | test("^(push|remote|config|send-email|request-pull|credential|filter-branch|filter-repo|lfs|daemon|svn|p4)$")) then .ok = false
       elif ($s.head | test("^(npm|pnpm|yarn|bun)$")) and (($s.args[0] // "") | test(publish_verbs)) then .ok = false
       elif ($s.head | IN("curl", "wget")) and (($s | urls) as $u | ($u | length) == 0 or ($u | all(is_local_url) | not)) then .ok = false
       elif $s.head == "open" and ($s.args | all(startswith("-") or is_local_url) | not) then .ok = false
       elif (.cwd as $c | $s | path_args | all((test("[$`]") | not) and (resolve($c; $R.user_home) | under_any($wr + dev_roots)))) | not then .ok = false
-      else . end) | .ok);
+      else . end
+        end) | .ok);
 
 # ---------------------------------------------------------------- the decision
 
@@ -308,21 +344,34 @@ def decide:
   | ($q | tool_paths($R)) as $paths
   | (if $tool == "Bash" then ($in.command // "") else "" end) as $cmd
   | (if $tool == "Bash" then ($cmd | segments) else [] end) as $segs
-  | (if $tool == "Bash" then $cmd
+  # What the text checks (secrets, flags, money) read: for Bash the commands, their words and
+  # URLs, never quoted phrases or heredoc bodies (a commit message, a script's text).
+  | (if $tool == "Bash" then [$segs[] | .path, (.args[] | select(test("[[:space:]]") | not)), .redirs[]] | join(" ")
      elif (file_tools | index($tool)) then $paths | join(" ")
      elif ($tool | startswith("mcp__")) then ($in | tostring)
      elif ($tool | IN("WebFetch", "WebSearch")) then ($in.url // $in.query // "" | tostring)
      else "" end) as $text
-  | ($tool == "Bash" and ($cmd | test(">|(^|[^A-Za-z0-9_-])(tee|cp|mv|rm|ln|chmod|truncate|dd|install|python3?|node|ruby|patch|jq)([^A-Za-z0-9_-]|$)|(^|[^A-Za-z0-9_-])sed[^|;&]*[[:space:]]-[a-zA-Z]*i|(^|[^A-Za-z0-9_-])perl[^|;&]*[[:space:]]-[a-z]*[pi]"))) as $writes
-  | (if $tool == "Bash" then ($cmd | redirect_targets | map(select(test("[$`]") | not) | resolve($R.cwd; $R.user_home))) else [] end) as $redir
-  | ($redir + [$segs[] | path_args[] | select(test("[$`]") | not) | resolve($R.cwd; $R.user_home)]) as $bpaths
+  # The flag service is reached by its CLI, its API's URL or an MCP tool, not by a path or a search
+  # pattern that names it.
+  | (if $tool == "Bash" then [$segs[] | .head, (urls[])] | join(" ")
+     elif ($tool | startswith("mcp__")) or ($tool | IN("WebFetch", "WebSearch")) then $text
+     else "" end) as $utext
+  | ([$segs[] | .redirs[] | select(test("[$`]") | not) | resolve($R.cwd; $R.user_home)]) as $redir
+  # What a Bash line writes: its redirects, and the paths of commands that change files.
+  | ($redir + [$segs[] | select((.head | IN("rm", "mv", "cp", "ln", "chmod", "chown", "tee", "touch", "mkdir", "rmdir", "patch", "truncate", "dd", "install", "rsync", "tar", "unzip"))
+                         or (.head == "sed" and (.args | any(test("^-[a-zA-Z]*i|^--in-place"))))
+                         or (.head == "perl" and (.args | any(test("^-[a-zA-Z]*i")))))
+                | path_args[], (.args[] | select((startswith("-") or test("[[:space:]/]")) | not) | select(test("[$`]") | not))
+                | select(test("[$`]") | not) | resolve($R.cwd; $R.user_home)]) as $wpaths
+  # A script that names a control file (python3 - <<EOF ... meta.json): the commander's look.
+  | ($tool == "Bash" and ($segs | any(.head | test("^(python3?|node|ruby|perl|bash|sh|zsh|jq)$")))) as $interp
   # 1. guards
   | if ($R.permits // "") != "" and (($cmd | contains($R.permits)) or ($paths | any(under($R.permits))) or (($tool | startswith("mcp__")) and ($text | contains($R.permits))))
       then {verdict: "deny", rule: "guard:store", why: "touches chartroom's permit store"}
     elif $segs | any(.args as $a | ([.head] + $a) as $w | any(range(0; ($w | length) - 1); $w[.] == "permit" and ($w[. + 1] | IN("answer", "grant", "revoke"))))
       then {verdict: "deny", rule: "guard:self-answer", why: "answers or grants a chartroom permission"}
     elif ((write_tools | index($tool)) and ($paths | any(IN(control_files($R)[]))))
-      or ($writes and (control_files($R) | any(. as $f | ($cmd | contains($f)) or ($bpaths | index($f)) != null or ($R.cwd == $R.task_dir and ($cmd | test("(^|[^A-Za-z0-9_.-])" + ($f | split("/") | last | esc) + "([^A-Za-z0-9_.-]|$)"))))))
+      or ($wpaths | any(IN(control_files($R)[])))
       then {verdict: "deny", rule: "guard:controls", why: "rewrites the task's own control files"}
     elif ($tool | IN("AskUserQuestion", "ExitPlanMode")) then {verdict: "none", rule: "question", why: "a question, not a permission"}
     elif $q.event == "denied" then {verdict: "none", rule: "denied", why: "recorded"}
@@ -330,9 +379,12 @@ def decide:
     elif $q.pre != null then {verdict: "allow", rule: "preapproved:\($q.pre)", why: "the commander allowed exactly this call"}
     else
       ([$q.always[]? | select(.tool == $tool) | select(
+          # A prefix or glob pattern covers one plain command only: never a line that chains,
+          # substitutes or redirects another command onto it (`npm test && git push ...`).
           if $tool == "Bash" then (.pattern as $p
-            | if ($p | endswith(":*")) then ($cmd | startswith($p[:-2]))
-              elif ($p | contains("*")) then ($cmd | test("^" + ($p | split("*") | map(esc) | join(".*")) + "$"))
+            | ($cmd | test("[;&|`\n<>]|\\$\\(") | not) as $plain
+            | if ($p | endswith(":*")) then $plain and ($segs | length) == 1 and ($cmd == $p[:-2] or ($cmd | startswith($p[:-2] + " ")))
+              elif ($p | contains("*")) then $plain and ($segs | length) == 1 and ($cmd | test("^" + ($p | split("*") | map(esc) | join(".*")) + "$"))
               else $cmd == $p end)
           elif (file_tools | index($tool)) then ($paths | index(.pattern)) != null
           else .pattern == "sig:\($q.sig)" end)] | first) as $a
@@ -341,10 +393,11 @@ def decide:
         else
           # 4. commander classes
           ( [$segs[] | seg_classes[]]
-            + text_classes($text)
+            + text_classes($text; $utext)
             + (if ($tool | startswith("mcp__")) then ($q | mcp_classes) else [] end)
             + (if (write_tools | index($tool)) and ($paths | any(under_any(control_tree($R)))) then [{class: "controls", kind: "the worker's own settings or hooks"}] else [] end)
-            + (if $writes and ((control_tree($R) | any(. as $c | $cmd | contains($c))) or ($bpaths | any(under_any(control_tree($R))))) then [{class: "controls", kind: "the worker's own settings or hooks"}] else [] end)
+            + (if ($wpaths | any(under_any(control_tree($R)))) then [{class: "controls", kind: "the worker's own settings or hooks"}] else [] end)
+            + (if $interp and (control_files($R) | any(. as $f | $cmd | contains($f))) and ($cmd | test(">|write|dump|open\\([^)]*[\"']w")) then [{class: "controls", kind: "a script that may rewrite the task's control files"}] else [] end)
             + (if (write_tools | index($tool)) and ($paths | any(under_any(work_roots($R)) | not)) then [{class: "elsewhere", kind: "a file outside the worktree"}] else [] end)
             + (if ($redir | any(under_any(work_roots($R) + dev_roots) | not)) then [{class: "elsewhere", kind: "a write outside the worktree"}] else [] end)
           ) as $m
