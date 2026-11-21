@@ -291,6 +291,7 @@ usage: chartroom store doctor [--json]   the database, its python and sqlite, th
        chartroom store legacy [--json]  what this home still keeps as files from before the store
        chartroom store events <id>      a task's event lines, from wherever it lives
        chartroom store meta <id>        a task's record (its meta.json), from wherever it lives
+       chartroom store mail             this home's mailbox records (relays, told words, acks), file then store
 EOF
 }
 
@@ -318,6 +319,9 @@ cmd_store() {
       [[ $# -eq 1 ]] || die "usage: chartroom store events <id>"
       task_exists "$1" || die "no such task: $1"
       task_events "$1" ;;
+    mail)
+      [[ $# -eq 0 ]] || die "usage: chartroom store mail"
+      mailbox_lines ;;
     meta)
       [[ $# -eq 1 ]] || die "usage: chartroom store meta <id>"
       meta_path_fresh "$1"; [[ -n "$META_PATH" ]] || die "no such task: $1"

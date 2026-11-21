@@ -97,6 +97,9 @@ log_of() {
   if [[ -f "$CHARTROOM_HOME/tasks/$1/meta.json" ]]; then printf '%s/tasks/%s/events.log' "$CHARTROOM_HOME" "$1"
   else printf '%s/tasks/%s/events.spool' "$CHARTROOM_HOME" "$1"; fi
 }
+# A home's mailbox records (relays, told words, acks), wherever they live: [home].
+mail_of() { CHARTROOM_HOME="${1:-$CHARTROOM_HOME}" "$CHARTROOM" store mail 3>&-; }
+
 # Change a task's record as a test fakes one (a dispatch time, a pid), wherever it lives: <jq filter>.
 set_meta() { # <id> <jq filter>
   local f="$CHARTROOM_HOME/tasks/$1/meta.json" doc

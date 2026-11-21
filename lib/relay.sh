@@ -13,12 +13,63 @@
 #   {"schema":1,"kind":"ack","id":"rl-3f2a","at":"<UTC>"}
 # A relay is data for the receiving XO to weigh, never an instruction to chartroom: nothing runs
 # because one arrived. Ids are rl-<hex> (rulings own r-<hex>).
+#
+# In a home with the store on (CHARTROOM_STORE=sqlite), its mailbox is the store's instead
+# (lib/store.py mail): a record is born where the receiving home's own switch says, in the
+# database its .home-id names, and its sent copies are store docs (kind sent). Every reader reads
+# the file from before and the store's records, rendered per process as the same text; the
+# watch reads that rendering under the cursor key @mail, beside the file's @relays.
 
 CR_RELAY_MAX=2000        # bytes of text: one short message
 CR_RELAY_RECORD_MAX=4000 # bytes of the record as written: one append, one write()
 CR_RELAY_ID_RE='^rl-[0-9a-f]{4,}$'
 
 relay_dir() { printf '%s/relays' "${1:-$CR_HOME}"; }
+mailbox_file() { printf '%s/inbox.ndjson' "$(relay_dir "${1:-}")"; } # [home]: the file from before the store
+
+# Whether the home at <path> keeps its new records in the store (its own switch, as it reads it).
+home_store_on() { # <home path>
+  [[ "$1" == "$CR_HOME" ]] && { store_on; return; }
+  ( CR_HOME="$1"; load_home_config >/dev/null 2>&1; store_settings; store_on )
+}
+
+# The store's mailbox of this home, rendered for this process: prints its path, or nothing when
+# the home has nothing in the store. fresh: read the store again (a poll, after a write).
+mailbox_store_file() { # [fresh]
+  store_dir || return 0
+  local f="$STORE_D/mail.ndjson"
+  if [[ "${1:-}" == fresh || ! -f "$f" ]]; then
+    store_py mail-render "${STORE_HOME_ARGS[@]}" --out "$f" || die "could not read the store (${STORE_DB:-$CR_DB})"
+  fi
+  printf '%s' "$f"
+}
+
+# Every record line of this home's mailbox: the file's, then the store's.
+mailbox_lines() {
+  local f s; f="$(mailbox_file)"
+  [[ ! -f "$f" ]] || cat "$f"
+  s="$(mailbox_store_file)" || exit 1
+  [[ -z "$s" ]] || cat "$s"
+}
+mailbox_any() { local s; [[ -f "$(mailbox_file)" ]] && return 0; s="$(mailbox_store_file)" || exit 1; [[ -s "$s" ]]; }
+
+# One record into <home>'s mailbox: its store when its switch is on, else its relays/inbox.ndjson.
+mailbox_put() { # <home path> <record>
+  if home_store_on "$1"; then
+    ( CR_HOME="$1"; STORE_UID_FOR=""; store_home_ensure; store_py mail-add "${STORE_HOME_ARGS[@]}" --json "$2" && store_stamp ) || exit 1
+    store_reset
+  else
+    mkdir -p "$(relay_dir "$1")"
+    mailbox_append "$(mailbox_file "$1")" "$2"
+  fi
+}
+
+# This home's copies of what it sent: relays/outbox.ndjson, then its store docs (kind sent).
+outbox_lines() {
+  local f; f="$(relay_dir)/outbox.ndjson"
+  [[ ! -f "$f" ]] || cat "$f"
+  store_doc_list sent
+}
 
 # One record appended to a mailbox file under its lock (<file>.lock, a directory holding the
 # writer's pid), so two writers never interleave: a relay from another home and the commander's
@@ -42,19 +93,19 @@ mailbox_append() { # <file> <record>
 
 # The valid records of one mailbox file, one JSON object per line, each with its direction; a
 # line that is not a record (hand-edited, cut short) is skipped.
-relay_records() { # <file> <in|out>
-  [[ -f "$1" ]] || return 0
-  jq -R -c --arg dir "$2" --arg re "$CR_RELAY_ID_RE" '
-    fromjson? | select(type == "object" and (.id | type) == "string" and (.id | test($re))) | . + {direction: $dir}' "$1"
+relay_records() { # <in|out>: the lines on stdin
+  jq -R -c --arg dir "$1" --arg re "$CR_RELAY_ID_RE" '
+    fromjson? | select(type == "object" and (.id | type) == "string" and (.id | test($re))) | . + {direction: $dir}'
 }
 
 # This home's relays, oldest first: the open ones received (no ack yet), or with --all every one
 # received (acked or not) and every one sent. Each is {id, direction, from, to, at, text, re,
 # project, acked, acked_at}; text has its control characters other than newline and tab removed.
 relays_json() { # [--all]
-  local all=false d; d="$(relay_dir)"
+  local all=false recs
   [[ "${1:-}" == --all ]] && all=true
-  { relay_records "$d/inbox.ndjson" in; relay_records "$d/outbox.ndjson" out; } | jq -s -c --argjson all "$all" '
+  recs="$({ mailbox_lines | relay_records in; outbox_lines | relay_records out; })" || exit 1
+  jq -s -c --argjson all "$all" <<<"$recs" '
     (map(select(.direction == "in" and .kind == "ack")) | map({key: .id, value: (.at // "")}) | from_entries) as $acks
     | [.[] | select(.kind == "relay" and (.from | type) == "string" and (.text | type) == "string")
        | {id, direction, from, to: (.to // null), at: (.at // null),
@@ -78,7 +129,7 @@ RELAY_LINE_JQ='def relay_line: "- [\(.id)] "
 # For status: how many relays wait on this XO, or nothing.
 relay_line() {
   local n
-  [[ -f "$(relay_dir)/inbox.ndjson" ]] || return 0
+  mailbox_any || return 0
   n="$(relays_json | jq length)"
   [[ "$n" -gt 0 ]] || return 0
   printf 'relays: %s open from other homes (chartroom relay list)\n' "$n"
@@ -108,10 +159,10 @@ EOF
   return 1
 }
 
-# A relay id not used in any of the given mailbox files.
-relay_new_id() { # <file>...
-  local id f used=""
-  for f in "$@"; do [[ -f "$f" ]] && used+="$(jq -R -r 'fromjson? | .id? // empty' "$f" 2>/dev/null | tr '\n' ' ')"; done
+# A relay id not used in the target's mailbox or this home's (received or sent).
+relay_new_id() { # <target home path>
+  local id used
+  used="$({ (STORE_UID_FOR=""; CR_HOME="$1"; mailbox_lines); mailbox_lines; outbox_lines; } | jq -R -r 'fromjson? | .id? // empty' 2>/dev/null | tr '\n' ' ')" || exit 1
   while true; do
     id="rl-$(rand_hex4)"
     [[ " $used " == *" $id "* ]] || { printf '%s' "$id"; return 0; }
@@ -165,28 +216,29 @@ relay_send() {
     die "relay refused: the message looks like it holds $kind. A relay never carries a secret; say where it is kept instead (nothing was sent)"
   fi
 
-  local mine theirs; mine="$(relay_dir)"; theirs="$(relay_dir "$path")"
+  local mine; mine="$(relay_dir)"
   if [[ -n "$re" ]]; then
     re="$(tr '[:upper:]' '[:lower:]' <<<"$re" | sed -E 's/^\[//; s/\]$//')"
     [[ "$re" =~ $CR_RELAY_ID_RE ]] || die "relay: --re takes a relay id (rl-xxxx), not '$re'"
-    { relay_records "$mine/inbox.ndjson" in; relay_records "$mine/outbox.ndjson" out; } |
+    { mailbox_lines | relay_records in; outbox_lines | relay_records out; } |
       jq -e -s --arg id "$re" --arg h "$to" 'any(.[]; .kind == "relay" and .id == $id and ((.direction == "in" and .from == $h) or (.direction == "out" and .to == $h)))' >/dev/null ||
       die "relay: no relay $re between this home and $to (chartroom relay list --all)"
   fi
 
   local id rec
-  id="$(relay_new_id "$theirs/inbox.ndjson" "$mine/inbox.ndjson" "$mine/outbox.ndjson")"
+  id="$(relay_new_id "$path")"
   rec="$(jq -n -c --arg id "$id" --arg from "$from" --arg to "$to" --arg at "$(now)" --arg text "$text" --arg re "$re" --arg project "$project" \
     '{schema: 1, kind: "relay", id: $id, from: $from, to: $to, at: $at, text: $text,
       re: (if $re == "" then null else $re end), project: (if $project == "" then null else $project end)}')"
   local rbytes; rbytes="$(printf '%s' "$rec" | wc -c | tr -d ' ')"
   (( rbytes <= CR_RELAY_RECORD_MAX )) || die "relay: the message takes $rbytes bytes once written (quotes, backslashes and line breaks count twice); a relay record holds at most $CR_RELAY_RECORD_MAX. Shorten it, or put it in a file $to's XO can read and relay its path"
   # The relay itself, the one write in the target home; then this home's own copy.
-  mkdir -p "$theirs"
-  mailbox_append "$theirs/inbox.ndjson" "$rec"
+  mailbox_put "$path" "$rec"
   stamp_changed "$path" # its board shows the relay
   bell_ring "$path" watch # its watches wake now (a dead one's FIFO is that home's to remove)
-  if ! { mkdir -p "$mine" && printf '%s\n' "$rec" >>"$mine/outbox.ndjson"; }; then
+  if store_on; then
+    ( store_doc_put sent "$id" "$rec" ) || warn "relayed $id to $to, but could not keep a copy in the store"
+  elif ! { mkdir -p "$mine" && printf '%s\n' "$rec" >>"$mine/outbox.ndjson"; }; then
     warn "relayed $id to $to, but could not keep a copy in $mine/outbox.ndjson"
   fi
   printf '%s\n' "$id"
@@ -195,7 +247,7 @@ relay_send() {
 # relay ack <id>...: marks relays received here as handled (an ack record in this home's mailbox).
 relay_ack() {
   [[ $# -ge 1 ]] || die "usage: chartroom relay ack <rl-id>..."
-  local f q rows; f="$(relay_dir)/inbox.ndjson"
+  local q rows
   rows="$(relays_json --all)"
   for q in "$@"; do
     q="$(tr '[:upper:]' '[:lower:]' <<<"$q" | sed -E 's/^\[//; s/\]$//')"
@@ -204,7 +256,7 @@ relay_ack() {
       none) die "relay ack: no relay $q received in this home (chartroom relay list --all)" ;;
       acked) echo "$q was already acked" ;;
       open)
-        mailbox_append "$f" "$(jq -n -c --arg id "$q" --arg at "$(now)" '{schema: 1, kind: "ack", id: $id, at: $at}')" && stamp_changed
+        mailbox_put "$CR_HOME" "$(jq -n -c --arg id "$q" --arg at "$(now)" '{schema: 1, kind: "ack", id: $id, at: $at}')" && stamp_changed
         rows="$(jq -c --arg id "$q" 'map(if .id == $id and .direction == "in" then .acked = true else . end)' <<<"$rows")"
         echo "acked $q" ;;
     esac
@@ -242,23 +294,23 @@ cmd_relay() {
 # next round. A mailbox that shrank (rewritten by hand) is taken from its end, never replayed.
 # The cursor moves by the bytes on disk (counted by od, so a NUL byte a foreign writer left can
 # neither shift it nor reach bash).
-watch_relays() {
-  local f size off upto chunk out
-  f="$(relay_dir)/inbox.ndjson"
+watch_mailbox() { # <file> <cursor key>
+  local f="$1" key="$2" size off upto chunk out acks
   [[ -f "$f" ]] || return 0
-  size=$(($(wc -c <"$f"))); off="${OFF[@relays]:-0}"
-  if (( size < off )); then OFF[@relays]=$size; return 0; fi
+  size=$(($(wc -c <"$f"))); off="${OFF[$key]:-0}"
+  if (( size < off )); then OFF[$key]=$size; return 0; fi
   (( size > off )) || return 0
   # How many of the new bytes run through the last newline.
   upto="$(head -c "$size" "$f" | tail -c +"$((off + 1))" | od -An -v -tu1 | tr -s ' ' '\n' |
     awk 'NF { n++; if ($1 == 10) last = n } END { print last + 0 }')"
   (( upto > 0 )) || return 0
   chunk="$(head -c "$((off + upto))" "$f" | tail -c +"$((off + 1))" | LC_ALL=C tr -d '\000')"
-  out="$(head -c "$size" "$f" | LC_ALL=C tr -d '\000' | jq -R -s -r --arg new "$chunk" --arg re "$CR_RELAY_ID_RE" --arg cm "$CR_TELL_ID_RE" '
+  # (acks from both halves of the mailbox: one written after the switch may ack a file's record)
+  acks="$(mailbox_lines | LC_ALL=C tr -d '\000' | jq -R -s -c '[split("\n")[] | fromjson? | select(type == "object" and .kind == "ack") | .id] | map({key: tostring, value: true}) | from_entries')" || exit 1
+  out="$(jq -n -r --arg new "$chunk" --arg re "$CR_RELAY_ID_RE" --arg cm "$CR_TELL_ID_RE" --argjson acked "$acks" '
     def recs: split("\n")[] | fromjson? | select(type == "object");
     def one: gsub("[[:cntrl:]]+"; " ");
-    ([recs | select(.kind == "ack") | .id] | map({key: tostring, value: true}) | from_entries) as $acked
-    | $new | recs
+    $new | recs
     | select((.id | type) == "string" and ($acked[.id] | not) and (.text | type) == "string")
     | if .kind == "relay" and (.id | test($re)) and (.from | type) == "string" then
         "[relay \(.id)] [from \(.from | one)]"
@@ -272,7 +324,35 @@ watch_relays() {
         + (if (.re | type) == "string" then " [re \(.re | one)]" else "" end)
         + " " + (.text | one)
       else empty end')"
-  OFF[@relays]=$((off + upto))
+  OFF[$key]=$((off + upto))
   if [[ -n "$out" ]]; then printf '%s\n' "$out"; WOKE=1; fi
   return 0
+}
+
+# The watch's round over this home's mailbox: the file from before (@relays) and the store's
+# (@mail), read again from the store. light <since>: only what changed since that file's time.
+watch_relays() { # [light <file>]
+  local f s=""; f="$(mailbox_file)"
+  # (the store's read first, so the acks the file's records are checked against are current; the
+  # home's store id is looked for again, as the first store record of a home gives it one)
+  if { STORE_UID_FOR=""; store_dir; } && [[ "${1:-}" != light || ! "$CR_HOME/$CR_STAMP" -ot "$2" ]]; then s="$(mailbox_store_file fresh)" || exit 1; fi
+  if [[ "${1:-}" != light || ! "$f" -ot "$2" ]]; then watch_mailbox "$f" @relays; fi
+  [[ -z "$s" ]] || watch_mailbox "$s" @mail
+}
+
+# A watch that starts with no cursor: each mailbox from its end. 1 when there is no mailbox.
+watch_mailbox_start() {
+  local f s any=1; f="$(mailbox_file)"
+  if [[ -f "$f" ]]; then any=0; [[ -n "${OFF[@relays]+x}" ]] || OFF[@relays]=$(($(wc -c <"$f"))); fi
+  s="$(mailbox_store_file fresh)" || exit 1
+  if [[ -n "$s" ]]; then any=0; [[ -n "${OFF[@mail]+x}" ]] || OFF[@mail]=$(($(wc -c <"$s"))); fi
+  return "$any"
+}
+
+# A new cursor's mailbox lines: each mailbox at its end.
+mailbox_cursor_lines() {
+  local f s; f="$(mailbox_file)"
+  [[ ! -f "$f" ]] || printf '@relays\t%s\n' "$(($(wc -c <"$f")))"
+  s="$(mailbox_store_file fresh)" || exit 1
+  [[ -z "$s" ]] || printf '@mail\t%s\n' "$(($(wc -c <"$s")))"
 }

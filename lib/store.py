@@ -26,7 +26,12 @@ Tables (PRAGMA user_version 2; each version is a forward-only migration in MIGRA
   focus   (2) the home's focus while the switch is on (lib/focus.sh), one row
   docs    (3) the app's records born in the store, each the JSON doc its file would hold, under
           its own id: (kind, id) -> doc. kind snooze (one per ref, the newest wins), card (an
-          ask the XO posted), answer (one per card: the first insert wins, a second is refused)
+          ask the XO posted), answer (one per card: the first insert wins, a second is refused),
+          sent (a relay this home sent: the copy relays/outbox.ndjson would hold)
+  mail    (3) the home's mailbox while its switch is on: relays from other homes, the
+          commander's words (tell) and acks, each the record relays/inbox.ndjson would hold, in
+          seq order, append-only (an ack is its own row). Rendered as that file's text, so the
+          watch reads it by byte offset as it reads the file (lib/relay.sh).
   compat  (3) min_reader: the oldest schema whose store.py may still use this database. A newer
           store.py whose migrations only add tables leaves it, so an older chartroom keeps
           working beside it; one that changes what is there raises it.
@@ -116,11 +121,20 @@ CREATE TABLE docs (
   at TEXT NOT NULL,
   PRIMARY KEY (hid, kind, id)
 );
+CREATE TABLE mail (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  hid INTEGER NOT NULL REFERENCES homes(hid),
+  id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  doc TEXT NOT NULL,
+  at TEXT NOT NULL
+);
+CREATE INDEX mail_hid ON mail(hid, seq);
 CREATE TABLE compat (min_reader INTEGER NOT NULL);
 INSERT INTO compat (min_reader) VALUES (2);
 """,
 }
-DOC_KINDS = ("snooze", "card", "answer")
+DOC_KINDS = ("snooze", "card", "answer", "sent")
 DOC_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 
 ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
@@ -801,6 +815,40 @@ def doc_list(conn, home, kind, did=None):
         sys.stdout.write(d + "\n")
 
 
+# ------------------------------------------------------------------ mail
+
+
+MAIL_KINDS = ("relay", "commander", "ack")
+MAIL_RECORD_MAX = 65536
+
+
+def mail_add(conn, home, doc):
+    """One record into the home's mailbox (append-only)."""
+    if len(doc.encode("utf-8")) > MAIL_RECORD_MAX:
+        raise Fail("mail: the record is over %d bytes" % MAIL_RECORD_MAX)
+    try:
+        rec = json.loads(doc)
+    except ValueError:
+        raise Fail("mail: not JSON")
+    if not isinstance(rec, dict) or rec.get("kind") not in MAIL_KINDS or not isinstance(rec.get("id"), str) or not DOC_ID_RE.match(rec["id"]):
+        raise Fail("mail: a record with a kind (%s) and an id" % ", ".join(MAIL_KINDS))
+    at = rec.get("at") if isinstance(rec.get("at"), str) else now()
+    with Tx(conn):
+        hid = home.hid(conn, create=True)
+        conn.execute("INSERT INTO mail(hid, id, kind, doc, at) VALUES (?, ?, ?, ?, ?)",
+                     (hid, rec["id"], rec["kind"], json.dumps(rec, separators=(",", ":")), at))
+
+
+def mail_render(conn, home, out):
+    """<out>: the home's mailbox as relays/inbox.ndjson would hold it, one record a line in seq
+    order. The text only grows, so a byte offset into it stays valid (the watch's @mail)."""
+    lines = []
+    hid = home.hid(conn) if conn is not None else None
+    if hid is not None:
+        lines = [d + "\n" for (d,) in conn.execute("SELECT doc FROM mail WHERE hid = ? ORDER BY seq", (hid,))]
+    write_atomic(out, "".join(lines))
+
+
 def inbox_add(conn, home, project, text):
     import random
     try:
@@ -1096,6 +1144,12 @@ def main(argv):
     if cmd == "doc-list":
         doc_check(opts.get("kind", ""), opts.get("id", "x"))
         doc_list(connect(False), home, opts["kind"], opts.get("id"))
+        return 0
+    if cmd == "mail-add":
+        mail_add(connect(True), home, opts.get("json", ""))
+        return 0
+    if cmd == "mail-render":
+        mail_render(connect(False), home, opts["out"])
         return 0
     if cmd == "inbox-add":
         print(inbox_add(connect(True), home, opts.get("project", ""), opts.get("text", "")))

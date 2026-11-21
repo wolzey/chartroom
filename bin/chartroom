@@ -1326,11 +1326,11 @@ WATCH_IVL_MS=3000 WATCH_SLOW_MS=60000 # cmd_watch's two intervals, from the sett
 
 # The --once cursor is created once, at the current end of every log, so history is
 # never replayed; tasks created after that are absent from it and are read from byte 0.
-# The relay mailbox (lib/relay.sh) is kept under @relays, which no task id can be, and each
+# The relay mailbox (lib/relay.sh) is kept under @relays (the store's, under @mail), which no task id can be, and each
 # hc/herdr agent's last state under @state:<id> (watch_baseline).
 ensure_cursor() {
   [[ -f "$CURSOR_FILE" ]] && return 0
-  local d r m id
+  local d m id
   shopt -s nullglob
   task_meta_files; store_render_events open # (a closed task never wakes: its log is not read)
   {
@@ -1341,8 +1341,7 @@ ensure_cursor() {
       events_path "$id"; d="$EVENTS_PATH"
       [[ -f "$d" ]] && printf '%s\t%s\n' "$id" "$(($(wc -c <"$d")))"
     done
-    r="$(relay_dir)/inbox.ndjson"
-    if [[ -f "$r" ]]; then printf '@relays\t%s\n' "$(($(wc -c <"$r")))"; fi
+    mailbox_cursor_lines
   } >"$CURSOR_FILE"
 }
 WOKE=0
@@ -1532,8 +1531,7 @@ cmd_watch() {
     for i in "${!hc_ids[@]}"; do watch_baseline "${hc_ids[$i]}" hc "${hc_unseen[$i]}"; done
   fi
   MC=()
-  f="$(relay_dir)/inbox.ndjson"
-  if [[ $fresh -eq 1 && -f "$f" && -z "${OFF[@relays]+x}" ]]; then OFF[@relays]=$(($(wc -c <"$f"))); watch_unread_tells; fi
+  if [[ $fresh -eq 1 ]] && watch_mailbox_start; then watch_unread_tells; fi
   # a cursor made just now starts at the end of the mailbox too (ensure_cursor)
   if [[ $new_cursor -eq 1 ]]; then watch_unread_tells; fi
   # Between scans the watch waits on its doorbell. A ring, or the light round's timer, scans only
@@ -1623,8 +1621,7 @@ cmd_watch() {
           done <"$STORE_D/.sizes"
         fi
       fi
-      f="$(relay_dir)/inbox.ndjson"
-      [[ "$f" -ot "$BELL_PREV" ]] || watch_relays
+      watch_relays light "$BELL_PREV"
       clock_ms
       for id in "${!WAIT_DUE[@]}"; do (( WAIT_DUE[$id] > NOW_MS )) || watch_overdue "$id"; done
     fi

@@ -11,7 +11,9 @@
 # appends an ack record, as for relays. One record per line:
 #   {"schema":1,"kind":"commander","id":"cm-3f2a","at":"<UTC>","text":"...","via":"app",
 #    "re":"q-1b2c"|null,"project":"shop"|null}
-# relay list never shows these: they are the commander's, not another home's.
+# relay list never shows these: they are the commander's, not another home's. With the home's
+# store on, a told message and its ack are store mail instead (lib/relay.sh: mailbox_put); both
+# halves are read.
 
 CR_TELL_MAX=16000 # bytes of text: a round of answers with notes fits
 CR_TELL_ID_RE='^cm-[0-9a-f]{4,}$'
@@ -23,16 +25,16 @@ tell_usage() { echo "usage: chartroom tell [--re <ref>] [--project P] [--via app
 # This home's told messages, oldest first: the unacked ones, or with --all every one. Each is
 # {id, at, text, via, re, project, acked, acked_at}.
 tells_json() { # [--all]
-  local all=false f; f="$(relay_dir)/inbox.ndjson"
+  local all=false lines
   [[ "${1:-}" == --all ]] && all=true
-  [[ -f "$f" ]] || { echo '[]'; return 0; }
-  jq -R -s -c --argjson all "$all" --arg re "$CR_TELL_ID_RE" '
+  lines="$(mailbox_lines)" || exit 1
+  jq -R -s -c --argjson all "$all" --arg re "$CR_TELL_ID_RE" <<<"$lines" '
     [split("\n")[] | fromjson? | select(type == "object" and (.id | type) == "string")] as $recs
     | ([$recs[] | select(.kind == "ack")] | map({key: .id, value: (.at // "")}) | from_entries) as $acks
     | [$recs[] | select(.kind == "commander" and (.id | test($re)) and (.text | type) == "string")
        | {id, at: (.at // null), text: (.text | gsub("(?![\\n\\t])[[:cntrl:]]"; "")), via: (.via // null),
           re: (.re // null), project: (.project // null), acked: ($acks[.id] != null), acked_at: $acks[.id]}
-       | select($all or (.acked | not))]' "$f"
+       | select($all or (.acked | not))]'
 }
 
 # tell <text>: one commander record appended to this home's mailbox; prints its id.
@@ -62,13 +64,13 @@ tell_send() {
   if kind="$(relay_secret_kind "$text")"; then
     die "tell refused: the message looks like it holds $kind. Say where it is kept instead (nothing was sent)"
   fi
-  local d id; d="$(relay_dir)"
-  mkdir -p "$d"
+  local id used
+  used="$(mailbox_lines)" || exit 1
   while true; do
     id="cm-$(rand_hex4)"
-    grep -q "\"id\":\"$id\"" "$d/inbox.ndjson" 2>/dev/null || break
+    grep -q "\"id\":\"$id\"" <<<"$used" || break
   done
-  mailbox_append "$d/inbox.ndjson" "$(jq -n -c --arg id "$id" --arg at "$(now)" --arg text "$text" --arg via "$via" --arg re "$re" --arg project "$project" \
+  mailbox_put "$CR_HOME" "$(jq -n -c --arg id "$id" --arg at "$(now)" --arg text "$text" --arg via "$via" --arg re "$re" --arg project "$project" \
     '{schema: 1, kind: "commander", id: $id, at: $at, text: $text, via: $via,
       re: (if $re == "" then null else $re end), project: (if $project == "" then null else $project end)}')"
   stamp_changed
@@ -78,7 +80,7 @@ tell_send() {
 
 tell_ack() {
   [[ $# -ge 1 ]] || die "usage: chartroom tell ack <cm-id>..."
-  local f q rows; f="$(relay_dir)/inbox.ndjson"
+  local q rows
   rows="$(tells_json --all)"
   for q in "$@"; do
     q="$(tr '[:upper:]' '[:lower:]' <<<"$q" | sed -E 's/^\[//; s/\]$//')"
@@ -87,7 +89,7 @@ tell_ack() {
       none) die "tell ack: no message $q in this home (chartroom tell list --all)" ;;
       acked) echo "$q was already acked" ;;
       open)
-        mailbox_append "$f" "$(jq -n -c --arg id "$q" --arg at "$(now)" '{schema: 1, kind: "ack", id: $id, at: $at}')" && stamp_changed
+        mailbox_put "$CR_HOME" "$(jq -n -c --arg id "$q" --arg at "$(now)" '{schema: 1, kind: "ack", id: $id, at: $at}')" && stamp_changed
         rows="$(jq -c --arg id "$q" 'map(if .id == $id then .acked = true else . end)' <<<"$rows")"
         echo "acked $q" ;;
     esac
@@ -109,7 +111,7 @@ tell_list() {
 
 # For status: how many told messages the XO has not acked, or nothing.
 tell_line() {
-  [[ -f "$(relay_dir)/inbox.ndjson" ]] || return 0
+  mailbox_any || return 0
   local n; n="$(tells_json | jq length)"
   [[ "$n" -gt 0 ]] || return 0
   printf 'told: %s unread from the commander, from the app (chartroom tell list)\n' "$n"

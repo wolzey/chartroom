@@ -111,7 +111,7 @@ new_remote() { # a task made through the client; prints its id
     export FAKE_SSH_SHELL="$(command -v "$sh")"
     run cr relay other "$hostile"
     [ "$status" -eq 0 ]
-    [ "$(tail -1 "$BH/chartroom/other/relays/inbox.ndjson" | jq -r .text)" = "$hostile" ]
+    [ "$(mail_of "$BH/chartroom/other" | tail -1 | jq -r .text)" = "$hostile" ]
     local id; TITLE="--title -x '\$HOME'" id="$(new_remote)"
     [ "$(brain_meta "$id" .title)" = "--title -x '\$HOME'" ]
     run cr event "$id" progress "$big"

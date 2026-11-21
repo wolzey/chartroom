@@ -15,6 +15,7 @@ in_a() { CHARTROOM_HOME="$A" cr "$@"; }
 in_b() { CHARTROOM_HOME="$B" cr "$@"; }
 
 @test "relay appends one record to the other home's mailbox, keeps a copy, and writes nothing else" {
+  files_only "the mailbox file's own record, and the files a relay writes (the store's: test/store-app.bats)"
   task="$(CHARTROOM_HOME="$B" cr new --project "$PROJECT" --title "look around" --kind scout | sed -n 's/^id=//p')"
   before_a="$(snapshot "$A")"; before_b="$(snapshot "$B")"
   run in_a relay globex --project shop "which region does staging use?"
@@ -56,7 +57,8 @@ of text, café")"
   [ "${lines[1]}" = "[relay $i3] [from acme] third" ]
   run in_b watch --once --timeout 2
   [ "$status" -eq 124 ]
-  grep -qx "@relays	$(wc -c <"$B/relays/inbox.ndjson" | tr -d ' ')" "$B/.watch-cursor"
+  if [[ -f "$B/relays/inbox.ndjson" ]]; then grep -qx "@relays	$(wc -c <"$B/relays/inbox.ndjson" | tr -d ' ')" "$B/.watch-cursor"
+  else grep -qx "@mail	$(mail_of "$B" | wc -c | tr -d ' ')" "$B/.watch-cursor"; fi
   # a running stream (`watch` without --once) starts at the end, then wakes within seconds
   CHARTROOM_HOME="$B" "$CHARTROOM" watch >"$BATS_TEST_TMPDIR/stream" 2>&1 3>&- &
   pid=$!
@@ -109,7 +111,7 @@ of text, café")"
   [[ "${lines[1]}" == "- [$id] "*"Z — [from acme] [shop] please check the cert" ]]
   run in_b relay ack "[${id^^}]"
   [ "$status" -eq 0 ]; [ "$output" = "acked $id" ]
-  [ "$(tail -1 "$B/relays/inbox.ndjson" | jq -c '[.kind, .id]')" = "[\"ack\",\"$id\"]" ]
+  [ "$(mail_of "$B" | tail -1 | jq -c '[.kind, .id]')" = "[\"ack\",\"$id\"]" ]
   run in_b relay ack "$id"
   [ "$status" -eq 0 ]; [ "$output" = "$id was already acked" ]
   run in_b relay list
@@ -132,7 +134,7 @@ of text, café")"
   id="$(in_a relay globex "can you confirm the region?")"
   run in_b relay acme --re "$id" "yes: us-east-2"
   [ "$status" -eq 0 ]; reply="$output"
-  [ "$(jq -c '[.from, .to, .re]' "$A/relays/inbox.ndjson")" = "[\"globex\",\"acme\",\"$id\"]" ]
+  [ "$(mail_of "$A" | jq -c '[.from, .to, .re]')" = "[\"globex\",\"acme\",\"$id\"]" ]
   run in_a watch --once --timeout 5
   [ "$status" -eq 0 ]
   [ "$output" = "[relay $reply] [from globex] [re $id] yes: us-east-2" ]
@@ -218,7 +220,7 @@ of text, café")"
   # within the text cap, but past one append once quotes are escaped
   run in_a relay globex "$(printf '"%.0s' $(seq 1 1990))"
   [ "$status" -ne 0 ]; [[ "$output" == *"bytes once written"*"at most 4000"* ]]
-  n="$(wc -l <"$B/relays/inbox.ndjson")"
+  n="$(mail_of "$B" | wc -l)"
   for s in "the key is AKIA""ABCDEFGHIJKLMNOP" "use ghp_""aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789" \
            "-----BEGIN OPENSSH ""PRIVATE KEY-----" "token: xoxb-""1234567890-abcdefghij" \
            "PASSWORD = ""hunter2hunter2" "sk-ant-""api03-abcdefghijklmnopqrstuvwxyz"; do
@@ -227,7 +229,7 @@ of text, café")"
     [[ "$output" == *"relay refused: the message looks like it holds"*"nothing was sent"* ]]
     [[ "$output" != *"$s"* ]]
   done
-  [ "$(wc -l <"$B/relays/inbox.ndjson")" -eq "$n" ]
+  [ "$(mail_of "$B" | wc -l)" -eq "$n" ]
   # talking about a secret is fine
   run in_a relay globex "the deploy token lives in the team vault; ask before rotating it"
   [ "$status" -eq 0 ]

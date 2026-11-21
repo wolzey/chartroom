@@ -117,3 +117,95 @@ db() { python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); [print("|
   [ "$(jq '.counts.needs' <<<"$snap")" -eq $((n0 - 4)) ]
   [ "$(cr app task "$st" --json | jq -r '.answer.answers[0].note')" = up ]
 }
+
+@test "tell: a store row once the switch is on; the watch wakes once; ack; nothing written to the mailbox file" {
+  store_on
+  cr watch --once --timeout 1 >/dev/null 2>&1 || true
+  id="$(cr tell --via app --re q-1234 "ship it after lunch")"
+  [[ "$id" =~ ^cm-[0-9a-f]{4}$ ]]
+  [ ! -e "$CHARTROOM_HOME/relays/inbox.ndjson" ]
+  [ "$(db "select kind || ' ' || id from mail")" = "commander $id" ]
+  run cr watch --once --timeout 5
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[commander $id] [via app] [re q-1234] ship it after lunch"* ]]
+  run cr watch --once --timeout 1
+  [ "$status" -eq 124 ]
+  [ "$(cr tell list --json | jq -r '.[0].id')" = "$id" ]
+  [[ "$(cr status)" == *"told: 1 unread from the commander"* ]]
+  cr tell ack "$id" >/dev/null
+  [ "$(cr tell list --json | jq length)" = 0 ]
+  [ "$(db "select group_concat(kind) from mail")" = "commander,ack" ]
+}
+
+@test "the mailbox's two halves: an old file's records and acks, a store's, a file an older sender still grows" {
+  cr init --name here >/dev/null 2>&1 || true
+  old="$(cr tell "from before the switch")"
+  store_on
+  cr watch --once --timeout 1 >/dev/null 2>&1 || true
+  # An ack written after the switch (a store row) acks the file's record.
+  cr tell ack "$old" >/dev/null
+  [ "$(cr tell list --json | jq length)" = 0 ]
+  [ "$(cr tell list --all --json | jq -r '.[0].acked')" = true ]
+  # A line an older chartroom appends to the file, and a store row: one watch wakes on each, once.
+  printf '{"schema":1,"kind":"commander","id":"cm-0dd1","at":"2026-01-01T00:00:00Z","text":"appended by an older chartroom","via":"app","re":null,"project":null}\n' >>"$CHARTROOM_HOME/relays/inbox.ndjson"
+  new="$(cr tell "after the switch")"
+  run cr watch --once --timeout 5
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[commander cm-0dd1]"*"appended by an older chartroom"* ]]
+  [[ "$output" == *"[commander $new]"*"after the switch"* ]]
+  [[ "$output" != *"$old"* ]]
+  grep -q '^@mail	' "$CHARTROOM_HOME/.watch-cursor"; grep -q '^@relays	' "$CHARTROOM_HOME/.watch-cursor"
+  run cr watch --once --timeout 1
+  [ "$status" -eq 124 ]
+}
+
+@test "relay between homes: born where the receiving home's switch says, in the database its .home-id names" {
+  unset CHARTROOM_DB
+  A="$BATS_TEST_TMPDIR/acme"; B="$BATS_TEST_TMPDIR/globex"; C="$BATS_TEST_TMPDIR/initech"
+  CHARTROOM_HOME="$A" cr init --name acme >/dev/null
+  CHARTROOM_HOME="$B" cr init --name globex >/dev/null
+  CHARTROOM_HOME="$C" cr init --name initech >/dev/null
+  printf 'CHARTROOM_STORE=sqlite\n' >>"$A/config"; printf 'CHARTROOM_STORE=sqlite\n' >>"$B/config"
+  # globex was born in a database of its own (another state directory, as a GUI launcher's).
+  XDG_STATE_HOME="$BATS_TEST_TMPDIR/stateB" CHARTROOM_HOME="$B" cr new --project "$PROJECT" --title "b's first" >/dev/null
+  dbA="$BATS_TEST_TMPDIR/state/chartroom/chartroom.db"; dbB="$BATS_TEST_TMPDIR/stateB/chartroom/chartroom.db"
+  [ "$(sed -n 2p "$B/.home-id")" = "$dbB" ]
+  CHARTROOM_HOME="$B" cr watch --once --timeout 1 >/dev/null 2>&1 || true
+  # acme (on) to globex (on): a row in globex's own database, a sent doc in acme's.
+  r1="$(CHARTROOM_HOME="$A" cr relay globex "to an on home")"
+  [ "$(CHARTROOM_DB="$dbB" python3 -c 'import sqlite3,os; c=sqlite3.connect(os.environ["CHARTROOM_DB"]); print(c.execute("select id from mail").fetchone()[0])')" = "$r1" ]
+  [ ! -e "$B/relays/inbox.ndjson" ]; [ ! -e "$A/relays/outbox.ndjson" ]
+  # the record as the file would hold it, and the sender's copy the same
+  [ "$(mail_of "$B" | jq -c '[.schema, .kind, .id, .from, .to, .text, .re, .project]')" = "[1,\"relay\",\"$r1\",\"acme\",\"globex\",\"to an on home\",null,null]" ]
+  [ "$(CHARTROOM_HOME="$A" cr relay list --all --json | jq -r '.[0] | "\(.direction) \(.id)"')" = "out $r1" ]
+  run env CHARTROOM_HOME="$B" "$CHARTROOM" watch --once --timeout 5
+  [ "$status" -eq 0 ]; [[ "$output" == *"[relay $r1] [from acme] to an on home"* ]]
+  # acme (on) to initech (off): its file, as today, and no store for it.
+  r2="$(CHARTROOM_HOME="$A" cr relay initech "to an off home")"
+  [ "$(jq -r .id "$C/relays/inbox.ndjson")" = "$r2" ]
+  [ ! -e "$C/.home-id" ]
+  # initech (off) to acme (on): acme's store; a reply threads; acme lists it and acks it.
+  r3="$(CHARTROOM_HOME="$C" cr relay acme --re "$r2" "back to an on home")"
+  [ ! -e "$A/relays/inbox.ndjson" ]
+  [ "$(CHARTROOM_HOME="$A" cr relay list --json | jq -r '.[0] | "\(.id) \(.re)"')" = "$r3 $r2" ]
+  CHARTROOM_HOME="$A" cr relay ack "$r3" >/dev/null
+  [ "$(CHARTROOM_HOME="$A" cr relay list --json | jq length)" = 0 ]
+}
+
+@test "a running watch hears its home's first store mail at once, though the home had no store id when it started" {
+  A="$BATS_TEST_TMPDIR/acme"; B="$BATS_TEST_TMPDIR/globex"
+  CHARTROOM_HOME="$A" cr init --name acme >/dev/null
+  CHARTROOM_HOME="$B" cr init --name globex >/dev/null
+  printf 'CHARTROOM_STORE=sqlite\n' >>"$B/config"
+  [ ! -e "$B/.home-id" ]
+  CHARTROOM_HOME="$B" CHARTROOM_WATCH_INTERVAL=30 "$CHARTROOM" watch --once --timeout 20 >"$BATS_TEST_TMPDIR/w" 2>&1 3>&- &
+  w=$!
+  for _ in $(seq 1 50); do [ -f "$B/.watch-cursor" ] && break; sleep 0.1; done
+  sleep 1
+  rid="$(CHARTROOM_HOME="$A" cr relay globex "the first store record of this home")"
+  [ -s "$B/.home-id" ]
+  for _ in $(seq 1 40); do kill -0 "$w" 2>/dev/null || break; sleep 0.1; done
+  ! kill -0 "$w" 2>/dev/null || { kill -9 "$w"; false; }
+  wait "$w" || true
+  [ "$(cat "$BATS_TEST_TMPDIR/w")" = "[relay $rid] [from acme] the first store record of this home" ]
+}

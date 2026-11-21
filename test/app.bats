@@ -40,7 +40,7 @@ item() { snap | jq -c --arg t "$1" '[.needs[] | select(.title | test($t))][0]'; 
   run cr tell "the key is ghp_abcdefghijklmnopqrstuvwxyz0123456789"
   [ "$status" -ne 0 ]
   [[ "$output" == *"GitHub token"* ]]
-  run grep -q ghp_ "$CHARTROOM_HOME/relays/inbox.ndjson"
+  run bash -c 'CHARTROOM_HOME="$1" "$2" store mail | grep -q ghp_' _ "$CHARTROOM_HOME" "$CHARTROOM"
   [ "$status" -ne 0 ]
 }
 
@@ -52,7 +52,7 @@ item() { snap | jq -c --arg t "$1" '[.needs[] | select(.title | test($t))][0]'; 
   run cr ask answer "$id" --pick 1
   [ "$status" -ne 0 ]
   [[ "$output" == *"already answered (by app at "* ]]
-  [ "$(jq -r '.answers[0].choice' "$CHARTROOM_HOME/questions/$id.answer.json")" = no ]
+  [ "$(cr ask show "$id" --json | jq -r '.answer.answers[0].choice')" = no ]
   # the XO hears it as the commander's words, linked to the card
   run cr tell list --json
   [ "$(jq -r '.[-1].re' <<<"$output")" = "$id" ]
@@ -67,7 +67,7 @@ item() { snap | jq -c --arg t "$1" '[.needs[] | select(.title | test($t))][0]'; 
   run cr ask answer "$id" --via app - <<<'{"answers":[{"q":1,"choice":"Robots"},{"q":2,"choice":"p95 under 300ms"},{"q":3,"note":"no"}]}'
   [ "$status" -ne 0 ]
   [[ "$output" == *"question(s) 1: the choice is not one of its options"* ]]
-  [ ! -e "$CHARTROOM_HOME/questions/$id.answer.json" ]
+  [ "$(cr ask show "$id" --json | jq -c .answer)" = null ]
   run cr ask answer "$id" --via app - <<<'{"answers":[{"q":1,"choice":"Shoppers"},{"q":2,"choice":"p95 under 300ms"},{"q":3,"note":"admin search"}]}'
   [ "$status" -eq 0 ]
 }
@@ -172,7 +172,7 @@ item() { snap | jq -c --arg t "$1" '[.needs[] | select(.title | test($t))][0]'; 
   run cr ask answer "$card" --via app --note "the LRU"
   [ "$status" -ne 0 ]
   [[ "$output" == *"has moved on since that question"*"newer ask"* ]]
-  [ ! -e "$CHARTROOM_HOME/questions/$card.answer.json" ]
+  [ "$(cr ask show "$card" --json | jq -c .answer)" = null ]
   # the newest ask, once the XO has answered it in the terminal (steer logs "steered:"), is closed too
   card="$(item "Pick a cache" | jq -r .card)"
   printf '%s steered: use a 5 minute TTL\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$(log_of "$task")"
@@ -185,12 +185,13 @@ item() { snap | jq -c --arg t "$1" '[.needs[] | select(.title | test($t))][0]'; 
   id="$(cr ask --title "Which key?" --option a --option b)"
   run cr ask answer "$id" --via app --pick 1 --note "use ghp_abcdefghijklmnopqrstuvwxyz0123456789"
   [ "$status" -ne 0 ]
-  [ ! -e "$CHARTROOM_HOME/questions/$id.answer.json" ]
+  [ "$(cr ask show "$id" --json | jq -c .answer)" = null ]
   run cr ask answer "$id" --via app --pick 1
   [ "$status" -eq 0 ]
 }
 
 @test "mailbox: an append waits for a live writer's lock and takes over a dead one's" {
+  files_only "the mailbox file's own writer lock (the store's writers: its busy timeout)"
   mkdir -p "$CHARTROOM_HOME/relays/inbox.ndjson.lock"
   sleep 30 & holder=$!
   echo "$holder" >"$CHARTROOM_HOME/relays/inbox.ndjson.lock/pid"

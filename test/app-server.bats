@@ -114,7 +114,7 @@ state() { # waits for both homes' first snapshot
   card="$(jq -r '.homes[] | select(.name == "globex") | .snapshot.needs[] | select(.title | test("Rate limits")) | .card' "$BATS_TEST_TMPDIR/app-state")"
   [ "$(act globex answer "{\"card\":\"$card\",\"answers\":[{\"q\":1,\"choice\":\"Per partner\"}]}" a-test-0002)" = 202 ]
   [ "$(outcome a-test-0002)" = "done	" ]
-  [ -f "$BATS_TEST_TMPDIR/h/globex/questions/$card.answer.json" ]
+  [ "$(CHARTROOM_HOME="$BATS_TEST_TMPDIR/h/globex" cr ask show "$card" --json | jq -r '.answer.answers[0].choice')" = "Per partner" ]
   [ "$(act globex answer "{\"card\":\"$card\",\"answers\":[{\"q\":1,\"note\":\"x\"}]}" a-test-0003)" = 202 ]
   [[ "$(outcome a-test-0003)" == "failed	"*"already answered"* ]]
   # a card id that is not one is refused before anything runs
