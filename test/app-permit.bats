@@ -95,6 +95,32 @@ write_card() { # <home> <task> <p-id> <blocking true|false> <expires in s>
   [ "$(cr app snapshot --json | jq '[.needs[] | select(.kind == "permission")] | length')" -eq 0 ]
 }
 
+@test "a card the broker's hook raises shows in Needs me, and the app's allow reaches the waiting call" {
+  has_broker || skip "needs the permission broker (chartroom permit)"
+  export CHARTROOM_PERMIT_WAIT_SECONDS=30
+  app_fixture "$BATS_TEST_TMPDIR/h" "$PROJECT"
+  export CHARTROOM_HOME="$BATS_TEST_TMPDIR/h/acme"
+  t="$(cr status --json | jq -r '.[] | select(.title | test("sitemap")) | .id')"
+  serve
+  # the prompt Claude would show for an outward call, as its PermissionRequest hook gets it
+  jq -cn --arg cwd "$PROJECT" '{tool_name: "Bash", tool_input: {command: "git push origin HEAD", description: "Push the sitemap branch"},
+    cwd: $cwd, session_id: "s-1"}' >"$BATS_TEST_TMPDIR/p.json"
+  "$CHARTROOM" hook "$t" permission <"$BATS_TEST_TMPDIR/p.json" >"$BATS_TEST_TMPDIR/hook.out" 3>&- &
+  hp=$!
+  for _ in $(seq 1 100); do
+    p="$(curl -s "http://127.0.0.1:$PORT/api/v1/state" | jq -r --arg t "$t" '[.homes[].snapshot.needs[]? | select(.kind == "permission" and .task == $t)][0].permit // empty')"
+    [[ -n "$p" ]] && break; sleep 0.2
+  done
+  [[ "$p" =~ ^p-[0-9a-f]+$ ]]
+  [ "$(curl -s "http://127.0.0.1:$PORT/api/v1/state" | jq -r --arg p "$p" '.homes[].snapshot.needs[]? | select(.permit == $p) | "\(.group) \(.blocking) \(.command)"')" = "decide true git push origin HEAD" ]
+  [ "$(post a-perm-00010 "{\"id\":\"$p\",\"answer\":\"once\"}")" = 202 ]
+  settle a-perm-00010
+  [[ "$(outcome a-perm-00010)" == done* ]]
+  wait "$hp"
+  [ "$(jq -r '.hookSpecificOutput.decision.behavior' "$BATS_TEST_TMPDIR/hook.out")" = allow ]
+  events "$t" | grep -qF "allowed $p once"
+}
+
 @test "a missed card stays for a late allow (the worker is told to retry); its deny is refused" {
   has_broker || skip "needs the permission broker (chartroom permit)"
   app_fixture "$BATS_TEST_TMPDIR/h" "$PROJECT"
