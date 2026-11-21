@@ -227,6 +227,28 @@ test("notifications: a home's first read is only remembered; then only new open 
   assert.deepStrictEqual(n, { title: "T q-9", body: "acme · Decide: Pick the cache", tag: "acme:q-9", url: "/#/n/acme%3Aq-9" });
 });
 
+test("permission cards: first, nearest expiry first; a clock; never allowed by Enter", () => {
+  const now = 1_800_000_000_000;
+  const p = (id, exp, extra) => Object.assign({ key: "acme:" + id, id, kind: "permission", group: "decide", blocking: true, missed: false,
+    expires_epoch: now / 1000 + exp, at: "2026-01-01T00:00:00Z", desc: "Bash \"git push origin main\"", home: "acme", title: "Ship it" }, extra);
+  const list = M.ordered([
+    { key: "acme:q-1", kind: "decide", group: "decide", at: "2025-01-01T00:00:00Z" },
+    p("p-late", 600), { key: "acme:t-1", kind: "review", group: "read", breaking: true, at: "2024-01-01T00:00:00Z" },
+    p("p-soon", 90), p("p-retry", 0, { blocking: false }), p("p-missed", -10, { missed: true })]);
+  // the live blocking ones first by expiry; a retry card or a missed one is an ordinary Decide item
+  assert.deepStrictEqual(list.map((x) => x.id || x.key), ["p-soon", "p-late", "acme:q-1", "p-missed", "p-retry", "acme:t-1"]);
+  assert.deepStrictEqual(M.permitLeft(p("a", 725), now), { secs: 725, text: "12m left", over: false });
+  assert.deepStrictEqual(M.permitLeft(p("b", 45), now), { secs: 45, text: "45s left", over: false });
+  assert.strictEqual(M.permitLeft(p("c", -1), now).over, true);
+  assert.strictEqual(M.permitLeft(p("d", 300, { missed: true, state_permit: "lapsed" }), now).text, "the worker went on without it");
+  assert.strictEqual(M.permitLeft(p("e", 0, { blocking: false }), now).text, "auto mode refused this");
+  assert.strictEqual(M.primary(p("f", 300)).type, "focus-note");
+  // no bulk action applies to one
+  const plan = M.bulkPlan([p("g", 300)], "done");
+  assert.strictEqual(plan.run.length + M.bulkPlan([p("g", 300)], "close").run.length + M.bulkPlan([p("g", 300)], "snooze").run.length, 0);
+  assert.deepStrictEqual(M.notice(p("h", 300)), { title: "Allow Bash \"git push origin main\"?", body: "acme · Ship it", tag: "acme:h", url: "/#/n/acme%3Ah" });
+});
+
 test("move, ago and search: the keyboard's selection, short times, the palette's matches", () => {
   assert.strictEqual(M.move(null, 1, 3), 0);
   assert.strictEqual(M.move(2, 1, 3), 2);

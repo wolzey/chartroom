@@ -58,6 +58,17 @@ app_serve_url() { # <port>
   "$ts" serve status 2>/dev/null | grep -B1 "127.0.0.1:$1\$" | head -1 | awk '/^https?:/ {print $1}' || true
 }
 
+# Permission cards (the broker, lib/permit.sh: a Claude worker's prompt chartroom's policy would not
+# answer): the open ones, and for an hour those that expired or lapsed unanswered (a late allow still
+# works: the worker is told to retry). Empty where this chartroom has no broker.
+app_permits_json() {
+  declare -F permit_rows >/dev/null || { echo '[]'; return; }
+  permit_rows "" 1 | jq -s -c --argjson now "$(date +%s)" '
+    map(select(.state == "open"
+      or ((.state == "expired" or .state == "lapsed") and .late == null
+          and ($now - ((.answer.at // null | if . then fromdateiso8601 else null end) // .expires_epoch)) < 3600)))' 2>/dev/null || echo '[]'
+}
+
 # One home as the app reads it (lib/app/snapshot.jq).
 app_snapshot_json() {
   local since row id st rows=() extra ask intent off line
@@ -95,9 +106,11 @@ app_snapshot_json() {
     --argjson inbox "$(dashboard_inbox)" --argjson artifacts "$(artifacts_json --open)" \
     --argjson cards "$(asks_json --all)" --argjson answers "$answers" --argjson tells "$(tells_json --all)" \
     --argjson snoozes "$(snoozes_json)" --argjson focus "$(focus_json)" --argjson requests "$(requests_json)" --argjson initiatives "$(initiatives_json)" \
+    --argjson permits "$(app_permits_json)" \
     '{home: $home, home_name: (if $home_name == "" then ($home | split("/") | last) else $home_name end),
       machine: $machine, version: $version, rows: ., inbox: $inbox, artifacts: $artifacts, cards: $cards,
-      answers: $answers, tells: $tells, snoozes: $snoozes, focus: $focus, requests: $requests, initiatives: $initiatives}' >"$f"
+      answers: $answers, tells: $tells, snoozes: $snoozes, focus: $focus, requests: $requests, initiatives: $initiatives,
+      permits: $permits}' >"$f"
   jq -c -f "$CR_ROOT/lib/app/snapshot.jq" "$f"
   rm -f "$f"
 }

@@ -14,6 +14,7 @@ function short(label) {
 }
 
 function quickLabel(it) {
+  if (it.kind === "permission") return "Review";
   const p = M.primary(it, EF);
   if (p.type === "answer") return short(p.choice);
   if (p.type === "open-round") return "Answer " + (it.questions || []).length;
@@ -46,8 +47,43 @@ function Row({ it, i, sel, ob, picked, picking, onSelect, onQuick, onPick, prs }
       : html`<button class="btn sm" title="Enter" onClick=${(e) => { e.stopPropagation(); onQuick(it); }}>${quickLabel(it)}</button>`}</span>
     <span class="a-row-meta"><${HomeTag} name=${it.home} hue=${it.hue} />${it.project ? html`<span class="a-row-init truncate">${it.project}</span>` : null}</span>
     <span class="a-row-m">${it.short_id || ""}</span>
-    <span class="a-row-age">${M.ago(it.at)}</span>
+    <span class="a-row-age">${it.kind === "permission" ? html`<${Clock} it=${it} short=${true} />` : M.ago(it.at)}</span>
   </div>`;
+}
+
+// A permission card's countdown (to the broker's deny), live; amber, red in its last 2 minutes.
+function Clock({ it, short }) {
+  const [, tick] = useState(0);
+  useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 1000); return () => clearInterval(t); }, []);
+  const l = M.permitLeft(it);
+  if (!l) return null;
+  const text = !short ? l.text : l.secs == null ? "retry" : l.over ? "missed" : l.secs >= 60 ? Math.floor(l.secs / 60) + "m" : l.secs + "s";
+  return html`<span class=${"perm-clock" + (l.over ? " over" : l.secs != null && l.secs < 120 ? " soon" : "")} title=${l.text}>${text}</span>`;
+}
+
+// A worker's tool call waiting on the commander (the permission broker, lib/permit.sh). Nothing here
+// is allowed by a key: only these buttons answer it.
+function PermitBody({ it, note, setNote, noteRef, busy, onAct }) {
+  const [, tick] = useState(0);
+  useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 1000); return () => clearInterval(t); }, []);
+  const l = M.permitLeft(it);
+  const late = l && l.over;
+  const act = (answer) => onAct(it, { type: "permit", answer });
+  return html`
+    <div class="perm-head"><${Clock} it=${it} />${!it.blocking && it.reason_denied ? html`<span class="faint"> · ${it.reason_denied}</span>` : null}</div>
+    ${it.command != null ? html`<pre class="perm-cmd">${it.command}</pre>` : html`<div class="perm-cmd-d"><b>${it.desc}</b>${it.input ? html`<pre class="perm-cmd">${it.input}</pre>` : null}</div>`}
+    ${it.cwd ? html`<div class="perm-cwd faint">in ${it.cwd}</div>` : null}
+    ${it.why ? html`<p class="a-detail-sum">${it.why}</p>` : null}
+    <p class="muted perm-why">Came to you because: ${it.reason || "chartroom's policy would not answer it"}${it.rule ? " (" + it.rule + ")" : ""}</p>
+    ${late ? html`<p class="perm-late">${l.text}. An allow still works: the worker is told to run it again.</p>` : null}
+    <textarea class="input note" rows="2" ref=${noteRef} data-note="1" placeholder=${late || !it.blocking ? "A note for the worker (optional)" : "A note for the worker, sent with a deny (optional)"}
+      value=${note || ""} onInput=${(e) => setNote(e.target.value)} disabled=${busy}></textarea>
+    <div class="a-detail-actions perm-acts">
+      <button class="btn primary" disabled=${busy} onClick=${() => act("once")}>${late ? "Allow now (the worker will retry)" : "Allow once"}</button>
+      <span class="perm-always"><button class="btn" disabled=${busy} onClick=${() => act("always")}>Always for this task</button>
+        <span class="faint">allows <code>${it.pattern}</code> until the task closes</span></span>
+      ${late ? null : html`<button class="btn danger-ghost" disabled=${busy} onClick=${() => act("deny")}>Deny</button>`}
+    </div>`;
 }
 
 function Filters({ all, filters, setFilters, homes }) {
@@ -160,6 +196,8 @@ export function AskBody({ it, picks, setPick, note, setNote, busy, onAct, onDeta
     // approved on the initiative's page, where the whole checklist fits
     body = html`<p class="a-detail-sum">${it.summary}</p>
       <div class="a-detail-actions"><button class="btn primary" onClick=${() => onDetails(it)}>Review the stories <kbd>↵</kbd></button>${snoozeBtn}</div>`;
+  } else if (it.kind === "permission") {
+    body = html`<${PermitBody} it=${it} note=${note} setNote=${setNote} noteRef=${noteRef} busy=${busy} onAct=${onAct} />`;
   } else if (it.kind === "login") {
     // only the commander can sign in again; it leaves Needs me by itself at the next fleet check
     const cmd = (it.summary || "").replace(/^Sign in again on [^:]+: /, "").replace(/\. Until then.*$/, "");

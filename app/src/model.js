@@ -23,6 +23,7 @@ var AppModel = (function () {
     artifact: { label: "To send", glyph: "tidy" },
     stories: { label: "Stories", glyph: "approve" },
     login: { label: "Sign-in", glyph: "login" },
+    permission: { label: "Permission", glyph: "blocked" },
   };
   const GROUPS = [
     { id: "decide", label: "Decide", hint: "Questions and choices waiting on you" },
@@ -85,9 +86,13 @@ var AppModel = (function () {
   }
 
   // The list in display order: by group, then breaking first, then oldest first.
+  // A live permission card a worker is blocked on: the only items with a clock, so they come first
+  // (nearest expiry first), ahead of every group.
+  const clocked = (it) => it.kind === "permission" && it.blocking && !it.missed;
   function ordered(list) {
     const rank = {}; GROUPS.forEach((g, i) => { rank[g.id] = i; });
     return list.slice().sort((a, b) =>
+      (clocked(b) ? 1 : 0) - (clocked(a) ? 1 : 0) || (clocked(a) ? a.expires_epoch - b.expires_epoch : 0) ||
       (rank[a.group] ?? 9) - (rank[b.group] ?? 9) || (b.breaking ? 1 : 0) - (a.breaking ? 1 : 0) ||
       String(a.at || "").localeCompare(String(b.at || "")) || String(a.key).localeCompare(String(b.key)));
   }
@@ -192,8 +197,19 @@ var AppModel = (function () {
   }
 
   // What Enter does on a row: answer with the recommendation, approve, accept, or open the card.
+  // A permission card's clock (lib/permit.sh: denied when it runs out). -> {secs, text, over}.
+  function permitLeft(it, nowMs) {
+    if (!it || it.kind !== "permission") return null;
+    if (!it.blocking) return { secs: null, text: "auto mode refused this", over: false };
+    const secs = Math.floor(it.expires_epoch - (nowMs == null ? Date.now() : nowMs) / 1000);
+    if (it.missed || secs <= 0) return { secs: 0, text: it.state_permit === "lapsed" ? "the worker went on without it" : "the wait ran out: denied", over: true };
+    return { secs, text: secs >= 60 ? Math.floor(secs / 60) + "m left" : secs + "s left", over: false };
+  }
+
   function primary(it, EventFmt) {
     if (it.kind === "round" || it.kind === "stories" || it.kind === "login") return { type: "open-round" };
+    // never allowed by a key press: Enter only puts the cursor in the note
+    if (it.kind === "permission") return { type: "focus-note" };
     if (it.kind === "approve") return { type: "approve" };
     if (it.kind === "review") return { type: "accept" };
     if (it.kind === "artifact") return { type: "done" };
@@ -409,6 +425,10 @@ var AppModel = (function () {
   // One notification: the item's key as its tag (the push of the same item replaces it), and a link
   // that opens Needs me on it.
   function notice(it) {
+    if (it.kind === "permission") {
+      return { title: ("Allow " + (it.desc || "a call") + "?").slice(0, 100), body: (it.home + " · " + it.title).slice(0, 180),
+        tag: it.key, url: "/#/n/" + encodeURIComponent(it.key) };
+    }
     const g = (GROUPS.find((x) => x.id === it.group) || {}).label || "Needs you";
     return { title: String(it.title || "Chartroom").slice(0, 100), body: (it.home + " · " + g + (it.summary ? ": " + it.summary : "")).slice(0, 180),
       tag: it.key, url: "/#/n/" + encodeURIComponent(it.key) };
@@ -416,6 +436,6 @@ var AppModel = (function () {
 
   return { KINDS, GROUPS, STATUS, kind, items, homes, standing, visible, ordered, counts, projects, questions, details,
     primary, answerBody, answered, move, ago, agoText, snoozes, search, askText, headline, bulkPlan, range, promote, linkParts, BOARD, boardItems, boardFilter, boardColumns, initiatives, milestones,
-    freshItems, notice };
+    freshItems, notice, permitLeft };
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = AppModel;

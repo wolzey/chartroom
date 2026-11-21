@@ -224,6 +224,13 @@ function App() {
     else if (what.type === "accept" || what.type === "close") { action = what.type; body = { task: it.task }; msg = (what.type === "accept" ? "Accepted " : "Closed ") + (it.short_id || it.task); }
     else if (what.type === "done") { action = "done"; body = { ref: it.ref }; msg = "Marked done"; }
     else if (what.type === "snooze") { action = "snooze"; body = Object.assign({ ref: it.ref }, what.body); msg = "Snoozed for " + what.label.toLowerCase(); }
+    else if (what.type === "permit") {
+      // a permission card: the broker answers the worker's waiting call (or steers a retry)
+      action = "permit"; body = { id: it.permit, answer: what.answer, note: n.trim() || undefined };
+      const late = it.missed || (M.permitLeft(it) || {}).over;
+      msg = (what.answer === "deny" ? "Denied " : what.answer === "always" ? "Allowed for the rest of the task: " : "Allowed once: ") + (it.desc || "the call") +
+        (late && what.answer !== "deny" ? "; the worker is told to run it again" : "");
+    }
     else return;
     if (action === "answer" || action === "tell") msg = viaXo(msg);
     const e = enqueue(it, action, body, msg.split(";")[0]);
@@ -313,7 +320,7 @@ function App() {
         e.preventDefault();
         if (s.route.name === "round") return submitRoundRef.current();
         const it = s.active;
-        if (!it || it.sent) return;
+        if (!it || it.sent || it.kind === "permission") return; // a permission card answers only by its buttons
         if (it.kind === "approve") return performRef.current(it, { type: "approve" });
         const t = (notesRef.current[it.key] || {})[1];
         const has = (picksRef.current[it.key] || {})[1] != null || (t && t.trim());

@@ -191,6 +191,23 @@
   .r-bar { bottom: calc(60px + env(safe-area-inset-bottom)); }
 }
 .ck.unk { color: var(--text-2); }
+
+/* the permission card (a worker's call waiting on the commander) */
+.perm-clock { font-variant-numeric: tabular-nums; font-weight: 500; color: var(--amber); }
+.perm-clock.soon, .perm-clock.over { color: var(--rose); }
+.perm-head { font-size: var(--fs-sm); }
+.perm-cmd { margin: 0; padding: 10px 12px; border-radius: var(--r-md); background: var(--sunken); border: 1px solid var(--border);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: var(--fs-sm); line-height: 1.5;
+  white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; max-height: 40vh; overflow: auto; }
+.perm-cmd-d { display: grid; gap: 6px; }
+.perm-cwd { font-size: var(--fs-xs); margin-top: -4px; overflow-wrap: anywhere; }
+.perm-why { font-size: var(--fs-sm); }
+.perm-late { font-size: var(--fs-sm); color: var(--rose); }
+.perm-acts { flex-wrap: wrap; align-items: flex-start; }
+.perm-always { display: inline-flex; flex-direction: column; gap: 3px; max-width: 100%; }
+.perm-always .faint { font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.btn.danger-ghost { color: var(--rose); border-color: color-mix(in srgb, var(--rose) 40%, var(--border)); background: transparent; }
+.btn.danger-ghost:hover { background: var(--rose-soft); }
 .ck.unk .ck-i { color: var(--text-3); }
 .sp .checks code { font-size: var(--fs-xs); }
 .a-detail.slim .a-detail-title { margin-bottom: var(--s-3); }

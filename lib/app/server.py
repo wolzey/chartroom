@@ -50,6 +50,7 @@ TASK_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,127}$")
 HOME_NAME = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 CARD = re.compile(r"^(q-[0-9a-f]{4,}|i-[0-9a-f]{4,}|ev-[a-z0-9][a-z0-9-]{0,127}-[0-9]{1,12})$")
+PERMIT_ID = re.compile(r"^p-[0-9a-f]{4,16}$")
 INBOX_ID = re.compile(r"^i-[0-9a-f]{4,}$")
 ARTIFACT_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,127}/[a-z0-9][a-z0-9-]{0,79}$")
 DURATION = re.compile(r"^[0-9]{1,4}[mhd]$")
@@ -556,6 +557,9 @@ class Pusher:
         return [(k, cur[k][0], cur[k][1]) for k in new]
 
     def payload(self, key, home, it):
+        if it.get("kind") == "permission":  # a worker's call, waiting on the commander
+            return {"title": ("Allow %s?" % (it.get("desc") or "a call"))[:100], "body": ("%s · %s" % (home, it.get("title") or ""))[:180],
+                    "tag": key, "url": "/#/n/" + quote(key, safe="")}
         title = str(it.get("title") or "Chartroom")
         body = home + " · " + PUSH_GROUP.get(it.get("group"), "Needs you")
         if it.get("summary"):
@@ -719,6 +723,20 @@ def verb_for(action, body):
         return ["ask", "answer", card, "--via", "app", "-"], json.dumps(ans).encode("utf-8")
     if action in ("accept", "close"):
         return [action, need("task", TASK_ID, "a task id")], None
+    if action == "permit":
+        # a permission card (lib/permit.sh): allow once, always for this task, or deny; the first
+        # answer wins, and the verb's refusal says who won
+        pid = need("id", PERMIT_ID, "a permission card (p-…)")
+        ans = need("answer", re.compile(r"^(once|always|deny)$"), "once, always or deny")
+        argv = ["permit", "answer", pid, ans, "--by", "app", "--via", "app"]
+        note = body.get("note")
+        if note is not None:
+            if not isinstance(note, str) or len(note) > 2000:
+                raise ValueError("note: at most 2000 characters")
+            note = " ".join(note.split())
+            if note:
+                argv += ["--note", note]
+        return argv, None
     if action == "snooze":
         ref = need("ref", REF, "an item's id")
         if body.get("for"):

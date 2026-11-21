@@ -2,7 +2,8 @@
 # design), and Needs me, built from the records alone. Input (lib/app.sh, app_snapshot_json):
 #   {home, home_name, machine, version, rows: [status rows + extras], inbox: {waiting, approvals},
 #    artifacts: [open artifacts], cards: [open posted cards], answers: {id: answer}, tells: [told
-#    messages, newest last], snoozes: {ref: until}, focus: {projects, since, until} | null}
+#    messages, newest last], snoozes: {ref: until}, focus: {projects, since, until} | null,
+#    requests, initiatives, permits: [permission cards, lib/permit.sh's rows]}
 # The server only caches and serves this; what an item means is decided here.
 #
 # App status (the design's seven) from a task's state:
@@ -61,7 +62,26 @@ def askline: sub("^[^ ]+ [a-z-]+: ?"; "");
      links: (.links // []), priority: (.priority // null), labels: (.labels // []),
      initiative: (.initiative // null), milestone: (.milestone // null)}] as $tasks
 
+# Permission cards (lib/permit.sh): a worker's tool call waiting on the commander (blocking), or a
+# retry auto mode refused. A card stays while open, and for an hour after it expired or lapsed
+# unanswered (missed: only an allow, which the worker retries). A card of a task that is done,
+# closed or gone is dropped. A task waiting on its open blocking card is that card in Needs me, not
+# a second, bare "decision" item.
+| ([$tasks[] | {key: .id, value: .}] | from_entries) as $by_id
+| [$in.permits[]? | . as $p | ($by_id[$p.task] // null) as $t
+   | select($t != null and ($t.status | IN("done", "closed") | not))
+   | {id: $p.id, type: "permit", kind: "permission", group: "decide", ref: null, permit: $p.id,
+      task: $t.id, short_id: $t.short_id, title: $t.title, project: $t.project,
+      at: $p.created, expires_epoch: $p.expires_epoch, blocking: ($p.blocking == true), missed: ($p.state != "open"),
+      state_permit: $p.state, tool: $p.tool, command: (if $p.tool == "Bash" then ($p.input.command // null) else null end),
+      input: (if $p.tool == "Bash" then null else ($p.input | tojson | cut(4000)) end),
+      desc: $p.desc, why: ($p.why // ""), cwd: ($p.cwd // ""), rule: $p.rule, reason: $p.reason, pattern: $p.pattern,
+      reason_denied: ($p.reason_denied // null), summary: $p.desc, live: $t.live, state: $t.state,
+      breaking: false, held: $t.held}] as $permits
+| ([$permits[] | select(.blocking and (.missed | not)) | .task] | unique) as $permit_tasks
+
 | ([$tasks[] | select(.status == "needs" or .status == "review")
+    | select(.status == "review" or .state != "decision" or (.id | IN($permit_tasks[]) | not))
     | . as $t
     | ($t.ask) as $ask
     | (if $t.status == "review" then
@@ -98,6 +118,7 @@ def askline: sub("^[^ ]+ [a-z-]+: ?"; "");
      | {id: ("stories-" + .id), type: "initiative", kind: "stories", group: "approve", ref: ("stories-" + .id), initiative: .id,
         title: ("Approve the stories of " + .name), summary: "The XO proposes \(.progress.proposed) \(if .progress.proposed == 1 then "story" else "stories" end): edit, drop, add, order and approve them.",
         project: null, at: .created, breaking: false, held: false}]
+  + $permits
   + [$arts[] | select(.kind == "message" or .kind == "runbook")
      | {id: .ref, type: "artifact", kind: "artifact", group: "read", sub: .kind, ref: .ref, title, project: null,
         owner_type, owner, at: .updated, breaking: false, held: false}]
@@ -110,7 +131,10 @@ def askline: sub("^[^ ]+ [a-z-]+: ?"; "");
             held: ([$all[] | select(.held and .sent == null)] | length),
             snoozed: ([$all[] | select(.snoozed_until != null and .sent == null)] | length),
             sent: ([$all[] | select(.sent != null)] | length)},
-   needs: ($all | sort_by([(if .breaking then 0 else 1 end), (.at // "")]) ),
+   # a live blocking permission card first, nearest expiry first: the only items with a clock
+   needs: ($all | sort_by((.kind == "permission" and .blocking and (.missed | not)) as $clock
+                          | [(if $clock then 0 else 1 end), (if $clock then .expires_epoch else 0 end),
+                             (if .breaking then 0 else 1 end), (.at // "")]) ),
    tasks: $tasks,
    tells: ([$in.tells[]? | {id, at, via, re, project, acked, text: (.text | cut(300))}] | .[-30:]),
    # new work asked for from the app, not briefed yet: the board shows it in Drafting
