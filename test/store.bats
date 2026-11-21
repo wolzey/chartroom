@@ -254,6 +254,25 @@ db() { python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); [print("|
   (( SECONDS - start < 15 ))
 }
 
+@test "seams: the app's records (cards, answers, snoozes, the mailbox) are read only by their own modules" {
+  # Each record has a file half from before the store and a store half: lib/ask.sh (cards and
+  # answers), lib/snooze.sh, lib/tell.sh and lib/relay.sh (the mailbox) own both, and every other
+  # reader goes through their functions, so none misses a store-born record.
+  cd "$REPO_ROOT"
+  shopt -s nullglob
+  out="$(grep -nE '(^|[^a-z_])(ask_dir|ask_answer_file|snooze_file|relay_dir)|\.answer\.json|snoozes\.ndjson|inbox\.ndjson|outbox\.ndjson' \
+      bin/chartroom lib/*.sh lib/*/*.sh lib/*.jq lib/*/*.jq lib/*/*.py |
+    grep -vE '^lib/(ask|snooze|relay|tell|store)\.sh:' |
+    grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' |
+    grep -vE '^bin/chartroom:[0-9]+:[[:space:]]{20,}' |
+    grep -vE '^lib/app/server\.py:.*for rel in \("\.changed", ' |
+    # Pending, each removed by the slice that ports it: cards and answers (slice 3), the mailbox
+    # the watch reads (slice 4).
+    grep -vE '^lib/app\.sh:[0-9]+:.*(ask_dir|\.answer\.json)|^lib/ticket\.sh:[0-9]+:.*ask_dir' |
+    grep -vE '^bin/chartroom:[0-9]+:.*relay_dir\)/inbox\.ndjson' || true)"
+  if [ -n "$out" ]; then printf 'outside their modules:\n%s\n' "$out" >&2; return 1; fi
+}
+
 @test "a home keeps the database it was born in, whatever XDG_STATE_HOME says later" {
   unset CHARTROOM_DB
   store_on
