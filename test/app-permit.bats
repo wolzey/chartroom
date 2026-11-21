@@ -112,6 +112,6 @@ write_card() { # <home> <task> <p-id> <blocking true|false> <expires in s>
   [[ "$(outcome a-perm-00004)" == done* ]]
   [ "$(cr permit show p-3c4d | jq -r '"\(.late.answer) \(.late.by)"')" = "once app" ]
   # recorded as a late allow (the broker then tells the worker to run it again), and out of Needs me
-  grep -rq "allowed p-3c4d once (late, after it expired) by app" "$CHARTROOM_HOME/tasks/$t"
+  events "$t" | grep -qF "allowed p-3c4d once (late, after it expired) by app"
   [ "$(cr app snapshot --json | jq '[.needs[] | select(.permit == "p-3c4d")] | length')" -eq 0 ]
 }
