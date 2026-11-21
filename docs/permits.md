@@ -165,7 +165,7 @@ permit: refused Bash "chartroom permit answer p-1a2b once" (guard:self-answer)
 
   Grants (`push-branch`, `open-pr`, `merge-auto`) and "always" cover most of the outward ones.
 - **Replayed as prompts** (`PermissionRequest`, what Claude would ask about), 67% are allowed by
-  the `local:*` rules. Real prompts are rarer than every call: fluid's history has about 12.
+  the `local:*` rules. Real prompts are far rarer than calls: about a dozen in one busy home's history.
 
 ## Security, and what it is not
 
