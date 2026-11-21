@@ -365,7 +365,10 @@ others read between steps. `close` only marks it closed; its directory is never 
   session. Every multiple-choice question you ask them, and every grilling round, also goes there
   as a card: `chartroom ask --title "<question>" --option "<a>" --option "<b>" --recommend 1
   --project <project>` for one question, or `chartroom ask <card.json>` for a round (its format is
-  in `chartroom ask --help`); then ask it here too. The first answer wins, wherever it comes
+  in `chartroom ask --help`); then ask it here too. When the question is about a task, name it
+  (`--task <id>`, or `"task"` in the card's JSON). The answers then stay on that task's page in
+  the app under Decisions, and on its initiative's page; a card with no task shows nowhere once
+  answered. The first answer wins, wherever it comes
   from: when they answer in this session, record it with `chartroom ask answer <q-id> --pick N
   [--note "..."]` (or an answer file) so the app's card closes; if that says it was already
   answered, the app's answer stands and has reached you as a `[commander ...]` wake. A worker's

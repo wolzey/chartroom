@@ -390,6 +390,40 @@ ask_withdraw() {
   echo "withdrew $id"
 }
 
+# The commander's decisions on tasks: every answered card that belongs to one, newest first. Two
+# sources, wherever the answer came from (the app, the terminal, or the XO recording it with
+# `ask answer`):
+#   - a card the XO posted (`chartroom ask`, a choice or a grilling round) whose task is one of these;
+#   - a task's own ask (a worker's decision or plan, ev-<task>-<offset>) answered in the app.
+# A withdrawn card decided nothing. Each question in its own words, with the answer and the note:
+#   [{card, kind: choice|round|decision|approval, task, title, asked_at, at, via, note,
+#     questions: [{text, choice, note}]}]
+decisions_json() { # <task id>...
+  [[ $# -gt 0 ]] || { echo '[]'; return; }
+  local tasks answers cards evs
+  tasks="$(jq -n -c '$ARGS.positional' --args "$@")"
+  answers="$(answers_json)"
+  cards="$(asks_json --all | jq -c --argjson t "$tasks" '[.[] | select(.task != null and (.task as $x | $t | index($x)) and .answer != null and (.answer.withdrawn | not))]')"
+  # a task's own asks with an answer: each one's question, from its event line
+  evs="$(jq -r --argjson t "$tasks" 'keys[] | select(test("^ev-.+-[0-9]+$")) | select(capture("^ev-(?<t>.+)-[0-9]+$").t as $x | $t | index($x))' <<<"$answers" \
+    | while IFS= read -r k; do [[ -z "$k" ]] || ask_card_json "$k" 2>/dev/null || true; done | jq -s -c .)"
+  jq -n -c --argjson cards "$cards" --argjson evs "${evs:-[]}" --argjson ans "$answers" '
+    def headline: if length > 140 then (.[0:140] | sub("[\\s,;:(]+[^\\s]*$"; "")) + "…" else . end;
+    ([$cards[] | . as $c | $c.answer as $a
+      | {card: $c.id, kind: (if ($c.questions | length) > 1 then "round" else "choice" end), task: $c.task, initiative: ($c.initiative // null),
+         title: $c.title, asked_at: $c.asked_at, at: $a.at, via: $a.via, note: ($a.note // null),
+         questions: [$a.answers[]? as $x | ($c.questions[] | select(.id == $x.q)) as $q
+           | {text: $q.text, choice: ($x.choice // null), note: ($x.note // null)}]}]
+     + [$evs[] | . as $c | $ans[$c.id] as $a | select($a != null and ($a.withdrawn | not))
+      | ($c.text | sub("\\s+--detail\\s.*$"; "") | sub("\\s*\\bDetails?:.*$"; "")) as $ask
+      | {card: $c.id, kind: (if $a.action then "approval" else "decision" end), task: $c.task, initiative: null,
+         title: ($ask | headline), asked_at: $c.at, at: $a.at, via: $a.via, note: ($a.note // null),
+         questions: (if $a.action == "approve" then [{text: $ask, choice: "Approved", note: ($a.note // null)}]
+                     elif $a.action == "changes" then [{text: $ask, choice: "Changes requested", note: ($a.note // null)}]
+                     else [$a.answers[]? | {text: ((.question // null) // $ask), choice: (.choice // null), note: (.note // null)}] end)}])
+    | sort_by(.at // "") | reverse'
+}
+
 # Every posted card with its answer (null while open), newest first: [{card..., answer}].
 asks_json() { # [--all]
   local d; d="$(ask_dir)"

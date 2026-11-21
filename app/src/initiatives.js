@@ -5,7 +5,7 @@
 // commander edits, drops, adds, reorders, orders by "after", and approves), the numbered decisions
 // and the PRs. Every write is queued like any other action.
 import { html, useState, useEffect, useRef } from "./html.js";
-import { HomeTag, Status, Linked, linkifyDom, PrBadges, Tabs } from "./ui.js";
+import { HomeTag, Status, Linked, linkifyDom, PrBadges, Tabs, DecisionList } from "./ui.js";
 
 const M = window.AppModel;
 const MD = window.Markdown;
@@ -141,7 +141,7 @@ function Milestones({ ini, onStory }) {
   })}</div>`;
 }
 
-export function InitiativePage({ home, hue, id, version, prs, tasksByHome, onAct, onBack, onOpenTask, onOpenRound, toast }) {
+export function InitiativePage({ home, hue, id, version, prs, tasksByHome, onAct, onBack, onOpenTask, onOpenRound, toast, cardHref }) {
   const [ini, setIni] = useState(null);
   const [err, setErr] = useState(null);
   const [tab, setTab] = useState("plan");
@@ -164,9 +164,11 @@ export function InitiativePage({ home, hue, id, version, prs, tasksByHome, onAct
   const prUrls = [...new Set(taskIds.flatMap((t) => ((tasksByHome[home] || {})[t] || {}).prs || []))];
   const act = (action, body, label) => { onAct(action, Object.assign({ id }, body), label); toast(label); };
   const decisions = (ini.decisions || []).slice().reverse();
+  // the commander's answers on its stories' tasks (lib/ask.sh, decisions_json), by story
+  const taskDecs = ini.task_decisions || [];
   const superseded = {};
   for (const d of ini.decisions || []) if (d.supersedes) superseded[d.supersedes] = d.n;
-  const tabs = [{ id: "plan", label: "Plan" }, { id: "stories", label: "Stories", count: p.total }, { id: "decisions", label: "Decisions", count: decisions.length }, { id: "prs", label: "PRs", count: prUrls.length }];
+  const tabs = [{ id: "plan", label: "Plan" }, { id: "stories", label: "Stories", count: p.total }, { id: "decisions", label: "Decisions", count: decisions.length + taskDecs.length }, { id: "prs", label: "PRs", count: prUrls.length }];
   const main = html`<main class="a-main">
     <header class="a-head"><div class="a-head-l"><button class="link faint" onClick=${onBack}>Initiatives</button><span class="faint">/</span>
       <${HomeTag} name=${home} hue=${hue} /><span class="faint">/</span><h1 class="truncate">${ini.name}</h1></div></header>
@@ -188,8 +190,12 @@ export function InitiativePage({ home, hue, id, version, prs, tasksByHome, onAct
         : tab === "stories" ? html`<${Milestones} ini=${ini} onStory=${(s) => onOpenTask(home, s.task)} />`
         : tab === "decisions" ? html`<ol class="decisions">${decisions.length ? decisions.map((d) => html`<li key=${d.n} class=${"dec" + (superseded[d.n] ? " superseded" : "")}>
             <span class="dec-n">D${d.n}</span><div class="grow"><div class="dec-c"><${Linked} text=${d.text} /></div>
-            <div class="dec-m faint">${M.agoText(d.at)}${d.card ? " · from " + d.card : ""}${superseded[d.n] ? html` · <span class="sup">superseded by D${superseded[d.n]}</span>` : null}</div></div></li>`)
-            : html`<p class="dt-empty">No decisions yet. Every answered card of this initiative becomes one.</p>`}</ol>`
+            <div class="dec-m faint">${M.agoText(d.at)}${d.card ? " · from a card" : ""}${superseded[d.n] ? html` · <span class="sup">superseded by D${superseded[d.n]}</span>` : null}</div></div></li>`)
+            : html`<p class="dt-empty">No decisions yet. Every answered card of this initiative becomes one.</p>`}</ol>
+          ${taskDecs.length ? html`<section class="ini-taskdecs"><h3 class="i-h">From its tasks <span class="count">${taskDecs.length}</span></h3>
+            ${(ini.stories || []).filter((st) => st.task && taskDecs.some((d) => d.task === st.task)).map((st) => html`<div key=${st.id} class="ini-taskdec">
+              <button class="link dec-task" onClick=${() => onOpenTask(home, st.task)}><${Linked} text=${st.title} /></button>
+              <${DecisionList} items=${taskDecs.filter((d) => d.task === st.task)} home=${home} cardHref=${cardHref ? (d) => cardHref(home, d) : null} /></div>`)}</section>` : null}`
         : html`<div class="pr-list">${prUrls.length ? html`<${PrBadges} urls=${prUrls} prs=${prs} />` : html`<p class="dt-empty">No PRs yet.</p>`}</div>`}
     </div>
   </main>`;

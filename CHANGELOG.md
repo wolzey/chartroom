@@ -7,6 +7,11 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- The app: a task's page lists its Decisions, every answered card of the task.
+  - **What each shows:** each question in its own words, with the answer, the note, when, and where it was answered.
+  - **Which cards:** grilling rounds and choice cards the XO posted for the task, answered in the app or recorded by the XO, and the task's own decisions answered in the app.
+  - **The initiative:** its page shows its stories' decisions, under "From its tasks".
+  - **The round:** a grilling round's page names its task or initiative and links there.
 - `chartroom permit escalate <p-id> [--note T]`: the XO hands an open permission card to the commander. The app pushes it at once and marks it "The XO left this one to you", with the note.
 
 ### Changed

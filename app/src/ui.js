@@ -1,5 +1,5 @@
 // ui.js - the design system's small components (app/styles/base.css), as React.
-import { html, useEffect, useRef } from "./html.js";
+import { html, useEffect, useRef, useState } from "./html.js";
 
 const M = window.AppModel;
 
@@ -151,4 +151,29 @@ export function Toasts({ toasts, onUndo }) {
     ${toasts.map((t) => html`<div key=${t.id} class="toast"><span>${t.text}</span>
       ${t.undo ? html`<button type="button" onClick=${() => onUndo(t)}>Undo</button>` : null}</div>`)}
   </div>`;
+}
+
+// The commander's decisions on a task (lib/ask.sh, decisions_json): each answered card, its
+// questions in their own words with the answer and the note, when, where it was answered, and a
+// link to the card while it is still in the app (a round's page). Long rounds fold after three.
+const VIA = { app: "in the app", terminal: "in the terminal", xo: "through the XO" };
+export function DecisionList({ items, home, cardHref }) {
+  const [open, setOpen] = useState({});
+  if (!items || !items.length) return null;
+  return html`<ol class="dec-list">${items.map((d) => {
+    const qs = d.questions || [];
+    const shown = open[d.card] || qs.length <= 4 ? qs : qs.slice(0, 3);
+    const href = cardHref ? cardHref(d) : null;
+    return html`<li key=${d.card} class="dec-item">
+      <div class="dec-top"><span class="dec-title"><${Linked} text=${d.title} /></span></div>
+      <div class="dec-m faint">${d.kind === "round" ? qs.length + " questions · " : ""}answered ${M.agoText(d.at)}${VIA[d.via] ? " " + VIA[d.via] : ""}${href
+        ? html` · <a href=${href}>${d.kind === "round" ? "open the round" : "open the card"}</a>` : null}</div>
+      ${qs.length ? html`<ul class="dec-qs">${shown.map((q, i) => html`<li key=${i}>
+          ${qs.length > 1 || (q.text && q.text !== d.title) ? html`<div class="dec-q"><${Linked} text=${q.text} /></div>` : null}
+          <div class="dec-a">${q.choice ? html`<b>${q.choice}</b>` : null}${q.choice && q.note ? html`<span class="faint"> · </span>` : null}${q.note
+            ? html`<span class="dec-note"><${Linked} text=${q.note} /></span>` : null}${!q.choice && !q.note ? html`<span class="faint">no answer</span>` : null}</div></li>`)}</ul>` : null}
+      ${shown.length < qs.length ? html`<button class="link dec-more" onClick=${() => setOpen(Object.assign({}, open, { [d.card]: true }))}>Show all ${qs.length}</button>` : null}
+      ${d.note ? html`<p class="dec-note muted">Note: <${Linked} text=${d.note} /></p>` : null}
+    </li>`;
+  })}</ol>`;
 }

@@ -6,7 +6,7 @@ import { Pill, HomeTag, Options, Why, Linked } from "./ui.js";
 
 const M = window.AppModel;
 
-export function RoundPage({ it, picks, notes, setPick, setNote, focus, setFocus, busy, onSubmit, onBack }) {
+export function RoundPage({ it, picks, notes, setPick, setNote, focus, setFocus, busy, onSubmit, onBack, owner }) {
   useEffect(() => { window.scrollTo(0, 0); }, [it && it.key]);
   // on the phone, the progress row follows the question being read as the page scrolls
   useEffect(() => {
@@ -67,6 +67,8 @@ export function RoundPage({ it, picks, notes, setPick, setNote, focus, setFocus,
         </div>
       </aside>
       <div class="r-qs">
+        ${owner ? html`<p class="r-owner">For the ${owner.kind}: <a href=${owner.href}><${Linked} text=${owner.title} /></a>
+          <span class="faint"> · your answers are kept on its page, under Decisions</span></p>` : null}
         ${sent
           ? html`<div class="card r-sent"><div class="empty"><div class="mark">✓</div>
               <h3>${sent.withdrawn ? "Withdrawn" : "Round sent"}</h3>

@@ -213,3 +213,22 @@
 .ck.unk .ck-i { color: var(--text-3); }
 .sp .checks code { font-size: var(--fs-xs); }
 .a-detail.slim .a-detail-title { margin-bottom: var(--s-3); }
+
+/* Decisions: what the commander answered, on a task's page and its initiative's */
+.dec-lede { margin: -6px 0 var(--s-3); font-size: var(--fs-sm); }
+.dec-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s-3); }
+.dec-item { padding: var(--s-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); }
+.dec-title { font-weight: 600; color: var(--text); line-height: 1.45; overflow-wrap: anywhere; }
+.dec-item .dec-m { margin-top: 2px; font-size: var(--fs-xs); }
+.dec-qs { list-style: none; margin: var(--s-3) 0 0; padding: 0; display: grid; gap: var(--s-3); }
+.dec-qs > li { padding-left: var(--s-3); border-left: 2px solid var(--border); }
+.dec-q { font-size: var(--fs-sm); color: var(--text-2); line-height: 1.5; overflow-wrap: anywhere; }
+.dec-a { margin-top: 2px; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.dec-a b { font-weight: 600; color: var(--text); }
+.dec-note { color: var(--text-2); }
+.dec-item > .dec-note { margin: var(--s-3) 0 0; font-size: var(--fs-sm); }
+.dec-more { margin-top: var(--s-2); font-size: var(--fs-sm); }
+.ini-taskdecs { margin-top: var(--s-6); display: grid; gap: var(--s-4); }
+.ini-taskdec { display: grid; gap: var(--s-2); }
+.dec-task { justify-self: start; font-weight: 600; }
+.r-owner { margin: 0; font-size: var(--fs-sm); line-height: 1.5; color: var(--text-2); overflow-wrap: anywhere; }

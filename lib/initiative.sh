@@ -253,7 +253,12 @@ cmd_initiative() {
       initiatives_json ${all:+"$all"} | jq -r 'if length == 0 then "initiatives: none" else .[] | "- [\(.id)] \(.name)  \(.status)  \(.progress.done)/\(.progress.total) done" + (if .progress.proposed > 0 then ", \(.progress.proposed) proposed" else "" end) end' ;;
     show)
       local id="${1:-}"; need_init "$id"
-      if [[ "${2:-}" == --json ]]; then initiative_json "$id" | jq .; return; fi
+      if [[ "${2:-}" == --json ]]; then
+        # the page also lists the decisions taken on its stories' tasks (the commander's answers there)
+        local tids=() t
+        while IFS= read -r t; do [[ -n "$t" ]] && tids+=("$t"); done < <(jq -r '[.stories[]?.task | select(. != null)] | unique | .[]' "$(init_file "$id")")
+        initiative_json "$id" | jq --argjson td "$(decisions_json "${tids[@]+"${tids[@]}"}")" '. + {task_decisions: $td}'; return
+      fi
       initiative_json "$id" | jq -r '"\(.id) \(.name) (\(.status))" + (if .intent then "\n  " + .intent else "" end)
         + ([.stories[] | "\n- \(.id) [\(.status)] \(.title)" + (if .task then " → \(.task)" else "" end) + (if (.after | length) > 0 then " (after \(.after | join(", ")))" else "" end)] | join(""))' ;;
     set)

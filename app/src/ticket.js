@@ -5,7 +5,7 @@
 // Every change goes through the outbox like any other action; uploads go straight to the server,
 // which queues them.
 import { html, useState, useEffect, useRef } from "./html.js";
-import { HomeTag, Status, Linked, linkifyDom, PrCard, PrBadges, Menu } from "./ui.js";
+import { HomeTag, Status, Linked, linkifyDom, PrCard, PrBadges, Menu, DecisionList } from "./ui.js";
 import { AskBody } from "./needs.js";
 import { taskFile } from "./api.js";
 
@@ -74,7 +74,7 @@ function feedOf(t, pending) {
   return out.sort((a, b) => String(a.at).localeCompare(String(b.at)));
 }
 
-export function TicketPage({ home, hue, id, version, prs, item, machine, askProps, onAct, onBack, toast }) {
+export function TicketPage({ home, hue, id, version, prs, item, machine, askProps, onAct, onBack, toast, cardHref }) {
   const [t, setT] = useState(null);
   const [err, setErr] = useState(null);
   const [report, setReport] = useState(null);
@@ -206,6 +206,10 @@ export function TicketPage({ home, hue, id, version, prs, item, machine, askProp
 
       ${prUrls.length ? html`<section class="t-sec t-prs"><div class="sec-h"><h2 class="i-h">Pull requests <span class="count">${prUrls.length}</span></h2></div>
         <div class="pr-list">${prUrls.map((u) => html`<${PrCard} key=${u} url=${u} pr=${prs[u]} />`)}</div></section>` : null}
+
+      ${(o.decisions || []).length ? html`<section class="t-sec t-decs"><div class="sec-h"><h2 class="i-h">Decisions <span class="count">${o.decisions.length}</span></h2></div>
+        <p class="faint dec-lede">What you answered for this task, newest first.</p>
+        <${DecisionList} items=${o.decisions} home=${home} cardHref=${cardHref ? (d) => cardHref(home, d) : null} /></section>` : null}
 
       <section class="t-sec"><div class="sec-h"><h2 class="i-h">Description</h2><span class="grow"></span>
         ${editing

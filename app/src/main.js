@@ -509,13 +509,33 @@ function App() {
   }
   const updated = data && data.homes && data.homes.map((h) => h.refreshed_at).filter(Boolean).sort().pop();
 
+  // a decision's card, while it is still in the app (a round answered in the last 48 hours)
+  const cardHref = (home, d) => {
+    const x = all.find((y) => y.home === home && y.card === d.card && y.kind === "round");
+    return x ? "#/q/" + encodeURIComponent(home) + "/" + encodeURIComponent(d.card) : null;
+  };
+  // what a round belongs to: its task (by title) or its initiative, to link back to
+  const ownerOf = (it) => {
+    if (!it) return null;
+    const h = (data && data.homes || []).find((x) => x.name === it.home);
+    const snap = h && h.snapshot;
+    if (it.task) {
+      const t = ((snap && snap.tasks) || []).find((x) => x.id === it.task);
+      return { kind: "task", title: t ? t.title : it.task, href: "#/t/" + encodeURIComponent(it.home) + "/" + encodeURIComponent(it.task) };
+    }
+    if (it.initiative) {
+      const ini = ((snap && snap.initiatives) || []).find((x) => x.id === it.initiative);
+      return { kind: "initiative", title: ini ? ini.name : it.initiative, href: "#/i/" + encodeURIComponent(it.home) + "/" + encodeURIComponent(it.initiative) };
+    }
+    return null;
+  };
   let main, aside = null;
   if (!data && !loadErr) main = html`<main class="a-main"><div class="a-head"><div class="a-head-l"><h1>Needs me</h1></div></div><div class="notice"><span>Reading every home…</span></div></main>`;
   else if (route.name === "round") {
     const it = roundItem;
     main = html`<${RoundPage} it=${it && !it.sent && local[it.key] ? Object.assign({}, it, { sent: { at: new Date(it.at).toISOString(), via: "app", pending: obState[it.key] === "pending" } }) : it} picks=${(it && picks[it.key]) || {}} notes=${(it && notes[it.key]) || {}} busy=${false}
       setPick=${(q, l) => pick(it.key, q, l)} setNote=${(q, t) => note(it.key, q, t)} focus=${focusQ} setFocus=${setFocusQ}
-      onSubmit=${submitRound} onBack=${() => go("#/")} />`;
+      onSubmit=${submitRound} onBack=${() => go("#/")} owner=${ownerOf(it)} />`;
   } else if (route.name === "board") {
     const prsMap = (data && data.prs) || {};
     main = html`<${BoardPage} all=${boardAll} list=${boardList} filters=${boardFilters} setFilters=${setBoardFilters}
@@ -541,7 +561,7 @@ function App() {
       onOpen=${(i) => go("#/i/" + encodeURIComponent(i.home) + "/" + encodeURIComponent(i.id))} />`;
   } else if (route.name === "initiative") {
     const initAct = (action, body, label) => setOutbox((o) => o.concat([OB.create(route.home, action, body, null, label, Date.now())]));
-    main = html`<${InitiativePage} home=${route.home} hue=${hueOf(route.home)} id=${route.id} version=${data && data.version} prs=${(data && data.prs) || {}}
+    main = html`<${InitiativePage} home=${route.home} hue=${hueOf(route.home)} id=${route.id} version=${data && data.version} prs=${(data && data.prs) || {}} cardHref=${cardHref}
       tasksByHome=${tasksByHome} onAct=${initAct} onBack=${() => go("#/i")} toast=${toast}
       onOpenTask=${(home, task) => go("#/t/" + encodeURIComponent(home) + "/" + encodeURIComponent(task))}
       onOpenRound=${(card) => go("#/q/" + encodeURIComponent(route.home) + "/" + encodeURIComponent(card))} />`;
@@ -556,7 +576,7 @@ function App() {
       setOutbox((o) => o.concat([OB.create(route.home, action, body, key, label, Date.now())]));
       if (action === "accept" || action === "close") toast(label);
     };
-    main = html`<${TicketPage} home=${route.home} hue=${hueOf(route.home)} id=${route.id} version=${data && data.version} prs=${(data && data.prs) || {}}
+    main = html`<${TicketPage} home=${route.home} hue=${hueOf(route.home)} id=${route.id} version=${data && data.version} prs=${(data && data.prs) || {}} cardHref=${cardHref}
       item=${it} machine=${h && h.snapshot ? h.snapshot.machine : null} onAct=${ticketAct} onBack=${() => go("#/")} toast=${toast}
       askProps=${{ picks: raw && picks[raw.key], setPick: (q, l) => raw && pick(raw.key, q, l), note: raw && (notes[raw.key] || {})[1],
         setNote: (t) => raw && note(raw.key, 1, t), busy: false, onAct: perform, onDetails: openDetails, prs: (data && data.prs) || {}, undelivered }} />`;

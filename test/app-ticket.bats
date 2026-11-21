@@ -127,3 +127,38 @@ steers() { events "$T" | grep -c ' steered: ' || true; }
   # a byte range, for video in Safari
   [ "$(curl -s -H 'Range: bytes=0-4' "http://127.0.0.1:$PORT/api/v1/homes/acme/tasks/$T/attachments/$note")" = "plain" ]
 }
+
+@test "decisions: every answered card of a task is on its ticket, and on its initiative's page, each question with its answer" {
+  # a grilling round the XO posted for the task, answered: every question in its own words
+  cat >"$BATS_TEST_TMPDIR/round.json" <<JSON
+{"title": "The badge, before it ships", "project": "shop", "task": "$T", "questions": [
+  {"id": 1, "text": "Count stock per warehouse or in total?", "options": [{"label": "In total", "rec": true}, {"label": "Per warehouse"}]},
+  {"id": 2, "text": "Show the badge on bundles?", "options": [{"label": "Yes"}, {"label": "No"}]}]}
+JSON
+  q="$(cr ask "$BATS_TEST_TMPDIR/round.json")"
+  jq -n '{answers: [{q: 1, choice: "In total"}, {q: 2, choice: "No", note: "bundles are a later story"}]}' | cr ask answer "$q" - >/dev/null
+  # a choice card withdrawn decided nothing; one of another task is not this one's
+  w="$(cr ask --title "Ship on Friday?" --option Yes --option No --task "$T")"
+  cr ask withdraw "$w" >/dev/null
+  o="$(cr status --json | jq -r '.[] | select(.title | test("sitemap"; "i")) | .id')"
+  x="$(cr ask --title "Purge first?" --option Yes --option No --task "$o")"
+  cr ask answer "$x" --pick 1 >/dev/null
+  # the task's own ask (a worker's decision), answered as from the app
+  ev="$(cr app snapshot --json | jq -r --arg t "$(cr status --json | jq -r '.[] | select(.title | test("cache"; "i")) | .id')" '.needs[] | select(.task == $t) | .card')"
+  jq -n '{answers: [{q: 1, choice: "An in-process LRU", note: "keep it simple"}]}' | cr ask answer "$ev" --via app - >/dev/null
+  c="$(cr status --json | jq -r '.[] | select(.title | test("cache"; "i")) | .id')"
+
+  d="$(cr app task "$T" --json | jq -c .decisions)"
+  [ "$(jq 'length' <<<"$d")" -eq 1 ]
+  [ "$(jq -r '.[0] | "\(.card) \(.kind) \(.title) \(.questions | length)"' <<<"$d")" = "$q round The badge, before it ships 2" ]
+  [ "$(jq -r '.[0].questions[1] | "\(.text)|\(.choice)|\(.note)"' <<<"$d")" = "Show the badge on bundles?|No|bundles are a later story" ]
+  dc="$(cr app task "$c" --json | jq -c .decisions)"
+  [ "$(jq -r '.[0] | "\(.kind) \(.questions[0].choice) \(.questions[0].note)"' <<<"$dc")" = "decision An in-process LRU keep it simple" ]
+  [[ "$(jq -r '.[0].title' <<<"$dc")" == "Which cache for search?"* ]]
+
+  # the initiative the task belongs to lists them too, by task
+  i="$(cr initiative new --name "Faster product pages")"
+  st="$(cr initiative story add "$i" --title "The stock badge")"
+  cr initiative story link "$i" "$st" "$T" >/dev/null
+  [ "$(cr initiative show "$i" --json | jq -r '.task_decisions | map("\(.task) \(.card)") | join(",")')" = "$T $q" ]
+}
