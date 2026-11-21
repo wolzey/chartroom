@@ -75,7 +75,7 @@ nodes_probe_all() { # <machines json> <dir> <remote to look for, or "">
   for ((i = 0; i < n; i++)); do
     IFS=$'\t' read -r loc target < <(jq -r --argjson i "$i" '.[$i] | [.local, (.target // "")] | @tsv' <<<"$machines")
     if [[ "$loc" == true ]]; then
-      ( rc=0; CR_PROBE_PROJECT="$want" bash "$CR_ROOT/lib/nodeprobe.sh" >"$dir/$i.out" 2>"$dir/$i.err" </dev/null || rc=$?; echo "$rc" >"$dir/$i.rc" ) 2>/dev/null &
+      ( rc=0; CHARTROOM_LOGIN_SHELL="$(login_shell)" CR_PROBE_PROJECT="$want" bash "$CR_ROOT/lib/nodeprobe.sh" >"$dir/$i.out" 2>"$dir/$i.err" </dev/null || rc=$?; echo "$rc" >"$dir/$i.rc" ) 2>/dev/null &
     else
       cmd="PATH=\"$(radar_remote_path):\$PATH\"${want:+ CR_PROBE_PROJECT='$want'} bash -s"
       ( rc=0; radar_ssh_opts; ssh "${RADAR_SSH_O[@]}" -- "$target" "$cmd" <"$CR_ROOT/lib/nodeprobe.sh" >"$dir/$i.out" 2>"$dir/$i.err" || rc=$?
@@ -237,7 +237,8 @@ cmd_nodes() {
 
 # ---------------------------------------------------------------- node probe / node init
 
-node_probe_local() { CR_PROBE_PROJECT="${1:-}" bash "$CR_ROOT/lib/nodeprobe.sh" </dev/null; }
+# (this machine's login shell as chartroom's settings name it, the config file included)
+node_probe_local() { CHARTROOM_LOGIN_SHELL="$(login_shell)" CR_PROBE_PROJECT="${1:-}" bash "$CR_ROOT/lib/nodeprobe.sh" </dev/null; }
 
 # Writes this machine's node file: its budgets, so `chartroom nodes` (and, from stage 3, placement)
 # counts it in. Defaults from its own probe: half its performance cores as workers, cpu 100% on

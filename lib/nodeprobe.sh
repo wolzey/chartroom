@@ -13,7 +13,7 @@
 # Tools are checked on the PATH a worker would get: the user's interactive login shell's
 # ($SHELL -lic, as lib/core.sh login_path reads it: mise, asdf and the like are set up only
 # there), read from chartroom's 10-minute cache when it is fresh, else asked here (bounded at
-# 10 s; the probe still writes nothing). CHARTROOM_LOGIN_SHELL names another shell, or "none"
+# 10 s; the probe itself writes nothing, though the shell's rc files run as in a new terminal). CHARTROOM_LOGIN_SHELL names another shell, or "none"
 # to keep the probe's own PATH. `path_source` says which: login or inherited.
 #
 # Logins are checked where a worker would run. A Mac's login keychain is closed to an ssh

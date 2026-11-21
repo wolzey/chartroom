@@ -175,6 +175,15 @@ remote_probe() { # <target> [initialised 0|1]
   mkdir -p "$XDG_STATE_HOME/chartroom"; printf '%s' "/cached/bin:$PATH" >"$XDG_STATE_HOME/chartroom/login-path"
   run cr node probe
   [ "$(tool_line node)" = $'missing\t-' ]
+  # the shell may come from chartroom's config file, or the older CHARTROOM_BRAIN_LOGIN_SHELL
+  unset CHARTROOM_LOGIN_SHELL; export CHARTROOM_CONFIG="$BATS_TEST_TMPDIR/cfg"
+  printf 'CHARTROOM_BRAIN_LOGIN_SHELL=%s\n' "$BIN/loginsh" >"$CHARTROOM_CONFIG"
+  run cr node probe
+  [ "$(probe_val path_source)" = login ]
+  printf 'CHARTROOM_LOGIN_SHELL=none\nCHARTROOM_BRAIN_LOGIN_SHELL=%s\n' "$BIN/loginsh" >"$CHARTROOM_CONFIG"
+  run cr node probe
+  [ "$(probe_val path_source)" = inherited ]
+  printf 'CHARTROOM_LOGIN_SHELL=%s\n' "$BIN/loginsh" >"$CHARTROOM_CONFIG"
   # a shell that answers nothing usable leaves the probe's own PATH
   rm -f "$XDG_STATE_HOME/chartroom/login-path"; printf '#!/bin/sh\necho no path here\n' >"$BIN/loginsh"
   run cr node probe
