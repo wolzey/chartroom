@@ -237,6 +237,19 @@ store_meta_set() { # <id> <key> <value>
   store_py meta-set "${STORE_HOME_ARGS[@]}" --id "$1" --key "$2" --value "$3" || exit 1
   store_reset; store_stamp
 }
+# The app's records born in the store (store.py docs): one JSON doc per (kind, id).
+store_doc_put() { # <kind> <id> <json> [upsert|insert]: insert returns 4, quietly, when there is one
+  store_home_ensure
+  local rc=0 err
+  err="$(store_py doc-put "${STORE_HOME_ARGS[@]}" --kind "$1" --id "$2" --json "$3" --mode "${4:-upsert}" 2>&1 >/dev/null)" || rc=$?
+  (( rc == 4 )) && return 4
+  (( rc == 0 )) || { printf '%s\n' "$err" >&2; exit 1; }
+  store_stamp
+}
+store_doc_list() { # <kind> [id]: its docs, one JSON line each, oldest first; nothing for a home not in the store
+  store_uid_of; [[ -n "$STORE_UID" ]] || return 0
+  store_py doc-list "${STORE_HOME_ARGS[@]}" --kind "$1" ${2:+--id "$2"} || die "could not read the store (${STORE_DB:-$CR_DB})"
+}
 store_meta_set_json() { # <id> <key> <json value | "">: "" takes the key out
   if [[ -z "$3" ]]; then store_py meta-set "${STORE_HOME_ARGS[@]}" --id "$1" --key "$2" --delete || exit 1
   else store_py meta-set "${STORE_HOME_ARGS[@]}" --id "$1" --key "$2" --json "$3" || exit 1; fi

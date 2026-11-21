@@ -11,7 +11,11 @@
 #            them (lib/dashboard/eventfmt.js), so there is no record to write and no migration.
 #   i-xxxx   an open "Waiting on the commander" inbox item.
 # An answer is questions/<id>.answer.json, created only if absent (noclobber): the first answer
-# wins, from the app or the terminal, and a second is refused with who answered and when. An answer
+# wins, from the app or the terminal, and a second is refused with who answered and when.
+# With the store on (CHARTROOM_STORE=sqlite), a new q- card is a store doc (kind card) instead of
+# its file. An answer lives where its card does (ask_place), so the first one wins in one place:
+# a file card's in its noclobber file, a store card's as a store doc (kind answer) the store
+# inserts only once; a worker's ask follows its task, an inbox item's follows the item. An answer
 # from the app is also told to the XO as the commander's words (lib/tell.sh), so the XO relays a
 # worker's answer with `steer` and records the rest, as it would an answer typed in its session.
 #
@@ -138,11 +142,15 @@ ask_post() { # <file|-> | quick flags
   fi
   jq -e . >/dev/null 2>&1 <<<"$json" || die "ask: the card is not JSON"
   local d id card kind; d="$(ask_dir)"
-  mkdir -p "$d"
-  while true; do id="q-$(rand_hex4)"; [[ -e "$d/$id.json" ]] || break; done
+  while true; do id="q-$(rand_hex4)"; [[ -e "$d/$id.json" || -n "$(store_doc_list card "$id")" ]] || break; done
   card="$(ask_normalize "$id" "$(now)" <<<"$json")"
   if kind="$(relay_secret_kind "$card")"; then die "ask refused: the card looks like it holds $kind (nothing was posted)"; fi
-  printf '%s\n' "$card" >"$d/$id.json.tmp" && mv "$d/$id.json.tmp" "$d/$id.json"
+  if store_on; then
+    store_doc_put card "$id" "$card" insert || die "ask: card id $id was taken just now; post it again"
+  else
+    mkdir -p "$d"
+    printf '%s\n' "$card" >"$d/$id.json.tmp" && mv "$d/$id.json.tmp" "$d/$id.json"
+  fi
   stamp_changed
   printf '%s\n' "$id"
 }
@@ -152,7 +160,7 @@ ask_post() { # <file|-> | quick flags
 ask_card_json() { # <id>
   local id="$1"
   case "$(ask_kind "$id")" in
-    q) [[ -f "$(ask_dir)/$id.json" ]] || return 1; cat "$(ask_dir)/$id.json" ;;
+    q) ask_posted_card "$id" ;;
     ev)
       [[ "$id" =~ ^ev-(.+)-([0-9]+)$ ]] || return 1
       local task="${BASH_REMATCH[1]}" off="${BASH_REMATCH[2]}" got
@@ -170,6 +178,61 @@ ask_card_json() { # <id>
 }
 
 ask_answer_file() { printf '%s/%s.answer.json' "$(ask_dir)" "$1"; }
+
+# An inbox item born in the store (lib/store.sh renders them into .inbox.json).
+inbox_in_store() { # <i-id>
+  store_load || return 1
+  [[ -s "$STORE_D/.inbox.json" ]] && jq -e --arg id "$1" 'any(.[]; .id == $id)' "$STORE_D/.inbox.json" >/dev/null
+}
+
+# Where a card and its answer live: db (store docs) or file (questions/).
+ask_place() { # <id>
+  case "$(ask_kind "$1")" in
+    q) if [[ -f "$(ask_dir)/$1.json" ]]; then echo file
+       elif [[ -n "$(store_doc_list card "$1")" ]]; then echo db
+       else echo file; fi ;;
+    ev) [[ "$1" =~ ^ev-(.+)-([0-9]+)$ ]] && is_store_task "${BASH_REMATCH[1]}" && { echo db; return 0; }; echo file ;;
+    inbox) if inbox_in_store "$1"; then echo db; else echo file; fi ;;
+    *) echo file ;;
+  esac
+}
+
+# A posted card (q-), from wherever it lives; fails when there is none.
+ask_posted_card() { # <q-id>
+  local f; f="$(ask_dir)/$1.json"
+  if [[ -f "$f" ]]; then cat "$f"; return 0; fi
+  local c; c="$(store_doc_list card "$1")"
+  [[ -n "$c" ]] && printf '%s\n' "$c"
+}
+
+# The card's answer (its JSON), or nothing while it is open.
+ask_answer_get() { # <id>
+  if [[ "$(ask_place "$1")" == db ]]; then store_doc_list answer "$1"
+  else local f; f="$(ask_answer_file "$1")"; [[ ! -f "$f" ]] || cat "$f"; fi
+}
+
+# The first answer, kept only if there is none yet: fails when one is there already.
+ask_answer_put() { # <id> <record>
+  if [[ "$(ask_place "$1")" == db ]]; then store_doc_put answer "$1" "$2" insert || return 1; return 0; fi
+  mkdir -p "$(ask_dir)"
+  ( set -o noclobber; printf '%s\n' "$2" >"$(ask_answer_file "$1")" ) 2>/dev/null
+}
+
+# The answer kept, updated after it won (who was told).
+ask_answer_set() { # <id> <record>
+  if [[ "$(ask_place "$1")" == db ]]; then store_doc_put answer "$1" "$2"; return; fi
+  local f; f="$(ask_answer_file "$1")"
+  printf '%s\n' "$2" >"$f.tmp" && mv "$f.tmp" "$f"
+}
+
+# Every answer kept, {card id: answer}: the files and the store's.
+answers_json() {
+  local d afiles=() st; d="$(ask_dir)"
+  if [[ -d "$d" ]]; then shopt -s nullglob; afiles=("$d"/*.answer.json); shopt -u nullglob; fi
+  st="$(store_doc_list answer | jq -s -c .)" || exit 1
+  { [[ ${#afiles[@]} -eq 0 ]] || cat "${afiles[@]}"; } | jq -s -c --argjson st "$st" '
+    (. + $st) | map(select(type == "object" and (.id | type) == "string") | {key: .id, value: .}) | from_entries' 2>/dev/null || echo '{}'
+}
 
 # The commander's words for an answer: what the XO reads in its wake.
 ask_words() { # <card-json> <answer-json>
@@ -209,9 +272,9 @@ ask_answer() {
   [[ -n "$id" ]] || die "$(ask_usage)"
   [[ "$via" =~ ^(app|terminal)$ ]] || die "ask answer: --via is app or terminal"
   local card; card="$(ask_card_json "$id")" || die "ask answer: no open card $id (chartroom ask list)"
-  local f; f="$(ask_answer_file "$id")"
-  if [[ -f "$f" ]]; then
-    die "ask answer: $id was already answered ($(jq -r '"by \(.via) at \(.at)" + (if .withdrawn then ", withdrawn" else "" end)' "$f" 2>/dev/null || echo "earlier"))"
+  local had; had="$(ask_answer_get "$id")"
+  if [[ -n "$had" ]]; then
+    die "ask answer: $id was already answered ($(jq -r '"by \(.via) at \(.at)" + (if .withdrawn then ", withdrawn" else "" end)' <<<"$had" 2>/dev/null || echo "earlier"))"
   fi
   # A worker's ask is answerable only while it is the worker's open question: once the task moved
   # on (the XO answered it in the terminal with steer, or the worker asked something newer), an
@@ -267,10 +330,9 @@ ask_answer() {
     bytes="$(printf '%s' "$words" | wc -c | tr -d ' ')"
     (( bytes <= CR_TELL_MAX )) || die "ask answer: the answer is $bytes bytes as words for the XO; at most $CR_TELL_MAX"
   fi
-  mkdir -p "$(ask_dir)"
-  # The first answer wins: the file is created only if it is not there yet.
-  if ! ( set -o noclobber; printf '%s\n' "$rec" >"$f" ) 2>/dev/null; then
-    die "ask answer: $id was already answered ($(jq -r '"by \(.via) at \(.at)"' "$f" 2>/dev/null || echo "just now"))"
+  # The first answer wins: it is kept only if there is none yet (a noclobber file, or a store insert).
+  if ! ask_answer_put "$id" "$rec"; then
+    die "ask answer: $id was already answered ($(ask_answer_get "$id" | jq -r '"by \(.via) at \(.at)"' 2>/dev/null || echo "just now"))"
   fi
   # From the app, the XO hears it as the commander's words; in the terminal it already has them.
   if [[ "$via" == app ]]; then
@@ -279,9 +341,9 @@ ask_answer() {
     project="$(jq -r '.project // empty' <<<"$card")"
     [[ -n "$project" ]] || { [[ "$re" == "$id" ]] || project="$(project_label "$re" 2>/dev/null || true)"; }
     told="$(tell_send --via app --re "$re" ${project:+--project "$project"} -- "$words")" ||
-      warn "answered $id, but could not tell the XO; it is in $(ask_answer_file "$id")"
+      warn "answered $id, but could not tell the XO; the answer is kept (chartroom ask show $id)"
     if [[ -n "$told" ]]; then
-      jq -c --arg t "$told" '.told = $t' "$f" >"$f.tmp" && mv "$f.tmp" "$f"
+      ask_answer_set "$id" "$(jq -c --arg t "$told" '.told = $t' <<<"$rec")"
     fi
   fi
   # an answered card of an initiative is one of its decisions, numbered, linked to the card
@@ -295,10 +357,9 @@ ask_answer() {
 
 ask_withdraw() {
   local id="${1:-}"; shift || true
-  [[ "$id" =~ $CR_ASK_ID_RE && -f "$(ask_dir)/$id.json" ]] || die "ask withdraw: no card $id (a q-xxxx the XO posted)"
-  local f; f="$(ask_answer_file "$id")"
+  [[ "$id" =~ $CR_ASK_ID_RE ]] && ask_posted_card "$id" >/dev/null || die "ask withdraw: no card $id (a q-xxxx the XO posted)"
   local rec; rec="$(jq -n -c --arg id "$id" --arg at "$(now)" --arg r "$*" '{schema: 1, id: $id, at: $at, via: "xo", withdrawn: true, note: (if $r == "" then null else $r end), answers: []}')"
-  ( set -o noclobber; printf '%s\n' "$rec" >"$f" ) 2>/dev/null || die "ask withdraw: $id was already answered"
+  ask_answer_put "$id" "$rec" || die "ask withdraw: $id was already answered"
   stamp_changed
   echo "withdrew $id"
 }
@@ -310,15 +371,13 @@ asks_json() { # [--all]
   shopt -s nullglob
   local files=("$d"/q-*.json)
   shopt -u nullglob
-  local cards=() answers=() f
-  for f in "${files[@]+"${files[@]}"}"; do
-    case "$f" in *.answer.json) answers+=("$f") ;; *) cards+=("$f") ;; esac
-  done
-  [[ ${#cards[@]} -gt 0 ]] || { echo '[]'; return 0; }
-  jq -s -c --argjson all "$all" '
-    (map(select(.answers != null or .withdrawn == true)) | map({key: .id, value: .}) | from_entries) as $ans
-    | [.[] | select(.questions != null) | . + {answer: $ans[.id]}] | map(select($all or .answer == null))
-    | sort_by(.asked_at) | reverse' "${cards[@]}" "${answers[@]+"${answers[@]}"}"
+  local st
+  st="$({ store_doc_list card; store_doc_list answer; } | jq -s -c .)" || exit 1
+  { [[ ${#files[@]} -eq 0 ]] || cat "${files[@]}"; } | jq -s -c --argjson all "$all" --argjson st "$st" '
+    (. + $st) as $docs
+    | ($docs | map(select(.answers != null or .withdrawn == true)) | map({key: .id, value: .}) | from_entries) as $ans
+    | [$docs[] | select(.questions != null) | . + {answer: $ans[.id]}] | map(select($all or .answer == null))
+    | sort_by(.asked_at) | reverse' 
 }
 
 ask_list() {
@@ -340,7 +399,7 @@ ask_show() {
   for a in "$@"; do case "$a" in --json) json=1 ;; *) id="$a" ;; esac; done
   [[ -n "$id" ]] || die "usage: chartroom ask show <id> [--json]"
   local card ans="null" f; card="$(ask_card_json "$id")" || die "ask show: no card $id"
-  f="$(ask_answer_file "$id")"; [[ -f "$f" ]] && ans="$(cat "$f")"
+  f="$(ask_answer_get "$id")"; [[ -z "$f" ]] || ans="$f"
   if [[ $json -eq 1 ]]; then jq --argjson a "$ans" '. + {answer: $a}' <<<"$card"; return; fi
   jq -r --argjson a "$ans" '
     if .kind == "event" then "\(.id): \(.task)'"'"'s \(.event_kind)\n  \(.text)"

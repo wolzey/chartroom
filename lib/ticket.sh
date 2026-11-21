@@ -279,7 +279,7 @@ ticket_json() { # <id>
       kind: ($line | capture("^[^ ]+ (?<k>[a-z-]+):") | if .k == "agent" then "awaiting-input" else .k end)}')"
   fi
   local answer=null
-  [[ "$ask" != null && -f "$(ask_dir)/ev-$id-$off.answer.json" ]] && answer="$(cat "$(ask_dir)/ev-$id-$off.answer.json")"
+  if [[ "$ask" != null ]]; then answer="$(ask_answer_get "ev-$id-$off")"; [[ -n "$answer" ]] || answer=null; fi
   jq -n -c --argjson row "$row" --argjson extra "$(dashboard_task_extra "$id")" --argjson meta "$(cat "$META_PATH")" \
     --argjson sections "$(brief_sections_json "$id")" --argjson ask "$ask" --argjson answer "$answer" \
     --argjson attachments "$(attachments_json "$id")" --argjson links "$(links_json "$id")" \

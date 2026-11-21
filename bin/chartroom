@@ -935,7 +935,9 @@ status_store_rows() {
 cmd_status() {
   local json=0 all=0 a rows=() row focus
   for a in "$@"; do case "$a" in --json) json=1 ;; --all) all=1 ;; esac; done
-  while IFS= read -r row; do rows+=("$row"); done < <(if [[ $all -eq 1 ]]; then status_rows --all; else status_rows; fi)
+  # (read whole first: a store that cannot be read fails the command, never shows an empty crew)
+  local out; out="$(if [[ $all -eq 1 ]]; then status_rows --all; else status_rows; fi)" || exit 1
+  while IFS= read -r row; do [[ -n "$row" ]] && rows+=("$row"); done <<<"$out"
   if [[ $json -eq 1 ]]; then printf '%s\n' "${rows[@]+"${rows[@]}"}" | jq -s .; return; fi
   # Focus mode leads, so it is never left on unseen; the count is the board's (rows + inbox).
   focus="$(focus_json)"

@@ -62,7 +62,10 @@ app_serve_url() { # <port>
 app_snapshot_json() {
   local since row id rows=() extra ask intent off line
   printf -v since '%(%s)T' -1; since=$((since - CR_APP_RECENT_HOURS * 3600))
+  # (read whole first: a store that cannot be read fails the snapshot, never shows an empty home)
+  local all_rows; all_rows="$(status_rows --all --since "$since")" || exit 1
   while IFS= read -r row; do
+    [[ -n "$row" ]] || continue
     id="$(jq -r .id <<<"$row")"
     extra="$(dashboard_task_extra "$id")"
     ask=null intent=""
@@ -81,15 +84,9 @@ app_snapshot_json() {
         prs: ([$links[] | select(.kind == "pr") | .url]), links: $links,
         priority: ($meta[0].priority // null), labels: ($meta[0].labels // []),
         initiative: ($meta[0].initiative // null), milestone: ($meta[0].milestone // null)}' <<<"$row")")
-  done < <(status_rows --all --since "$since")
-  local answers='{}' d f
-  d="$(ask_dir)"
-  if [[ -d "$d" ]]; then
-    shopt -s nullglob
-    local afiles=("$d"/*.answer.json)
-    shopt -u nullglob
-    [[ ${#afiles[@]} -eq 0 ]] || answers="$(jq -s -c 'map(select(type == "object" and (.id | type) == "string") | {key: .id, value: .}) | from_entries' "${afiles[@]}" 2>/dev/null || echo '{}')"
-  fi
+  done <<<"$all_rows"
+  local answers f
+  answers="$(answers_json)" || exit 1
   f="$(mktemp)"
   printf '%s\n' "${rows[@]+"${rows[@]}"}" | jq -s -c \
     --arg home "$CR_HOME" --arg home_name "$(home_name_of "$CR_HOME")" --arg version "$CR_VERSION" \

@@ -5,6 +5,9 @@
 #
 # snoozes.ndjson in the home, append-only, the newest record per ref winning:
 #   {"schema":1,"ref":"<id>","until":"<UTC>"|null,"at":"<UTC>"}     (until null: snooze off)
+# With the store on (CHARTROOM_STORE=sqlite), a new record is a store doc instead (kind snooze,
+# one per ref, the same JSON). Both are read: per ref, the newest by "at" wins, the store's on a
+# tie, so a snooze off in the store ends a snooze from the file.
 
 CR_SNOOZE_REF_RE='^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$'
 
@@ -13,17 +16,20 @@ snooze_usage() { echo "usage: chartroom snooze <ref> (--for 30m|4h|2d | --until 
 
 # {ref: until} for every snooze still in force (until in the future); --all: the newest per ref.
 snoozes_json() { # [--all]
-  local f all=false; f="$(snooze_file)"
+  local f all=false st; f="$(snooze_file)"
   [[ "${1:-}" == --all ]] && all=true
-  [[ -f "$f" ]] || { echo '{}'; return 0; }
-  jq -R -s -c --argjson all "$all" '
+  st="$(store_doc_list snooze | jq -s -c .)" || exit 1
+  { [[ -f "$f" ]] && cat "$f"; true; } | jq -R -s -c --argjson all "$all" --argjson store "$st" '
     [split("\n")[] | fromjson? | select(type == "object" and (.ref | type) == "string")]
+    | (. + [$store[] | select(type == "object" and (.ref | type) == "string")])
+    | (to_entries | sort_by(.value.at // "", .key) | map(.value))
     | reduce .[] as $r ({}; .[$r.ref] = $r.until)
-    | with_entries(select($all or (.value != null and ((.value | fromdateiso8601? // 0) > now))))' "$f"
+    | with_entries(select($all or (.value != null and ((.value | fromdateiso8601? // 0) > now))))'
 }
 
 snooze_write() { # <ref> <until|"">
-  jq -n -c --arg r "$1" --arg u "$2" --arg at "$(now)" '{schema: 1, ref: $r, until: (if $u == "" then null else $u end), at: $at}' >>"$(snooze_file)"
+  local rec; rec="$(jq -n -c --arg r "$1" --arg u "$2" --arg at "$(now)" '{schema: 1, ref: $r, until: (if $u == "" then null else $u end), at: $at}')"
+  if store_on; then store_doc_put snooze "$1" "$rec"; else printf '%s\n' "$rec" >>"$(snooze_file)"; fi
   stamp_changed
 }
 

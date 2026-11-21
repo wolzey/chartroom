@@ -98,11 +98,14 @@ dashboard_json() { # [pr-states-file]
   # cutoff is taken before lanes.jq takes its own, so it never leaves out a task lanes.jq keeps.
   printf -v since '%(%s)T' -1; since=$((since - 10#$hours * 3600))
   # (a store task's row carries its extras already, from the same read of the store: lib/store.py)
+  # (read whole first: a store that cannot be read fails the board, never shows an empty one)
+  local all_rows; all_rows="$(CR_ROWS_EXTRA=1 status_rows --all --since "$since" ${CR_BOARD_ID:+--id "$CR_BOARD_ID"})" || exit 1 # CR_BOARD_ID (`show`): that task alone; the inbox stays
   while IFS= read -r row; do
+    [[ -n "$row" ]] || continue
     if [[ "$row" == *'"_extra":'* ]]; then rows+=("$row"); continue; fi
     id="$(jq -r .id <<<"$row")"
     rows+=("$(jq -c --argjson x "$(dashboard_task_extra "$id")" '. + $x' <<<"$row")")
-  done < <(CR_ROWS_EXTRA=1 status_rows --all --since "$since" ${CR_BOARD_ID:+--id "$CR_BOARD_ID"}) # CR_BOARD_ID (`show`): that task alone; the inbox stays
+  done <<<"$all_rows"
   if [[ ${#rows[@]} -gt 0 && "${rows[*]}" == *'"_extra":'* ]]; then
     mapfile -t rows < <(printf '%s\n' "${rows[@]}" | jq -c 'if has("_extra") then (. + ._extra | del(._extra)) else . end')
   fi

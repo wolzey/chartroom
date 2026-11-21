@@ -24,6 +24,12 @@ Tables (PRAGMA user_version 2; each version is a forward-only migration in MIGRA
           whom, why. The item itself is never written (lib/marks.sh).
   inbox   (2) inbox items born in the store, read beside inbox.md's lines
   focus   (2) the home's focus while the switch is on (lib/focus.sh), one row
+  docs    (3) the app's records born in the store, each the JSON doc its file would hold, under
+          its own id: (kind, id) -> doc. kind snooze (one per ref, the newest wins), card (an
+          ask the XO posted), answer (one per card: the first insert wins, a second is refused)
+  compat  (3) min_reader: the oldest schema whose store.py may still use this database. A newer
+          store.py whose migrations only add tables leaves it, so an older chartroom keeps
+          working beside it; one that changes what is there raises it.
 
 The task's events render as the exact lines an events.log holds, "<ts> <kind>: <text>\\n", in seq
 order. Rendering is deterministic and append-only, so a byte offset into the rendered text stays
@@ -38,7 +44,7 @@ import sqlite3
 import sys
 import time
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # meta.json keys kept as columns (the rest go in `extra`). The order is the one `chartroom new`
 # writes a meta.json in, which the rendered file keeps; later columns follow the extra keys.
@@ -101,7 +107,21 @@ CREATE TABLE focus (
   doc TEXT NOT NULL
 );
 """,
+    3: """
+CREATE TABLE docs (
+  hid INTEGER NOT NULL REFERENCES homes(hid),
+  kind TEXT NOT NULL,
+  id TEXT NOT NULL,
+  doc TEXT NOT NULL,
+  at TEXT NOT NULL,
+  PRIMARY KEY (hid, kind, id)
+);
+CREATE TABLE compat (min_reader INTEGER NOT NULL);
+INSERT INTO compat (min_reader) VALUES (2);
+""",
 }
+DOC_KINDS = ("snooze", "card", "answer")
+DOC_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 
 ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
@@ -150,7 +170,7 @@ def connect(create):
 def migrate(conn):
     v = conn.execute("PRAGMA user_version").fetchone()[0]
     if v >= SCHEMA_VERSION:
-        if v > SCHEMA_VERSION:
+        if v > SCHEMA_VERSION and min_reader(conn) > SCHEMA_VERSION:
             raise Fail("the store at %s is schema %d, newer than this chartroom (%d): update chartroom" % (db_path(), v, SCHEMA_VERSION))
         return
     conn.execute("BEGIN IMMEDIATE")
@@ -166,6 +186,16 @@ def migrate(conn):
     except BaseException:
         conn.execute("ROLLBACK")
         raise
+
+
+def min_reader(conn):
+    """The oldest schema that may use this database (compat, from schema 3); a database from
+    before compat has none recorded, which means its own version."""
+    try:
+        row = conn.execute("SELECT MIN(min_reader) FROM compat").fetchone()
+    except sqlite3.OperationalError:
+        return conn.execute("PRAGMA user_version").fetchone()[0]
+    return row[0] if row and row[0] is not None else conn.execute("PRAGMA user_version").fetchone()[0]
 
 
 class Tx:
@@ -726,6 +756,51 @@ def marks_doc(conn, hid):
 INBOX_TAG = re.compile(r"^- \[(i-[0-9a-f]{4,})\] ", re.M)
 
 
+# ------------------------------------------------------------------ docs (the app's records)
+
+
+def doc_check(kind, did):
+    if kind not in DOC_KINDS:
+        raise Fail("doc: '%s' is not a kind of record the store keeps (%s)" % (kind, ", ".join(DOC_KINDS)))
+    if not DOC_ID_RE.match(did or ""):
+        raise Fail("doc: '%s' is not a record id" % did)
+
+
+def doc_put(conn, home, kind, did, doc, mode):
+    """mode upsert: the doc replaces any before it (a snooze). mode insert: only if there is none
+    yet, else exit 4 (an answer: the first one wins)."""
+    doc_check(kind, did)
+    try:
+        body = json.loads(doc)
+    except ValueError:
+        raise Fail("doc: not JSON")
+    if not isinstance(body, dict):
+        raise Fail("doc: a JSON object")
+    at = body.get("at") if isinstance(body.get("at"), str) else now()
+    text = json.dumps(body, separators=(",", ":"))
+    with Tx(conn):
+        hid = home.hid(conn, create=True)
+        if mode == "insert":
+            cur = conn.execute("INSERT OR IGNORE INTO docs(hid, kind, id, doc, at) VALUES (?, ?, ?, ?, ?)", (hid, kind, did, text, at))
+            if cur.rowcount == 0:
+                raise Fail("doc: %s %s exists" % (kind, did), 4)
+        else:
+            conn.execute("INSERT INTO docs(hid, kind, id, doc, at) VALUES (?, ?, ?, ?, ?) "
+                         "ON CONFLICT(hid, kind, id) DO UPDATE SET doc = excluded.doc, at = excluded.at", (hid, kind, did, text, at))
+
+
+def doc_list(conn, home, kind, did=None):
+    """The kind's docs, one JSON line each, oldest first (by at, then by when they were written)."""
+    if conn is None:
+        return
+    hid = home.hid(conn)
+    if hid is None:
+        return
+    q = "SELECT doc FROM docs WHERE hid = ? AND kind = ?" + (" AND id = ?" if did is not None else "") + " ORDER BY at, rowid"
+    for (d,) in conn.execute(q, (hid, kind) + ((did,) if did is not None else ())):
+        sys.stdout.write(d + "\n")
+
+
 def inbox_add(conn, home, project, text):
     import random
     try:
@@ -1011,6 +1086,16 @@ def main(argv):
         items = [tuple(l.rstrip("\n").split("\t", 1)) for l in sys.stdin if "\t" in l]
         applied, failed = apply_marks(connect(True), home, opts.get("op", ""), opts.get("by", ""), opts.get("why", ""), items)
         print(json.dumps({"applied": applied, "failed": failed}))
+        return 0
+    if cmd == "doc-put":
+        mode = opts.get("mode", "upsert")
+        if mode not in ("upsert", "insert"):
+            raise Fail("doc-put: --mode upsert or insert")
+        doc_put(connect(True), home, opts.get("kind", ""), opts.get("id", ""), opts.get("json", ""), mode)
+        return 0
+    if cmd == "doc-list":
+        doc_check(opts.get("kind", ""), opts.get("id", "x"))
+        doc_list(connect(False), home, opts["kind"], opts.get("id"))
         return 0
     if cmd == "inbox-add":
         print(inbox_add(connect(True), home, opts.get("project", ""), opts.get("text", "")))

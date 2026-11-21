@@ -266,9 +266,7 @@ db() { python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); [print("|
     grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' |
     grep -vE '^bin/chartroom:[0-9]+:[[:space:]]{20,}' |
     grep -vE '^lib/app/server\.py:.*for rel in \("\.changed", ' |
-    # Pending, each removed by the slice that ports it: cards and answers (slice 3), the mailbox
-    # the watch reads (slice 4).
-    grep -vE '^lib/app\.sh:[0-9]+:.*(ask_dir|\.answer\.json)|^lib/ticket\.sh:[0-9]+:.*ask_dir' |
+    # Pending, removed by the slice that ports it: the mailbox the watch reads (slice 4).
     grep -vE '^bin/chartroom:[0-9]+:.*relay_dir\)/inbox\.ndjson' || true)"
   if [ -n "$out" ]; then printf 'outside their modules:\n%s\n' "$out" >&2; return 1; fi
 }
