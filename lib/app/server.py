@@ -1646,7 +1646,7 @@ def main():
     os.chdir(os.path.dirname(args.pidfile) if args.pidfile else "/")
     hub = Hub(args.bin)
     if not hub.discover():
-        sys.exit("chartroom app: no home to show (chartroom homes)")
+        sys.exit("chartroom app: no registered home to show (chartroom homes; register one with: chartroom homes add <name> <path>)")
     try:
         httpd = ThreadingHTTPServer((LOOPBACK, args.port), None)
     except OSError as exc:

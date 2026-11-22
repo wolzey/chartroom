@@ -255,9 +255,11 @@ cmd_init() {
     local c found=()
     for c in "$HOME/code" "$HOME/src" "$HOME/work" "$HOME/projects" "$HOME/dev"; do [[ -d "$c" ]] && found+=("$c"); done
     echo "No project roots set, so 'chartroom project <name>' needs a path."
+    echo "To search by name, add to $CR_CONFIG_FILE:"
     if [[ ${#found[@]} -gt 0 ]]; then
-      echo "To search by name, add to $CR_CONFIG_FILE:"
       echo "  CHARTROOM_PROJECT_ROOTS=$(IFS=:; echo "${found[*]}")"
+    else
+      echo "  CHARTROOM_PROJECT_ROOTS=<the directories that hold your checkouts, colon-separated>"
     fi
   fi
 }

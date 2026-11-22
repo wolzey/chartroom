@@ -19,6 +19,7 @@ setup() { common_setup; }
   grep -q chartroom "$CHARTROOM_HOME/AGENTS.md"
   grep -q '^## Waiting on the commander' "$CHARTROOM_HOME/inbox.md"
   [[ "$output" == *"No project roots set"* ]]
+  [[ "$output" == *"CHARTROOM_PROJECT_ROOTS="* ]] # says how to set them, with or without a guess
 }
 
 @test "init never overwrites an existing inbox" {
