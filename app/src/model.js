@@ -290,7 +290,8 @@ var AppModel = (function () {
       const base = { home: h.name, hue: (i % 5) + 1, machine: s.machine || null };
       for (const t of s.tasks || []) {
         const line = t.status === "working" || t.status === "waiting" ? headline(String(t.last_event || "").replace(/^[a-z-]+: /, "")) : null;
-        out.push(Object.assign({}, t, base, { key: h.name + ":" + t.id, type: "task", task: t.id, column: t.status === "closed" ? "done" : t.status, line }));
+        // a task pinned to a device runs there; the others on their home's machine
+        out.push(Object.assign({}, t, base, { machine: t.machine || base.machine, key: h.name + ":" + t.id, type: "task", task: t.id, column: t.status === "closed" ? "done" : t.status, line }));
       }
       // an initiative's approved stories that have no task yet: Queued (held ones wait on their "after")
       for (const ini of s.initiatives || []) {

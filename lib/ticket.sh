@@ -31,6 +31,7 @@ usage: chartroom attachment add <id> [--name N] [--type MIME] [--caption C] [--b
        chartroom brief <id> --sections <file|->   replace sections of the brief: {"Commander's intent": "...", "Spec": "..."}
        chartroom set <id> priority=urgent|high|medium|low|none labels=a,b initiative=<id>|none milestone=<id>|none
        chartroom set <id> model=<m> effort=<e> sandbox=<mode> permission=<mode>   (before dispatch)
+       chartroom set <id> node=<device>|here                                       (before dispatch)
 EOF
 }
 
@@ -238,6 +239,8 @@ CR_SET_KEYS='model|effort|sandbox|permission|priority|labels|initiative|mileston
 cmd_set() {
   local id="${1:-}"; need_task "$id"; shift
   [[ $# -ge 1 ]] || die "$(ticket_usage)"
+  # node=<device>|here: where it runs (lib/backends/node.sh), set on its own
+  if [[ "$1" == node=* ]]; then [[ $# -eq 1 ]] || die "set: node=... goes on its own"; node_pin "$id" "${1#node=}"; return; fi
   local kv k v l keys=() vals=() json=()
   for kv in "$@"; do
     [[ "$kv" == *=* ]] || die "set: '$kv' is not key=value"

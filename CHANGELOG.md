@@ -7,6 +7,11 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- **Pinned dispatch.** `chartroom new --node <device>` or `chartroom set <id> node=<device>` pins a task, and `dispatch` runs it on that device in a guest home of the device's own chartroom.
+  - **What comes back:** its event lines (each once, however often they are sent), report.md and plan.md, and its permission cards. An answer given on the brain reaches the worker waiting there.
+  - **Steer, stop and peek** go to it over the connection. `status`, the board and the app show its machine, and its liveness comes from the device's heartbeat.
+  - **`close`:** the branch comes to the brain first, as a git bundle, fast-forward only into the task's own branch. The device closes its copy only once the brain holds that commit. If any step fails, nothing is deleted.
+  - A device accepts pushes only for tasks pinned to it, at that attempt, and never a line only the brain writes (an accept, a close).
 - **Commands reach a device over its connection.** Its agent long-polls the brain's app server for them, so the brain still opens nothing to it. `chartroom node ping <name>` makes a round trip. `chartroom node update <name>|--all` fast-forwards a device's chartroom to the brain's commit, only along its own `origin/main`, and its agent restarts onto it. `chartroom device update` does the same by hand on the device.
 - **`chartroom app service on|off|status`** (macOS) runs the app server as a LaunchAgent. launchd starts it at login, starts it again if it ends, and so brings it back after a reboot. `app stop` boots the LaunchAgent out, and `app serve --daemon` starts it again.
 

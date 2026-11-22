@@ -313,6 +313,7 @@ has no events\.log of its own
 ^bin/chartroom:.*\[\[ -f "\$d/meta\.json" \]\] \|\| continue
 ^bin/chartroom:.*for f in "\$CR_HOME"/tasks/\*/meta\.json; do \[\[ "\$f" -ot
 ^lib/dashboard/server\.py:.*glob\.glob\(os\.path\.join\(base, "events\.log"\)\)
+^lib/guest\.sh:[0-9]+:guest_(meta|log)_file\(\) \{
 ^lib/app/server\.py:.*GET  /api/v1/homes/<home>/tasks/<id>/files/
 ^lib/app/server\.py:.*FILE_RECORD = "meta\.json"
 ^lib/permit\.jq:.*def control_files\(\$R\): \[\$R\.task_dir \+ "/meta\.json"

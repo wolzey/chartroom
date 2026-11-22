@@ -458,7 +458,7 @@ shorts() { cr status --all --json | jq -r 'map("\(.id)=\(.short_id)") | join(" "
   [ "$(cr status --all --json | jq '[.[].short_id] | (unique | length) == length')" = true ]
   # status --json keeps every existing field and only adds short_id (and focus mode's breaking,
   # in_focus, held, and the radar stacks' base and mentions)
-  [ "$(cr status --json | jq -c '.[0] | keys - ["breaking", "in_focus", "held", "base", "mentions"]')" = '["backend","branch","closed","created","dispatched","has_report","id","kind","last","last_at","live","project","short_id","state","title","updated","waiting_on","waiting_since","waiting_until"]' ]
+  [ "$(cr status --json | jq -c '.[0] | keys - ["breaking", "in_focus", "held", "base", "mentions", "machine"]')" = '["backend","branch","closed","created","dispatched","has_report","id","kind","last","last_at","live","project","short_id","state","title","updated","waiting_on","waiting_since","waiting_until"]' ]
 }
 
 @test "short ids: an id whose suffix would start with a dash grows past it" {

@@ -304,6 +304,13 @@ log_event() {
   else printf '%s %s: %s\n' "$(now)" "$2" "${3//$'\n'/ }" >>"$(tdir "$1")/events.log"; fi
   stamp_changed; bell_ring "" watch
 }
+# A line as another chartroom wrote it ("<ts> <kind>: <text>"), appended verbatim (a pinned
+# task's device: lib/backends/node.sh). A store task takes its kind and text (the store stamps it).
+log_event_line() { # <id> <line>
+  if is_store_task "$1"; then local rest="${2:21}"; store_event "$1" "${rest%%: *}" "${rest#*: }"
+  else printf '%s\n' "$2" >>"$(tdir "$1")/events.log"; fi
+  stamp_changed; bell_ring "" watch
+}
 pid_alive() { [[ -n "${1:-}" ]] && kill -0 "$1" 2>/dev/null; }
 
 # ---------------------------------------------------------------- landed work

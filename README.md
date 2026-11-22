@@ -537,6 +537,15 @@ chartroom node update --all                  # each device moves to this brain's
 - **Its own revocable token.** Only the token's sha256 is kept on the brain. On macOS the agent is a
   LaunchAgent in the login session, and the token is in the login keychain; elsewhere a 0600
   file. A token opens that device's routes only, never the app.
+- **Pinned work.** `chartroom new ... --node m3` (or `chartroom set <id> node=m3`, before dispatch)
+  pins a task to a device. `dispatch` sends it there: the device runs it in a guest home of its
+  own chartroom, on its own hc, claude/codex, git and gh logins. Its event lines, report and plan
+  come back to the brain as the worker writes them, so the watch, the board and the app see it as
+  any task, with its machine. Steer, stop and peek go to it as commands, and a permission card
+  its worker raises is answered here and reaches it there. `close` brings the branch to the brain
+  first (a git bundle, fast-forward only into the task's own branch); only once the brain holds
+  that very commit does the device close its copy. Only hc:claude and hc:codex run on a device,
+  and a pinned task never moves by itself; one whose device is away waits for it.
 - **Commands** reach a device by long-poll: its agent holds one request open to the brain's app
   server and runs what comes, one at a time; the brain still opens nothing to it. `node update`
   fast-forwards the device's chartroom to the brain's commit (only along its own `origin/main`)

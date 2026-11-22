@@ -20,11 +20,20 @@ setup() {
   DEV2="$BATS_TEST_TMPDIR/dev2"; mkdir -p "$DEV2/home"; : >"$DEV2/config"
 }
 
+# A process and everything under it (an agent, its long-poll loop, the launchd stand-in's loop):
+# nothing a test starts may outlive it (another suite's sweep would count it).
+kill_tree_of() {
+  local c
+  for c in $(ps -A -o pid=,ppid= | awk -v p="$1" '$2 == p {print $1}'); do kill_tree_of "$c"; done
+  kill "$1" 2>/dev/null || true
+}
 teardown() {
   local p
-  for p in ${AGENTS:-}; do kill "$p" 2>/dev/null || true; done
-  p="$(jq -r '.pid // empty' "$DEV/state/chartroom/device/agent.json" 2>/dev/null || true)"; [[ -z "$p" ]] || kill "$p" 2>/dev/null || true
-  p="$(jq -r '.pid // empty' "$DEV2/state/chartroom/device/agent.json" 2>/dev/null || true)"; [[ -z "$p" ]] || kill "$p" 2>/dev/null || true
+  for p in ${AGENTS:-} \
+    "$(jq -r '.pid // empty' "$DEV/state/chartroom/device/agent.json" 2>/dev/null || true)" \
+    "$(jq -r '.pid // empty' "$DEV2/state/chartroom/device/agent.json" 2>/dev/null || true)"; do
+    [[ -z "$p" ]] || kill_tree_of "$p"
+  done
   cr app stop >/dev/null 2>&1 || true
 }
 
@@ -372,4 +381,166 @@ joined() { # enrols the device as m3 and answers one heartbeat
   [ "$status" -ne 0 ]
   [[ "$output" == *"is not on this machine's origin/main"* ]]
   [ "$(git -C "$T/devroot" rev-parse HEAD)" = "$c2" ]
+}
+
+# A pinned task end to end, the device's worker the stub agent on the command runner (the suite
+# has no real hc): the device's checkout is a clone of the brain's at another path.
+pinned_setup() {
+  export CHARTROOM_NODE_BACKENDS='hc:claude|hc:codex|command' CHARTROOM_COMMAND="$STUB {id}" CHARTROOM_PROJECT_ROOTS="$BATS_TEST_TMPDIR"
+  git clone -q "$PROJECT" "$BATS_TEST_TMPDIR/devproj"
+  export CHARTROOM_GUEST_PROJECT_MAP="$PROJECT:$BATS_TEST_TMPDIR/devproj"
+  joined
+  agent
+  until_true 'cr fleet devices --json | jq -e ".[0].caps | index(\"dispatch\")" >/dev/null'
+  ID="$(new_task --backend command --node m3 2>/dev/null)"
+  jq -e '.node != null and .backend == "node:command" and .node_backend == "command"' "$CHARTROOM_HOME/tasks/$ID/meta.json"
+}
+ev_has() { grep -q -- "$1" "$CHARTROOM_HOME/tasks/$ID/events.log"; }
+
+@test "pinned: dispatch runs it on the device; its events come back; a steer reaches it; close brings the record home" {
+  export STUB_MODE=decision
+  pinned_setup
+  run cr dispatch "$ID"
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"the worker runs on m3 (attempt 1)"* ]]
+  # (no worktree here: it is made on the device)
+  [ -z "$(jq -r '.worktree // ""' "$CHARTROOM_HOME/tasks/$ID/meta.json")" ]
+  [ -n "$(jq -r '.worktree // ""' "$DEV/state/chartroom/node/guests/acme/tasks/$ID/meta.json")" ]
+  until_true 'ev_has " decision: pick A or B"'
+  ev_has " note: dispatched via command"
+  # the brain reads its liveness from the device's heartbeat, and shows where it runs
+  until_true '[ "$(cr status --json | jq -r --arg i "$ID" ".[] | select(.id == \$i) | .live")" != unknown ]'
+  cr status --json | jq -c --arg i "$ID" '.[] | select(.id == $i) | {machine, state, live}'
+  cr status --json | jq -e --arg i "$ID" '.[] | select(.id == $i) | (.machine == "m3") and (.state | test("decision|needs|blocked"))'
+  run cr steer "$ID" "A, please"
+  echo "$output"
+  [ "$status" -eq 0 ]
+  until_true 'ev_has " done: finished after steer: A, please"'
+  ev_has " steered: A, please"
+  until_true '[ -f "$CHARTROOM_HOME/tasks/$ID/report.md" ]'
+  grep -q 'steer: A, please' "$CHARTROOM_HOME/tasks/$ID/report.md"
+  # each line once, however often it was pushed
+  [ "$(grep -c ' done: finished after steer' "$CHARTROOM_HOME/tasks/$ID/events.log")" = 1 ]
+  run cr peek "$ID"
+  [[ "$output" == *"== on m3: online"* ]]
+  # the brain's own loops take a remote task in their stride
+  run cr watch --once --timeout 3
+  echo "watch: $status $output"
+  [[ "$status" -eq 0 || "$status" -eq 124 ]]
+  [[ "$output" != *"command not found"* ]]
+  run cr sweep --json
+  [ "$status" -eq 0 ]
+  run cr board
+  [ "$status" -eq 0 ]
+  run cr close "$ID"
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"m3: "*"closed $ID"* ]]
+  [[ "$output" == *"closed $ID" ]]
+  [ -n "$(jq -r '.closed // ""' "$CHARTROOM_HOME/tasks/$ID/meta.json")" ]
+  [ ! -e "$FLEET/tasks/acme/$ID.json" ]
+  [ -n "$(jq -r '.closed // ""' "$DEV/state/chartroom/node/guests/acme/tasks/$ID/meta.json")" ]
+}
+
+@test "pinned close: the branch comes home by bundle first, and the device's copy goes only once the brain holds it" {
+  export STUB_MODE=done STUB_COMMIT=1
+  pinned_setup
+  cr dispatch "$ID" >/dev/null
+  until_true 'ev_has " done: stub finished"'
+  b="$(jq -r .branch "$CHARTROOM_HOME/tasks/$ID/meta.json")"
+  tip="$(git -C "$BATS_TEST_TMPDIR/devproj" rev-parse "refs/heads/$b")"
+  ! git -C "$PROJECT" rev-parse --verify --quiet "refs/heads/$b"
+  run cr close "$ID"
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"branch $b is on this machine at ${tip:0:12} (from m3)"* ]]
+  # (here the device's origin is the brain's checkout, so its own landed rule already finds it
+  # there; on a real device its origin is the forge and the copy goes because the brain holds it)
+  [[ "$output" == *"m3: branch $b deleted"* ]]
+  [ "$(git -C "$PROJECT" rev-parse "refs/heads/$b")" = "$tip" ]
+  ! git -C "$BATS_TEST_TMPDIR/devproj" rev-parse --verify --quiet "refs/heads/$b"
+  # here it is unlanded work, so it is kept
+  [[ "$output" == *"branch $b kept"* ]]
+  ev_has " note: branch $b fetched from m3 at ${tip:0:12}"
+}
+
+@test "pinned: a push for a task not this device's, or a line only the brain writes, is refused" {
+  export STUB_MODE=silent
+  pinned_setup
+  cr dispatch "$ID" >/dev/null
+  t2() { curl -s -o "$BATS_TEST_TMPDIR/body" -w '%{http_code}' -X POST -H 'Content-Type: application/json' -H "Authorization: Bearer $1" -d "$2" "$URL/api/v1/device/$3"; }
+  id="$(dev_id)"; t="$(token)"
+  dev2 device join "$URL" "$(new_code --name m5)" >/dev/null
+  tok2="$(cat "$DEV2/state/chartroom/device/token")"; id2="$(sed -n 's/^CHARTROOM_DEVICE_ID=//p' "$DEV2/home/.config/chartroom/device")"
+  body() { jq -cn --arg d "$1" --arg t "$ID" --argjson a "$2" --argjson l "$3" '{id: $d, protocol: 1, home: "acme", task: $t, attempt: $a, offset: 9999, lines: $l}'; }
+  # another device, and this device at another attempt
+  [ "$(t2 "$tok2" "$(body "$id2" 1 '[]')" events)" = 403 ]
+  [ "$(t2 "$t" "$(body "$id" 2 '[]')" events)" = 403 ]
+  # a file other than report.md / plan.md
+  [ "$(t2 "$t" "$(jq -cn --arg d "$id" --arg t "$ID" '{id: $d, protocol: 1, home: "acme", task: $t, attempt: 1, name: "meta.json", content: "{}"}')" files)" = 400 ]
+  # an accept or a close in a pushed line is dropped; a worker's line is kept
+  off="$(jq -r '.node_off' "$CHARTROOM_HOME/tasks/$ID/meta.json")"
+  l="$(jq -cn '["2026-01-01T00:00:00Z note: accepted", "2026-01-01T00:00:01Z note: closed", "2026-01-01T00:00:02Z progress: real line"]')"
+  [ "$(t2 "$t" "$(jq -cn --arg d "$id" --arg t "$ID" --argjson o "$off" --argjson l "$l" '{id: $d, protocol: 1, home: "acme", task: $t, attempt: 1, offset: $o, lines: $l}')" events)" = 200 ]
+  ev_has "progress: real line"
+  ! ev_has "2026-01-01T00:00:00Z note: accepted"
+  ! ev_has "2026-01-01T00:00:01Z note: closed"
+  # a card's answer comes only from the brain: a pushed answer is not a card
+  [ "$(t2 "$t" "$(jq -cn --arg d "$id" --arg t "$ID" '{id: $d, protocol: 1, home: "acme", task: $t, attempt: 1, cards: {"p-1234.answer": {"answer": "once"}, "../x": {}}}')" permits)" = 200 ]
+  [ -z "$(ls "$CHARTROOM_HOME/permits/$ID" 2>/dev/null | grep -v '^grants.json$' || true)" ]
+}
+
+@test "pinned: a permission card on the device is the brain's to answer, and the answer goes back to the worker waiting there" {
+  export STUB_MODE=silent
+  pinned_setup
+  cr dispatch "$ID" >/dev/null
+  g="$DEV/state/chartroom/node/guests/acme/permits/$ID"; mkdir -p "$g"
+  now="$(date +%s)"
+  # as the device's PermissionRequest hook writes one (lib/permit.sh permit_card)
+  jq -cn --arg t "$ID" --argjson now "$now" '{id: "p-abcd", task: $t, created: ($now | todate), created_epoch: $now, expires_epoch: ($now + 900),
+    event: "permission", blocking: true, tool: "Bash", input: {command: "make deploy"}, sig: "0123456789ab", desc: "run make deploy",
+    cwd: "", why: "", rule: "ask", reason: "a deploy", pattern: "Bash(make deploy)"}' >"$g/p-abcd.json"
+  until_true '[ -f "$CHARTROOM_HOME/permits/$ID/p-abcd.json" ]'
+  # (as the commander would: a process of its own, not one under the worker running this suite)
+  as_commander() {
+    local o="$BATS_TEST_TMPDIR/commander.$RANDOM" i
+    ( ( "$CHARTROOM" "$@" >"$o.out" 2>&1; echo $? >"$o.rc" ) 3>&- & )
+    for i in $(seq 1 600); do [[ -f "$o.rc" ]] && break; sleep 0.1; done
+    cat "$o.out"; return "$(cat "$o.rc" 2>/dev/null || echo 1)"
+  }
+  run as_commander permit answer p-abcd once --note "go ahead"
+  echo "$output"
+  [ "$status" -eq 0 ]
+  until_true '[ -f "$g/p-abcd.answer.json" ]' 40
+  jq -e '.answer == "once" and .note == "go ahead"' "$g/p-abcd.answer.json"
+  # and the device never sends an answer back as if it were a card
+  sleep 3
+  [ ! -e "$CHARTROOM_HOME/permits/$ID/p-abcd.answer.json.json" ]
+}
+
+@test "pinned: a dispatch the device refuses is a failed event; the task still closes; a revoked device's task closes here" {
+  export STUB_MODE=silent
+  pinned_setup
+  # a project outside the device's roots (read from its node file at each dispatch)
+  sed -i.bak "s|^CHARTROOM_NODE_PROJECT_ROOTS=.*|CHARTROOM_NODE_PROJECT_ROOTS=$BATS_TEST_TMPDIR/elsewhere|" "$DEV/node"; mkdir -p "$BATS_TEST_TMPDIR/elsewhere"
+  run cr dispatch "$ID"
+  echo "$output"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"did not start a worker"* || "$output" == *"failed"* ]]
+  ev_has " failed: the dispatch on m3 did not start a worker: "
+  run cr close "$ID"
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"m3 has nothing of $ID"* ]]
+  [[ "$(grep ' failed: ' "$CHARTROOM_HOME/tasks/$ID/events.log")" == *"outside this node's project roots"* ]]
+  # a task on a device that is then revoked
+  mv "$DEV/node.bak" "$DEV/node"
+  id2="$(new_task --backend command --node m3 2>/dev/null)"
+  cr dispatch "$id2" >/dev/null
+  cr node revoke m3 >/dev/null
+  run cr close "$id2"
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"m3 is revoked: the record closes here"* ]]
 }

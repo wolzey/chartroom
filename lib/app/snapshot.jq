@@ -60,7 +60,7 @@ def askline: sub("^[^ ]+ [a-z-]+: ?"; "");
      has_report, breaking: (.breaking // false), in_focus: (.in_focus != false), held: (.held // false),
      ask: (.ask // null), intent: (.intent // null), artifacts: arts_of("task"; .id),
      links: (.links // []), priority: (.priority // null), labels: (.labels // []),
-     initiative: (.initiative // null), milestone: (.milestone // null)}] as $tasks
+     initiative: (.initiative // null), milestone: (.milestone // null), machine: (.machine // null)}] as $tasks
 
 # Permission cards (lib/permit.sh): a worker's tool call waiting on the commander (blocking), or a
 # retry auto mode refused. A card stays while open, and for an hour after it expired or lapsed

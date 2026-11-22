@@ -408,6 +408,8 @@ permit_cmd_answer() {
       [[ "$ans" == once ]] && permit_preapprove "$id" "$card"
       permit_tell_worker "$id" "$ans" "$card" "$note"
     fi
+    # a worker on a device waits there: the answer goes to it (lib/backends/node.sh)
+    if [[ "$(backend_runner "$id")" == node ]]; then node_permit_sync "$id"; fi
     echo "$word: $desc"
     return 0
   fi
@@ -419,11 +421,20 @@ permit_cmd_answer() {
     if [[ "$ans" == always ]]; then permit_always_add "$id" "$card" "$by"; else permit_preapprove "$id" "$card"; fi
     permit_log "$id" "$word (late, after it $(jq -r '.answer' <<<"$cur")) $who: $desc"
     permit_tell_worker "$id" "$ans" "$card" "$note"
+    if [[ "$(backend_runner "$id")" == node ]]; then node_permit_sync "$id"; fi
     echo "$word (late): $desc; the worker is told to run it again"
     return 0
   fi
   msg="$(jq -r '"\(.answer) by \(.by)\(if (.via // "") != "" then " via \(.via)" else "" end) at \(.at)"' <<<"$cur")"
   die "$pid was already answered: $msg (the first answer wins)"
+}
+
+# A task's answers, "always" patterns and pre-approvals as {relative path: content}: what a
+# worker on a device needs of them (lib/backends/node.sh node_permit_sync).
+permit_sync_files_json() { # <id>
+  local d; d="$(permit_tdir "$1")"
+  (cd "$d" 2>/dev/null && find . -maxdepth 2 -type f \( -name 'p-*.answer.json' -o -name 'p-*.late.json' -o -name always.ndjson -o -path './pre/*' \) | sed 's|^\./||') |
+    while IFS= read -r f; do jq -cn --arg f "$f" --rawfile c "$d/$f" '{($f): $c}'; done | jq -s -c 'add // {}'
 }
 
 # Tell the worker the outcome of a card it is no longer waiting on.

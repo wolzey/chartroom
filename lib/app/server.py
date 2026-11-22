@@ -27,6 +27,10 @@ stdin), so the CLI stays the one writer of the records and a client home's rules
   POST /api/v1/device/rotate     a device swaps its token for one it made: `chartroom fleet rotate`
   POST /api/v1/device/commands   long-poll (up to 25 s): the commands queued for that device
   POST /api/v1/device/result     a device's answer to one of its own commands
+  POST /api/v1/device/<events|files|permits>   what a worker there wrote, for a task pinned to that
+                                 device at that attempt: `chartroom fleet ingest` in the task's home
+  POST /api/v1/device/bundle     a pinned task's branch, as a git bundle (raw body; X-Home, X-Task,
+                                 X-Attempt, X-Branch, X-Sha, X-Device): fetched into its own branch
                             The device routes (lib/fleet.sh, lib/device.sh) open by a device's own
                             token alone: the Tailscale login is ignored there (every device carries
                             the owner's), and a device token opens nothing else. The server writes
@@ -453,6 +457,8 @@ CMD_ID = re.compile(r"^c-[0-9]{13}-[0-9a-f]{6}$")
 POLL_MAX = 25  # seconds a device's long-poll is held
 CMD_BATCH = 5
 OUT_MAX = 64 * 1024
+GUEST_TASK = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+BUNDLE_MAX = 512 * 1024 * 1024
 
 
 class Devices:
@@ -578,6 +584,19 @@ class Devices:
         except OSError:
             pass
         return True
+
+    def pinned(self, did, home, task, attempt):
+        """The pin of <home>/<task> when it is this device's at this attempt, else None."""
+        if not isinstance(home, str) or not HOME_NAME.match(home) or not isinstance(task, str) or not GUEST_TASK.match(task):
+            return None
+        try:
+            with open(os.path.join(self.dir, "tasks", home, task + ".json")) as fh:
+                m = json.load(fh)
+        except (OSError, ValueError):
+            return None
+        if not isinstance(m, dict) or m.get("device") != did or m.get("attempt") != attempt:
+            return None
+        return m
 
     def join_refused(self):
         with self.lock:
@@ -1388,9 +1407,68 @@ def make_handler(hub, args, root, actions, prs, fleet, pusher, devices=None):
             except (BrokenPipeError, ConnectionResetError, OSError):
                 return
 
+        def device_auth(self, did, token):
+            if not isinstance(did, str) or not DEVICE_ID.match(did) or not DEVICE_TOKEN.match(token or ""):
+                return None, None
+            return devices.auth(did, token)
+
+        def ingest(self, kind, did, home, task, attempt, doc):
+            """A push for a pinned task: the pin checked here and again by the verb, in its home."""
+            pin = devices.pinned(did, home, task, attempt)
+            hm = hub.homes.get(home)
+            if not pin or not hm or os.path.realpath(hm.path) != os.path.realpath(pin.get("home_path") or ""):
+                return self.json(403, {"error": "that task is not this device's (at that attempt)"})
+            doc = dict(doc, home=home, id=task, attempt=attempt, device=did)
+            code, out, err = run([devices.cli, "fleet", "ingest", kind], hm.path, stdin=json.dumps(doc).encode(), timeout=120)
+            if code != 0:
+                return self.json(DEVICE_EXIT.get(code, 500), {"error": last_line(err) or "the push failed"})
+            return self.send(200, out.strip() + "\n", "application/json")
+
+        def bundle(self):
+            h = self.headers
+            auth = h.get("Authorization") or ""
+            used, rec = self.device_auth(h.get("X-Device"), auth[7:].strip() if auth.startswith("Bearer ") else "")
+            if not used:
+                return self.json(401, {"error": "unauthorized"})
+            try:
+                n = int(h.get("Content-Length") or "-1")
+                attempt = int(h.get("X-Attempt") or "0")
+            except ValueError:
+                n, attempt = -1, 0
+            if n <= 0 or n > BUNDLE_MAX:
+                return self.json(413, {"error": "a bundle is 1 byte to 512 MB"})
+            home, task = h.get("X-Home") or "", h.get("X-Task") or ""
+            if not devices.pinned(h.get("X-Device"), home, task, attempt):
+                return self.json(403, {"error": "that task is not this device's (at that attempt)"})
+            d = os.path.join(devices.dir, "bundles")
+            os.makedirs(d, mode=0o700, exist_ok=True)
+            tmp = os.path.join(d, "%s.%s.%d.bundle" % (home, task, attempt))
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            left = n
+            with os.fdopen(fd, "wb") as fh:
+                while left > 0:
+                    chunk = self.rfile.read(min(65536, left))
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    left -= len(chunk)
+            self.body_done = left == 0
+            try:
+                if left > 0:
+                    return self.json(400, {"error": "the bundle was cut short"})
+                return self.ingest("bundle", h.get("X-Device"), home, task, attempt,
+                                   {"path": tmp, "branch": h.get("X-Branch") or "", "sha": h.get("X-Sha") or ""})
+            finally:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+
         def device(self, path):
             """A device's request: its own token, never the Tailscale login (lib/fleet.sh)."""
             h = self.headers
+            if path == "/api/v1/device/bundle" and devices is not None:
+                return self.bundle()
             try:
                 n = int(h.get("Content-Length") or "0")
             except ValueError:
@@ -1416,7 +1494,7 @@ def make_handler(hub, args, root, actions, prs, fleet, pusher, devices=None):
                 if code != 0:
                     return self.json(DEVICE_EXIT.get(code, 500), {"error": last_line(err) or "the join failed"})
                 return self.send(200, out.strip() + "\n", "application/json")
-            if route not in ("heartbeat", "rotate", "commands", "result"):
+            if route not in ("heartbeat", "rotate", "commands", "result", "events", "files", "permits"):
                 return self.json(404, {"error": "not found"})
             auth = h.get("Authorization") or ""
             token = auth[7:].strip() if auth.startswith("Bearer ") else ""
@@ -1428,6 +1506,11 @@ def make_handler(hub, args, root, actions, prs, fleet, pusher, devices=None):
                 return self.json(401, {"error": "revoked" if rec and rec.get("revoked") else "unauthorized"})
             if body.get("protocol") != DEVICE_PROTOCOL:
                 return self.json(409, {"error": "this brain speaks device protocol %d; update chartroom on the device" % DEVICE_PROTOCOL})
+            if route in ("events", "files", "permits"):
+                attempt = body.get("attempt")
+                keep = {"events": ("offset", "lines"), "files": ("name", "content"), "permits": ("cards",)}[route]
+                return self.ingest(route, did, body.get("home"), body.get("task"), attempt if isinstance(attempt, int) else -1,
+                                   {k: body.get(k) for k in keep})
             if route == "commands":
                 try:
                     wait = max(0, min(POLL_MAX, int(body.get("wait") or 0)))

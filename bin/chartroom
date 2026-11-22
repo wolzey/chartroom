@@ -101,6 +101,8 @@ source "$CR_ROOT/lib/nodes.sh"
 source "$CR_ROOT/lib/fleet.sh"
 # shellcheck source=../lib/device.sh
 source "$CR_ROOT/lib/device.sh"
+# shellcheck source=../lib/guest.sh
+source "$CR_ROOT/lib/guest.sh"
 # shellcheck source=../lib/stuck.sh
 source "$CR_ROOT/lib/stuck.sh"
 # shellcheck source=../lib/brain.sh
@@ -128,7 +130,7 @@ done
 CR_VERSION="$(cat "$CR_ROOT/VERSION" 2>/dev/null || echo 0.0.0)"
 load_config
 
-RUNNERS='hc|herdr|cmux|tmux|headless|command|subagent'
+RUNNERS='hc|herdr|cmux|tmux|headless|command|subagent|node'
 SESSION_RUNNERS='hc|herdr|cmux|tmux'
 
 # ---------------------------------------------------------------- backends
@@ -150,7 +152,7 @@ valid_backend() {
   local b; b="$(canon_backend "$1")"
   case "$b" in
     command|subagent) return 0 ;;
-    *:*) [[ "${b%%:*}" =~ ^($SESSION_RUNNERS|headless)$ && "${b#*:}" =~ ^($KNOWN_AGENTS)$ ]] ;;
+    *:*) [[ "${b%%:*}" =~ ^($SESSION_RUNNERS|headless|node)$ && "${b#*:}" =~ ^($KNOWN_AGENTS)$ ]] ;;
     *) return 1 ;;
   esac
 }
@@ -170,7 +172,7 @@ probe_backend() { # <backend>
     esac
   fi
   why="$("${r}_probe" "$a" 2>&1)" || { echo "$why"; return 1; }
-  if [[ -n "$a" && "$r" != headless ]]; then
+  if [[ -n "$a" && "$r" != headless && "$r" != node ]]; then # (a node task's agent runs on its device)
     [[ -n "$(agent_bin "$a")" ]] || { echo "$a not on PATH"; return 1; }
   fi
   return 0
@@ -299,7 +301,7 @@ cmd_project() {
 # ---------------------------------------------------------------- new / worktree
 
 cmd_new() {
-  local project="" title="" kind="ship" backend="" base="" id="" plan_gate=0 command="" permission="" model="" grants=()
+  local project="" title="" kind="ship" backend="" base="" id="" plan_gate=0 command="" permission="" model="" grants=() node=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --project) project="$2"; shift 2 ;;
@@ -313,10 +315,11 @@ cmd_new() {
       --model) model="$2"; shift 2 ;;
       --plan-gate) plan_gate=1; shift ;;
       --grant) [[ "${2:-}" =~ ^($PERMIT_GRANTS)$ ]] || die "unknown grant '${2:-}' (names: ${PERMIT_GRANTS//|/, })"; grants+=("$2"); shift 2 ;;
+      --node) node="${2:-}"; [[ -n "$node" ]] || die "--node needs a device (chartroom nodes lists them)"; shift 2 ;;
       *) die "new: unknown arg $1" ;;
     esac
   done
-  [[ -n "$project" && -n "$title" ]] || die "usage: chartroom new --project PATH --title TEXT [--backend RUNNER:AGENT|command|subagent|auto] [--kind ship|scout] [--base REF] [--plan-gate] [--command TEMPLATE] [--permission MODE] [--model M] [--grant NAME]..."
+  [[ -n "$project" && -n "$title" ]] || die "usage: chartroom new --project PATH --title TEXT [--backend RUNNER:AGENT|command|subagent|auto] [--kind ship|scout] [--base REF] [--plan-gate] [--command TEMPLATE] [--permission MODE] [--model M] [--grant NAME]... [--node DEVICE]"
   [[ "$kind" =~ ^(ship|scout)$ ]] || die "kind must be ship or scout (got $kind)"
   local source=explicit
   if [[ -z "$backend" || "$backend" == auto ]]; then backend=""; source=auto
@@ -358,6 +361,9 @@ cmd_new() {
     log_event "$id" note "grants: $(jq -r 'join(", ")' "$(permit_tdir "$id")/grants.json")"
   fi
   write_brief "$id"
+  # pinned at birth: it runs on that device (lib/backends/node.sh); a pin that cannot be is said
+  # and the task stays here, unpinned
+  if [[ -n "$node" ]]; then ( node_pin "$id" "$node" ) >&2 || warn "$id is not pinned (above): chartroom set $id node=<device> once it can be"; fi
   printf 'id=%s\nbrief=%s\n' "$id" "$d/brief.md"
 }
 
@@ -656,7 +662,8 @@ cmd_dispatch() {
   select_backend "$id"
   meta_set "$id" backend "$SELECTED"
   runner="${SELECTED%%:*}"; agent=""; [[ "$SELECTED" == *:* ]] && agent="${SELECTED#*:}"
-  if [[ "$runner" != subagent || "$kind" == ship ]]; then wt="$(cmd_worktree "$id")"; fi
+  # (a pinned task's worktree is made on its device)
+  if [[ "$runner" != node && ( "$runner" != subagent || "$kind" == ship ) ]]; then wt="$(cmd_worktree "$id")"; fi
   # A parked worker is not resumed by a dispatch: that starts a fresh one on the brief.
   if [[ -n "$(meta "$id" parked)" ]]; then
     log_event "$id" note "the parked session $(meta "$id" session_id) is left behind: a dispatch starts a fresh worker"
@@ -900,7 +907,7 @@ status_file_rows() {
         state:$st,live:$live,created,last:$last,last_at:(if $last_at=="" then null else $last_at end),
         updated,dispatched,closed,branch,base:(.base // null),mentions:($ment | split("\n") | map(select(length > 0))),has_report:$has_report,
         waiting_on:($wait.on // null),waiting_until:($wait.until // null),waiting_since:($wait.since // null),
-        short_id:($shorts[.id] // .id),breaking:$brk}
+        short_id:($shorts[.id] // .id),breaking:$brk,machine:(if (.node // "") != "" then (.node_name // .node) else null end)}
        | . + focus_marks($focus; "task"; $brk)' "$m"
   done
 }
@@ -939,7 +946,7 @@ status_store_rows() {
         state:$st,live:$live,created,last:$c.last,last_at:(if $c.last_at=="" then null else $c.last_at end),
         updated,dispatched,closed,branch,base:(.base // null),mentions:$c.mentions,has_report:$c.has_report,
         waiting_on:($wait.on // null),waiting_until:($wait.until // null),waiting_since:($wait.since // null),
-        short_id:($shorts[.id] // .id),breaking:$brk}
+        short_id:($shorts[.id] // .id),breaking:$brk,machine:(if (.node // "") != "" then (.node_name // .node) else null end)}
     | . + focus_marks($focus; "task"; $brk)
     | if $c.extra then . + {_extra: $c.extra} else . end' <<<"$raw"
 }
@@ -1248,6 +1255,8 @@ cmd_close() {
   wt="$(meta "$id" worktree)"; project="$(meta "$id" project)"; branch="$(meta "$id" branch)"; base_sha="$(meta "$id" base_sha)"
   r="$(backend_runner "$id")"
   if [[ -n "$r" && "$r" =~ ^(headless|command)$ ]]; then "${r}_close" "$id"; fi
+  # a pinned task: its branch comes here and the device closes its copy first (lib/backends/node.sh)
+  if [[ "$r" == node ]]; then node_close_task "$id" "$discard"; fi
   if is_joined "$id"; then
     local dirty=""; [[ -d "$wt" ]] && dirty="$(git -C "$wt" status --porcelain 2>/dev/null || true)"
     echo "left $wt as it is (a joined session's own directory; chartroom never removes or cleans it)${dirty:+; it has uncommitted changes}"
@@ -1592,7 +1601,7 @@ cmd_watch() {
           case "$r" in
             hc) hc_open=1; if [[ -n "$HC_ASKED" ]]; then covered=0; fi ;;
             herdr) if herdr_up; then covered=0; fi ;;
-            tmux|cmux|subagent) ;;
+            tmux|cmux|subagent|node) ;;
             *) covered=0 ;;
           esac
           # Its own cadence (lib/stuck.sh): a prompt nothing reports, a brief behind a dialog, a stall.
@@ -1801,6 +1810,8 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           (omit --backend: pick per CHARTROOM_BACKEND_ORDER).
                                           --grant (repeatable): push-branch, open-pr, merge-auto,
                                           comment-pr, prod-read, enforced by the permission hooks
+                                          --node: pin it to an enrolled device (hc:claude or
+                                          hc:codex there); dispatch runs it on that device
   chartroom join [--title T] [--kind ship|scout] [--agent A]
                                           run INSIDE a running agent session (not launched by
                                           chartroom) from its directory: records it as a joined
@@ -1818,6 +1829,8 @@ chartroom - run a crew of coding agents from one agent session (the XO)
   chartroom stop <id>                     interrupt a worker
   chartroom set <id> key=value...         a task's settings before dispatch: model, effort,
                                           sandbox, permission (for a file or a store task)
+  chartroom set <id> node=<device>|here   where it runs: pinned to an enrolled device, or this
+                                          machine (before dispatch)
   chartroom remove <ref>... [--why T] [--stop] [--json]
                                           take tasks, inbox items (i-xxxx) and artifacts
                                           (<id>/<slug>) out of every view at once, touching no

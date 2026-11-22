@@ -124,7 +124,7 @@ fleet_devices_json() {
       | {id: $d.id, name: $d.name, aliases: ($d.aliases // []), host: $d.host, hw_uuid: ($d.hw_uuid // null), enrolled: $d.enrolled,
          revoked: ($d.revoked // null), rotate_pending: ($d.rotate // false), status: $st,
          last_seen: $ls, seen_age_s: (if $ls == null then null else $now - $ls end),
-         version: ($s.version // null), protocol: ($s.protocol // null), rev: ($s.rev // null), caps: ($s.caps // []),
+         version: ($s.version // null), protocol: ($s.protocol // null), rev: ($s.rev // null), caps: ($s.caps // []), tasks: ($s.tasks // {}),
          skew_s: (if $s.clock != null and $ls != null then $s.clock - $ls else null end),
          probe: ($s.probe // null)})
     | sort_by(.name)'
@@ -375,6 +375,7 @@ cmd_fleet() {
     join) fleet_join "$@" ;;
     rotate) fleet_rotate "$@" ;;
     devices) [[ "${1:-}" == --json ]] || die "usage: chartroom fleet devices --json"; fleet_devices_json | jq 'map(del(.probe))' ;;
+    ingest) node_ingest "$@" ;;
     *) die "usage: chartroom fleet join|rotate (the app server's; one JSON document on stdin) | fleet devices --json" ;;
   esac
 }

@@ -334,3 +334,39 @@ routes in lib/app/server.py). No work is placed on a device yet.
 - **Leaving.** `chartroom device leave` stops the agent and deletes the token there; revoke it on
   the brain too.
 
+### Pinned dispatch (built)
+
+- **Pinning.** `new --node <device>` or `set <id> node=<device>|here`, before dispatch, makes the
+  task's backend `node:<agent>`. The device's id is in `meta.node`, and what runs there (hc:claude
+  or hc:codex) is in `meta.node_backend`. A pin needs a device whose agent says it can take work
+  (the `dispatch` capability in its heartbeat).
+- **The runner.** `lib/backends/node.sh` is a runner like the others. Launch, steer, stop, peek and
+  close each become a command for the device (`fleet/queue/<id>/`), taken by its long-poll.
+- **On the device.** `lib/guest.sh` runs them in a guest home,
+  `$XDG_STATE_HOME/chartroom/node/guests/<home>/`. That is an ordinary chartroom home of the
+  device's own: `new --id` with the brain's brief (its home's paths moved there), then `dispatch`.
+  A dispatch sent twice finds the task and starts nothing.
+- **What comes back.** The agent's loop pushes the guest log's lines from the dispatch on. The
+  brain appends each one verbatim, by offset (`meta.node_off`), so a replay never doubles one.
+  report.md, plan.md and new permission cards come back the same way. An answer given on the
+  brain is sent back as `permit-sync`.
+- **Liveness.** The heartbeat carries each pinned task's live word, and the brain's `status` reads
+  it from there.
+- **Close.** In this order, stopping at the first step that does not hold:
+  1. The device bundles the branch.
+  2. The brain fetches it, fast-forward only, into the task's branch.
+  3. The brain's tip must equal the device's.
+  4. The device closes its guest task and deletes its copy of the branch.
+  5. The brain closes the record, and its branch then follows the landed rule.
+- **Scope.** A push is taken only for a task pinned to that device at that attempt
+  (`fleet/tasks/<home>/<id>.json`), checked by the server and again by `fleet ingest`. A pushed
+  line that only the brain writes (an accept, a close) is dropped. Only `report.md` and `plan.md`
+  are taken as files. Only cards are taken from a device, never answers.
+- **Not yet:**
+  - live screen watching;
+  - the brain's screen-based stuck checks for a remote worker (turn ends and hook prompts do
+    arrive as events);
+  - the 4-hour reminder for a pin whose device stays away;
+  - automatic placement;
+  - handoff.
+
