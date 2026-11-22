@@ -104,9 +104,14 @@ sweep_procs_json() {
   while IFS=$'\t' read -r pid cwd; do [[ -n "$pid" ]] && cwd_of[$pid]="$cwd"; done < <(sweep_cwds)
   while IFS=$'\t' read -r pre lay; do prefixes+=("$pre"); layouts+=("$lay"); done < <(sweep_root_prefixes)
   local i n
+  # (CHARTROOM_SWEEP_ONLY_UNDER, the tests' only: just the processes whose directory or command
+  # line lies under it, so a process another test left on the machine is never one of theirs)
+  local only="${CHARTROOM_SWEEP_ONLY_UNDER:-}" only_p=""
+  [[ -z "$only" ]] || only_p="$(cd "$only" 2>/dev/null && pwd -P || printf '%s' "$only")"
   while IFS=$'\t' read -r pid ppid age cpu pcpu rss tty args; do
     cwd="${cwd_of[$pid]:-}"; root=""; gone=0
     if [[ "$cwd" == *" (deleted)" ]]; then cwd="${cwd% (deleted)}"; gone=1; fi
+    if [[ -n "$only" && "$cwd" != "$only"* && "$cwd" != "$only_p"* && "$args" != *"$only"* && "$args" != *"$only_p"* ]]; then continue; fi
     for ((i = 0; i < ${#prefixes[@]}; i++)); do
       pre="${prefixes[$i]}"
       [[ "$cwd" == "$pre"* ]] || continue

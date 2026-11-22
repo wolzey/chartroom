@@ -8,6 +8,9 @@ setup() {
   common_setup
   cr init >/dev/null
   export CHARTROOM_SWEEP_SETTLE_MINUTES=0
+  # Only this test's processes: sweep reads every process of this user, and a loop another
+  # suite left on a CI runner (an orphaned watch, a fake hc stream) is not this test's to count.
+  export CHARTROOM_SWEEP_ONLY_UNDER="$BATS_TEST_TMPDIR"
   SPAWNED="$BATS_TEST_TMPDIR/spawned"; : >"$SPAWNED"
   TOOLS="$BATS_TEST_TMPDIR/tools"; mkdir -p "$TOOLS/bin" "$TOOLS/dashboard"
   # A long-running program whose argv is "bash <path> <args...>"; its one child is a sleep.
