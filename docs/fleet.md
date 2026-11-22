@@ -24,7 +24,7 @@ What each part does today:
 |---|---|---|
 | Brain | one place where the records live and the workers run | stable (it is just a machine with homes) |
 | Client home on a laptop | the same XO conversation from the laptop; every command runs on the brain over ssh | experimental, step 1 of 5: it reports a brain it cannot reach, and has no offline mode yet |
-| Devices | other machines show on the brain's Fleet and in `chartroom nodes` with their load, memory, disk and tools | experimental: no work is placed on a device yet |
+| Devices | other machines show on the brain's Fleet and in `chartroom nodes` with their load, memory, disk and tools | experimental: a task you pin to a device with `--node` runs there, its record kept on the brain; nothing spreads work by itself yet |
 | The app on your phone | Needs me, the board and the fleet, answered from anywhere on your tailnet, with push | experimental |
 | Permission cards | a Claude worker's permission prompts reach you as cards instead of waiting in a terminal | stable, on for every Claude worker |
 
@@ -118,6 +118,9 @@ chartroom app serve --daemon      # 127.0.0.1:4516; it needs at least one regist
 chartroom app doctor              # the server, who may come in, push, and the Serve command to run
 ```
 
+On macOS, `chartroom app service on` runs it as a LaunchAgent instead, so it starts at login and
+comes back after a reboot (`app service off` undoes it).
+
 Put it on your tailnet, once. It is the standard Tailscale CLI. On a Mac with the App Store
 Tailscale, the binary is `/Applications/Tailscale.app/Contents/MacOS/Tailscale`.
 
@@ -180,7 +183,7 @@ chartroom device join https://<brain>.<tailnet>.ts.net <code>
 chartroom device status              # joined …; agent: running; last: ok
 ```
 
-`install.sh --device` makes no home: a device does no crew work of its own yet. On macOS, `join`
+`install.sh --device` makes no home: a device runs only the work the brain pins to it. On macOS, `join`
 loads a LaunchAgent (`dev.chartroom.device`), and the agent makes the join itself, in your login
 session, so the token goes into the login keychain. That works from an ssh session too, as long
 as you are logged in at the device's screen. Back on the brain:
@@ -190,6 +193,30 @@ chartroom nodes                      # every machine: contact, load, memory, dis
 ```
 
 The app's Fleet tab shows the same.
+
+### Pinned work
+
+A task can run on a device you name. The device needs the project checked out at the same path
+as on the brain, inside its node's project roots, and hc with Claude Code or Codex signed in:
+only hc:claude and hc:codex run on a device. On the device, once:
+
+```bash
+chartroom node init --project-roots ~/src    # the directories that hold your checkouts, colon-separated
+```
+
+On the brain:
+
+```bash
+chartroom new --project ~/src/app --title "…" --backend hc:claude --node mini
+chartroom set <id> node=here                 # before dispatch: run it on the brain after all (node=mini pins it again)
+chartroom dispatch <id>                      # the device runs it; its events, report and cards come back here
+```
+
+The record stays on the brain, so `status`, the board and the app show the task as any other,
+with its machine. Steer, stop, peek and `close` go to the device over its connection, and
+`close` brings the branch to the brain before the device deletes its copy. A pinned task never
+moves by itself: if its device is away, it waits. Nothing places work on a device for you yet.
+[docs/multi-machine.md §12](multi-machine.md#pinned-dispatch-built) has the protocol.
 
 ## 6. Permission cards
 
@@ -253,8 +280,10 @@ XOs talk to each other: [docs/homes.md](homes.md).
 
 ### Updating
 
-Re-run the installer on every machine (it fast-forwards the checkout), then `chartroom doctor`.
-On the brain, restart the app with `chartroom app stop && chartroom app serve --daemon`.
+Re-run the installer on the brain and the laptop (it fast-forwards the checkout), then
+`chartroom doctor`. On the brain, restart the app with `chartroom app stop && chartroom app serve --daemon`.
+Devices follow the brain over their connection: `chartroom node update --all` on the brain moves
+each one to the brain's commit, and `chartroom node ping mini` checks the round trip.
 `chartroom brain status` on a laptop shows the brain's chartroom version.
 
 ### Where the logs are
@@ -278,6 +307,10 @@ checked, read-only, on a real fleet: a brain whose app is on Tailscale Serve wit
 two Macs joined as devices, each running its agent with its token in the keychain. The
 admin-console steps, the phone's own steps and the access-rule example were not run. Neither
 were `chartroom dashboard open` from a client home (its ssh tunnel) or turning push on: push was
-only read, already on, on the real fleet. The
+only read, already on, on the real fleet. Pinning (`node init --project-roots`, `new --node`,
+`set node=here`) was run in the throwaway homes; `dispatch` to a device, `node update` and
+`node ping` need the device's agent running as a service with hc signed in, and `app service on`
+loads a LaunchAgent, so they were not:
+they ran on a real device in the change that built them, and test/device.bats covers them. The
 `chartroom permit` commands were not run by hand either: chartroom's guard refuses them to a
 worker, and the test suite (test/permit.bats, test/app-permit.bats) runs them instead.

@@ -10,8 +10,9 @@ record, and a laptop used headlessly.
 they differ): each machine runs chartroom's device agent, keeps the one connection, outbound, and
 the brain never reaches out to it, holds no key to it, and asks it to open no port.
 [§12](#12-devices-the-brain-never-reaches-out) describes what is built of that: enrolment, the
-device's own revocable token, and heartbeats that Fleet and `chartroom nodes` read. Work is not
-placed on a device yet.
+device's own revocable token, heartbeats that Fleet and `chartroom nodes` read, commands over
+the connection, and pinned dispatch: a task pinned to a device runs there. Automatic placement is
+not built yet.
 
 ## 1. Goals and shape
 
@@ -293,7 +294,8 @@ stop placing there). It never kills a worker.
 ## 12. Devices: the brain never reaches out
 
 Built: enrolment and heartbeats (lib/fleet.sh on the brain, lib/device.sh on a device, the device
-routes in lib/app/server.py). No work is placed on a device yet.
+routes in lib/app/server.py), commands, and pinned dispatch (below). Nothing places work on a
+device by itself yet.
 
 ```
  device (mini)                                          brain (the desk): its app server

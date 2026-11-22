@@ -89,7 +89,7 @@ been signed in to for a while.
 | The app: one PWA for every home on a machine, over Tailscale | experimental | off until `chartroom app serve` | [docs/app.md](docs/app.md) |
 | Phone push for the app (Web Push, encrypted end to end) | experimental | off (`CHARTROOM_APP_PUSH=on`) | [docs/app.md](docs/app.md#on-the-phone-and-notifications) |
 | Brain and client homes: a laptop's home whose records and workers live on an always-on machine | experimental (step 1 of 5: no offline mode) | off until `chartroom brain link` | [docs/client-homes.md](docs/client-homes.md) |
-| Devices join a brain: other machines enrol with a one-time code and send heartbeats | experimental (no work is placed on a device yet) | off until `node add` / `device join` | [docs/multi-machine.md](docs/multi-machine.md#12-devices-the-brain-never-reaches-out) |
+| Devices join a brain: other machines enrol with a one-time code and send heartbeats | experimental (a task runs on a device only when you pin it there with `--node`; nothing spreads work by itself yet) | off until `node add` / `device join` | [docs/multi-machine.md](docs/multi-machine.md#12-devices-the-brain-never-reaches-out) |
 | The SQLite store for task records | experimental (stage 1) | off (`CHARTROOM_STORE=sqlite`) | [docs/store.md](docs/store.md) |
 
 Experimental means it works and has tests, but its commands, settings or files may still
