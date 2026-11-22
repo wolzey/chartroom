@@ -150,6 +150,18 @@ interactive_argv() { # <id> <agent> <hooks> [session|resume]
 
 trust_dialog_up() { grep -qiE 'trust this folder|do you trust' <<<"$1"; }
 
+# Claude's dialog to add a directory it has not worked in (an --add-dir: chartroom gives a worker
+# its task's folder that way): the folder it names, or nothing.
+adddir_dialog_path() { # <screen>
+  awk '/Adding a new directory:/ { if ((getline line) > 0) { sub(/^[ \t]+/, "", line); sub(/[ \t]+$/, "", line); print line }; exit }' <<<"$1"
+}
+# A folder of a task that chartroom made itself: its record's folder, or the worktree it created.
+own_task_folder() { # <id> <path>
+  local d; d="$(tdir "$1")"
+  [[ "$2" == "$d" || "$2" == "$(cd "$d" 2>/dev/null && pwd -P)" ]] && return 0
+  [[ "$(meta "$1" worktree_created)" == 1 && -n "$(meta "$1" worktree)" && "$2" == "$(meta "$1" worktree)" ]]
+}
+
 # Prints the keys to send (space-separated, runner-neutral names: down enter), or nothing.
 trust_answer_keys() { # <agent> <screen>
   local agent="$1" screen="$2"
@@ -170,6 +182,23 @@ handle_trust() {
   local id="$1" agent="$2" screen_fn="$3" keys_fn="$4" i scr keys what
   for i in 1 2 3 4 5 6 7 8; do
     scr="$("$screen_fn" "$id" 2>/dev/null || true)"
+    # Adding a folder: answered only for the task's own folders, which chartroom made (a device's
+    # guest home is new to its Claude, so its task folder is asked about there)
+    local add; add="$(adddir_dialog_path "$scr")"
+    if [[ -n "$add" ]]; then
+      if ! own_task_folder "$id" "$add"; then
+        log_event "$id" agent "awaiting-input: a dialog to add $add, a folder chartroom did not make; a human must answer it"
+        return 1
+      fi
+      if grep -qE '❯ *No, exit' <<<"$scr"; then keys="down enter"
+      elif grep -qE '❯ *Yes, add it' <<<"$scr"; then keys=enter
+      else log_event "$id" agent "awaiting-input: unrecognised dialog to add $add; left for a human"; return 1; fi
+      # shellcheck disable=SC2086
+      "$keys_fn" "$id" $keys
+      log_event "$id" note "added its own folder $add when $agent asked (chartroom made it)"
+      sleep 3
+      return 0
+    fi
     if trust_dialog_up "$scr"; then
       if [[ "$(meta "$id" worktree_created)" != 1 ]]; then
         log_event "$id" agent "awaiting-input: trust dialog for a folder chartroom did not create; a human must answer it"

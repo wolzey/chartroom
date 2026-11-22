@@ -236,6 +236,27 @@ lines"
   events "$id2" | grep -q "agent: awaiting-input: trust dialog for a folder chartroom did not create"
 }
 
+@test "tmux: Claude's dialog to add a folder is answered only for the task's own folder" {
+  use_fake tmux claude
+  export FAKE_TMUX_DIR="$BATS_TEST_TMPDIR/tmux"; mkdir -p "$FAKE_TMUX_DIR"
+  id="$(new_task --backend tmux:claude)"
+  # as Claude 2.1 asks on a machine where the task's folder is new to it (a device's guest home)
+  printf ' Adding a new directory:\n %s\n This session hasn'"'"'t worked here before. Is this a directory you created or one you trust?\n ❯ No, exit\n   Yes, add it\n Enter to confirm · Esc to cancel\n' \
+    "$CHARTROOM_HOME/tasks/$id" >"$FAKE_TMUX_DIR/screen"
+  export FAKE_TMUX_TASK="$id"
+  run cr dispatch "$id"
+  grep -q "send-keys -t %1 Down" "$FAKE_TMUX_DIR/calls.log"
+  events "$id" | grep -q "note: added its own folder $CHARTROOM_HOME/tasks/$id when claude asked (chartroom made it)"
+  # a folder chartroom did not make: no keys, a wake that says which
+  id2="$(new_task --backend tmux:claude)"
+  printf ' Adding a new directory:\n /srv/other/secrets\n Is this a directory you created or one you trust?\n ❯ No, exit\n   Yes, add it\n' >"$FAKE_TMUX_DIR/screen"
+  : >"$FAKE_TMUX_DIR/calls.log"
+  FAKE_TMUX_TASK="$id2" run cr dispatch "$id2"
+  [[ "$output" == *"waiting at a startup dialog chartroom will not answer"* ]]
+  ! grep -q "send-keys -t %2 Down" "$FAKE_TMUX_DIR/calls.log"
+  events "$id2" | grep -q "agent: awaiting-input: a dialog to add /srv/other/secrets, a folder chartroom did not make; a human must answer it"
+}
+
 @test "herdr watch --once: a turn that ended while nobody watched wakes the next call, once" {
   use_fake herdr claude
   export FAKE_HERDR_DIR="$BATS_TEST_TMPDIR/herdr"; mkdir -p "$FAKE_HERDR_DIR"; herdr_sock_up

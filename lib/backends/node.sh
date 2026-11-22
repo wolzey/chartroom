@@ -145,7 +145,7 @@ node_peek() { # <id> <n>
   local st; st="$(fleet_device_json "$(meta "$1" node)" | jq -r '"\(.status) (last heartbeat \(.seen_age_s // "?")s ago)"')"
   echo "== on $(node_name_of "$1"): $st"
   [[ "$st" == online* ]] || return 0
-  node_cmd "$1" peek "$(jq -cn --argjson n "${2:-15}" '{n: $n}')" 30 | sed -n '/^== pane\|^== screen\|^== terminal/,$p' || true
+  node_cmd "$1" peek "$(jq -cn --argjson n "${2:-15}" '{n: $n}')" 30 | sed -nE '/^== (pane|screen|terminal)/,$p' || true
 }
 node_attach() {
   die "the worker of $1 runs on $(node_name_of "$1"): attach there (chartroom attach $1, with CHARTROOM_HOME set to its guest home: chartroom peek $1 prints it), or with your own hc link to it"
