@@ -110,3 +110,29 @@ setup() {
   [ "$status" -eq 1 ]
   [[ "$output" == *"trailer email not in trailer_ok"* && "$output" == *"Co-Authored-By: Someone <$e>"* ]]
 }
+
+@test "an email in a tracked file fails unless it is an example, test or noreply address" {
+  printf '%s\n' "owner@example.com" "a@host.example" "x@y.invalid" "git@github.com:o/r.git" \
+    "noreply@anthropic.com" "1+u@users.noreply.github.com" >"$R/ok.md"
+  git -C "$R" add -A; git -C "$R" commit -qm "docs: examples"
+  run "$GATE"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  e="someone@order""protection.com"
+  printf 'mail %s.\n' "$e" >"$R/notes.md"; git -C "$R" add -A; git -C "$R" commit -qm "docs: notes"
+  run "$GATE"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"not an example or noreply one"* && "$output" == *"notes.md:1: $e"* ]]
+  [[ "$output" != *"ok.md"* ]]
+}
+
+@test "a tailnet's MagicDNS name in a tracked file fails" {
+  h="desk.tail""0a1b2c.ts.net"
+  echo "open https://$h/" >"$R/notes.md"; git -C "$R" add -A; git -C "$R" commit -qm "docs: notes"
+  run "$GATE"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"personal data in tracked files"* && "$output" == *"notes.md:1"* ]]
+  # a placeholder passes
+  echo 'open https://<brain>.<tailnet>.ts.net/' >"$R/notes.md"; git -C "$R" add -A; git -C "$R" commit -qm "docs: placeholder"
+  run "$GATE"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # No-personal-data gate. Fails if anything that would be published mentions the author's
 # private machine, employers, or personal tooling:
-#   1. tracked file contents (this file is excluded because it holds the pattern)
+#   1. tracked file contents (this file is excluded because it holds the pattern), including a
+#      tailnet's MagicDNS name and any email address outside the example/noreply allowlist
 #   2. committed symlinks: their targets are scanned, and any target that is absolute or
 #      climbs out of the repo fails outright (a link into a local temp dir leaks paths)
 #   3. commit metadata reachable from HEAD: author/committer names and emails, messages
@@ -13,7 +14,10 @@
 # Usage: scripts/privacy-gate.sh [repo-dir]   (default: this checkout)
 set -euo pipefail
 cd "${1:-$(dirname "$0")/..}"
-pattern='ethan|wolz[^e]|/Users/|/home/[a-z]|fluid|guardhouse|zenshift|azure.*create-pr|core:|migration:|gh-axi|launchdarkly|work/github\.com|\.captain/tasks|/private/tmp/|claude-501'
+pattern='ethan|wolz[^e]|/Users/|/home/[a-z]|fluid|guardhouse|zenshift|azure.*create-pr|core:|migration:|gh-axi|launchdarkly|work/github\.com|\.captain/tasks|/private/tmp/|claude-501|tail[0-9a-f]{4,}\.ts\.net'
+# Emails in tracked files: only reserved example domains (RFC 2606/6761), GitHub noreply
+# addresses, Anthropic's noreply and ssh remotes (git@...). Anything else is someone's address.
+email_ok='^[^@]+@([a-z0-9-]+\.)*(example|invalid|test|localhost)$|^[^@]+@example\.(com|org|net)$|^[^@]+@users\.noreply\.github\.com$|^noreply@anthropic\.com$|^git@'
 owner_email='11860354+wolzey@users.noreply.github.com'
 # collaborators who commit under their own GitHub noreply address, as author, committer or trailer
 collaborators=('198639793+cbrannelly@users.noreply.github.com')
@@ -25,6 +29,9 @@ report() { printf 'privacy gate: %s\n' "$1"; fail=1; }
 # 1. file contents
 hits="$(git ls-files -z | grep -zv '^scripts/privacy-gate\.sh$' | xargs -0 grep -nEiI "$pattern" -- 2>/dev/null || true)"
 [[ -z "$hits" ]] || report "personal data in tracked files:"$'\n'"$hits"
+emails="$(git ls-files -z | grep -zv '^scripts/privacy-gate\.sh$' | xargs -0 grep -noEiI '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}' -- 2>/dev/null |
+  awk -F: -v ok="$email_ok" '{ e = tolower($NF); sub(/[.]+$/, "", e); if (e !~ ok) print $1 ":" $2 ": " e }' || true)"
+[[ -z "$emails" ]] || report "an email address that is not an example or noreply one:"$'\n'"$emails"
 
 # 2. symlinks (mode 120000): the blob is the link target
 while read -r mode sha _ path; do

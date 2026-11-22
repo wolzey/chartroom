@@ -239,8 +239,8 @@ r-old-2 working underway" ]
   use_fake herdr
   [ "$(cr radar machines --json | jq '.machines | length')" = 1 ]
   export FAKE_HERDR_DIR="$BATS_TEST_TMPDIR/herdr"; mkdir -p "$FAKE_HERDR_DIR"; herdr_sock_up
-  echo '[{"id":"1","label":"studio","target":"me@studio.ts.net","enabled":true},{"id":"2","label":"old","target":"old","enabled":false},{"id":"3","label":"bad name;x","target":"x","enabled":true}]' >"$FAKE_HERDR_DIR/machines.json"
-  [ "$(cr radar machines --json | jq -c '.machines[1:]')" = '[{"machine":"studio","local":false,"target":"me@studio.ts.net","via":"herdr"}]' ]
+  echo '[{"id":"1","label":"studio","target":"me@desk.example","enabled":true},{"id":"2","label":"old","target":"old","enabled":false},{"id":"3","label":"bad name;x","target":"x","enabled":true}]' >"$FAKE_HERDR_DIR/machines.json"
+  [ "$(cr radar machines --json | jq -c '.machines[1:]')" = '[{"machine":"studio","local":false,"target":"me@desk.example","via":"herdr"}]' ]
   # the setting wins over herdr; "none" turns other machines off
   [ "$(CHARTROOM_RADAR_MACHINES="a b=b.example" cr radar machines --json | jq -c '[.machines[1:][] | [.machine, .target, .via]]')" = '[["a","a","config"],["b","b.example","config"]]' ]
   [ "$(CHARTROOM_RADAR_MACHINES=none cr radar machines --json | jq '.machines | length')" = 1 ]
