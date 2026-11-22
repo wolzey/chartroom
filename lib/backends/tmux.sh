@@ -34,6 +34,7 @@ tmux_open() { # <id> <wt> <launcher>
 
 tmux_alive() { local p; p="$(meta "$1" tmux_pane)"; [[ -n "$p" ]] && tmx display-message -p -t "$p" '#{pane_id}' >/dev/null 2>&1; }
 tmux_screen() { tmx capture-pane -p -t "$(meta "$1" tmux_pane)"; }
+tmux_history() { tmx capture-pane -p -S -80 -t "$(meta "$1" tmux_pane)"; }
 tmux_type() { tmx send-keys -t "$(meta "$1" tmux_pane)" -l -- "$2"; }
 tmux_keys() {
   local id="$1" k; shift

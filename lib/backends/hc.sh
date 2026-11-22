@@ -97,6 +97,7 @@ hc_info() { # <id>
 }
 hc_alive() { hc_info "$1"; [[ "$HC_STATE" == live ]]; }
 hc_screen() { hcx read "$(meta "$1" hc_terminal)"; }
+hc_history() { hcx read "$(meta "$1" hc_terminal)" --lines 80; } # (the screen and what scrolled off it)
 hc_keys() {
   local id="$1" t k; shift; t="$(meta "$id" hc_terminal)"
   for k in "$@"; do

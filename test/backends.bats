@@ -255,6 +255,20 @@ lines"
   [[ "$output" == *"waiting at a startup dialog chartroom will not answer"* ]]
   ! grep -q "send-keys -t %2 Down" "$FAKE_TMUX_DIR/calls.log"
   events "$id2" | grep -q "agent: awaiting-input: a dialog to add /srv/other/secrets, a folder chartroom did not make; a human must answer it"
+  # on a short terminal the dialog's header has scrolled off: the folder is read from the history
+  id3="$(new_task --backend tmux:claude)"
+  printf ' Adding a new directory:\n %s\n' "$CHARTROOM_HOME/tasks/$id3" >"$FAKE_TMUX_DIR/history"
+  printf ' This session hasn'"'"'t worked here before.\n ❯ No, exit\n   Yes, add it\n Enter to confirm · Esc to cancel\n' >"$FAKE_TMUX_DIR/screen"
+  : >"$FAKE_TMUX_DIR/calls.log"
+  FAKE_TMUX_TASK="$id3" run cr dispatch "$id3"
+  grep -q "send-keys -t %3 Down" "$FAKE_TMUX_DIR/calls.log"
+  events "$id3" | grep -q "note: added its own folder $CHARTROOM_HOME/tasks/$id3 when claude asked"
+  # and with nothing to read it from, a human is asked, saying so
+  id4="$(new_task --backend tmux:claude)"
+  rm -f "$FAKE_TMUX_DIR/history"; : >"$FAKE_TMUX_DIR/calls.log"
+  FAKE_TMUX_TASK="$id4" run cr dispatch "$id4"
+  ! grep -q "send-keys -t %4 Down" "$FAKE_TMUX_DIR/calls.log"
+  events "$id4" | grep -q "agent: awaiting-input: a dialog to add a folder chartroom could not read; a human must answer it"
 }
 
 @test "herdr watch --once: a turn that ended while nobody watched wakes the next call, once" {

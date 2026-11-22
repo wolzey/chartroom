@@ -43,9 +43,10 @@ screen_prompt() { # <id> <agent> <screen>
           printf 'Codex approval prompt: %s' "${line:-(see its screen)}" ;;
       esac ;;
     claude)
-      line="$(adddir_dialog_path "$scr")"
-      if [[ -n "$line" ]] && grep -qE '(❯|›) *(No, exit|Yes, add it)' <<<"$(screen_tail 6 <<<"$scr")"; then
-        if own_task_folder "$id" "$line"; then printf 'a dialog to add its own folder %s came up after the dispatch; a human must answer it' "$line"
+      if adddir_dialog_up "$(screen_tail 6 <<<"$scr")"; then
+        line="$(adddir_dialog_path_of "$(backend_runner "$id")" "$id" "$scr")"
+        if [[ -z "$line" ]]; then printf 'a dialog to add a folder chartroom could not read; a human must answer it'
+        elif own_task_folder "$id" "$line"; then printf 'a dialog to add its own folder %s came up after the dispatch; a human must answer it' "$line"
         else printf 'a dialog to add %s, a folder chartroom did not make; a human must answer it' "$line"; fi
       elif grep -qE '(❯|›) *(No, exit|Yes, I trust)' <<<"$(screen_tail 6 <<<"$scr")"; then trust_prompt_text "$id"; fi ;;
   esac

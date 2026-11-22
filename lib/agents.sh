@@ -152,9 +152,19 @@ trust_dialog_up() { grep -qiE 'trust this folder|do you trust' <<<"$1"; }
 
 # Claude's dialog to add a directory it has not worked in (an --add-dir: chartroom gives a worker
 # its task's folder that way): the folder it names, or nothing.
-adddir_dialog_path() { # <screen>
-  awk '/Adding a new directory:/ { if ((getline line) > 0) { sub(/^[ \t]+/, "", line); sub(/[ \t]+$/, "", line); print line }; exit }' <<<"$1"
+adddir_dialog_path() { # <screen> (the last such dialog in it)
+  awk '/Adding a new directory:/ { if ((getline line) > 0) { sub(/^[ \t]+/, "", line); sub(/[ \t]+$/, "", line); p = line } } END { if (p != "") print p }' <<<"$1"
 }
+# The same, for a dialog whose header has scrolled off a short terminal (its options still show):
+# read from the runner's recent history when it has one (<runner>_history: hc, tmux).
+adddir_dialog_path_of() { # <runner> <id> <screen>
+  local p; p="$(adddir_dialog_path "$3")"
+  if [[ -z "$p" ]] && grep -qE '(❯|›) *Yes, add it|^ *Yes, add it' <<<"$3" && declare -F "$1_history" >/dev/null; then
+    p="$(adddir_dialog_path "$("$1_history" "$2" 2>/dev/null || true)")"
+  fi
+  printf '%s' "$p"
+}
+adddir_dialog_up() { grep -qE '(❯|›)? *Yes, add it' <<<"$1"; } # <screen>
 # A folder of a task that chartroom made itself: its record's folder, or the worktree it created.
 own_task_folder() { # <id> <path>
   local d; d="$(tdir "$1")"
@@ -184,7 +194,11 @@ handle_trust() {
     scr="$("$screen_fn" "$id" 2>/dev/null || true)"
     # Adding a folder: answered only for the task's own folders, which chartroom made (a device's
     # guest home is new to its Claude, so its task folder is asked about there)
-    local add; add="$(adddir_dialog_path "$scr")"
+    local add=""
+    if adddir_dialog_up "$scr"; then
+      add="$(adddir_dialog_path_of "${screen_fn%_screen}" "$id" "$scr")"
+      [[ -n "$add" ]] || { log_event "$id" agent "awaiting-input: a dialog to add a folder chartroom could not read; a human must answer it"; return 1; }
+    fi
     if [[ -n "$add" ]]; then
       if ! own_task_folder "$id" "$add"; then
         log_event "$id" agent "awaiting-input: a dialog to add $add, a folder chartroom did not make; a human must answer it"

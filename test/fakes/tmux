@@ -19,7 +19,8 @@ case "$cmd" in
     if [[ "${*: -1}" == '#{pane_pid}' ]]; then echo "${FAKE_TMUX_PANE_PID:-999999}"
     elif [[ "${*: -1}" == '#{pane_title}' ]]; then cat "$S/title" 2>/dev/null || echo host.local
     else echo "$t"; fi ;;
-  capture-pane) cat "$S/screen" 2>/dev/null || printf '❯ \n' ;;
+  # (-S: with the history too; $S/history, when there is one, is what scrolled off above the screen)
+  capture-pane) if [[ " $* " == *" -S "* ]]; then cat "$S/history" 2>/dev/null || true; fi; cat "$S/screen" 2>/dev/null || printf '❯ \n' ;;
   send-keys)
     # -l text accumulates in the input box; C-u clears it; Enter submits it to the
     # UserPromptSubmit hook as {"prompt": ...}. FAKE_TMUX_DROP=N cuts N leading characters
