@@ -113,7 +113,7 @@ On the brain, name the one person the app lets in: your Tailscale login, in
 `~/.config/chartroom/config`. Then start it:
 
 ```bash
-echo 'CHARTROOM_APP_USER=you@example.com' >> ~/.config/chartroom/config
+mkdir -p ~/.config/chartroom && echo 'CHARTROOM_APP_USER=you@example.com' >> ~/.config/chartroom/config
 chartroom app serve --daemon      # 127.0.0.1:4516; it needs at least one registered home
 chartroom app doctor              # the server, who may come in, push, and the Serve command to run
 ```
@@ -269,13 +269,15 @@ On the brain, restart the app with `chartroom app stop && chartroom app serve --
 
 ## How this guide was checked
 
-Each command above was run before it went in. Most ran in throwaway homes on one Mac: a brain,
+Each command above was run before it went in, except those named at the end of this section. Most ran in throwaway homes on one Mac: a brain,
 a device and a laptop home, each with its own empty `HOME`. The app server ran on a spare port.
 The device kept its token in a 0600 file and loaded no LaunchAgent (`CHARTROOM_KEYCHAIN=none`,
 `CHARTROOM_LAUNCHCTL=none`, then `chartroom device run --once`). The laptop reached the brain
 through the test suite's loopback ssh. The keychain, LaunchAgent and Tailscale Serve steps were
 checked, read-only, on a real fleet: a brain whose app is on Tailscale Serve with push on, and
 two Macs joined as devices, each running its agent with its token in the keychain. The
-admin-console steps, the phone's own steps and the access-rule example were not run. The
+admin-console steps, the phone's own steps and the access-rule example were not run. Neither
+were `chartroom dashboard open` from a client home (its ssh tunnel) or turning push on: push was
+only read, already on, on the real fleet. The
 `chartroom permit` commands were not run by hand either: chartroom's guard refuses them to a
 worker, and the test suite (test/permit.bats, test/app-permit.bats) runs them instead.
