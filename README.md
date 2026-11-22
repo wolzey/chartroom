@@ -73,7 +73,7 @@ work has landed (merged, or on origin at that commit).
 
 **What a clean account has run.** The steps above, then a first task on the `command` backend
 (a stub worker) through dispatch, commit and close, and the dashboard, were run in an empty
-`HOME` that had only bash, jq, git, tmux, python3 and the claude CLI on its PATH (chartroom
+`HOME` that had only bash, jq, git, tmux, python3, curl and the claude CLI on its PATH (chartroom
 0.2.0). A Claude XO and a real Claude worker have **not** been run from such a pristine home,
 because Claude Code needs its own sign-in there. Both run every day on machines that have
 been signed in to for a while.

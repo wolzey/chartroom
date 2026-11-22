@@ -57,7 +57,9 @@ Set up once, in the Tailscale admin console:
    ```
 
    This is an example, not a policy chartroom tests. Port 22 is ssh, used by client homes.
-   Port 443 is the app, and the devices' heartbeats.
+   Port 443 is the app, and the devices' heartbeats. Tag only the brain and the devices, never
+   the phone or laptop you open the app from: a tagged machine carries no user login, and the
+   app lets in only yours.
 
 Then check from the laptop that the brain answers ssh with no prompt. Client homes use ssh in
 batch mode and never ask for a password:
