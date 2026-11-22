@@ -11,7 +11,7 @@
 #   $home_name  the home's name in the list of homes (lib/homes.sh), "" when it has none
 #   $focus    focus mode's {projects, since, until}, or null (lib/focus.sh)
 #
-# Rules (README "Dashboard" documents the same table):
+# Rules (docs/dashboard.md, "Dashboard", documents the same table):
 #   needs_you    decision, blocked, failed, awaiting-input, review (a worker reported done; it
 #                waits on the commander's accept or close); plus inbox "Waiting ..." items
 #   in_progress  working, drafting, or waiting (a stopped worker inside its `waiting` window;

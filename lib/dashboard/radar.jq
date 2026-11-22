@@ -14,8 +14,8 @@
 #   $via      how the machine was found ("this machine", "herdr", "config")
 #   $contact  ok | unreachable | no-chartroom | error, from the call itself; $error its message
 #
-# Output: {machine: {...}, agents: [...], flagships: [...]}. The state table (the README's
-# "Radar" section documents the same):
+# Output: {machine: {...}, agents: [...], flagships: [...]}. The state table (docs/dashboard.md's
+# "The fleet radar" section documents the same):
 #   status state            live                       radar state      sector
 #   decision                any                        decision         decision
 #   blocked                 any                        blocked          blocked

@@ -123,6 +123,12 @@ setup() {
   [ "$status" -eq 1 ]
   [[ "$output" == *"not an example or noreply one"* && "$output" == *"notes.md:1: $e"* ]]
   [[ "$output" != *"ok.md"* ]]
+  # the allowlist's dots are literal: a look-alike of a noreply domain is still someone's address
+  e="x@users""xnoreply.github.com"
+  printf '%s\n' "$e" >"$R/notes.md"; git -C "$R" add -A; git -C "$R" commit -qm "docs: look-alike"
+  run "$GATE"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"notes.md:1: $e"* ]]
 }
 
 @test "a tailnet's MagicDNS name in a tracked file fails" {

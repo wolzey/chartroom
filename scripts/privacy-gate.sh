@@ -30,7 +30,8 @@ report() { printf 'privacy gate: %s\n' "$1"; fail=1; }
 hits="$(git ls-files -z | grep -zv '^scripts/privacy-gate\.sh$' | xargs -0 grep -nEiI "$pattern" -- 2>/dev/null || true)"
 [[ -z "$hits" ]] || report "personal data in tracked files:"$'\n'"$hits"
 emails="$(git ls-files -z | grep -zv '^scripts/privacy-gate\.sh$' | xargs -0 grep -noEiI '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}' -- 2>/dev/null |
-  awk -F: -v ok="$email_ok" '{ e = tolower($NF); sub(/[.]+$/, "", e); if (e !~ ok) print $1 ":" $2 ": " e }' || true)"
+  ok="$email_ok" awk -F: '{ e = tolower($NF); sub(/[.]+$/, "", e); if (e !~ ENVIRON["ok"]) print $1 ":" $2 ": " e }' || true)"
+# (the pattern goes through ENVIRON, not awk -v, which would turn its \. into a bare .)
 [[ -z "$emails" ]] || report "an email address that is not an example or noreply one:"$'\n'"$emails"
 
 # 2. symlinks (mode 120000): the blob is the link target
