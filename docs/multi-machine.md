@@ -3,7 +3,7 @@
 Design for spreading the crew's work over several machines without the commander placing it.
 Status: **stage 1 is built** (`chartroom nodes`, `chartroom node probe`, `chartroom node init`:
 read-only discovery plus each node's own budgets); stages 2 to 4 are designed here and not yet
-built. "Studio" and "m3" below are example labels: an always-on desktop that holds the home of
+built. "desk" and "mini" below are example labels: an always-on desktop that holds the home of
 record, and a laptop used headlessly.
 
 **Devices push to the brain** (the commander's direction, superseding the ssh protocol below where
@@ -15,7 +15,7 @@ placed on a device yet.
 
 ## 1. Goals and shape
 
-The commander uses one XO in one **home of record**: an always-on desktop (the "Studio"). They reach it from whichever
+The commander uses one XO in one **home of record**: an always-on desktop (the "desk"). They reach it from whichever
 laptop they are on. Workers should spread over every machine that has room, without the commander placing them.
 
 - **Origin.** The home that created the task. It is the only record: `meta.json`, `brief.md`, `events.log`, report,
@@ -30,11 +30,11 @@ laptop they are on. Workers should spread over every machine that has room, with
   login-session runner (hc or herdr), as it does locally.
 
 ```
-  laptop ──ssh/herdr/dashboard──▶ Studio: origin home + XO + watch
+  laptop ──ssh/herdr/dashboard──▶ desk: origin home + XO + watch
                                      │  ssh -o BatchMode=yes (fixed verbs only)
                     ┌────────────────┼─────────────────────────┐
                     ▼                ▼                         ▼
-             local node        node "m3"                  node "laptop"
+             local node        node "mini"                node "laptop"
              (as today)        spool: leases, guests      spool: ...
                                worktree + hc terminal     (budget 30%, pause on battery)
                     events ◀── one `node stream` per node (origin's watch) ──┘
@@ -115,8 +115,8 @@ messages go on **stdin as JSON**, never interpolated into the shell line. Remote
   - every live worker on the node, from all its own homes and all guests, not parked;
   - plus unexpired reservations.
 
-  The node counts its own homes' workers too: the Studio runs its own crew and is a node at the same time.
-- **Two dispatchers.** Both may read the same probe and both may pick `m3`. The first `lease` under the lock gets the
+  The node counts its own homes' workers too: the desk runs its own crew and is a node at the same time.
+- **Two dispatchers.** Both may read the same probe and both may pick `mini`. The first `lease` under the lock gets the
   slot. The second gets a refusal with fresh numbers and re-places: at most 3 tries, then it queues (stage 3).
 - **Name collisions.** hc and herdr terminal names are task ids. `lease` refuses an id that any origin already holds on
   that node, and `hc_clear_stale` already refuses a live terminal of the same name. Ids are `slug-hex4`, so this is
@@ -175,8 +175,8 @@ see the same idle node.
 
 | Node | Capacity C·B | Load L | 1st task u_cpu | 2nd task |
 |---|---|---|---|---|
-| Studio | 28 × 0.8 = 22.4 | 6 | (6 + 1.5) / 22.4 = 0.33 | 0.33 → **here** |
-| m3 | 16 × 1.0 = 16 | 3 | (3 + 1.5) / 16 = 0.28 → **here** | (3 + 3) / 16 = 0.375 |
+| desk | 28 × 0.8 = 22.4 | 6 | (6 + 1.5) / 22.4 = 0.33 | 0.33 → **here** |
+| mini | 16 × 1.0 = 16 | 3 | (3 + 1.5) / 16 = 0.28 → **here** | (3 + 3) / 16 = 0.375 |
 
 Total usage climbs evenly instead of filling one machine to 100% first.
 
@@ -221,12 +221,12 @@ stop placing there). It never kills a worker.
 
 | Failure | What happens |
 |---|---|
-| **Node unreachable mid-task** (sleep, Wi-Fi, reboot) | The stream ends or times out. The task reads `live: unreachable` (its state is unchanged). After `CHARTROOM_NODE_LOST_MINUTES` (10) it wakes once: `lost: node m3 unreachable since T (<ssh's message>); its worktree and commits stay on m3; chartroom recover <id>`. It shows as `lost` (the radar's Adrift sector). Nothing is deleted. When contact returns, the stream resumes from `node_off`: events written meanwhile replay in order, and the task carries on (`note: node m3 back; N events replayed`) |
+| **Node unreachable mid-task** (sleep, Wi-Fi, reboot) | The stream ends or times out. The task reads `live: unreachable` (its state is unchanged). After `CHARTROOM_NODE_LOST_MINUTES` (10) it wakes once: `lost: node mini unreachable since T (<ssh's message>); its worktree and commits stay on mini; chartroom recover <id>`. It shows as `lost` (the radar's Adrift sector). Nothing is deleted. When contact returns, the stream resumes from `node_off`: events written meanwhile replay in order, and the task carries on (`note: node mini back; N events replayed`) |
 | **Worker gone after a node reboot** | Its worktree and commits are on the node. `chartroom recover <id>` (stage 2): (a) **default**, on the same node, resume the recorded session (`claude --resume`, as park's revive does) in the same worktree; (b) `--elsewhere`: fetch the branch to the origin and dispatch a **new** worker on another node from the branch tip, with the brief plus "resume from <branch>; the last worker's last events: …". A dead worker can be replaced. A live one never moves |
 | **Commits only on a dead node** | The origin fetches the branch (`git fetch <target>:<worktree> <branch>`) on every wake-worthy event (`decision`, `blocked`, `waiting`, `done`, `failed`), at `close`, and every 30 min while the branch moves. At worst it loses that window, until the node returns |
 | **Stale checkout** | `accept` runs `git fetch origin` in the node's checkout before **every** worktree, then `git cat-file -e <base_sha>`. If the sha is missing, accept refuses (`base <sha> is not on the remote; push it or run it locally`) and the lease is released. The node's own checkout is never pulled, reset or switched (a person may be using it): the worktree starts from the sha |
-| **ssh auth expiry** (keys, agent, Tailscale SSH re-check) | BatchMode never prompts. Exit 255 with `Permission denied` / `Host key verification failed` / a Tailscale check URL marks the node's contact `auth`. It wakes once per outage: `node m3: ssh needs you (<message>); run ssh m3 once in a terminal`. Placement skips the node, and its tasks read `unreachable` |
-| **Clock skew in event timestamps** | Node lines keep the node's timestamp (the line format is a stable contract) and the origin's **append order** is the order. The stream's `hello` measures the skew (node epoch − origin epoch − RTT/2); above 30 s it logs `note: node m3's clock is 74 s ahead`. Leases use only the node's clock. Waiting windows use the worker's own until-time, and their 15-minute grace absorbs small skew |
+| **ssh auth expiry** (keys, agent, Tailscale SSH re-check) | BatchMode never prompts. Exit 255 with `Permission denied` / `Host key verification failed` / a Tailscale check URL marks the node's contact `auth`. It wakes once per outage: `node mini: ssh needs you (<message>); run ssh mini once in a terminal`. Placement skips the node, and its tasks read `unreachable` |
+| **Clock skew in event timestamps** | Node lines keep the node's timestamp (the line format is a stable contract) and the origin's **append order** is the order. The stream's `hello` measures the skew (node epoch − origin epoch − RTT/2); above 30 s it logs `note: node mini's clock is 74 s ahead`. Leases use only the node's clock. Waiting windows use the worker's own until-time, and their 15-minute grace absorbs small skew |
 | **Logins locked** (rebooted, not logged in to the GUI, FileVault) | No runner core answers, so logins are `unknown` and the node is not eligible. A worker never starts from the ssh shell |
 | **Dispatcher dies between lease and accept** | The reservation lapses after 120 s |
 | **Dispatcher dies after accept** | The worker runs on. The lease becomes `orphaned` after 15 min, is still counted while the worker is live, and is re-adopted by that origin's next stream |
@@ -257,7 +257,7 @@ stop placing there). It never kills a worker.
 - **`status`.** Rows gain `machine` (`null` when local) and `node_contact`. The table gets a `MACHINE` column **only when
   some open task runs elsewhere**. LIVE comes from the cached `node.json` (`working`, `unreachable 4m`). `status` never
   opens ssh, so it stays fast and works offline.
-- **board / dashboard.** Cards carry an "on m3" chip. The task page gets a machine row. Its live pane is the proxied
+- **board / dashboard.** Cards carry an "on mini" chip. The task page gets a machine row. Its live pane is the proxied
   `node peek` (bounded at 25 s, like the radar's).
 - **radar.** The origin's record is drawn under the node's machine (`m` splits by machine), labelled with its home and
   "from <origin machine>". The node's own `status --all-homes` never lists guests, so a task is never drawn twice.
@@ -296,14 +296,14 @@ Built: enrolment and heartbeats (lib/fleet.sh on the brain, lib/device.sh on a d
 routes in lib/app/server.py). No work is placed on a device yet.
 
 ```
- device (m3, the M5)                                    brain (the Studio): its app server
+ device (mini)                                          brain (the desk): its app server
  chartroom device run (a LaunchAgent in the login       POST /api/v1/device/join       a one-time code
    session, dev.chartroom.device)                       POST /api/v1/device/heartbeat  every 15 s
    every 15 s: its probe (lib/nodeprobe.sh) ──HTTPS──▶  POST /api/v1/device/rotate     a new token
                                     (Tailscale Serve)   devices/<id>.json, <id>.seen.json
 ```
 
-- **Enrolling.** On the brain, `chartroom node add --name m3` prints a code: single use, 10 minutes,
+- **Enrolling.** On the brain, `chartroom node add --name mini` prints a code: single use, 10 minutes,
   only its sha256 is stored. On the device, after `install.sh --device` (no home is made there),
   `chartroom device join <brain-url> <code>`. The device sends its node id (`CHARTROOM_NODE_ID`,
   minted once by `node init` and kept across `--force`), host name and hardware id; the brain

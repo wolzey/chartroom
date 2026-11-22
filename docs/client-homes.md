@@ -29,7 +29,7 @@ moves records, places work, or works offline.
 
 ```bash
 cd ~/chartroom/acme           # an empty home here; the brain has a registered home "acme"
-chartroom brain link studio   # ssh target of the brain; --as NAME if it is named differently there
+chartroom brain link desk   # ssh target of the brain; --as NAME if it is named differently there
 chartroom brain status        # contact, the copy, pending edits, attach and the tunnel
 chartroom brain unlink        # local again (the copy stays, as a snapshot)
 ```
@@ -194,8 +194,8 @@ at the end of each log.
 
 - The client watch reconnects quietly, with backoff.
 - After `CHARTROOM_BRAIN_OUTAGE_SECONDS` (60) it wakes once:
-  `[brain] studio unreachable since <T>: <ssh's message>; this home lives there …`.
-- When the brain is back it wakes once more: `[brain] studio back after 12m`.
+  `[brain] desk unreachable since <T>: <ssh's message>; this home lives there …`.
+- When the brain is back it wakes once more: `[brain] desk back after 12m`.
 - Step 5's "switch to local mode?" question goes where the first line is printed.
 
 ## attach, peek, dashboard, artifacts

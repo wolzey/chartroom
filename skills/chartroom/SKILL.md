@@ -265,7 +265,7 @@ hot or slow, run the `sweep` skill (`chartroom sweep --apply`, one line to relay
 `chartroom nodes` lists the machines that can take crew work (this one first) with their room,
 logins, tools and checkouts: an enrolled device from its last heartbeat (`online`, `stale`,
 `lost`), any other machine read-only over ssh. Use it to answer "which machine has room" or
-"can m3 run this". Workers still run on this machine: dispatching onto another one arrives in a
+"can mini run this". Workers still run on this machine: dispatching onto another one arrives in a
 later release (docs/multi-machine.md), and you never place work by hand on a machine the
 commander has not made a node (`chartroom node init`, run there by the commander). Enrolling,
 revoking or rotating a device (`chartroom node add|revoke|rotate`) changes who can reach the

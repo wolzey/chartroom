@@ -28,6 +28,89 @@ dashboard can show the fleet in a browser).
      └────── each in its own git worktree; events → ~/.chartroom/tasks/<id>/events.log
 ```
 
+## Quickstart
+
+You need macOS or Linux, bash 4 or newer (macOS: `brew install bash`), `jq`, `git`, and an
+agent CLI you are already signed in to: Claude Code or Codex. With tmux, each worker gets a
+window you can watch. Without it, workers run headless.
+
+```bash
+# 1. install: the CLI in ~/.local/bin, and your home (the XO's records) in ~/.chartroom
+curl -fsSL https://raw.githubusercontent.com/wolzey/chartroom/main/install.sh | bash
+# 2. what can run here; the "auto:" line is the backend your first worker gets
+chartroom doctor
+# 3. teach your agent to be the XO (Codex or Gemini: --agents; pi: --pi)
+chartroom install-skills --claude
+# 4. start the XO in the home
+cd ~/.chartroom && claude
+```
+
+Then, at the XO's prompt, ask for something in a repository you have:
+
+> In ~/code/todo-cli, add a --json flag to `list`, and separately find out why the test suite
+> takes four minutes.
+
+The XO resolves the project, writes two briefs (one **ship**, one **scout**), dispatches each
+to a worker in its own git worktree, and goes quiet until something needs you. Ask
+*"bearings"* at any time for a digest: needs you, ready, under way, trouble. To look for
+yourself:
+
+```bash
+chartroom dashboard --daemon --open   # the board in your browser (http://127.0.0.1:4517)
+chartroom status                      # the same, in the terminal
+chartroom attach <id>                 # a worker's own terminal (tmux, herdr, cmux, hc)
+```
+
+When a worker is done, the XO reviews it and closes the task. `chartroom close <id>` removes
+the worktree, refuses while it holds uncommitted work, and deletes the branch only once its
+work has landed (merged, or on origin at that commit).
+
+- `install-skills` with no flag links into the agents whose config directories it finds. On a
+  machine where the agent has never run, there are none yet: pass the flag.
+- `chartroom project <name>` finds a repository by name once `CHARTROOM_PROJECT_ROOTS` (in
+  `~/.config/chartroom/config`) names the directories that hold your checkouts. Until then,
+  give the XO a path.
+
+**What a clean account has run.** The steps above, then a first task on the `command` backend
+(a stub worker) through dispatch, commit and close, and the dashboard, were run in an empty
+`HOME` that had only bash, jq, git, tmux, python3 and the claude CLI on its PATH (chartroom
+0.2.0). A Claude XO and a real Claude worker have **not** been run from such a pristine home,
+because Claude Code needs its own sign-in there. Both run every day on machines that have
+been signed in to for a while.
+
+## What is new since 0.1.0
+
+| Feature | Status | Default | Read |
+|---|---|---|---|
+| Branch cleanup: `close` deletes a branch once its work has landed; `sweep` prunes landed leftovers | stable | on | [Housekeeping](#housekeeping-sweep) |
+| Permission cards: a Claude worker's permission prompts become cards the XO or you answer | stable | on for every Claude worker | [Permission cards](#permission-cards-no-prompt-only-a-terminal-can-answer), [docs/permits.md](docs/permits.md) |
+| The hc runner: workers in the Herdr app's terminals | experimental (`hc:codex` not run against a real codex) | first in the automatic order, skipped when `hc` is absent | [Backends](#backends) |
+| Parked workers: an idle hc:claude worker's session ends and resumes on the next message | experimental | on after 60 minutes, hc:claude only | [Idle workers park](#idle-workers-park) |
+| The app: one PWA for every home on a machine, over Tailscale | experimental | off until `chartroom app serve` | [docs/app.md](docs/app.md) |
+| Phone push for the app (Web Push, encrypted end to end) | experimental | off (`CHARTROOM_APP_PUSH=on`) | [docs/app.md](docs/app.md#on-the-phone-and-notifications) |
+| Brain and client homes: a laptop's home whose records and workers live on an always-on machine | experimental (step 1 of 5: no offline mode) | off until `chartroom brain link` | [docs/client-homes.md](docs/client-homes.md) |
+| Devices join a brain: other machines enrol with a one-time code and send heartbeats | experimental (no work is placed on a device yet) | off until `node add` / `device join` | [docs/multi-machine.md](docs/multi-machine.md#12-devices-the-brain-never-reaches-out) |
+| The SQLite store for task records | experimental (stage 1) | off (`CHARTROOM_STORE=sqlite`) | [docs/store.md](docs/store.md) |
+
+Experimental means it works and has tests, but its commands, settings or files may still
+change in a minor release. The full list is in [CHANGELOG.md](CHANGELOG.md).
+
+## Documentation
+
+- [docs/fleet.md](docs/fleet.md): build your own fleet: an always-on brain, a laptop, other
+  Macs, the app on your phone, and permission cards, with Tailscale as the recommended network.
+- [docs/dashboard.md](docs/dashboard.md): the local dashboard, the fleet radar, `chartroom nodes`,
+  and reaching the board from other devices.
+- [docs/app.md](docs/app.md), [docs/permits.md](docs/permits.md),
+  [docs/client-homes.md](docs/client-homes.md), [docs/multi-machine.md](docs/multi-machine.md):
+  the app, permission cards, client homes and devices in depth.
+- [docs/homes.md](docs/homes.md): several homes (and XOs) on one machine, and how they talk.
+- [docs/crew-view.md](docs/crew-view.md): the crew inside Claude Code or pi, and the Herdr panel.
+- [docs/store.md](docs/store.md): the SQLite store.
+- [docs/upgrading.md](docs/upgrading.md): a home from chartroom's predecessor.
+- [skills/chartroom/references/backends.md](skills/chartroom/references/backends.md): every
+  backend, and how each confirms delivery.
+
 ## Design
 
 - **It installs into your existing setup instead of being one.** chartroom is a CLI on your PATH
@@ -40,8 +123,9 @@ dashboard can show the fleet in a browser).
   writes down every fallback, and never fails just because herdr isn't there.
 - **Agent-native signals instead of screen scraping.** Turn ends, approval prompts and prompt
   receipt come from Claude Code hooks and Codex `notify`, not from pattern-matching the TUI.
-- **Small surface.** About 1,600 lines of bash across a few files, with `jq` and `git`. No `gh`
-  required, no worktree manager, no Node.
+- **Small surface.** Bash with `jq` and `git` (about 13,000 lines across `bin/` and `lib/`), plus
+  Python's standard library for the dashboard and app servers. No `gh` required, no worktree
+  manager, no Node (only the app's optional phone push uses it).
 - **The contract is files.** Briefs, an append-only event log with a documented line format, and
   reports. Any worker in any language can take part with `printf >>`.
 
@@ -51,6 +135,7 @@ chartroom runs on macOS and Linux only.
 
 Requirements: bash ≥ 4 (macOS: `brew install bash`), `jq`, `git`. Optional, per backend:
 the Herdr app (herdr-core, `hc`), herdr, cmux (macOS), tmux ≥ 3.0, the `claude` and/or `codex` CLIs.
+`python3` for the dashboard and the app, `curl` on a device that joins a brain.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/wolzey/chartroom/main/install.sh | bash
@@ -80,54 +165,12 @@ Per agent:
 | pi | `chartroom install-skills --pi` (and, for the crew view, `pi install <checkout>/mods/crew-view-pi`) | same as Codex |
 | opencode, Cursor, Amp, Copilot, others | paste [`adapters/agents-md/AGENTS.md`](adapters/agents-md/AGENTS.md) into the agent's instructions, or start it in `~/.chartroom` (its `AGENTS.md` points at the skill) | same as Codex |
 
-### A live crew view in Claude Code (and pi)
+### The crew view and the Herdr panel (optional)
 
-`mods/crew-view` is a Claude Code mod (verified on Claude Code 2.1.302, the todo list on 2.1.303) that draws the crew inside the XO's
-session: a one-line band above the prompt (`⚓ 🏃 3 · 🙋 2 [shop] 108a, [billing] 9c1e · ✅ 1`,
-one emoji per lane, every item that needs you labelled with its project) and a `/crew` pane that
-browses the board's items, the dashboard inside Claude Code. Tab or the arrows walk the items,
-Enter opens one: its state, the commander's intent, the last events, the report's summary or the
-outcome, PRs, artifacts and where the worker runs. From there, `c` puts `/continue <id>` in the
-prompt (Enter runs it), `y` copies the id, `p` a PR URL, `a` an artifact, `r` reads the report,
-`b` goes back; `/crew <id>` opens an item directly. `q` or Esc closes the pane, `/crew` toggles
-it, and `/crew off` hides the band for the session. While [focus mode](#focus-mode-one-project-at-a-time)
-is on, the band leads with `🎯 <project> · N held` and counts only what is in focus. It reads
-`chartroom board --json` only when the home's change stamp (`.changed`, below) moved, which it
-stats every 15 seconds without a process, and at least every 5 minutes; an item it reads with
-`chartroom show <id> --json`.
-
-Under the band sits [your todo list](#your-next-steps-the-todo-list), styled like Claude Code's
-own: the first three things you owe the crew (`☐ [legal] i-7f3a sign the NDA · due 10-22`),
-`+N more`, and while focus mode is on, the focus and how many items it holds. `/todo` opens a
-pane of all of it, where the row with the ring takes `c` (copy an artifact's text), `d` (done,
-pressed twice), `o` (`/continue <id>` into the prompt) and `a` (show the held items too); `/todo
-off` hides the list. `/crew todo` is the same command (and the way in where your own `/todo`
-command or skill already has the name). Install it at user scope:
-
-```
-/plugin install crew-view@chartroom
-```
-
-It stays inert (no command, timer, process or drawing) until the session loads the `captain` or
-`chartroom` skill, and in every session but the XO's: an interactive one whose working directory
-is the chartroom home, not under `worktrees/`, with no `CHARTROOM_TASK`. Installed from a local checkout (`claude plugin marketplace add <checkout>`),
-`/reload-plugins` picks up edits. See [mods/crew-view/README.md](mods/crew-view/README.md).
-
-`mods/crew-view-pi` is the same band, browser and todo list (`/todo`) for [pi](https://pi.dev) (0.87 or newer), gated
-the same way (`/skill:captain` or `/skill:chartroom` wakes it): `pi install <checkout>/mods/crew-view-pi`,
-for example `pi install ~/.local/share/chartroom/mods/crew-view-pi`. See
-[mods/crew-view-pi/README.md](mods/crew-view-pi/README.md).
-
-### A Tasks panel in the Herdr app
-
-`mods/herdr-chartroom` is a side panel for the Herdr app (`herdr-app`) listing every home's open
-tasks in the radar's sectors, from `chartroom radar --json`. Clicking a task passes it to its
-home's XO: it types `/continue <id>` into the agent running in that home's folder and brings the
-XO's tab to the front. It never types into a blocked XO (it brings that XO forward so you can
-answer its question) or a bare shell, and never starts an XO; when it can't send, it says why. The chevron opens the details, with PRs and **Open worker**.
-Install it by copying its files into `~/.config/herdr-app/mods/chartroom` (not a symlink: the app
-doesn't hot-reload one), then place it in a layout. See
-[mods/herdr-chartroom/README.md](mods/herdr-chartroom/README.md).
+`/plugin install crew-view@chartroom` at a Claude Code prompt draws the crew in the XO's own
+session: a band above the prompt, a `/crew` pane and your todo list. `mods/crew-view-pi` does
+the same for pi, and `mods/herdr-chartroom` is a Tasks panel for the Herdr app. See
+[docs/crew-view.md](docs/crew-view.md).
 
 ### Updating, and running on several machines
 
@@ -150,577 +193,29 @@ chartroom doctor
 
 ### A home from before chartroom
 
-A home made by chartroom's predecessor (`~/.captain`, with `captain.md`, "Captain's intent"
-briefs and `codex` / `herdr-claude` / `herdr-codex` backends) works as is. On each machine
-that has one:
-
-1. Point chartroom at it, and keep its old defaults if you want new tasks to look like the old
-   ones, in `~/.config/chartroom/config`:
-
-   ```
-   CHARTROOM_HOME=~/.captain
-   CHARTROOM_WORKSPACE=captain-crew
-   CHARTROOM_BRANCH_PREFIX=cap/
-   CHARTROOM_PROJECT_ROOTS=~/code
-   CHARTROOM_HARNESS=claude
-   ```
-
-2. Move any older copies of the `captain`, `bearings`, `dashboard` and `continue` skills out of
-   your agents' skill directories (`install-skills` never replaces a real directory), then run
-   `chartroom install-skills`. It also links a `captain` skill: the chartroom skill under its old
-   name, so `/captain` and a home whose `AGENTS.md` asks for it keep working.
-3. Briefs already handed to workers name the old helper's path. Leave an executable at that
-   path that hands over to chartroom, so running workers can still report:
-
-   ```bash
-   #!/usr/bin/env bash
-   export CHARTROOM_HOME="${CAP_HOME:-$HOME/.captain}"
-   [[ "${1:-}" == dashboard ]] && { shift; set -- dashboard open "$@"; }
-   exec "$(command -v chartroom || echo "$HOME/.local/bin/chartroom")" "$@"
-   ```
-
-4. Check: `chartroom status` lists the old tasks with their states, and `chartroom board`
-   shows the same lanes as the dashboard.
-5. Optional: move hand-written preferences into the rulings ledger (see Concepts).
-   `chartroom rule draft > map.tsv` lists each bullet with a guessed topic and its date. Edit
-   the topics so rulings that replace each other share one, set a row's topic to `keep` to
-   leave that bullet as hand-written text, and rewrite a row's text if the winner has to stand
-   alone. Then `chartroom rule import map.tsv` (a dry run) and `--apply`, which backs the file
-   up under `records/`, appends the rulings, removes the imported bullets and renders the block.
-
-## Quickstart
-
-```bash
-chartroom init
-cd ~/.chartroom && claude        # or codex, gemini, pi ...
-```
-
-Then talk to it: *"In ~/code/todo-cli, add a --json flag to `list`, and separately find out
-why the test suite takes four minutes."* The XO resolves the project, writes two briefs (one
-**ship**, one **scout**), dispatches them on the best available backends, and goes quiet until
-something needs you. Ask *"bearings"* at any time for a four-part digest: needs you, ready,
-under way, trouble.
+A `~/.captain` home made by chartroom's predecessor works as is. [docs/upgrading.md](docs/upgrading.md)
+says what to set so that new tasks look like the old ones.
 
 ## The chartroom app
 
-One app for every home on the brain, served by chartroom and reached over the tailnet: it opens
-on **Needs me**, one inbox of every decision, plan to approve, blocker and report across every
-home, answered in place from a quick view beside the list. It is a React PWA in `app/`, shipped
-in this repo with no build step (React and htm are vendored), and served by `lib/app/server.py`
-(Python standard library). The [dashboard](#dashboard) keeps running beside it until the app
-covers everything it does.
-
-```bash
-chartroom app serve --daemon     # 127.0.0.1:4516 (CHARTROOM_APP_PORT), for Tailscale Serve
-chartroom app service on         # macOS: a LaunchAgent keeps it up and starts it again after a reboot
-chartroom app doctor             # the server, who may come in, and the Serve command to run
-chartroom app open               # this machine's browser (start it first with --no-auth)
-chartroom app stop               # (or: status)
-```
-
-- **Who gets in.** The server listens on 127.0.0.1 only. `tailscale serve --bg --https=443
-  http://127.0.0.1:4516` puts it on your tailnet over HTTPS (which the PWA needs) and names the
-  person at each request; only `CHARTROOM_APP_USER`, your Tailscale login, gets in. There is no
-  password. `--no-auth` drops the identity check for this machine's own browser, and then
-  refuses anything that came through a proxy. [docs/app.md](docs/app.md) has the details.
-- **Acting from it.** Mark read, accept, close and snooze run as they would in the terminal
-  (`artifact done`, `todo done`, `accept`, `close`, `snooze`). Answers, approvals and anything
-  typed go to that home's XO as your own words (`chartroom tell`), and its `watch` wakes with
-  `[commander <id>] ...`. The app shows when the XO has read one.
-- **Instant.** Every action is queued in the page: the item moves at once, and an outbox kept in
-  the browser sends it in the background, retrying while the server cannot be reached. The
-  server accepts it at once and runs the verb behind it in order, per home. An action that
-  fails comes back with the reason and a Retry.
-- **Several at once.** Select rows (their checkbox, `x`, `Shift+J`/`Shift+K`, shift-click, `⌘A`)
-  and a bar acts on all of them: Mark done (an inbox question or a draft is marked done; a
-  finished task is accepted), Accept, Close, Snooze. One action per item: each one succeeds or
-  fails on its own, and Close never discards work: a task that cannot be closed cleanly
-  refuses and says why.
-- **Question cards.** A worker's `decision` (its options parsed from its own words), an inbox
-  question, and a card the XO posts with `chartroom ask` are all cards. Only an explicit
-  marker (`(1) RECOMMENDED: ...`) recommends an option, one per question at most. An ask with
-  several questions is a grilling round, answered on its own page and submitted together. The
-  first answer wins, from the app or the terminal (`chartroom ask answer`).
-- **Readable.** Every text colour measures at least 4.5:1 (WCAG AA), light and dark, and every
-  URL is a link; a GitHub PR or issue reads `repo#123`.
-- **Keys.** `j`/`k` move, `Enter` answers with the recommendation (or approves, or accepts),
-  `1`-`9` pick an option, `⌘↵` sends, `o` opens details, `s` snoozes, `x` selects, `⌘K` or `/`
-  opens the palette. Dark and light follow the system, and the moon toggles them.
-- **Tickets and the board.** A task opens as a ticket: its question, its PRs (state and checks
-  from `gh`), its description (the brief, edited in place), plan, report, attachments (25 MB
-  each; `chartroom attachment`), and the activity with comments that steer the worker (`@xo`
-  asks the XO). The board shows every home's tasks in seven columns, filtered by home, project,
-  initiative and machine. `c` anywhere writes a new task, which goes to that home's XO as a
-  request (`chartroom request`).
-- **Every home.** It reads each registered home on the machine (`chartroom homes`) in the
-  background with `chartroom app snapshot --json`, again whenever a home's records change. A
-  client home is left out, and refuses `chartroom app`: the app runs on its brain.
+One app for every home on a machine (experimental). It opens on **Needs me**, one inbox of
+every decision, plan to approve, blocker and report across every home, answered in place. It is
+a PWA served on 127.0.0.1 by `chartroom app serve`, and Tailscale Serve puts it on your phone
+over HTTPS for your own Tailscale login only. See [docs/app.md](docs/app.md), and
+[docs/fleet.md](docs/fleet.md) for the setup.
 
 ## Dashboard
 
 ```bash
 chartroom dashboard                  # http://127.0.0.1:4517, Ctrl-C to stop
 chartroom dashboard --daemon --open  # in the background, and open the browser
-chartroom dashboard open             # reuse the running one (or start it), then open the browser
-chartroom dashboard --theme hud      # start with the HUD theme as the default
-chartroom dashboard --daemon --expose  # on the network too, behind an access token (see below)
-chartroom dashboard stop             # (or: status)
-chartroom dashboard --json           # the same lanes, no server
-chartroom board                      # the same lanes in the terminal, one line per item
-chartroom show 21ba                  # one item in detail (--json for the crew views)
+chartroom dashboard stop
 ```
 
-A one-page, read-only view of the fleet that refreshes every 5 seconds, so you can see what
-to pull from. It works on phones and tablets (lanes stack, nothing scrolls sideways, text is
-12px or larger and every control is a 44px tap target) and follows your light/dark setting (or a
-light/dark toggle in the header). Work in progress visibly moves, changes animate, and
-`prefers-reduced-motion` turns all motion off. It has five lanes, each with a count in the
-header:
-
-| Lane | What lands there |
-|---|---|
-| **Needs you** | tasks in `decision`, `blocked`, `failed`, `awaiting-input` or `review` (in that order; `review` is a worker's finished work awaiting your look: a PR to review, a merged PR or a report to read), then the "Waiting on ..." items in `inbox.md` with their question text; every card leads with its project |
-| **In progress** | `working` and `drafting` tasks, and `waiting` ones: a worker that ended its turn right after a `waiting` event, inside its window (the card shows what it waits on and until when) |
-| **On hold** | `stopped-silent` and `waiting-overdue` tasks; tasks whose last event (other than their own `waiting` event) says they wait on a person ("waiting on/for", "awaiting review", "pending approval", "on hold"); done tasks whose open PR still needs someone's review |
-| **Ready for you** | `done` tasks (ones you accepted) that are not closed yet |
-| **Recently finished** | tasks closed in the last 48 hours (`CHARTROOM_DASHBOARD_RECENT_HOURS`), and done tasks whose PRs are all merged |
-
-Each card shows the title, project (above the title on a Needs you card, so you can tell which
-project a question is for at a glance), age, the last worker event, PR/MR links found in
-`events.log` and `report.md`, and links that open the task's brief, report, plan and event log
-as plain text. A task or inbox card with open [artifacts](#artifacts-drafts-that-outlive-the-chat)
-(drafts for you to send or run) shows a chip for each: one click copies the text and opens it,
-with a copy button beside it; a [page](#pages-reports-to-read-and-print)'s chip opens it in the
-viewer instead. The header's **pages** link lists every page. Approvals given in chat but not yet in a brief are listed under
-Needs you, and so are open [relays from other homes](#talking-between-homes) (for the XO to
-weigh; they are not cards). Above the lanes, a "Your next steps" strip shows [your todo list](#your-next-steps-the-todo-list):
-the first five items, each with its short id (a click copies `/continue <id>`).
-
-How it is built, and what it promises:
-
-- **Loopback by default, read-only always.** A Python standard-library server (`python3`,
-  nothing to install) bound to `127.0.0.1` unless you put it on the network (below). It answers
-  `GET` only, serves just the page, the lanes JSON (`/api/dashboard`), the five task files
-  above, artifact texts and pages (the pages list and viewer at `/pages`, and its JSON at
-  `/api/pages`), and has no endpoint that changes anything. On loopback it refuses requests whose
-  `Host` is not `127.0.0.1` or `localhost` (DNS rebinding) and needs no auth, because nothing
-  off the machine can reach it.
-- **No external requests from the page.** CSS and JS are inline; no CDNs, fonts or analytics.
-- **Pages are untrusted.** A page is HTML a worker wrote, so it is served only from its own
-  route (`/task/<id>/artifacts/<slug>.html`, and only when its sidecar says it is a page), under
-  its own policy: `sandbox` (no scripts, an opaque origin, even when opened alone), nothing
-  fetched (`default-src 'none'`, inline styles and `data:` images only), and framed only by the
-  dashboard itself (`frame-ancestors 'self'`). The viewer frames it with the `sandbox` attribute
-  too, so its links open in a new tab and nothing in it can reach the dashboard. Its PDF
-  (`.../<slug>.pdf`) is printed on request by `chartroom artifact pdf`, one at a time, and
-  never for a request another site's page makes (a browser's `Sec-Fetch-Site` says so); nothing
-  else ever runs a page.
-- **Same answer as the CLI.** The lanes come from `chartroom dashboard --json`, built from the
-  rows `chartroom status` uses, so the page and the terminal never disagree.
-- **PR states are optional.** If `gh` is on your PATH, the server looks up the state of the PR
-  links it found (cached, refreshed every 5 minutes): a task in `review` says whether its PR is
-  merged or still to review; an accepted (`done`) one moves to Recently finished once merged, or
-  to On hold while its PR awaits someone's review. That is the only network traffic, and it is GitHub's API with
-  your own `gh` login. `--no-gh` turns it off; without `gh`, or offline, the page just shows the
-  links.
-- `--daemon` writes `.dashboard.pid` (pid and port) and `.dashboard.log` in the home. One
-  dashboard per home; `--port 0` picks a free port. The page is read on each load, so after an
-  update a reload shows the new page without restarting the server.
-- `dashboard open` reuses this home's dashboard if it answers on its port; otherwise it
-  replaces a stale pid file (or a server that stopped answering), starts one with `--daemon`
-  and waits for it. Then it opens the URL with `CHARTROOM_OPENER`, else `open` (macOS) or
-  `xdg-open`. It prints the URL either way. A lock in the home (holding its owner's pid; taken over only when that pid is gone) keeps two calls from starting two
-  servers. The `dashboard` skill (`/dashboard`) runs exactly this.
-- **Themes.** `chartroom` (a nautical chart table) and `hud` (machine vision: red and amber,
-  scanlines, a header radar, a reticle that locks onto cards). Both keep the same lanes and
-  cards, a light and a dark variant, and the reduced-motion behaviour. The server's default is
-  `--theme NAME`, else `CHARTROOM_DASHBOARD_THEME` (env or config file), else `chartroom`. The
-  theme menu in the header overrides it for that browser only ("default" goes back to the
-  server's). The default is set when the server starts: restart a running dashboard to change it.
-- A legacy home works the same: `CHARTROOM_HOME=~/.captain chartroom dashboard`.
-- **Short ids.** Each card shows a short id: a task's 4-hex suffix (`21ba`, grown to the
-  shortest unique suffix such as `n-21ba` when two open tasks share one), or an inbox item's
-  `i-7f3a` tag. Clicking it copies `/continue <id>`; paste that into the XO session and the
-  `continue` skill takes you straight to what the item needs from you.
-  `chartroom resolve <id>` maps any short or full id back. `chartroom board` prints the same
-  lanes in the terminal (short id, `[project]`, title, state, last event; color only on a
-  terminal, `--json` for the lanes JSON), and `chartroom show <id>` one item in detail: its card
-  plus the commander's intent, the last events, the outcome, the report's summary, PRs,
-  artifacts and where the worker runs (`--json` adds those fields to the card's, the board's
-  fields unchanged). Inbox items get their tag from
-  `chartroom inbox add [--project P] <text>` (or `chartroom inbox tag` for lines written by
-  hand); it never changes as other items come and go.
-- **Every question carries its project.** `chartroom inbox add --project webapp "which region?"`
-  writes `- [i-7f3a] 2026-01-02 — [webapp] which region?`; `--project` takes a name (`multi`
-  for a question that spans projects) or a repo path (its directory name). The board, the
-  dashboard, `resolve --json` and the lanes JSON (`project` on inbox items, `null` on a line
-  without a label) all show it. `chartroom inbox project i-7f3a webapp` labels an item that has
-  none. `status` puts the project right after the id, and every `watch` wake reads
-  `[<id>] [<project>] <event>`, so the XO relays a decision already labelled; the skills have
-  it lead every question it puts to you with `**[project]**` (and, in Claude Code, use the
-  project as the question's header).
-
-### The fleet radar: every agent on every machine
-
-`/radar` on the same dashboard (the **radar →** link in the board's header) shows every open
-task on every home of this machine, and of your other machines, as a small robot on a dark scope,
-in six sectors by state. The robot itself shows the state: eyes lit and antenna blinking while it
-works, an hourglass in hand while it waits, a red "!" sign when blocked, a "?" bubble at a
-decision, dimmed and asleep ("zz") when silent, a broken outline when lost, docked with a check
-when done or in review, tipped over when it failed. Click a robot, or tab to it and press Enter,
-for a side panel with:
-
-- its details and the reason for its state
-- what it waits on and until when, with a live countdown
-- its last event, written out as a note (see [Readable events](#readable-events-and-a-page-per-task))
-- the recent events as a timeline, and the last lines of its terminal (`chartroom peek`, every 10s)
-- links to the task's report (rendered), plan, brief and events, and to its full page
-
-Each home's XO sits on a bridge above the sectors: a bigger robot with a captain's cap. It comes
-from herdr and is marked "untracked: no events".
-
-**Stacks.** Related tasks stand in one stack: the robot of the one that needs you most, the
-others in a row behind it, and a count. Click it (or press Enter) to fan them out over the map;
-`Esc` folds it. Two tasks are related when they share a ticket key (`ENG-2752`, from the title,
-the id or the branch), when one's brief or events name the other's id (a handoff, a follow-up),
-when one was cut from the other's branch, or when they share a project and a title but for a
-trailing number ("QA dashboard T1", "T2"). A stack sits in its most urgent member's sector, and
-the grouping depends only on the set of tasks, so it holds from one poll to the next.
-
-**Active only.** The default view leaves out what is over: a docked task (review, done, failed)
-quiet for `CHARTROOM_RADAR_DONE_HOURS` (24), and a task whose session is gone and that has been
-quiet for `CHARTROOM_RADAR_STALE_DAYS` (3), decisions and blockers included. They fold into an
-**archive (N)** chip beside each machine; one click (or `a`) shows them, and the browser remembers
-the choice. The header counts both: "N active · M archived". A `--breaking` report is never
-archived.
-
-```bash
-chartroom radar                      # the same, in the terminal (this machine)
-chartroom radar --json               # one machine's records, as the page reads them
-chartroom radar machines             # the machines it reads, and how often
-```
-
-| Sector | States | |
-|---|---|---|
-| **Decision** | `decision` | asked for your call |
-| **Blocked** | `blocked`, `awaiting-input` | the worker said it cannot proceed, or the agent is stopped at a permission or question prompt |
-| **Adrift** | `overdue`, `stopped-silent`, `lost` | waited past its window; stopped without reporting; its session is gone |
-| **Under way** | `working` | working; a hollow "?" hull when its backend could not be checked |
-| **Holding** | `waiting` | its own `waiting` report, inside its window (a ring counts down to the until-time); or, marked *inferred*, a last message that says it waits on someone |
-| **Docked** | `review`, `done`, `failed` | a report to read (`review`: a worker's done, awaiting your accept or close); a wreck for a failure |
-
-Telling *blocked* from *waiting* is the point. The view keeps itself honest in these ways:
-
-- A robot moves only when its state changes it to another sector, flying to its new slot. The
-  comms log records the change.
-- A sonar ping means a real new event.
-- Nothing drifts or bobs to look busy. A working robot's antenna blinks because it is working.
-- A robot keeps its slot while it stays in its sector. A stack fans out over the map, not into
-  it, so nothing else moves.
-- With `prefers-reduced-motion`, robots are placed without flights, pings or blinks, and the log
-  still records every change.
-
-Arrow keys move between agents, `t` shows the same data as a table, `m` splits the map by
-machine, `a` toggles active only, and `/` filters. It works at phone width, where the panel
-becomes a bottom sheet.
-
-**Machines.** Every robot and table row names its machine. Each machine has a chip in the header
-showing when it was last read, or why it could not be.
-
-- **This machine.** Its label is `CHARTROOM_MACHINE_NAME`, set in the environment, the home's
-  config or the config file. Without it, the label is the host name. This machine's homes are
-  read with the same `status --json` the CLI uses.
-- **Other machines.** They come from `CHARTROOM_RADAR_MACHINES` (`label[=ssh-target] ...`, or
-  `none`), else herdr's enabled saved machines (`herdr machine list`). Each is read over
-  `ssh -o BatchMode=yes` with `chartroom status --json --all-homes`. Its XOs come from
-  `herdr --machine <m> agent list`.
-- **Read-only, always.** Nothing ever runs on another machine except that status call, its
-  `chartroom peek <id>`, and `cat` of one of the five task files. Each is built only from ids and
-  home paths that machine reported. (`chartroom nodes` adds one more, also read-only: its probe
-  script, [below](#several-machines-nodes).)
-- **An older chartroom** ignores `--all-homes` and answers for its default home only. The radar
-  tells this from the shape of the answer, since the version string may not have changed, and
-  says so on the machine's chip.
-- **An unreachable machine** keeps its last robots, dimmed and marked stale, and the chip says
-  "no contact" with ssh's own message. A machine never read shows no robots at all.
-
-**Cost.** The server reads in the background, never on a page request, and only while a radar
-page has asked in the last 90 seconds. An idle dashboard runs nothing and reaches no other
-machine.
-
-- **This machine** is re-read when its task files or herdr's agent states change. That happens
-  at most every `CHARTROOM_RADAR_LOCAL_MIN_SECONDS` (15), and at least every
-  `CHARTROOM_RADAR_LOCAL_MAX_SECONDS` (60).
-- **Other machines** are re-read every `CHARTROOM_RADAR_REMOTE_SECONDS` (60), backing off up to
-  5 minutes after failures.
-- **Every call is bounded.** Each runs in its own process group, which is killed after 90
-  seconds (25 for a peek), so no ssh outlives it. ssh reuses one connection per machine, while
-  its control socket's path is short enough for a socket.
-- **Same lock as the board.** On the network, the radar and its peeks sit behind the same access
-  token.
-
-### Several machines: nodes
-
-A **node** is a machine that can take crew work: this one, and any other you reach over ssh.
-Placing workers on them by itself is being built in stages ([docs/multi-machine.md](docs/multi-machine.md));
-today chartroom reads what each machine has room for and what it can run.
-
-```bash
-chartroom nodes                      # every node, this machine first
-chartroom nodes --project ~/src/shop # ... and which of them have a checkout of that project
-chartroom nodes --json
-chartroom node init --cpu 100 --battery allow   # on a machine: make it a node, with its own budgets
-chartroom node probe [--json]        # this machine's facts, as `nodes` reads them
-```
-
-```
-NODE           CONTACT  ROLE                     CPU                    MEM           DISK      POWER              IDLE  CREW          LOGINS                    TOOLS                       CHECKOUTS  UTIL
-studio (here)  ok       node: 10w cpu80% mem75%  28 (20P+8E) load 6.0  96G 79% free  22% free  AC                 2m    4/10 +3 other claude:ok codex:ok gh:ok  13 ok                       42         0.5
-m3             ok       node: 6w cpu100% mem75%  16 (12P+4E) load 1.2  48G 92% free  26% free  AC (battery 100%)  1h    0/6           claude:ok codex:ok gh:ok  11 ok error:node down:docker   131        0.17
-m3: node is broken: /opt/homebrew/bin/node: dyld[812]: Library not loaded: /opt/homebrew/opt/simdjson/lib/libsimdjson.34.dylib
-CREW is chartroom's workers against max workers (XOs and other agents shown apart); nothing enforces it until placement ships
-```
-
-- **Which machines.** `CHARTROOM_NODES` (`label[=ssh-target] ...`, or `none`), else the radar's
-  list: `CHARTROOM_RADAR_MACHINES`, else herdr's enabled saved machines. This machine is always first.
-- **A node opts in.** `chartroom node init`, run on that machine, writes its budgets to
-  `~/.config/chartroom/node` (`CHARTROOM_NODE_CONFIG` moves it): at most N workers, a share of its
-  cores and memory, whether it may work on battery, the priority its workers will get, and where
-  its project checkouts are. It makes no home: a node has no XO. Without that file a machine is
-  listed as "not a node" and will never be given work. `CHARTROOM_NODE_ACCEPT=off` in it
-  withdraws the machine at once.
-- **Read-only, always.** The only thing that runs on another machine is the probe itself,
-  `lib/nodeprobe.sh`, sent over `ssh -o BatchMode=yes <target> 'bash -s'`: it needs nothing installed
-  there (not even chartroom), writes nothing, and runs on a Mac's own bash 3.2. Each machine is
-  probed side by side, and one that does not answer within `CHARTROOM_NODES_TIMEOUT` seconds (45) reads
-  `timeout` (its ssh is ended; the probe there stops by its own bounds, at most about 90 seconds). ssh's own failures read `unreachable`, or `auth` when ssh would need you (a key, a
-  host key, a Tailscale check).
-- **Tools and logins are checked where a worker would run.** A tool counts when it works, not
-  when its binary is there (`docker` needs its daemon to answer), and a broken one is named with
-  its binary and the first line it printed. Tools are looked up on the PATH of your interactive
-  login shell (`$SHELL -lic`: version managers such as mise set theirs up only there), the one a
-  worker launched there gets, not the thin PATH of an ssh session; `path_source` says which was
-  used (`CHARTROOM_LOGIN_SHELL` names another shell, or `none`). On a Mac, an ssh session cannot
-  read the login keychain, so claude, codex and gh would all read logged out: the probe runs those
-  checks inside the machine's hc core (`hc exec`), which runs in the login session, and only when
-  that core already answers (it never starts one). With no core, logins read `unknown` over ssh.
-- **CREW** is chartroom's own workers there (hc terminals carrying a task), against the node's
-  max workers. An XO or your own agent session is shown apart (`+3 other`): it is not a slot,
-  though its load still counts. **Nothing enforces max workers yet**: until placement ships, a
-  machine at its budget still takes what is dispatched to it.
-- **UTIL** is what the node's use would be with one more worker, against its own budgets:
-  the largest of (crew + 1) / max workers, (load + `CHARTROOM_WORKER_CPU`) / (cores × cpu share),
-  and (memory in use + `CHARTROOM_WORKER_MEM_GB`) / (memory × memory share). Placement will put
-  each new task where it is lowest, so the machines fill evenly, each against its own budget.
-  Above 1 the node is full.
-- **On macOS, budgets are admission control,** not hard caps: there are no cgroups. A worker's own
-  builds can still push a node past its share; placement then sends new work elsewhere.
-
-#### Devices: machines that report to the brain
-
-A machine can instead **report** to the brain: it runs chartroom's device agent, which sends its
-probe to the brain's app server every 15 seconds. The brain never reaches out to it, holds no key
-to it, and asks it to open no port. Its row in `nodes` and Fleet is its last heartbeat. Work is not
-placed on a device yet ([docs/multi-machine.md §12](docs/multi-machine.md#12-devices-the-brain-never-reaches-out)).
-
-```bash
-chartroom node add --name m3                 # on the brain: a one-time code (10 minutes)
-curl -fsSL https://raw.githubusercontent.com/wolzey/chartroom/main/install.sh | bash -s -- --device
-chartroom device join https://<brain>.ts.net <code>   # on the device: enrol and start its agent
-chartroom device status                      # on the device: joined to what, its last heartbeat
-chartroom node rename m3 m3-mini             # on the brain: names are display only
-chartroom node rotate m3 | node revoke m3    # a new token; or none (its agent stops)
-chartroom node ping m3                       # a round trip over the connection
-chartroom node update --all                  # each device moves to this brain's commit, over the connection
-```
-
-- **Its own revocable token.** Only the token's sha256 is kept on the brain. On macOS the agent is a
-  LaunchAgent in the login session, and the token is in the login keychain; elsewhere a 0600
-  file. A token opens that device's routes only, never the app.
-- **Pinned work.** `chartroom new ... --node m3` (or `chartroom set <id> node=m3`, before dispatch)
-  pins a task to a device. `dispatch` sends it there: the device runs it in a guest home of its
-  own chartroom, on its own hc, claude/codex, git and gh logins. Its event lines, report and plan
-  come back to the brain as the worker writes them, so the watch, the board and the app see it as
-  any task, with its machine. Steer, stop and peek go to it as commands, and a permission card
-  its worker raises is answered here and reaches it there. `close` brings the branch to the brain
-  first (a git bundle, fast-forward only into the task's own branch); only once the brain holds
-  that very commit does the device close its copy. Only hc:claude and hc:codex run on a device,
-  and a pinned task never moves by itself; one whose device is away waits for it.
-- **Commands** reach a device by long-poll: its agent holds one request open to the brain's app
-  server and runs what comes, one at a time; the brain still opens nothing to it. `node update`
-  fast-forwards the device's chartroom to the brain's commit (only along its own `origin/main`)
-  and its agent restarts onto it.
-- **Status:** `online`, `stale` (no heartbeat for 45 s), `lost` (10 minutes, counted only while
-  the brain's app server is up), `new`, `revoked`. `chartroom doctor` lists the devices on the
-  brain, and the join and the agent on a device.
-
-### Client homes: one brain
-
-A home can live on another machine, the **brain** (an always-on desktop), while you keep talking
-to an XO on your laptop. Its every chartroom command then runs on the brain over ssh, its workers
-run there, and a copy of its records sits in the laptop's home at the same paths, so briefs,
-plans and reports open as before. At the brain itself the same home is just a home.
-
-```bash
-cd ~/chartroom/acme && chartroom brain link studio   # this (empty) home now lives on "studio"
-chartroom brain status                               # contact, the copy, pending edits, the tunnel
-chartroom brain fetch tasks/<id>/pane.log            # one file the copy leaves out
-chartroom brain git <id> log --oneline main..HEAD    # read-only git in a task's worktree there
-chartroom brain unlink                               # local again
-```
-
-- **The marker** is `CHARTROOM_BRAIN=<ssh target>` in that home's own `config`. The brain finds
-  the home by its registered name (`CHARTROOM_BRAIN_HOME`), never by a path the client sends.
-  `brain link` refuses a home that already has tasks: moving them is a migration of its own.
-- **Edits to the copy** (a brief, `inbox.md`, `commander.md`) go to the brain before the next
-  command. The brain applies one only if its own file is unchanged since it was copied;
-  otherwise the edit is kept as `<file>.client-conflict-<time>` and the command does not run.
-  The records chartroom owns (`meta.json`, `events.log`, rulings, relays, artifacts) are never
-  taken from a client.
-- **`watch --once`** is delivered at least once: the brain moves its cursor only after the
-  laptop has the wakes. While the brain is away it waits quietly, then wakes once
-  (`[brain] studio unreachable since …`) and once more when the brain is back. Every other command
-  exits 75 and says nothing was run.
-- **`attach`** resumes the worker on the brain and shows it here, through this machine's hc link
-  to the brain (`hc machine ls`). **`dashboard open`** opens the brain's dashboard through an
-  ssh tunnel, so nothing new listens on the network. **`artifact copy`** uses this machine's
-  clipboard.
-- **What runs on the brain is fixed:** one constant ssh command line (`chartroom brain gate`),
-  the arguments as JSON on stdin, and only registered homes and client-safe commands. Workers
-  never start from the ssh session (no headless or command runner from a client), because a
-  Mac's keychain is locked there.
-
-The protocol, the copy's filter, the failure table and an optional forced-command key are in
-[docs/client-homes.md](docs/client-homes.md).
-
-### Readable events and a page per task
-
-A worker's event is one line in `events.log`, often a long one. The radar's panel and the task
-page set it as a note rather than a wall of text, in a proportional face at a reading width, with
-monospace kept for ids, SHAs, paths and commands:
-
-- the kind as a badge, and `[breaking]` as a red tag;
-- a **headline**: the first sentence or clause, up to the first ":" or ".";
-- labelled parts (`Cause:`, `Options:`, `Need:`, `Recommend:`, `Report:` and the like) as small
-  headed blocks;
-- numbered options (`(1) ... (2)`, `(A) ... (B)`, `1) ... 2)`) as a list, the recommended one
-  highlighted;
-- several `; `-separated facts as bullets;
-- a task file's path as a link to that task's page (a report path opens its report), and a URL in
-  a new tab.
-
-The parser (`lib/dashboard/eventfmt.js`) only adds structure: whatever it cannot place stays the
-worker's words as paragraphs, and every word comes back in order (its tests hold it to that,
-garbage included). Nothing it renders is HTML: markup in an event is shown as text.
-
-A task's events read as a timeline, newest first, with relative times (the exact time on hover)
-and a filter by kind. A decision or blocker, the XO's steers answering it ("XO → worker", set
-apart from the worker's own reports) and the worker's follow-up form one thread, collapsed to its
-latest line until clicked; a run of progress reports collapses to the newest; agent noise
-(prompts received, turns ended, records) folds into an "N system events" toggle.
-
-`/task/<home>/<id>` (`?m=<machine>` for another machine's) is the task on a page of its own,
-linked from the radar's panel and from each card on the board. It has the title, project, home,
-machine, state, what it waits on and last activity on top, then the latest decision or blocker,
-the commander's intent from the brief, every event, `report.md` rendered as Markdown (tables
-included, raw HTML shown as text, links only to http(s)), its artifacts and pages, its live pane
-(read-only), and a `/continue <id>` copy button. It prints with every thread opened, and fits a
-phone. Another machine's task is read the radar's way, over the same read-only calls; a task the
-radar does not draw (closed, drafting) shows from its own home's dashboard.
-
-**Better events in the first place.** The brief asks workers for a headline first (at most ~140
-characters: what happened and what is needed), then the labelled parts, and the long part in
-report.md. `chartroom event <id> <kind> --detail "<the rest>" "<headline>"` writes the rest as
-the headline's `Details:` part on the same line, so the log format does not change.
-
-### On the network: other devices
-
-To open the board from a phone, a tablet or another computer, bind it beyond loopback:
-
-```bash
-chartroom dashboard --daemon --expose          # every interface (0.0.0.0)
-chartroom dashboard --daemon --host 100.64.0.7 # one address of this machine only
-chartroom dashboard status                     # print the URLs again
-chartroom dashboard stop                       # off the network again
-```
-
-`CHARTROOM_DASHBOARD_HOST` (env or config file) sets the default bind address; `--host` and
-`--expose` override it, and `--host 127.0.0.1` goes back to loopback. Only IPv4 addresses are
-accepted. Starting it prints a warning naming the bound address, then one URL per address
-other devices can use (one per non-loopback interface, VPN and overlay interfaces included),
-each with the access token:
-
-```
-dashboard running: http://127.0.0.1:4517/?token=… (pid 4242; log ~/.chartroom/.dashboard.log; …)
-WARNING: listening on 0.0.0.0:4517 (every interface), beyond this machine; the access token is the only lock
-on the network: http://192.168.1.20:4517/?token=…
-on the network: http://100.64.0.7:4517/?token=…
-```
-
-- **Access token, on by default.** Bound beyond loopback, every request except `/healthz` needs
-  the token in `$CHARTROOM_HOME/.dashboard.token` (random, made on first use, mode `0600`). Open
-  a printed URL once: the server checks `?token=` (in constant time), sets it as an `HttpOnly`,
-  `SameSite=Lax` cookie for 30 days, and redirects to the same page without the token, so it
-  leaves the address bar. Anything else gets `401`. The token survives restarts, so devices stay
-  signed in; to revoke every device, delete the file and restart the dashboard (it makes a new
-  one). With the token on, any name for the machine works in the URL (a DNS name, a LAN name),
-  since a rebinding page never has the cookie.
-- **`--no-token`** turns the token off, for networks where everyone who can reach the port may
-  read the board. It says so in the warning, and the `Host` guard stays on: the URL must use one
-  of the machine's addresses or its host name.
-- **What it shows.** The board shows the commander's inbox and every task's title, last event,
-  brief, report, plan and event log, and local file paths. It never serves environment
-  variables, config, tokens or any file outside those. Anyone with the token (or anyone on the
-  network, with `--no-token`) can read all of that, so treat the token like a password and
-  expose the board only on networks you trust.
-- **Plain HTTP.** The server does not do TLS, so on a shared LAN the token and the page cross
-  the network in the clear. A VPN or overlay network encrypts that hop: for example, with
-  [Tailscale](https://tailscale.com) on both devices, `--host <this machine's tailnet IP>`
-  makes the board reachable only over the tailnet, whose access rules then decide who can
-  reach it at all. Or put a TLS reverse proxy in front of a loopback dashboard (below).
-- `chartroom doctor` shows the configured bind address, whether a token exists, and where a
-  running dashboard listens. `.dashboard.log` (which holds the URLs) is `0600` too.
-
-### Optional: a local hostname
-
-To open the dashboard at `http://chartroom/` (or `https://chartroom/`) instead of a port, put
-a reverse proxy in front of it on a loopback address of its own, so nothing else on
-`127.0.0.1` changes. The server itself stays as it is. On macOS, with [Caddy](https://caddyserver.com):
-
-1. Map the name to a second loopback address: add `127.0.0.2 chartroom` to `/etc/hosts`, and
-   alias it with `sudo ifconfig lo0 alias 127.0.0.2 up` (a LaunchDaemon that runs this command
-   at load keeps it across reboots; Linux routes all of `127.0.0.0/8` already).
-2. Point Caddy at the dashboard, bound only to that address. On loopback the dashboard answers only
-   `Host: 127.0.0.1:<port>` or `localhost:<port>` (its DNS-rebinding guard, above), so the
-   proxy must present the upstream's own address:
-
-   ```caddyfile
-   {
-   	default_bind 127.0.0.2
-   	admin "unix//var/run/chartroom-caddy.sock|0600"
-   	skip_install_trust
-   }
-
-   http://chartroom, https://chartroom {
-   	tls internal
-   	reverse_proxy 127.0.0.1:4517 {
-   		header_up Host {upstream_hostport}
-   	}
-   }
-   ```
-
-   Naming both schemes serves plain HTTP too instead of redirecting. `admin` keeps Caddy's
-   admin API off `localhost:2019`, on a socket only root can use.
-3. Run Caddy as root (a LaunchDaemon with `KeepAlive`): macOS lets other users bind ports
-   below 1024 only on all interfaces, not on one address. Give it a root-owned copy of the
-   binary and the Caddyfile, not files your account can rewrite.
-4. `sudo caddy trust --config <Caddyfile> --adapter caddyfile` adds Caddy's local CA to the
-   System keychain, which Safari, Chrome and curl use (Firefox keeps its own store). Then flush
-   the DNS cache: `sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder`.
-
-Type the trailing slash (`chartroom/`) or the scheme, or the browser may search for the word.
-Undo by reversing each step: remove the hosts line, the LaunchDaemons and the alias
-(`sudo ifconfig lo0 -alias 127.0.0.2`), and `caddy untrust`.
+A read-only web view of the home: what needs you, what is in progress, on hold, ready, and
+recently finished, with a page per task. It also has the fleet radar (every agent on every
+machine) and `chartroom nodes`. It binds 127.0.0.1 unless you ask for more. See
+[docs/dashboard.md](docs/dashboard.md).
 
 ## Focus mode: one project at a time
 
@@ -848,7 +343,7 @@ chartroom artifact template --body              # the sample body: the classes t
   long for you.
 - **In the dashboard.** The header's **pages** link lists every page (newest first; read ones,
   marked `done`, on request), and a card's page chip opens it in the viewer: the page in a
-  sandboxed frame, with **Download PDF** and **open alone**. See [the dashboard](#dashboard)
+  sandboxed frame, with **Download PDF** and **open alone**. See [the dashboard](docs/dashboard.md#dashboard)
   for how it is served.
 - **PDF.** `pdf` prints with headless Chrome, Chromium or Edge: `CHARTROOM_CHROME` if set (a path
   or a command name), else the first on `PATH`, else the usual app locations (`chartroom doctor`
@@ -900,121 +395,21 @@ chartroom todo add --project shop "renew the cert by 2026-10-22"   # your own it
   decides what is held: urgency only orders the list. An artifact follows its owner's card. The
   list counts its own items, artifacts included, so its held count can differ from `status`'s.
 - **Where it shows.** `board --json` (and the dashboard's JSON) carries it as `todo`, so the
-  [crew views](#a-live-crew-view-in-claude-code-and-pi) draw it under their band with no second
+  [crew views](docs/crew-view.md#a-live-crew-view-in-claude-code-and-pi) draw it under their band with no second
   poll, and the dashboard shows a "Your next steps" strip above the lanes.
 
 ## Several XOs on one machine
 
-One home is one XO with one crew. When your work splits cleanly, say one home per company or
-client, give each its own home: its own projects, preferences and rulings, inbox, tasks and
-crew, dashboard and agent memory, and its own XO session. Nothing of one home's leaks into
-another's digest, and a question is never answered in the wrong company's terms.
+One home is one XO with one crew. Give each company or client a home of its own:
 
 ```bash
-CHARTROOM_HOME=~/chartroom/acme   chartroom init --name acme     # workspace acme-crew, dashboard port 4518
-CHARTROOM_HOME=~/chartroom/globex chartroom init --name globex   # workspace globex-crew, dashboard port 4519
-chartroom homes                                                   # the list, and anything that would collide
+CHARTROOM_HOME=~/chartroom/acme chartroom init --name acme   # its own workspace and dashboard port
+chartroom homes                                               # the list, and anything that would collide
+cd ~/chartroom/acme && claude                                 # that home's XO
 ```
 
-`init --name` writes the home's own settings to `<home>/config` (the same `KEY=VALUE` format as
-`~/.config/chartroom/config`, and it wins over it), only for keys it does not set yet: a
-workspace of its own (`CHARTROOM_WORKSPACE`), so its workers' tabs never mix with another
-home's, and a dashboard port of its own (`CHARTROOM_DASHBOARD_PORT`, the next free one from
-4518). Add anything else that should differ, such as `CHARTROOM_PROJECT_ROOTS` narrowed to that
-client's repositories, so `chartroom project` only finds theirs. It also adds the home to
-`~/.config/chartroom/homes`, one `name=path` line each. `chartroom homes add <name> <path>`
-registers an existing home without writing anything in it, and `homes rm` unregisters one
-without touching it.
-
-**Starting an XO.** Start the agent in the home's directory, as for any home. In a registered
-home that is enough: chartroom resolves the home from the directory it runs in (after
-`CHARTROOM_HOME`, before the config file), and so does the crew view. A one-word launcher in
-your shell rc keeps it short, and keeps your own alias for the agent:
-
-```zsh
-# xo <home>: an XO session in that home; `xo` alone lists the homes.
-xo() {
-  [[ -n "$1" ]] || { chartroom homes; return; }
-  local h; h="$(chartroom homes path "$1")" || return
-  (cd "$h" && CHARTROOM_HOME="$h" claude "${@:2}")
-}
-```
-
-The chartroom skill starts by checking that `chartroom doctor` names the directory it started
-in, and stops if it does not, so a session never drives another home by mistake.
-
-**What each home keeps to itself, and what they share.**
-
-| Per home | Shared by every home on the machine |
-|---|---|
-| `tasks/`, `worktrees/`, `inbox.md`, `commander.md`, `rulings.log`, `projects.md`, `focus.json`, `relays/` | the install, the skills and the crew view |
-| the workspace its workers' tabs open in | `~/.config/chartroom/config` (harness, branch prefix, backend order), under each home's own `config` |
-| the dashboard (`.dashboard.*`, its port, its page title) and its access cookie | the list of homes |
-| the `watch` cursor and wake stream | herdr agent names (task ids, unique per machine) |
-| what `sweep` frees: another registered home's workers, loops and listeners are neither freed nor listed | a project two homes both work in (its `.worktrees/` holds both homes' worktrees, by task id) |
-
-**Reading across homes.** `status`, `board`, `todo`, `inbox list` and `relay list` take `--all-homes`: the
-same command, read-only, run in every registered home with that home's own settings, one
-`== <home> · <path>` section each (`--json`: an array of `{home, path, current, result}`). A home
-that oversees the others, for errands that belong to no project, uses it for its bearings. It
-reads; it never steers, closes or dispatches another home's work. That belongs to the home's
-own XO, which another XO can still [tell or ask something](#talking-between-homes).
-
-**Splitting an existing home.** Make the new homes, copy each one its lines from `projects.md`
-and its live lines from `rulings.log` (verbatim: the ids stay the same, and `chartroom rule
-render` rebuilds `commander.md`'s block), and leave the old home's tasks to finish where they
-are. Nothing has to move.
-
-## Talking between homes
-
-Homes keep to themselves, but now and then one XO has something for another: a heads-up (the
-shared staging cluster is down, a vendor's API changes on Friday), or a request only the other
-home can answer. `chartroom relay` carries it, with no daemon:
-
-```bash
-chartroom relay globex --project shop "heads up: the shared bucket moves on Friday; does anything of yours still read it?"
-# rl-3f2a
-```
-
-It appends one record to the other home's mailbox, `relays/inbox.ndjson`, and writes nothing else
-there; this home keeps a copy in its own `relays/outbox.ndjson`. The relay rings the other home's
-`chartroom watch` (its doorbell, under [the contract](#state-format-and-event-protocol-the-contract)),
-so its XO session gets a wake at once, the same way it hears from its workers:
-
-```
-[relay rl-3f2a] [from acme] [shop] heads up: the shared bucket moves on Friday; does anything of yours still read it?
-```
-
-The `watch --once` cursor covers the mailbox, so each relay wakes once. One that arrives while
-no watch runs is still in view: `chartroom status` says `relays: 1 open from other homes`,
-`chartroom inbox list` lists it with its id under "Relays from other homes", the dashboard lists
-it under Needs you (a list, never a card or a todo item: it is for the XO, not for you), and
-every `--all-homes` view shows each home's, so a home that oversees the others sees them all.
-
-The other XO answers with `--re`, which goes back the same way, and acks the relay once it has
-dealt with it (a reply alone does not ack):
-
-```bash
-chartroom relay acme --re rl-3f2a "nothing of ours reads it; go ahead"
-chartroom relay ack rl-3f2a
-chartroom relay list [--all] [--json]   # the open relays received here (--all: acked and sent ones too)
-```
-
-- **A relay never makes anything happen by itself.** chartroom only delivers it. The receiving
-  XO weighs it under its own home's preferences and authority: its text is data, not
-  instructions, and anything that needs your word still comes to you, labelled with the home it
-  came from.
-- **Registered homes only.** It goes to a registered home that is a chartroom home, never to
-  this one, and only in this home's name: the sender must be registered too (a reply has to
-  find its way back), and `--from`, if given, must name this home.
-- **Short, and never a secret.** At most 2000 bytes (and 4000 as written, where quotes,
-  backslashes and line breaks count twice, so a relay is always one append); for more, write a
-  file the other XO can read and relay its path (`-` reads the message from stdin). A message that looks like it holds a
-  secret (a private key, an AWS, GitHub, GitLab, Slack, Stripe, Google or npm token, an `sk-`
-  API key, a JSON web token, a `password=` assignment) is refused, and nothing is sent.
-- **Focus mode never holds a relay**: it is for the XO. Whatever the XO brings to you from it goes
-  into the inbox, where focus applies as usual.
-- A home named `ack` or `list` cannot be relayed to (those are `relay`'s own subcommands).
+What each home keeps to itself, reading across homes, and how one home's XO tells or asks
+another's: [docs/homes.md](docs/homes.md).
 
 ## Housekeeping: sweep
 
@@ -1312,72 +707,9 @@ Any later report, steer or dispatch closes the wait. `status --json` rows carry 
 
 ### The store (stage 1, off by default)
 
-With `CHARTROOM_STORE=sqlite` in a home's own `config`, every task born after that lives in one
-SQLite database per machine, `${XDG_STATE_HOME:-~/.local/state}/chartroom/chartroom.db`
-(`CHARTROOM_DB` moves it), which only `lib/store.py` opens (Python's own `sqlite3`: WAL, a 10 s
-busy timeout, one short transaction per write). A task's place is fixed at birth:
-
-- **Tasks born before the switch** stay `meta.json` and `events.log`, read and written as above,
-  to the end. Nothing is moved or rewritten.
-- **Store tasks** have a row and their events in the database. `tasks/<id>/` still holds what
-  stays a file (`brief.md`, `plan.md`, `report.md`, `final.md`, `artifacts/`, `messages/`), but
-  no `meta.json` and no `events.log`. Read them with `chartroom store meta|events <id>`, `show` or
-  `status`. A process outside chartroom appends event lines to `tasks/<id>/events.spool` (the
-  brief's fallback, a launch wrapper's `exited`), in the same line format; the store takes each
-  whole line in once, keeping its time. An event the store cannot take waits there too.
-- The home gets `.home-id`, written once: its uid in the store, and the database its first
-  record went into, which the home keeps using (unless `CHARTROOM_DB` is set) even where
-  `XDG_STATE_HOME` differs, as it can between a terminal and an ssh session. Records follow the
-  uid, not the path, so a renamed or moved home keeps them.
-- `status`, `board` and `todo` read all of a home's store tasks in one call to the store, the
-  board's PR links, files and last event included; only liveness is still asked per open task.
-- Every write still moves `.changed`, and a store write also rewrites `tasks/.store-stamp`; a
-  reader that stats `meta.json` or `events.log` should stat one of those too, since a store task
-  has neither.
-
-`chartroom store doctor` shows the database and the Python it runs on; `store check` reports an
-id found in both places; `store legacy` counts what the home still keeps as files from before.
-
-With the switch on, new inbox items (`inbox add`) and the focus are store rows too; `inbox.md`
-and `focus.json` from before are still read (the first focus write removes the old file).
-
-So are the app's records, each kept as the JSON its file would hold, under its own id. The files
-from before are still read beside them.
-- **Snoozes:** one per ref. The newest by time wins across `snoozes.ndjson` and the store, so a
-  snooze off ends an old file snooze.
-- **Cards and answers:** the XO's `q-` cards (`questions/`). An answer lives where its card does,
-  so the first answer wins in one place: a worker's ask follows its task, an inbox item's follows
-  the item.
-- **The mailbox:** tells, relays from other homes, and acks (`relays/inbox.ndjson`), plus the
-  copies a home sends.
-  - A record is born where the **receiving** home's switch says, in the database its `.home-id`
-    names. A home with the switch off gets the file as before.
-  - `chartroom store mail` prints a home's records from both halves.
-  - The watch reads the store's mailbox under the cursor key `@mail`, beside the file's
-    `@relays`.
-
-`store legacy` counts these files too: open cards, answers, snooze lines and unacked mailbox
-records. `requests/`, `initiatives/`, and a task's `links.ndjson` and `attachments.ndjson` stay
-files: they live in the home's or the task's own folder.
-
-**Removing work.** `chartroom remove <ref>... [--why T]` takes tasks, inbox items (`i-xxxx`) and
-artifacts (`<id>/<slug>`) out of every view (status, board, todo, inbox list, artifact list, the
-watch's wakes) at once, by a mark in the store, whatever the switch says and however old the item.
-A removed task's or inbox item's artifacts leave with it. Nothing the item is made of is written: no record, worktree, branch or session, so unlanded work
-stays where it is (`close` and `sweep` keep their own guards; sweep still sees removed tasks).
-`chartroom restore <ref>...` undoes it for 30 days, `chartroom removed` lists what is removed, and
-`chartroom done <ref>...` marks inbox items and artifacts done. A task whose worker is live is
-refused unless `--stop`, which parks or ends the worker first. One call takes many refs: each is
-checked on its own, all that pass are applied in one transaction, and the rest are reported by ref
-(exit 1 when any failed; `--json` gives `{applied, failed}`). `accept` and `close` take several
-ids the same way. In a home with a store, `todo done` and `artifact done` mark instead of editing
-`inbox.md` or a sidecar. `sweep --apply` purges what removes no longer need (an inbox item removed
-past 30 days, a mark on a file that is gone; a task's record and events never) and keeps one
-backup of the database a day (`backups/` beside it, the newest 14).
-
-The event line format, the brief protocol and `meta.json`'s `schema` field are stable from 0.1;
-the change stamp's path and meaning are stable from the release that adds it. CLI flags may
-change before 1.0.
+With `CHARTROOM_STORE=sqlite` in a home's own `config`, tasks born after that keep their record
+and events in one SQLite database per machine instead of `meta.json` and `events.log`. The
+contract above still holds for every other file. See [docs/store.md](docs/store.md).
 
 ## Safety model
 
@@ -1427,16 +759,16 @@ machine), then `~/.config/chartroom/config` (`KEY=VALUE`, no shell evaluation;
 | `CHARTROOM_DASHBOARD_RECENT_HOURS` | `48` | how far back the dashboard's Recently finished lane reaches |
 | `CHARTROOM_DASHBOARD_THEME` | `chartroom` | the dashboard's default theme: `chartroom` or `hud` (`--theme` overrides) |
 | `CHARTROOM_DASHBOARD_HOST` | `127.0.0.1` | the IPv4 address the dashboard binds; `0.0.0.0` is every interface (`--host` / `--expose` override). Beyond loopback it needs the access token |
-| `CHARTROOM_APP_PORT` | `4516` | the port the [app](#the-chartroom-app) listens on, on 127.0.0.1 only (`--port` overrides) |
+| `CHARTROOM_APP_PORT` | `4516` | the port the [app](docs/app.md#the-chartroom-app) listens on, on 127.0.0.1 only (`--port` overrides) |
 | `CHARTROOM_APP_USER` | *(none)* | the one Tailscale login the app lets in; `app serve` refuses to start without it, unless `--no-auth` |
 | `CHARTROOM_APP_PUSH` | `off` | `on`: the app sends new Needs me items by Web Push (through the browser maker's push service, encrypted end to end) to the devices that turned it on; needs node on the brain |
 | `CHARTROOM_APP_PUSH_SUBJECT` | `mailto:chartroom@example.com` | the VAPID contact the push services see (a `mailto:` or `https:` URL) |
 | `CHARTROOM_GH` | `gh` | the gh binary the dashboard uses for PR states |
-| `CHARTROOM_MACHINE_NAME` | the host name | this machine's label on the [fleet radar](#the-fleet-radar-every-agent-on-every-machine) |
+| `CHARTROOM_MACHINE_NAME` | the host name | this machine's label on the [fleet radar](docs/dashboard.md#the-fleet-radar-every-agent-on-every-machine) |
 | `CHARTROOM_RADAR_MACHINES` | herdr's saved machines | the other machines the radar reads, read-only over ssh: `label[=ssh-target] ...`, or `none` |
-| `CHARTROOM_NODES` | the radar's list | the other machines `chartroom nodes` reads: `label[=ssh-target] ...`, or `none` ([nodes](#several-machines-nodes)) |
+| `CHARTROOM_NODES` | the radar's list | the other machines `chartroom nodes` reads: `label[=ssh-target] ...`, or `none` ([nodes](docs/dashboard.md#several-machines-nodes)) |
 | `CHARTROOM_NODES_TIMEOUT` | `45` | seconds `chartroom nodes` waits for a machine's probe |
-| `CHARTROOM_BRAIN_URL` | the app's Tailscale Serve URL | the URL `chartroom node add` tells a device to join ([devices](#devices-machines-that-report-to-the-brain)) |
+| `CHARTROOM_BRAIN_URL` | the app's Tailscale Serve URL | the URL `chartroom node add` tells a device to join ([devices](docs/dashboard.md#devices-machines-that-report-to-the-brain)) |
 | `CHARTROOM_NODE_STALE_SECONDS` / `CHARTROOM_NODE_LOST_MINUTES` | `45` / `10` | a device's heartbeat older than this is `stale`; silent this long while the brain's app server is up, `lost` |
 | `CHARTROOM_DEVICE_HEARTBEAT` | `15` | on a device: seconds between its agent's heartbeats |
 | `CHARTROOM_KEYCHAIN` / `CHARTROOM_LAUNCHCTL` | `/usr/bin/security` / `/bin/launchctl` on macOS | on a device: where its token is kept and how its agent is run; `none` for a 0600 file and an agent you run yourself (`chartroom device run`) |
@@ -1463,7 +795,7 @@ machine), then `~/.config/chartroom/config` (`KEY=VALUE`, no shell evaluation;
 | `CHARTROOM_CODEX_HOOKS_DIALOG` | `ask` | Codex's "Hooks need review" dialog at startup: `ask` wakes the XO; `skip` takes Esc in a worktree chartroom created, so those hooks do not run for that worker. Never trusts a hook |
 | `CHARTROOM_BASH_SEARCH` | see Install | environment only: colon-separated dirs searched for a bash ≥ 4 when started under an older one (PATH is always searched first) |
 | `CHARTROOM_PATH_APPEND` | `/opt/homebrew/bin:/usr/local/bin` on macOS, else empty | environment only: dirs appended to PATH when they exist and are missing; empty turns it off |
-| `CHARTROOM_STORE` | `files` | `sqlite`: tasks born from now on live in the store ([The store](#the-store-stage-1-off-by-default)); set it in the home's own `config` |
+| `CHARTROOM_STORE` | `files` | `sqlite`: tasks born from now on live in the store ([The store](docs/store.md#the-store-stage-1-off-by-default)); set it in the home's own `config` |
 | `CHARTROOM_DB` | `${XDG_STATE_HOME:-~/.local/state}/chartroom/chartroom.db` | environment only: the store's database |
 | `CHARTROOM_PYTHON` | `python3` on PATH | environment only: the Python (with its `sqlite3` module) the store runs on |
 | `CHARTROOM_RUNTIME_DIR` | `/tmp` | environment only: where `watch` and `listen` keep their doorbell FIFOs (`chartroom-<uid>/bells/`); every process of every home on the machine must agree on it |

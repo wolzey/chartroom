@@ -2,6 +2,61 @@
 
 The app is one place for every home on the brain. It opens on Needs me and acts through chartroom's own verbs. This page covers running it, how access works, and how it is built.
 
+## What it does
+
+One app for every home on the brain, served by chartroom and reached over the tailnet: it opens
+on **Needs me**, one inbox of every decision, plan to approve, blocker and report across every
+home, answered in place from a quick view beside the list. It is a React PWA in `app/`, shipped
+in this repo with no build step (React and htm are vendored), and served by `lib/app/server.py`
+(Python standard library). The [dashboard](dashboard.md#dashboard) keeps running beside it until the app
+covers everything it does.
+
+```bash
+chartroom app serve --daemon     # 127.0.0.1:4516 (CHARTROOM_APP_PORT), for Tailscale Serve
+chartroom app service on         # macOS: a LaunchAgent keeps it up and starts it again after a reboot
+chartroom app doctor             # the server, who may come in, and the Serve command to run
+chartroom app open               # this machine's browser (start it first with --no-auth)
+chartroom app stop               # (or: status)
+```
+
+- **Who gets in.** The server listens on 127.0.0.1 only. `tailscale serve --bg --https=443
+  http://127.0.0.1:4516` puts it on your tailnet over HTTPS (which the PWA needs) and names the
+  person at each request; only `CHARTROOM_APP_USER`, your Tailscale login, gets in. There is no
+  password. `--no-auth` drops the identity check for this machine's own browser, and then
+  refuses anything that came through a proxy. [docs/app.md](app.md) has the details.
+- **Acting from it.** Mark read, accept, close and snooze run as they would in the terminal
+  (`artifact done`, `todo done`, `accept`, `close`, `snooze`). Answers, approvals and anything
+  typed go to that home's XO as your own words (`chartroom tell`), and its `watch` wakes with
+  `[commander <id>] ...`. The app shows when the XO has read one.
+- **Instant.** Every action is queued in the page: the item moves at once, and an outbox kept in
+  the browser sends it in the background, retrying while the server cannot be reached. The
+  server accepts it at once and runs the verb behind it in order, per home. An action that
+  fails comes back with the reason and a Retry.
+- **Several at once.** Select rows (their checkbox, `x`, `Shift+J`/`Shift+K`, shift-click, `⌘A`)
+  and a bar acts on all of them: Mark done (an inbox question or a draft is marked done; a
+  finished task is accepted), Accept, Close, Snooze. One action per item: each one succeeds or
+  fails on its own, and Close never discards work: a task that cannot be closed cleanly
+  refuses and says why.
+- **Question cards.** A worker's `decision` (its options parsed from its own words), an inbox
+  question, and a card the XO posts with `chartroom ask` are all cards. Only an explicit
+  marker (`(1) RECOMMENDED: ...`) recommends an option, one per question at most. An ask with
+  several questions is a grilling round, answered on its own page and submitted together. The
+  first answer wins, from the app or the terminal (`chartroom ask answer`).
+- **Readable.** Every text colour measures at least 4.5:1 (WCAG AA), light and dark, and every
+  URL is a link; a GitHub PR or issue reads `repo#123`.
+- **Keys.** `j`/`k` move, `Enter` answers with the recommendation (or approves, or accepts),
+  `1`-`9` pick an option, `⌘↵` sends, `o` opens details, `s` snoozes, `x` selects, `⌘K` or `/`
+  opens the palette. Dark and light follow the system, and the moon toggles them.
+- **Tickets and the board.** A task opens as a ticket: its question, its PRs (state and checks
+  from `gh`), its description (the brief, edited in place), plan, report, attachments (25 MB
+  each; `chartroom attachment`), and the activity with comments that steer the worker (`@xo`
+  asks the XO). The board shows every home's tasks in seven columns, filtered by home, project,
+  initiative and machine. `c` anywhere writes a new task, which goes to that home's XO as a
+  request (`chartroom request`).
+- **Every home.** It reads each registered home on the machine (`chartroom homes`) in the
+  background with `chartroom app snapshot --json`, again whenever a home's records change. A
+  client home is left out, and refuses `chartroom app`: the app runs on its brain.
+
 ## Run it on the brain
 
 ```bash
@@ -18,7 +73,7 @@ To put it on your tailnet, run the command `doctor` prints, once. It is the stan
 tailscale serve --bg --https=443 http://127.0.0.1:4516
 ```
 
-Then open `https://<brain>.<tailnet>.ts.net/` on any of your devices. HTTPS is not optional. Installing the PWA, its service worker and push notifications all need a secure context, so a plain `http://studio:4520` cannot carry them.
+Then open `https://<brain>.<tailnet>.ts.net/` on any of your devices. HTTPS is not optional. Installing the PWA, its service worker and push notifications all need a secure context, so a plain `http://desk:4520` cannot carry them.
 
 On the brain itself, before Serve is set up, `chartroom app serve --daemon --no-auth` and `chartroom app open` give this machine's browser the app without an identity.
 
