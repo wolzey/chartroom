@@ -2046,10 +2046,15 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           an enrolled device: a new display name (the old one
                                           stays an alias); revoke its token (its agent stops,
                                           nothing on it is touched); a new token
-  chartroom device join <brain-url> <code> | run [--once] | status [--json] | leave
+  chartroom node update <name|id>...|--all | node ping <name|id>
+                                          over the connection: move a device's chartroom to this
+                                          brain's commit (a fast-forward on its own origin/main;
+                                          its agent restarts onto it); a round trip
+  chartroom device join <brain-url> <code|-> | run [--once] | status [--json] | leave | update
                                           on a device: enrol with a brain and run its agent (a
                                           LaunchAgent on macOS) that sends a heartbeat every
-                                          15 s; it opens no port and the brain never reaches it
+                                          15 s and takes the brain's commands by long-poll; it
+                                          opens no port and the brain never reaches it
   chartroom node probe [--json]           this machine's facts, as `nodes` reads them
   chartroom node init [--max-workers N] [--cpu PCT] [--mem PCT] [--battery pause|allow]
                       [--priority normal|nice|background] [--project-roots DIRS] [--force]

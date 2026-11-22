@@ -25,6 +25,8 @@ stdin), so the CLI stays the one writer of the records and a client home's rules
   POST /api/v1/device/join       a device enrols with a one-time code: `chartroom fleet join`
   POST /api/v1/device/heartbeat  a device's probe, every 15 s (Authorization: Bearer <its token>)
   POST /api/v1/device/rotate     a device swaps its token for one it made: `chartroom fleet rotate`
+  POST /api/v1/device/commands   long-poll (up to 25 s): the commands queued for that device
+  POST /api/v1/device/result     a device's answer to one of its own commands
                             The device routes (lib/fleet.sh, lib/device.sh) open by a device's own
                             token alone: the Tailscale login is ignored there (every device carries
                             the owner's), and a device token opens nothing else. The server writes
@@ -447,6 +449,10 @@ DEVICE_PROTOCOL = 1
 DEVICE_BODY_MAX = 256 * 1024
 DEVICE_EXIT = {0: 200, 2: 400, 3: 401, 4: 409}  # lib/fleet.sh's exit codes
 JOIN_FAILS = 10  # failed codes a minute before joins are refused for the rest of it
+CMD_ID = re.compile(r"^c-[0-9]{13}-[0-9a-f]{6}$")
+POLL_MAX = 25  # seconds a device's long-poll is held
+CMD_BATCH = 5
+OUT_MAX = 64 * 1024
 
 
 class Devices:
@@ -509,11 +515,69 @@ class Devices:
         doc = {"last_seen": now, "clock": clock if isinstance(clock, int) else None,
                "version": str(body.get("version") or "")[:80] or None, "protocol": body.get("protocol"),
                "probe": probe if isinstance(probe, str) else None, "addr": addr,
-               "agent_started": body.get("started") if isinstance(body.get("started"), int) else None}
+               "agent_started": body.get("started") if isinstance(body.get("started"), int) else None,
+               "rev": body["rev"] if isinstance(body.get("rev"), str) and re.match(r"^[0-9a-f]{7,40}$", body["rev"]) else None,
+               "caps": [c for c in body.get("caps") or [] if isinstance(c, str) and re.match(r"^[a-z-]{1,32}$", c)][:32]
+               if isinstance(body.get("caps"), list) else [],
+               "tasks": self.tasks_of(body.get("tasks"))}
         self.write(os.path.join(self.dir, "devices", did + ".seen.json"), json.dumps(doc, separators=(",", ":")) + "\n")
         # a device that (re)appears: Fleet reads the machines again now, not at its next turn
         if not before or now - int(before.get("last_seen") or 0) > 45:
             self.fleet.wake.set()
+
+    @staticmethod
+    def tasks_of(v):
+        """A heartbeat's word on each of its tasks: {"<home>/<id>": live word}, shapes checked."""
+        if not isinstance(v, dict):
+            return {}
+        out = {}
+        for k, w in list(v.items())[:200]:
+            if isinstance(k, str) and re.match(r"^[a-z][a-z0-9-]{0,31}/[a-z][a-z0-9_-]{0,31}$", k) and isinstance(w, str) and re.match(r"^[a-z-]{1,32}$", w):
+                out[k] = w
+        return out
+
+    def queue(self, did):
+        return os.path.join(self.dir, "queue", did)
+
+    def pending(self, did):
+        """The device's queued commands, oldest first; one whose ttl ran out is answered "expired"."""
+        d = self.queue(did)
+        try:
+            names = sorted(n for n in os.listdir(d) if n.endswith(".json") and CMD_ID.match(n[:-5]))
+        except OSError:
+            return []
+        out, now = [], time.time()
+        for n in names:
+            try:
+                with open(os.path.join(d, n)) as fh:
+                    c = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            if not isinstance(c, dict):
+                continue
+            if isinstance(c.get("expires"), int) and c["expires"] < now:
+                self.answer(did, n[:-5], {"rc": 124, "out": "", "err": "expired before the device took it"})
+                continue
+            out.append({"id": n[:-5], "type": c.get("type"), "payload": c.get("payload")})
+            if len(out) >= CMD_BATCH:
+                break
+        return out
+
+    def answer(self, did, cid, res):
+        """A device's answer to one of its own commands: False when it has none by that id."""
+        q = os.path.join(self.queue(did), cid + ".json")
+        r = os.path.join(self.dir, "results", cid + ".json")
+        if not os.path.isfile(q):
+            return os.path.isfile(r)  # (an answer sent twice: the first one stands)
+        os.makedirs(os.path.dirname(r), mode=0o700, exist_ok=True)
+        doc = {"id": cid, "device": did, "at": int(time.time()), "rc": res.get("rc") if isinstance(res.get("rc"), int) else 1,
+               "out": str(res.get("out") or "")[-OUT_MAX:], "err": str(res.get("err") or "")[-OUT_MAX:]}
+        self.write(r, json.dumps(doc, separators=(",", ":")) + "\n")
+        try:
+            os.remove(q)
+        except OSError:
+            pass
+        return True
 
     def join_refused(self):
         with self.lock:
@@ -1038,9 +1102,24 @@ def make_handler(hub, args, root, actions, prs, fleet, pusher, devices=None):
         def log_message(self, fmt, *a):
             pass
 
+        def parse_request(self):
+            self.body_done = False  # (one handler serves every request of a kept-alive connection)
+            return super().parse_request()
+
+        def read_body(self, n):
+            data = self.rfile.read(n) if n > 0 else b""
+            self.body_done = len(data) == n
+            return data
+
         def send(self, code, body, ctype, extra=()):
             if isinstance(body, str):
                 body = body.encode("utf-8")
+            # A write answered before its body was read (refused, too large) ends its connection:
+            # Tailscale Serve reuses connections, and the unread body would be read as the start
+            # of the next request on it.
+            if self.command in ("POST", "PUT", "DELETE", "PATCH") and not self.body_done:
+                self.close_connection = True
+                extra = tuple(extra) + (("Connection", "close"),)
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
@@ -1268,6 +1347,7 @@ def make_handler(hub, args, root, actions, prs, fleet, pusher, devices=None):
                         break
                     fh.write(chunk)
                     left -= len(chunk)
+            self.body_done = left == 0
             if left > 0:
                 try:
                     os.remove(tmp)
@@ -1318,7 +1398,7 @@ def make_handler(hub, args, root, actions, prs, fleet, pusher, devices=None):
             if n < 0 or n > DEVICE_BODY_MAX:
                 return self.json(413, {"error": "the request is too large"})
             try:
-                body = json.loads(self.rfile.read(n) or b"{}")
+                body = json.loads(self.read_body(n) or b"{}")
             except ValueError:
                 return self.json(400, {"error": "the body is not JSON"})
             if not isinstance(body, dict):
@@ -1336,7 +1416,7 @@ def make_handler(hub, args, root, actions, prs, fleet, pusher, devices=None):
                 if code != 0:
                     return self.json(DEVICE_EXIT.get(code, 500), {"error": last_line(err) or "the join failed"})
                 return self.send(200, out.strip() + "\n", "application/json")
-            if route not in ("heartbeat", "rotate"):
+            if route not in ("heartbeat", "rotate", "commands", "result"):
                 return self.json(404, {"error": "not found"})
             auth = h.get("Authorization") or ""
             token = auth[7:].strip() if auth.startswith("Bearer ") else ""
@@ -1348,6 +1428,24 @@ def make_handler(hub, args, root, actions, prs, fleet, pusher, devices=None):
                 return self.json(401, {"error": "revoked" if rec and rec.get("revoked") else "unauthorized"})
             if body.get("protocol") != DEVICE_PROTOCOL:
                 return self.json(409, {"error": "this brain speaks device protocol %d; update chartroom on the device" % DEVICE_PROTOCOL})
+            if route == "commands":
+                try:
+                    wait = max(0, min(POLL_MAX, int(body.get("wait") or 0)))
+                except (TypeError, ValueError):
+                    wait = 0
+                end = time.time() + wait
+                while True:
+                    cmds = devices.pending(did)
+                    if cmds or time.time() >= end:
+                        return self.json(200, {"commands": cmds})
+                    time.sleep(0.5)
+            if route == "result":
+                cid = body.get("cmd")
+                if not isinstance(cid, str) or not CMD_ID.match(cid):
+                    return self.json(400, {"error": "cmd is a command id"})
+                if not devices.answer(did, cid, body):
+                    return self.json(404, {"error": "no such command for this device"})
+                return self.json(200, {"ok": True})
             if route == "heartbeat":
                 devices.heartbeat(did, body, self.client_address[0])
                 return self.json(200, {"ok": True, "name": rec.get("name"), "rotate": bool(rec.get("rotate")),
@@ -1390,7 +1488,7 @@ def make_handler(hub, args, root, actions, prs, fleet, pusher, devices=None):
                 if n < 0 or n > 8192:
                     return self.json(413, {"error": "the request is too large"})
                 try:
-                    body = json.loads(self.rfile.read(n) or b"{}")
+                    body = json.loads(self.read_body(n) or b"{}")
                 except ValueError:
                     return self.json(400, {"error": "the body is not JSON"})
                 if not isinstance(body, dict):
@@ -1406,7 +1504,7 @@ def make_handler(hub, args, root, actions, prs, fleet, pusher, devices=None):
                     n = -1
                 if n < 0 or n > BODY_MAX:
                     return self.json(413, {"error": "the request is too large"})
-                self.rfile.read(n)
+                self.read_body(n)
                 hub.looked()
                 fleet.wake.set()
                 return self.json(202, {"ok": True})
@@ -1423,7 +1521,7 @@ def make_handler(hub, args, root, actions, prs, fleet, pusher, devices=None):
             if n < 0 or n > BODY_MAX:
                 return self.json(413, {"error": "the request is too large"})
             try:
-                body = json.loads(self.rfile.read(n) or b"{}")
+                body = json.loads(self.read_body(n) or b"{}")
             except ValueError:
                 return self.json(400, {"error": "the body is not JSON"})
             if not isinstance(body, dict):

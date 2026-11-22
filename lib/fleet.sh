@@ -22,6 +22,9 @@
 #   devices/<id>.seen.json  what it last said: last_seen, its clock, version, protocol and its
 #                           probe (lib/nodeprobe.sh's lines). Written by the app server only.
 #   codes/<sha256>.json     an enrolment code not yet used (the code itself is never stored)
+#   queue/<id>/<cmd>.json   a command for that device, until it answers (written here only; the
+#                           device takes it by long-poll: POST /api/v1/device/commands)
+#   results/<cmd>.json      a device's answer to one (written by the server; read and removed here)
 #   endpoint                "<pid> <since>": the app server that takes heartbeats, and since when
 #
 # A device's status is decided here, at read time, never in the server:
@@ -121,7 +124,7 @@ fleet_devices_json() {
       | {id: $d.id, name: $d.name, aliases: ($d.aliases // []), host: $d.host, hw_uuid: ($d.hw_uuid // null), enrolled: $d.enrolled,
          revoked: ($d.revoked // null), rotate_pending: ($d.rotate // false), status: $st,
          last_seen: $ls, seen_age_s: (if $ls == null then null else $now - $ls end),
-         version: ($s.version // null), protocol: ($s.protocol // null),
+         version: ($s.version // null), protocol: ($s.protocol // null), rev: ($s.rev // null), caps: ($s.caps // []),
          skew_s: (if $s.clock != null and $ls != null then $s.clock - $ls else null end),
          probe: ($s.probe // null)})
     | sort_by(.name)'
@@ -139,6 +142,93 @@ fleet_resolve() {
 
 fleet_name_taken() { # <name> [except id] -> 0 when another live device holds it
   fleet_devices_json | jq -e --arg n "$1" --arg x "${2:-}" 'any(.[]; .id != $x and .status != "revoked" and .name == $n)' >/dev/null
+}
+
+# ---------------------------------------------------------------- commands for a device
+
+fleet_ms() { perl -MTime::HiRes=time -e 'printf "%013d", time * 1000'; }
+
+# Queues a command; prints its id. It waits for the device however long it is offline, unless a
+# ttl is given: then the server answers it "expired" once the ttl has passed untaken.
+fleet_enqueue() { # <device id> <type> <payload json> [ttl seconds]
+  local did="$1" type="$2" payload="$3" ttl="${4:-0}" cid exp=null
+  [[ "$did" =~ $CR_DEVICE_ID_RE ]] || die "fleet: no device $did"
+  cid="c-$(fleet_ms)-$(fleet_rand_hex 3)"
+  (( ttl > 0 )) && exp=$(( $(date +%s) + ttl ))
+  fleet_write "$(fleet_dir)/queue/$did/$cid.json" "$(jq -cn --arg id "$cid" --arg t "$type" --argjson p "$payload" \
+    --arg at "$(now)" --argjson e "$exp" '{id: $id, type: $t, payload: $p, at: $at, expires: $e}')"
+  printf '%s' "$cid"
+}
+
+# Waits for a command's answer: prints it ({rc, out, err}) and removes it; 1 on timeout.
+fleet_wait() { # <cmd id> <seconds>
+  local f i n; f="$(fleet_dir)/results/$1.json"; n=$(( $2 * 4 ))
+  for ((i = 0; i <= n; i++)); do
+    if [[ -f "$f" ]]; then cat "$f"; rm -f "$f"; return 0; fi
+    sleep 0.25
+  done
+  return 1
+}
+fleet_withdraw() { rm -f "$(fleet_dir)/queue/$1/$2.json"; } # <device id> <cmd id>
+
+# A command run to its answer: its output printed, its exit code returned. A command not taken
+# within <seconds> is withdrawn (it never runs late) unless --keep: then it stays queued.
+fleet_call() { # <device id> <type> <payload json> <seconds> [--keep]
+  local cid res
+  cid="$(fleet_enqueue "$1" "$2" "$3")"
+  if ! res="$(fleet_wait "$cid" "$4")"; then
+    if [[ "${5:-}" == --keep ]]; then FLEET_CID="$cid"; return 124; fi
+    fleet_withdraw "$1" "$cid"
+    # (it may have been taken just now: its answer, if one comes, is read and dropped)
+    [[ -f "$(fleet_dir)/results/$cid.json" ]] && { res="$(cat "$(fleet_dir)/results/$cid.json")"; rm -f "$(fleet_dir)/results/$cid.json"; } || return 124
+  fi
+  printf '%s' "$(jq -r '.out // ""' <<<"$res")"
+  local err; err="$(jq -r '.err // ""' <<<"$res")"; [[ -z "$err" ]] || printf '%s\n' "$err" >&2
+  return "$(jq -r '.rc // 1' <<<"$res")"
+}
+
+fleet_device_json() { # <id> -> its row of fleet_devices_json
+  fleet_devices_json | jq -c --arg id "$1" '.[] | select(.id == $id)'
+}
+
+# chartroom node ping <name|id>: a round trip over the connection (the command channel works).
+cmd_node_ping() {
+  [[ $# -eq 1 ]] || die "usage: chartroom node ping <name|id>"
+  local id rc=0 t0; id="$(fleet_resolve "$1")"; t0="$(fleet_ms)"
+  fleet_call "$id" ping '{}' 30 || rc=$?
+  if (( rc == 124 )); then die "node ping: $1 did not take the command within 30s ($(fleet_device_json "$id" | jq -r .status))"; fi
+  echo " ($(( ($(fleet_ms) - t0) )) ms)"
+  return "$rc"
+}
+
+# chartroom node update <name|id>|--all: the device moves its chartroom to this brain's commit
+# (it must be on the device's own origin/main: a device only ever fast-forwards) and its agent
+# restarts onto it. Waits for the heartbeat that says so.
+cmd_node_update() {
+  local targets=() a rev ids id row name rc out i got
+  [[ $# -ge 1 ]] || die "usage: chartroom node update <name|id>... | --all"
+  if [[ "$1" == --all ]]; then mapfile -t targets < <(fleet_devices_json | jq -r '.[] | select(.status != "revoked") | .id')
+  else for a in "$@"; do targets+=("$(fleet_resolve "$a")"); done; fi
+  rev="$(git -C "$CR_ROOT" rev-parse HEAD)"
+  local fail=0
+  for id in "${targets[@]+"${targets[@]}"}"; do
+    row="$(fleet_device_json "$id")"; name="$(jq -r .name <<<"$row")"
+    if [[ "$(jq -r .status <<<"$row")" != online ]]; then echo "$name: $(jq -r .status <<<"$row"), not updated (it takes no command until it is back)"; fail=1; continue; fi
+    if ! jq -e '.caps | index("update")' <<<"$row" >/dev/null; then echo "$name: its agent is older than updates over the connection (once by hand: chartroom device update there)"; fail=1; continue; fi
+    if [[ "$(jq -r '.rev // ""' <<<"$row")" == "$rev" ]]; then echo "$name: already at ${rev:0:7}"; continue; fi
+    rc=0; out="$(fleet_call "$id" update "$(jq -cn --arg r "$rev" '{rev: $r}')" 90 2>&1)" || rc=$?
+    if (( rc != 0 )); then echo "$name: update failed ($rc): $out"; fail=1; continue; fi
+    echo "$name: $out"
+    got=""
+    for ((i = 0; i < 120; i++)); do
+      got="$(fleet_device_json "$id" | jq -r '.rev // ""')"
+      [[ "$got" == "$rev" ]] && break
+      sleep 1
+    done
+    if [[ "$got" == "$rev" ]]; then echo "$name: its agent restarted and reports ${rev:0:7}"
+    else echo "$name: updated, but no heartbeat from the new agent within 2 minutes (last rev ${got:0:7})"; fail=1; fi
+  done
+  return "$fail"
 }
 
 # ---------------------------------------------------------------- node add / rename / revoke / rotate

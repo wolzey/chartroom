@@ -9,6 +9,8 @@
 #                                              seconds (15), run by launchd in the login session
 #   chartroom device status [--json]           joined to what, the agent, its last heartbeat
 #   chartroom device leave                     stop the agent and forget the token here
+#   chartroom device update                    fast-forward to origin/main and restart the agent (by hand;
+#                                              the brain's `node update` does it over the connection)
 #
 # On macOS `join` writes the code to a 0600 file and loads the agent (a LaunchAgent in the login
 # session, dev.chartroom.device); the agent makes the join itself, so its token goes into the login
@@ -105,7 +107,7 @@ device_status_write() { # <state> [error]
 device_post() { # <path> <json file> [token]
   local out url; out="$(mktemp)"; url="$(device_cfg BRAIN)"
   DEV_HTTP="$( { [[ -z "${3:-}" ]] || printf 'header = "Authorization: Bearer %s"\n' "$3"; } |
-    curl -sS -K - -o "$out" -w '%{http_code}' --max-time 20 -X POST -H 'Content-Type: application/json' \
+    curl -sS -K - -o "$out" -w '%{http_code}' --max-time "${DEV_MAXTIME:-20}" -X POST -H 'Content-Type: application/json' \
       --data-binary @"$2" "${url%/}$1" 2>/dev/null)" || DEV_HTTP=000
   [[ "$DEV_HTTP" =~ ^[0-9]{3}$ ]] || DEV_HTTP=000
   DEV_BODY="$(cat "$out" 2>/dev/null)"; rm -f "$out"
@@ -154,10 +156,82 @@ device_do_join() {
   esac
 }
 
+# What this agent can be asked to do over the connection (the brain refuses a pin without it).
+CR_DEVICE_CAPS="commands update"
+device_rev() { git -C "$CR_ROOT" rev-parse HEAD 2>/dev/null || true; }
+
 device_heartbeat_body() { # <file> <started>
-  local probe; probe="$(node_probe_local 2>/dev/null || true)"
+  local probe tasks='{}'; probe="$(node_probe_local 2>/dev/null || true)"
+  if declare -F guest_tasks_json >/dev/null; then tasks="$(guest_tasks_json 2>/dev/null || echo '{}')"; fi
   jq -cn --arg id "$(device_cfg ID)" --arg v "$CR_VERSION" --argjson p "$CR_FLEET_PROTOCOL" --argjson c "$(date +%s)" \
-    --argjson s "$2" --arg probe "$probe" '{id: $id, version: $v, protocol: $p, clock: $c, started: $s, probe: $probe}' >"$1"
+    --argjson s "$2" --arg probe "$probe" --arg rev "$(device_rev)" --arg caps "$CR_DEVICE_CAPS" --argjson t "$tasks" \
+    '{id: $id, version: $v, protocol: $p, clock: $c, started: $s, probe: $probe, rev: $rev,
+      caps: ($caps | split(" ")), tasks: $t}' >"$1"
+}
+
+# ---------------------------------------------------------------- commands from the brain
+
+# The agent's second loop: it holds a long-poll open to the brain and runs each command it gets,
+# one at a time, in a subshell (a command that dies does not end the loop), and posts the answer.
+# A command it has already run (the answer lost on the way) gets the same answer again.
+device_poll_loop() {
+  local body tok c; body="$(mktemp)"
+  mkdir -p "$(device_state_dir)/cmds"
+  while true; do
+    tok="$(device_token_get)" || tok=""
+    [[ -n "$tok" ]] || { sleep 5; continue; }
+    jq -cn --arg id "$(device_cfg ID)" --argjson p "$CR_FLEET_PROTOCOL" '{id: $id, protocol: $p, wait: 25}' >"$body"
+    DEV_MAXTIME=40 device_post /api/v1/device/commands "$body" "$tok"
+    if [[ "$DEV_HTTP" != 200 ]]; then sleep 5; continue; fi
+    while IFS= read -r c; do
+      [[ -n "$c" ]] && device_run_command "$c" "$tok"
+    done < <(jq -c '.commands[]?' <<<"$DEV_BODY" 2>/dev/null || true)
+  done
+}
+
+device_run_command() { # <command json> <token>
+  local c="$1" tok="$2" cid type cache out err rc=0 res i
+  cid="$(jq -r '.id // ""' <<<"$c")"; type="$(jq -r '.type // ""' <<<"$c")"
+  [[ "$cid" =~ ^c-[0-9]{13}-[0-9a-f]{6}$ ]] || return 0
+  cache="$(device_state_dir)/cmds/$cid.json"
+  if [[ ! -f "$cache" ]]; then
+    out="$(mktemp)"; err="$(mktemp)"
+    case "$type" in
+      ping|update|dispatch|steer|stop|peek|close|close-done|permit-sync)
+        ( "device_cmd_${type//-/_}" "$(jq -c '.payload // {}' <<<"$c")" ) >"$out" 2>"$err" </dev/null || rc=$? ;;
+      *) echo "this agent does not know the command '$type' (chartroom node update)" >"$err"; rc=2 ;;
+    esac
+    jq -cn --arg id "$(device_cfg ID)" --argjson p "$CR_FLEET_PROTOCOL" --arg cmd "$cid" --argjson rc "$rc" \
+      --rawfile o "$out" --rawfile e "$err" '{id: $id, protocol: $p, cmd: $cmd, rc: $rc, out: ($o | .[-60000:]), err: ($e | .[-60000:])}' >"$cache"
+    rm -f "$out" "$err"
+    device_log "command $type ($cid): exit $rc"
+    # (the newest 200 answers are kept, for a brain that asks again)
+    ls -1t "$(device_state_dir)/cmds"/*.json 2>/dev/null | tail -n +201 | while IFS= read -r f; do rm -f "$f"; done
+  fi
+  for ((i = 0; i < 3; i++)); do
+    device_post /api/v1/device/result "$cache" "$tok"
+    [[ "$DEV_HTTP" == 200 || "$DEV_HTTP" == 404 ]] && break
+    sleep 2
+  done
+  return 0
+}
+
+device_cmd_ping() { echo "pong from $(device_cfg NAME) at $(device_rev | cut -c1-7)"; }
+
+# Fast-forward this machine's chartroom to the brain's commit, which must be on this checkout's
+# own origin/main; the agent then restarts onto it (exit 75: launchd starts it again).
+device_cmd_update() { # <payload {rev}>
+  local rev cur; rev="$(jq -r '.rev // ""' <<<"$1")"
+  [[ "$rev" =~ ^[0-9a-f]{40}$ ]] || { echo "update: rev is a full commit id" >&2; return 2; }
+  cur="$(device_rev)"
+  if [[ "$cur" == "$rev" ]]; then echo "already at ${rev:0:7}"; return 0; fi
+  [[ -z "$(git -C "$CR_ROOT" status --porcelain 2>/dev/null)" ]] || { echo "update: $CR_ROOT has local changes; not touched" >&2; return 1; }
+  git -C "$CR_ROOT" fetch -q origin main 2>&1 || { echo "update: git fetch failed" >&2; return 1; }
+  git -C "$CR_ROOT" merge-base --is-ancestor "$rev" origin/main || { echo "update: ${rev:0:7} is not on this machine's origin/main" >&2; return 1; }
+  git -C "$CR_ROOT" merge-base --is-ancestor "$cur" "$rev" || { echo "update: ${rev:0:7} is not ahead of ${cur:0:7}; a device only fast-forwards" >&2; return 1; }
+  git -C "$CR_ROOT" merge -q --ff-only "$rev" || { echo "update: the fast-forward failed" >&2; return 1; }
+  touch "$(device_state_dir)/restart"
+  echo "updated ${cur:0:7} -> ${rev:0:7}; the agent restarts onto it"
 }
 
 # A new token this device makes; the brain keeps the old one good 10 minutes, so an answer lost
@@ -177,52 +251,84 @@ device_rotate() { # <current token>
 }
 
 cmd_device_run() {
-  local once=0 every started tok body last="" st
+  local once=0 every started tok body last="" st next=0 now_s
+  DEV_POLLER="" # (globals: the EXIT trap reads them after this function has returned)
   [[ "${1:-}" == --once ]] && once=1
   every="$(cfg DEVICE_HEARTBEAT '' 15)"
   [[ "$every" =~ ^[0-9]+$ ]] && (( every >= 1 )) || die "CHARTROOM_DEVICE_HEARTBEAT is whole seconds (got '$every')"
   [[ -n "$(device_cfg BRAIN)" && -n "$(device_cfg ID)" ]] || die "device run: this machine has not joined a brain (chartroom device join <brain-url> <code>)"
-  started="$(date +%s)"; body="$(mktemp)"
+  started="$(date +%s)"; body="$(mktemp)"; DEV_HB_BODY="$body"
   local log; log="$(device_state_dir)/agent.log"
   [[ ! -f "$log" ]] || (( $(wc -c <"$log") < 1048576 )) || mv -f "$log" "$log.1"
-  device_log "agent started (chartroom $CR_VERSION, pid $$, brain $(device_cfg BRAIN), every ${every}s)"
+  rm -f "$(device_state_dir)/restart"
+  device_log "agent started (chartroom $CR_VERSION at $(device_rev | cut -c1-7), pid $$, brain $(device_cfg BRAIN), every ${every}s)"
+  # shellcheck disable=SC2064 # the poller's pid, when it exits
+  trap '[[ -z "${DEV_POLLER:-}" ]] || kill "$DEV_POLLER" 2>/dev/null; rm -f "${DEV_HB_BODY:-}"' EXIT
+  trap 'exit 143' TERM INT # (so the EXIT trap ends the poller too)
   while true; do
     if [[ -f "$(device_state_dir)/join-code" ]]; then
       st=0; device_do_join || st=$?
-      if (( st == 1 )); then rm -f "$body"; return 0; fi # refused: stays stopped until joined again
-      if (( st == 2 )); then (( once )) && { rm -f "$body"; return 1; }; sleep 30; continue; fi
+      if (( st == 1 )); then return 0; fi # refused: stays stopped until joined again
+      if (( st == 2 )); then (( once )) && return 1; sleep 30; continue; fi
     fi
-    tok="$(device_token_get)" || tok=""
-    if [[ -z "$tok" ]]; then
-      device_log "no token here: chartroom device join <brain-url> <code> again; the agent stops"
-      device_status_write error "no token"; rm -f "$body"; return 0
+    if [[ -f "$(device_state_dir)/restart" ]]; then
+      rm -f "$(device_state_dir)/restart"
+      device_log "restarting onto chartroom $(device_rev | cut -c1-7)"
+      exit 75 # (not 0: launchd's KeepAlive starts it again)
     fi
-    device_heartbeat_body "$body" "$started"
-    device_post /api/v1/device/heartbeat "$body" "$tok"
-    if [[ "$DEV_HTTP" == 401 ]] && tok="$(device_token_get next)" && [[ -n "$tok" ]]; then
+    # the second loop, for commands (not with --once: one heartbeat, nothing else)
+    if (( ! once )) && { [[ -z "$DEV_POLLER" ]] || ! pid_alive "$DEV_POLLER"; }; then
+      device_poll_loop & DEV_POLLER=$!
+    fi
+    now_s="$(date +%s)"
+    if declare -F guest_push_all >/dev/null; then guest_push_all || true; fi
+    if (( now_s >= next )); then
+      next=$((now_s + every))
+      tok="$(device_token_get)" || tok=""
+      if [[ -z "$tok" ]]; then
+        device_log "no token here: chartroom device join <brain-url> <code> again; the agent stops"
+        device_status_write error "no token"; return 0
+      fi
+      device_heartbeat_body "$body" "$started"
       device_post /api/v1/device/heartbeat "$body" "$tok"
-      if [[ "$DEV_HTTP" == 200 ]]; then printf '%s' "$tok" | device_token_put; device_token_del next; fi
+      if [[ "$DEV_HTTP" == 401 ]] && tok="$(device_token_get next)" && [[ -n "$tok" ]]; then
+        device_post /api/v1/device/heartbeat "$body" "$tok"
+        if [[ "$DEV_HTTP" == 200 ]]; then printf '%s' "$tok" | device_token_put; device_token_del next; fi
+      fi
+      case "$DEV_HTTP" in
+        200)
+          DEV_LAST_OK="$(now)"
+          [[ "$last" == ok ]] || device_log "heartbeat ok: the brain knows this machine as $(jq -r '.name // "?"' <<<"$DEV_BODY")"
+          last=ok
+          local nm; nm="$(jq -r '.name // empty' <<<"$DEV_BODY" 2>/dev/null || true)"
+          [[ -z "$nm" || "$nm" == "$(device_cfg NAME)" ]] || device_set_cfg NAME "$nm"
+          device_status_write ok
+          [[ "$(jq -r '.rotate // false' <<<"$DEV_BODY")" != true ]] || device_rotate "$tok" ;;
+        401)
+          device_log "the brain revoked this device (401: $(device_err)); the agent stops and leaves everything here as it is"
+          device_status_write revoked "$(device_err)"; return $(( once ? 1 : 0 )) ;; # exit 0: launchd leaves it stopped
+        *)
+          st="$( [[ "$DEV_HTTP" == 000 ]] && echo "the brain did not answer" || echo "the brain answered $DEV_HTTP: $(device_err)")"
+          [[ "$last" == "$st" ]] || device_log "heartbeat failed: $st (trying again every ${every}s)"
+          last="$st"; device_status_write unreachable "$st" ;;
+      esac
+      if (( once )); then [[ "$last" == ok ]]; return; fi
     fi
-    case "$DEV_HTTP" in
-      200)
-        DEV_LAST_OK="$(now)"
-        [[ "$last" == ok ]] || device_log "heartbeat ok: the brain knows this machine as $(jq -r '.name // "?"' <<<"$DEV_BODY")"
-        last=ok
-        local nm; nm="$(jq -r '.name // empty' <<<"$DEV_BODY" 2>/dev/null || true)"
-        [[ -z "$nm" || "$nm" == "$(device_cfg NAME)" ]] || device_set_cfg NAME "$nm"
-        device_status_write ok
-        [[ "$(jq -r '.rotate // false' <<<"$DEV_BODY")" != true ]] || device_rotate "$tok" ;;
-      401)
-        device_log "the brain revoked this device (401: $(device_err)); the agent stops and leaves everything here as it is"
-        device_status_write revoked "$(device_err)"; rm -f "$body"; return $(( once ? 1 : 0 )) ;; # exit 0: launchd leaves it stopped
-      *)
-        st="$( [[ "$DEV_HTTP" == 000 ]] && echo "the brain did not answer" || echo "the brain answered $DEV_HTTP: $(device_err)")"
-        [[ "$last" == "$st" ]] || device_log "heartbeat failed: $st (trying again every ${every}s)"
-        last="$st"; device_status_write unreachable "$st" ;;
-    esac
-    if (( once )); then rm -f "$body"; [[ "$last" == ok ]]; return; fi
-    sleep "$every"
+    sleep 2
   done
+}
+
+# chartroom device update: the same fast-forward as the brain's `node update`, by hand here (an
+# agent from before updates over the connection), then the agent is restarted.
+cmd_device_update() {
+  local rev; git -C "$CR_ROOT" fetch -q origin main || die "device update: git fetch failed"
+  rev="$(git -C "$CR_ROOT" rev-parse origin/main)"
+  device_cmd_update "$(jq -cn --arg r "$rev" '{rev: $r}')" || exit 1
+  rm -f "$(device_state_dir)/restart"
+  local lc; lc="$(device_launchctl)"
+  if [[ -n "$lc" ]] && "$lc" print "gui/$(id -u)/$CR_DEVICE_LABEL" >/dev/null 2>&1; then
+    "$lc" kickstart -k "gui/$(id -u)/$CR_DEVICE_LABEL" && echo "the agent restarted"
+  fi
 }
 
 # ---------------------------------------------------------------- the LaunchAgent
@@ -347,7 +453,8 @@ cmd_device() {
     run) cmd_device_run "$@" ;;
     status) cmd_device_status "$@" ;;
     leave) cmd_device_leave "$@" ;;
-    *) die "usage: chartroom device join <brain-url> <code> | run [--once] | status [--json] | leave" ;;
+    update) cmd_device_update "$@" ;;
+    *) die "usage: chartroom device join <brain-url> <code> | run [--once] | status [--json] | leave | update" ;;
   esac
 }
 

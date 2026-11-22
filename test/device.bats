@@ -17,9 +17,16 @@ setup() {
   cr init >/dev/null; cr homes add acme "$CHARTROOM_HOME" >/dev/null
   FLEET="$BATS_TEST_TMPDIR/fleet" # beside the config file, as the app server's own state
   DEV="$BATS_TEST_TMPDIR/dev"; mkdir -p "$DEV/home"; : >"$DEV/config"
+  DEV2="$BATS_TEST_TMPDIR/dev2"; mkdir -p "$DEV2/home"; : >"$DEV2/config"
 }
 
-teardown() { cr app stop >/dev/null 2>&1 || true; }
+teardown() {
+  local p
+  for p in ${AGENTS:-}; do kill "$p" 2>/dev/null || true; done
+  p="$(jq -r '.pid // empty' "$DEV/state/chartroom/device/agent.json" 2>/dev/null || true)"; [[ -z "$p" ]] || kill "$p" 2>/dev/null || true
+  p="$(jq -r '.pid // empty' "$DEV2/state/chartroom/device/agent.json" 2>/dev/null || true)"; [[ -z "$p" ]] || kill "$p" 2>/dev/null || true
+  cr app stop >/dev/null 2>&1 || true
+}
 
 start() {
   run cr app serve --daemon --port 0
@@ -29,7 +36,15 @@ start() {
 }
 # the device: its own HOME, config and state; same chartroom
 dev() { HOME="$DEV/home" XDG_STATE_HOME="$DEV/state" CHARTROOM_CONFIG="$DEV/config" CHARTROOM_NODE_CONFIG="$DEV/node" \
-  CHARTROOM_HOME="$DEV/nohome" CHARTROOM_MACHINE_NAME=m3 "$CHARTROOM" "$@" 3>&-; }
+  CHARTROOM_HOME="$DEV/nohome" CHARTROOM_MACHINE_NAME=m3 "${DEVBIN:-$CHARTROOM}" "$@" 3>&-; }
+# a second device (its own hardware)
+dev2() { HOME="$DEV2/home" XDG_STATE_HOME="$DEV2/state" CHARTROOM_CONFIG="$DEV2/config" CHARTROOM_NODE_CONFIG="$DEV2/node" \
+  CHARTROOM_HOME="$DEV2/nohome" CHARTROOM_MACHINE_NAME=m5 CHARTROOM_HW_UUID=test-hw-0002 "$CHARTROOM" "$@" 3>&-; }
+agent() { # the device's agent in the background, a heartbeat a second (as launchd would run it)
+  ( CHARTROOM_DEVICE_HEARTBEAT=1 dev device run >/dev/null 2>&1 ) 3>&- &
+  AGENTS="${AGENTS:-} $!"
+}
+until_true() { local i; for i in $(seq 1 "${2:-120}"); do eval "$1" && return 0; sleep 0.25; done; return 1; }
 code_of() { sed -n 's/^enrolment code[^:]*: \([A-Z0-9]\{5\}-[A-Z0-9]\{5\}\) .*/\1/p' <<<"$1"; }
 new_code() { local out; out="$(cr node add "$@")"; code_of "$out"; }
 dev_id() { sed -n 's/^CHARTROOM_DEVICE_ID=//p' "$DEV/home/.config/chartroom/device"; }
@@ -293,4 +308,68 @@ joined() { # enrols the device as m3 and answers one heartbeat
   grep -q '^CHARTROOM_DEVICE_TOKEN_STORE=file$' "$DEV/home/.config/chartroom/device"
   [ -n "$(find "$DEV/state/chartroom/device/token" -perm 600)" ]
   grep -q 'the keychain refused the token (security: SecKeychainItemCreateFromContent: User interaction is not allowed.)' "$DEV/state/chartroom/device/agent.log"
+}
+
+@test "commands: a round trip by long-poll; expired and unknown ones; only a device's own to answer" {
+  joined
+  agent
+  run cr node ping m3
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == "pong from m3 at "* ]]
+  id="$(dev_id)"; q="$FLEET/queue/$id"
+  # an unknown command is answered, not run
+  c="c-$(date +%s)000-aaaaaa"; echo '{"type":"frobnicate","payload":{}}' >"$q/$c.json"
+  until_true '[ -f "$FLEET/results/$c.json" ]'
+  jq -e '.rc == 2 and (.err | contains("does not know the command"))' "$FLEET/results/$c.json"
+  # a command whose ttl ran out before the device took it is answered "expired" and never runs
+  c="c-$(date +%s)001-bbbbbb"; echo '{"type":"ping","payload":{},"expires":1}' >"$q/$c.json"
+  until_true '[ -f "$FLEET/results/$c.json" ]'
+  jq -e '.rc == 124 and (.err | contains("expired"))' "$FLEET/results/$c.json"
+  ! grep -q "command ping ($c)" "$DEV/state/chartroom/device/agent.log"
+  # another device cannot answer this device's command
+  dev2 device join "$URL" "$(new_code --name m5)" >/dev/null
+  t2="$(cat "$DEV2/state/chartroom/device/token")"; id2="$(sed -n 's/^CHARTROOM_DEVICE_ID=//p' "$DEV2/home/.config/chartroom/device")"
+  c="c-$(date +%s)002-cccccc"; mkdir -p "$BATS_TEST_TMPDIR/hold"; echo '{"type":"ping","payload":{}}' >"$BATS_TEST_TMPDIR/hold/$c.json"
+  mv "$BATS_TEST_TMPDIR/hold/$c.json" "$q/"
+  run curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -H "Authorization: Bearer $t2" \
+    -d "{\"id\":\"$id2\",\"protocol\":1,\"cmd\":\"$c\",\"rc\":0,\"out\":\"forged\"}" "$URL/api/v1/device/result"
+  [ "$output" = 404 ]
+  until_true '[ -f "$FLEET/results/$c.json" ]'
+  ! grep -q forged "$FLEET/results/$c.json"
+  # and its long-poll never hands it another device's commands
+  run curl -s -X POST -H 'Content-Type: application/json' -H "Authorization: Bearer $t2" -d "{\"id\":\"$id2\",\"protocol\":1,\"wait\":0}" "$URL/api/v1/device/commands"
+  [ "$(jq '.commands | length' <<<"$output")" = 0 ]
+}
+
+@test "node update: a device fast-forwards to the brain's commit over the connection and restarts onto it" {
+  type -P rsync >/dev/null || skip "rsync not available"
+  T="$BATS_TEST_TMPDIR"
+  rsync -a --exclude .git "$REPO_ROOT/" "$T/src/"
+  git -C "$T/src" init -q; git -C "$T/src" add -A; git -C "$T/src" commit -qm c1
+  git clone -q --bare "$T/src" "$T/origin.git"
+  git clone -q "$T/origin.git" "$T/devroot"; git clone -q "$T/origin.git" "$T/brainroot"
+  git -C "$T/brainroot" commit -q --allow-empty -m c2; git -C "$T/brainroot" push -q origin HEAD:main
+  export CHARTROOM="$T/brainroot/bin/chartroom" DEVBIN="$T/devroot/bin/chartroom"
+  joined
+  # launchd's part: an agent that exits 75 is started again
+  ( while :; do rc=0; CHARTROOM_DEVICE_HEARTBEAT=1 dev device run >/dev/null 2>&1 || rc=$?; [ "$rc" -eq 75 ] || break; done ) 3>&- &
+  AGENTS="$!"
+  c1="$(git -C "$T/devroot" rev-parse HEAD)"; c2="$(git -C "$T/brainroot" rev-parse HEAD)"
+  until_true '[ "$(cr fleet devices --json | jq -r ".[0].rev")" = "$c1" ]'
+  run cr node update m3
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"m3: updated ${c1:0:7} -> ${c2:0:7}"* ]]
+  [[ "$output" == *"m3: its agent restarted and reports ${c2:0:7}"* ]]
+  [ "$(git -C "$T/devroot" rev-parse HEAD)" = "$c2" ]
+  grep -q "restarting onto chartroom ${c2:0:7}" "$DEV/state/chartroom/device/agent.log"
+  run cr node update m3
+  [[ "$output" == "m3: already at ${c2:0:7}" ]]
+  # a commit the device's origin does not have is refused, and the device stays where it is
+  git -C "$T/brainroot" commit -q --allow-empty -m c3
+  run cr node update m3
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"is not on this machine's origin/main"* ]]
+  [ "$(git -C "$T/devroot" rev-parse HEAD)" = "$c2" ]
 }

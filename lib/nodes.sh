@@ -352,7 +352,9 @@ cmd_node() {
     rename) cmd_node_rename "$@" ;;
     revoke) cmd_node_revoke "$@" ;;
     rotate) cmd_node_rotate "$@" ;;
-    *) die "usage: chartroom node probe [--json] | node init [--max-workers N] [--cpu PCT] [--mem PCT] [--battery pause|allow] [--priority normal|nice|background] [--project-roots DIRS] [--force] | node add [--name N] [--alias A]... [--replace NAME|ID] | node rename <name|id> <new> | node revoke <name|id> | node rotate <name|id>" ;;
+    update) cmd_node_update "$@" ;;
+    ping) cmd_node_ping "$@" ;;
+    *) die "usage: chartroom node probe [--json] | node init [--max-workers N] [--cpu PCT] [--mem PCT] [--battery pause|allow] [--priority normal|nice|background] [--project-roots DIRS] [--force] | node add [--name N] [--alias A]... [--replace NAME|ID] | node rename <name|id> <new> | node revoke <name|id> | node rotate <name|id> | node update <name|id>...|--all | node ping <name|id>" ;;
   esac
 }
 

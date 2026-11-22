@@ -14,6 +14,10 @@
 #                                          identity check, for this machine's own browser before
 #                                          Serve is set up; never with Serve pointed at it)
 #   chartroom app open | stop | status | doctor
+#   chartroom app service on|off|status    run the server as a LaunchAgent (dev.chartroom.app) in
+#                                          the login session: launchd starts it at login and again
+#                                          whenever it ends, so it is back after a reboot (once the
+#                                          user is logged in: with automatic login, by itself)
 #   chartroom app snapshot --json          one home as the app reads it
 
 CR_APP_PORT_DEFAULT=4516
@@ -132,8 +136,21 @@ with urllib.request.urlopen("http://127.0.0.1:%s/healthz" % sys.argv[1], timeout
 PY
 }
 
+CR_APP_LABEL=dev.chartroom.app
+app_plist() { printf '%s' "$HOME/Library/LaunchAgents/$CR_APP_LABEL.plist"; }
+app_service_loaded() { local lc; lc="$(device_launchctl)"; [[ -n "$lc" ]] && "$lc" print "gui/$(id -u)/$CR_APP_LABEL" >/dev/null 2>&1; }
+
 app_stop() {
   local pid port i
+  # launchd would only start a killed server again: a service is booted out (it is back at the
+  # next login, or with chartroom app serve --daemon / app service on)
+  if app_service_loaded; then
+    "$(device_launchctl)" bootout "gui/$(id -u)/$CR_APP_LABEL" 2>/dev/null || true
+    for i in $(seq 1 50); do read -r pid port _ < <(app_running) || break; sleep 0.1; done
+    rm -f "$(app_pidfile)"
+    echo "app stopped (its LaunchAgent $CR_APP_LABEL is booted out; it starts again at the next login, or with chartroom app service on)"
+    return 0
+  fi
   if ! read -r pid port _ < <(app_running); then rm -f "$(app_pidfile)"; echo "app not running"; return 0; fi
   kill "$pid" 2>/dev/null || true
   for i in $(seq 1 50); do pid_alive "$pid" || break; sleep 0.1; done
@@ -146,6 +163,8 @@ app_stop() {
 app_doctor() {
   local pid port user ts serve=""
   user="$(cfg APP_USER '' '')"
+  if app_service_loaded; then echo "service: LaunchAgent $CR_APP_LABEL (launchd starts it at login and again if it ends)"
+  elif [[ "$(uname -s)" == Darwin ]]; then echo "service: none (chartroom app service on: launchd keeps it up and starts it after a reboot)"; fi
   if read -r pid port _ < <(app_running); then echo "server: running on 127.0.0.1:$port (pid $pid)"
   else echo "server: not running (chartroom app serve --daemon)"; port="$(app_port)"; fi
   if [[ -n "$user" ]]; then echo "allowed: $user (CHARTROOM_APP_USER)"
@@ -188,6 +207,7 @@ cmd_app() {
       jq -c --arg at "$(now)" -f "$CR_ROOT/lib/app/fleet.jq" <<<"$nodes" | jq -c --arg at "$(now)" '. + {checked_at: $at}'
       return ;;
     stop) app_stop; return ;;
+    service) shift; app_service "$@"; return ;;
     status)
       local pid port
       if read -r pid port _ < <(app_running); then echo "app running: http://127.0.0.1:$port (pid $pid)"; else echo "app not running"; return 1; fi
@@ -211,8 +231,8 @@ cmd_app() {
       if [[ -n "$opener" ]] && $opener "$url" >/dev/null 2>&1; then echo "app open: $url"; else echo "app running: $url"; fi
       return ;;
     serve) shift ;;
-    ""|-h|--help) echo "usage: chartroom app serve [--port N] [--daemon] [--no-auth] | open | stop | status | doctor | snapshot --json"; [[ -n "${1:-}" ]]; return ;;
-    *) die "app: unknown command $1 (serve, open, stop, status, doctor, snapshot)" ;;
+    ""|-h|--help) echo "usage: chartroom app serve [--port N] [--daemon] [--no-auth] | open | stop | status | doctor | service on|off|status | snapshot --json"; [[ -n "${1:-}" ]]; return ;;
+    *) die "app: unknown command $1 (serve, open, stop, status, doctor, service, snapshot)" ;;
   esac
   local port daemon=0 noauth=0
   port="$(app_port)"
@@ -246,6 +266,10 @@ cmd_app() {
   [[ "$hold" =~ ^[0-9]+$ ]] || hold=120
   args+=(--push-hold "$hold")
   [[ $daemon -eq 1 ]] || exec "${CR_PY[@]}" "${args[@]}"
+  # the server is a LaunchAgent here (app service on): launchd starts it, never a nohup copy beside it
+  if [[ -f "$(app_plist)" && -n "$(device_launchctl)" && "$port" == "$(app_port)" && $noauth -eq 0 ]]; then
+    app_service_start; return
+  fi
   local log; log="$(app_logfile)"
   ( umask 077; nohup "${CR_PY[@]}" "${args[@]}" >"$log" 2>&1 </dev/null & echo $! >"$log.pid" )
   local child i; child="$(cat "$log.pid")"; rm -f "$log.pid"
@@ -261,3 +285,78 @@ cmd_app() {
   pid_alive "$child" && kill "$child" 2>/dev/null
   die "the app did not start"
 }
+
+# ---------------------------------------------------------------- app service (launchd)
+
+app_service_write() {
+  local f log; f="$(app_plist)"; log="$(app_logfile)"
+  mkdir -p "$(dirname "$f")" "$(app_state_dir)"
+  local env="" k
+  for k in SHELL XDG_CONFIG_HOME XDG_STATE_HOME CHARTROOM_CONFIG LANG; do
+    [[ -n "${!k:-}" ]] && env+="<key>$k</key><string>$(xml_esc "${!k}")</string>"
+  done
+  cat >"$f.tmp" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- chartroom's app server (written by chartroom app service on; chartroom app service off removes it) -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$CR_APP_LABEL</string>
+  <key>ProgramArguments</key><array><string>$(xml_esc "$CR_BIN")</string><string>app</string><string>serve</string></array>
+  <key>EnvironmentVariables</key><dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$(xml_esc "$HOME/.local/bin")</string><key>HOME</key><string>$(xml_esc "$HOME")</string>$env</dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>$(xml_esc "$log")</string>
+  <key>StandardErrorPath</key><string>$(xml_esc "$log")</string>
+</dict>
+</plist>
+PLIST
+  mv "$f.tmp" "$f"
+}
+
+app_service_start() {
+  local lc i pid p; lc="$(device_launchctl)"
+  app_service_loaded || "$lc" bootstrap "gui/$(id -u)" "$(app_plist)" || die "launchd would not load $(app_plist)"
+  for i in $(seq 1 100); do
+    if read -r pid p _ < <(app_running) && app_healthy "$p"; then
+      echo "app running: http://127.0.0.1:$p (pid $pid; LaunchAgent $CR_APP_LABEL; log $(app_logfile))"; return 0
+    fi
+    sleep 0.1
+  done
+  tail -n 20 "$(app_logfile)" >&2 2>/dev/null || true
+  die "the app's LaunchAgent did not bring the server up (log $(app_logfile))"
+}
+
+# The Mac's automatic login, as far as it can be read without asking for a password.
+app_autologin() {
+  local u; u="$(defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser 2>/dev/null || true)"
+  if [[ -n "$u" ]]; then echo "automatic login: on (as $u), so after a reboot the app comes back by itself"
+  else echo "automatic login: off, so after a reboot the app comes back once you log in at the screen"; fi
+}
+
+app_service() {
+  local lc; lc="$(device_launchctl)"
+  case "${1:-status}" in
+    on)
+      [[ -n "$lc" ]] || die "app service: needs launchd (macOS); elsewhere run chartroom app serve under your own supervisor"
+      local user; user="$(cfg APP_USER '' '')"
+      [[ -n "$user" ]] || die "app service: set CHARTROOM_APP_USER=<your Tailscale login> in $CR_CONFIG_FILE first"
+      find_python; [[ ${#CR_PY[@]} -gt 0 ]] || die "the app needs python3 (standard library only)"
+      if app_service_loaded; then "$lc" bootout "gui/$(id -u)/$CR_APP_LABEL" 2>/dev/null || true; fi
+      app_stop >/dev/null # (a nohup server from before, on the same port)
+      app_service_write
+      app_service_start
+      app_autologin ;;
+    off)
+      if [[ -n "$lc" ]] && app_service_loaded; then "$lc" bootout "gui/$(id -u)/$CR_APP_LABEL" 2>/dev/null || true; fi
+      rm -f "$(app_plist)" "$(app_pidfile)"
+      echo "app service off: launchd no longer runs the server (chartroom app serve --daemon runs one by hand)" ;;
+    status)
+      if app_service_loaded; then echo "app service: on ($CR_APP_LABEL)"; [[ "$(uname -s)" != Darwin ]] || app_autologin
+      elif [[ -f "$(app_plist)" ]]; then echo "app service: installed but not loaded (chartroom app service on)"
+      else echo "app service: off"; fi ;;
+    *) die "usage: chartroom app service on|off|status" ;;
+  esac
+}
+

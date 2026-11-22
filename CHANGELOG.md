@@ -7,6 +7,11 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- **Commands reach a device over its connection.** Its agent long-polls the brain's app server for them, so the brain still opens nothing to it. `chartroom node ping <name>` makes a round trip. `chartroom node update <name>|--all` fast-forwards a device's chartroom to the brain's commit, only along its own `origin/main`, and its agent restarts onto it. `chartroom device update` does the same by hand on the device.
+- **`chartroom app service on|off|status`** (macOS) runs the app server as a LaunchAgent. launchd starts it at login, starts it again if it ends, and so brings it back after a reboot. `app stop` boots the LaunchAgent out, and `app serve --daemon` starts it again.
+
+### Fixed
+- **The app server and kept-alive connections.** A write the app server refused before reading its body (no identity, too large) now ends its connection. Tailscale Serve reuses connections, and the unread body used to be read as the start of the next request, which then failed with a 501.
 - **Devices report to the brain.** A machine runs chartroom's device agent and sends the brain its probe every 15 seconds. The brain never reaches out to it, holds no key to it, and asks it to open no port. No work is placed on a device yet.
   - **Enrolling:** `chartroom node add` on the brain prints a one-time code (10 minutes). `install.sh --device`, then `chartroom device join <brain-url> <code>`, on the device. Its agent is a LaunchAgent in the login session.
   - **Its own revocable token:** the brain keeps only its sha256; the device keeps it in its login keychain (a 0600 file where there is none). It opens that device's routes only. `node revoke` stops the agent; `node rotate` swaps the token; `node rename` changes the display name.

@@ -287,3 +287,25 @@ state() { # waits for both homes' first snapshot
   [ "$(cr status --json | jq --arg t "$task" 'map(select(.id == $t)) | length')" = 1 ]
   [ "$(post /api/v1/homes/acme/remove '{"ref":"../x"}' -H 'X-Chartroom-App: 1')" = 400 ]
 }
+
+@test "a write refused before its body is read ends its connection: a reused one never reads that body as a request" {
+  printf 'CHARTROOM_APP_USER=owner@example.com\n' >"$CHARTROOM_CONFIG"
+  start
+  # as Tailscale Serve does: one kept-alive connection, a refused POST with a body, then a GET
+  run python3 - "$PORT" <<'PY'
+import http.client, sys
+c = http.client.HTTPConnection("127.0.0.1", int(sys.argv[1]), timeout=10)
+c.request("POST", "/api/v1/homes/acme/tell", body=b'{"text":"x"}', headers={"Content-Type": "application/json"})
+r = c.getresponse(); r.read()
+print("first", r.status, r.getheader("Connection"))
+try:
+    c.request("GET", "/healthz"); r2 = c.getresponse(); print("second", r2.status, r2.read().decode().strip())
+except (http.client.HTTPException, OSError):
+    c = http.client.HTTPConnection("127.0.0.1", int(sys.argv[1]), timeout=10)
+    c.request("GET", "/healthz"); r2 = c.getresponse(); print("second (new connection)", r2.status, r2.read().decode().strip())
+PY
+  echo "$output"
+  [[ "$output" == *"first 403 close"* ]]
+  [[ "$output" == *"200 ok"* ]]
+  [[ "$output" != *"501"* ]]
+}

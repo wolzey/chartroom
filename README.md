@@ -212,6 +212,7 @@ covers everything it does.
 
 ```bash
 chartroom app serve --daemon     # 127.0.0.1:4516 (CHARTROOM_APP_PORT), for Tailscale Serve
+chartroom app service on         # macOS: a LaunchAgent keeps it up and starts it again after a reboot
 chartroom app doctor             # the server, who may come in, and the Serve command to run
 chartroom app open               # this machine's browser (start it first with --no-auth)
 chartroom app stop               # (or: status)
@@ -529,11 +530,17 @@ chartroom device join https://<brain>.ts.net <code>   # on the device: enrol and
 chartroom device status                      # on the device: joined to what, its last heartbeat
 chartroom node rename m3 m3-mini             # on the brain: names are display only
 chartroom node rotate m3 | node revoke m3    # a new token; or none (its agent stops)
+chartroom node ping m3                       # a round trip over the connection
+chartroom node update --all                  # each device moves to this brain's commit, over the connection
 ```
 
 - **Its own revocable token.** Only the token's sha256 is kept on the brain. On macOS the agent is a
   LaunchAgent in the login session, and the token is in the login keychain; elsewhere a 0600
   file. A token opens that device's routes only, never the app.
+- **Commands** reach a device by long-poll: its agent holds one request open to the brain's app
+  server and runs what comes, one at a time; the brain still opens nothing to it. `node update`
+  fast-forwards the device's chartroom to the brain's commit (only along its own `origin/main`)
+  and its agent restarts onto it.
 - **Status:** `online`, `stale` (no heartbeat for 45 s), `lost` (10 minutes, counted only while
   the brain's app server is up), `new`, `revoked`. `chartroom doctor` lists the devices on the
   brain, and the join and the agent on a device.
