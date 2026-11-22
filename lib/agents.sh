@@ -56,8 +56,12 @@ claude_settings_file() { # <id> [all|prompt|headless] -> path
   local id="$1" mode="${2:-all}" f h
   f="$(tdir "$id")/claude-settings.json"
   h="CHARTROOM_HOME=$(printf '%q' "$CR_HOME") $(printf '%q' "$CR_BIN") hook $id"
+  # A device's guest worker (lib/guest.sh) gets its task folder here rather than by --add-dir:
+  # the flag makes Claude ask to add a folder it has not seen, and a guest home is new to it, while
+  # a settings file's additional directory is taken as it is (see claude_common_args)
   jq -n --arg stop "$h stop" --arg notif "$h notification" --arg sub "$h prompt-submit" --arg pre "$h pre-tool" \
-    --arg perm "$h permission" --arg denied "$h denied" --arg mode "$mode" --argjson wait "$((CR_PERMIT_WAIT + 60))" '{hooks:(
+    --arg guest "${CHARTROOM_GUEST:-}" --arg tdir "$(tdir "$id")" \
+    --arg perm "$h permission" --arg denied "$h denied" --arg mode "$mode" --argjson wait "$((CR_PERMIT_WAIT + 60))" '(if $guest == "1" then {permissions: {additionalDirectories: [$tdir]}} else {} end) + {hooks:(
     (if $mode == "all" then {Stop:[{hooks:[{type:"command",command:$stop}]}],
       Notification:[{hooks:[{type:"command",command:$notif}]}]} else {} end)
     + (if $mode != "headless" then {UserPromptSubmit:[{hooks:[{type:"command",command:$sub}]}]} else {} end)
@@ -101,7 +105,8 @@ claude_common_args() { # <id> <permission-mode or "">
   m="$(meta "$1" model)"
   [[ -n "$m" ]] && printf '%s\n' --model "$m"
   [[ -n "$perm" ]] && printf '%s\n' --permission-mode "$perm"
-  printf '%s\n' --add-dir "$(tdir "$1")"
+  # (a device's guest worker has it in its settings file instead: claude_settings_file)
+  [[ "${CHARTROOM_GUEST:-}" == 1 && "$(backend_runner "$1")" =~ ^($SESSION_RUNNERS)$ ]] || printf '%s\n' --add-dir "$(tdir "$1")"
 }
 
 # Full argv (one per line) for an interactive agent session. <hooks:1|0|prompt>

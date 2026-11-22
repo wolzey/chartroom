@@ -17,7 +17,7 @@ guest_run() { # <home> <chartroom verb...>: in the guest home, with the login PA
   local g ws; g="$(guest_dir "$1")"; shift
   ws="$(cat "$g/.workspace" 2>/dev/null || true)"
   local lp; lp="$(login_path)"
-  CHARTROOM_HOME="$g" CHARTROOM_STORE=files PATH="${lp:-$PATH}" CHARTROOM_WORKSPACE="${ws:-chartroom-guest}" "$CR_BIN" "$@"
+  CHARTROOM_GUEST=1 CHARTROOM_HOME="$g" CHARTROOM_STORE=files PATH="${lp:-$PATH}" CHARTROOM_WORKSPACE="${ws:-chartroom-guest}" "$CR_BIN" "$@"
 }
 
 # A guest home is always a files store (guest_run sets CHARTROOM_STORE=files), so its task

@@ -84,6 +84,24 @@ setup() { common_setup; }
   [[ "$output" == *"msg: fake codex ran"* ]]
 }
 
+@test "a device's guest Claude worker gets its task folder in its settings file, not by --add-dir (no dialog)" {
+  use_fake tmux claude
+  export FAKE_TMUX_DIR="$BATS_TEST_TMPDIR/tmux"; mkdir -p "$FAKE_TMUX_DIR"
+  id="$(new_task --backend tmux:claude)"
+  export FAKE_TMUX_TASK="$id"
+  CHARTROOM_GUEST=1 cr dispatch "$id" >/dev/null 2>&1 || true
+  launcher="$(ls "$CHARTROOM_HOME/tasks/$id"/*launch* 2>/dev/null | head -1)"
+  [ -n "$launcher" ]
+  ! grep -q -- '--add-dir' "$launcher"
+  grep -q -- "--settings $CHARTROOM_HOME/tasks/$id/claude-settings.json" "$launcher"
+  jq -e --arg d "$CHARTROOM_HOME/tasks/$id" '.permissions.additionalDirectories == [$d] and (.hooks.PreToolUse | length) == 1' "$CHARTROOM_HOME/tasks/$id/claude-settings.json"
+  # a worker on this machine keeps --add-dir (sweep knows its session by it)
+  id2="$(new_task --backend tmux:claude)"
+  FAKE_TMUX_TASK="$id2" cr dispatch "$id2" >/dev/null 2>&1 || true
+  grep -q -- "--add-dir $CHARTROOM_HOME/tasks/$id2" "$(ls "$CHARTROOM_HOME/tasks/$id2"/*launch* | head -1)"
+  jq -e '.permissions == null' "$CHARTROOM_HOME/tasks/$id2/claude-settings.json"
+}
+
 @test "headless:codex scout gets workspace-write with the task record added" {
   use_fake codex
   id="$(new_task --backend codex --kind scout)"
