@@ -201,8 +201,11 @@ as on the brain, inside its node's project roots, and hc with Claude Code or Cod
 only hc:claude and hc:codex run on a device. On the device, once:
 
 ```bash
-chartroom node init --project-roots ~/src    # the directories that hold your checkouts, colon-separated
+chartroom node init --force --project-roots ~/src   # the directories that hold your checkouts, colon-separated
 ```
+
+`device join` wrote that node file with no project roots, so `--force` rewrites it; it keeps the
+device's id, and the brain's `chartroom nodes` then counts its checkouts.
 
 On the brain:
 
@@ -212,8 +215,8 @@ chartroom set <id> node=here                 # before dispatch: run it on the br
 chartroom dispatch <id>                      # the device runs it; its events, report and cards come back here
 ```
 
-The record stays on the brain, so `status`, the board and the app show the task as any other,
-with its machine. Steer, stop, peek and `close` go to the device over its connection, and
+The record stays on the brain, so the board and the app show the task as any other, with its
+machine, and `status` shows its runner as `node:claude`. Steer, stop, peek and `close` go to the device over its connection, and
 `close` brings the branch to the brain before the device deletes its copy. A pinned task never
 moves by itself: if its device is away, it waits. Nothing places work on a device for you yet.
 [docs/multi-machine.md §12](multi-machine.md#pinned-dispatch-built) has the protocol.
@@ -307,10 +310,11 @@ checked, read-only, on a real fleet: a brain whose app is on Tailscale Serve wit
 two Macs joined as devices, each running its agent with its token in the keychain. The
 admin-console steps, the phone's own steps and the access-rule example were not run. Neither
 were `chartroom dashboard open` from a client home (its ssh tunnel) or turning push on: push was
-only read, already on, on the real fleet. Pinning (`node init --project-roots`, `new --node`,
-`set node=here`) was run in the throwaway homes; `dispatch` to a device, `node update` and
-`node ping` need the device's agent running as a service with hc signed in, and `app service on`
-loads a LaunchAgent, so they were not:
-they ran on a real device in the change that built them, and test/device.bats covers them. The
+only read, already on, on the real fleet. Pinning (`node init --force --project-roots` on a joined
+device, `new --node`, `set node=here`) was run in the throwaway homes. `dispatch` to a device,
+`node update` and `node ping` need the device's agent running as a service with hc signed in, so
+they were not run here: they ran on a real device in the change that built them, and
+test/device.bats covers them. `app service on` loads a LaunchAgent, so it was not run either; no
+test covers it. The
 `chartroom permit` commands were not run by hand either: chartroom's guard refuses them to a
 worker, and the test suite (test/permit.bats, test/app-permit.bats) runs them instead.
