@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "chartroom",
   "description": "Run a crew of coding agents from one Claude Code session: the XO delegates, supervises and reports; workers run in herdr, cmux, tmux, headless Claude/Codex, any CLI, or subagents.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": { "name": "wolzey", "url": "https://github.com/wolzey" },
   "homepage": "https://github.com/wolzey/chartroom",
   "repository": "https://github.com/wolzey/chartroom",

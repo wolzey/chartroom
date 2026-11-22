@@ -6,7 +6,17 @@ are stable from 0.1.0.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-22
+
+The first release since 0.1.0. Several features are experimental and off by default: the README's "What is new since 0.1.0" table says which.
+
 ### Added
+- **A fleet guide** (`docs/fleet.md`): build your own fleet from scratch: an always-on brain, a laptop as a client home, other Macs as devices, the app on a phone, and permission cards, with Tailscale as the recommended network and what works without it.
+- **Devices report to the brain.** A machine runs chartroom's device agent and sends the brain its probe every 15 seconds. The brain never reaches out to it, holds no key to it, and asks it to open no port. A task runs on a device only when it is pinned there (below); nothing spreads work across devices by itself yet.
+  - **Enrolling:** `chartroom node add` on the brain prints a one-time code (10 minutes). `install.sh --device`, then `chartroom device join <brain-url> <code>`, on the device. Its agent is a LaunchAgent in the login session.
+  - **Its own revocable token:** the brain keeps only its sha256; the device keeps it in its login keychain (a 0600 file where there is none). It opens that device's routes only. `node revoke` stops the agent; `node rotate` swaps the token; `node rename` changes the display name.
+  - **Fleet and `chartroom nodes`** show a device from its last heartbeat (`online`, `stale`, `lost`, counted only while the brain's app server is up) and no longer probe it over ssh. `nodes --ssh` reads the ssh list alone.
+  - **`chartroom doctor`** lists the devices on the brain, and the join and the agent on a device.
 - **Pinned dispatch.** `chartroom new --node <device>` or `chartroom set <id> node=<device>` pins a task, and `dispatch` runs it on that device in a guest home of the device's own chartroom.
   - **What comes back:** its event lines (each once, however often they are sent), report.md and plan.md, and its permission cards. An answer given on the brain reaches the worker waiting there.
   - **Steer, stop and peek** go to it over the connection. `status`, the board and the app show its machine, and its liveness comes from the device's heartbeat.
@@ -15,35 +25,6 @@ are stable from 0.1.0.
 - **Commands reach a device over its connection.** Its agent long-polls the brain's app server for them, so the brain still opens nothing to it. `chartroom node ping <name>` makes a round trip. `chartroom node update <name>|--all` fast-forwards a device's chartroom to the brain's commit, only along its own `origin/main`, and its agent restarts onto it. `chartroom device update` does the same by hand on the device.
 - **`chartroom app service on|off|status`** (macOS) runs the app server as a LaunchAgent. launchd starts it at login, starts it again if it ends, and so brings it back after a reboot. `app stop` boots the LaunchAgent out, and `app serve --daemon` starts it again.
 
-### Fixed
-- **The app server and kept-alive connections.** A write the app server refused before reading its body (no identity, too large) now ends its connection. Tailscale Serve reuses connections, and the unread body used to be read as the start of the next request, which then failed with a 501.
-- **Devices report to the brain.** A machine runs chartroom's device agent and sends the brain its probe every 15 seconds. The brain never reaches out to it, holds no key to it, and asks it to open no port. No work is placed on a device yet.
-  - **Enrolling:** `chartroom node add` on the brain prints a one-time code (10 minutes). `install.sh --device`, then `chartroom device join <brain-url> <code>`, on the device. Its agent is a LaunchAgent in the login session.
-  - **Its own revocable token:** the brain keeps only its sha256; the device keeps it in its login keychain (a 0600 file where there is none). It opens that device's routes only. `node revoke` stops the agent; `node rotate` swaps the token; `node rename` changes the display name.
-  - **Fleet and `chartroom nodes`** show a device from its last heartbeat (`online`, `stale`, `lost`, counted only while the brain's app server is up) and no longer probe it over ssh. `nodes --ssh` reads the ssh list alone.
-  - **`chartroom doctor`** lists the devices on the brain, and the join and the agent on a device.
-
-### Changed
-- chartroom cleans up after itself. The rule "branches are never deleted" becomes "**chartroom never deletes unlanded work**".
-  - **At close:** the task's branch is deleted once its work has landed: merged into its base, on origin at that very commit, or a merged pull request at it (asked of `gh`, so a squash merge counts). Otherwise it is kept, and close says why. A branch checked out elsewhere is kept, and a branch that moved during the check is left alone.
-  - **`sweep`:** it deletes the branches of closed tasks whose work landed after they closed, removing a leftover clean worktree first. A branch no task record names is never touched.
-
-### Fixed
-- `chartroom nodes` and the app's Fleet count a machine honestly.
-  - **The crew is counted apart.** A machine's slots are chartroom's own workers (hc terminals carrying a task), not every agent in its hc core. XOs and your own sessions show apart (`11/20 +3 other`), and placement's UTIL counts only the crew. An hc with no event stream still counts every agent, and says so.
-  - **The cap is shown, not enforced.** `nodes` and Fleet say that nothing holds work back by max workers until placement ships.
-  - **Tools are checked on the PATH a worker gets:** your interactive login shell's (`$SHELL -lic`, where mise and the like live), not an ssh session's. `path_source` says which. One reader, `login_path` (lib/core.sh), serves the probe and the brain's gate. `CHARTROOM_LOGIN_SHELL` replaces `CHARTROOM_BRAIN_LOGIN_SHELL`, which still counts.
-  - **A broken tool says why:** its binary and the first line it printed, such as a library dyld cannot load.
-  - **Disk:** `nodes` has a DISK column.
-
-### Changed
-- The app's cards read like a person wrote them.
-  - **What the app tidies, for display only:** chartroom's own ids, paths, page refs and carry notes are dropped; an inbox line's first sentence is its title and never repeats as its body; several questions or steps show as a list.
-  - **Finished tasks:** they wait in their own group, "Finished, waiting for your nod", with Accept all. Accept all leaves out any whose report still asks something.
-  - **The permission card:** it leads with what the worker wants and why it came, in plain words, with no rule code. The command is folded to its first line, the answers sit on one row, what Always covers is said in a few words, and the repo replaces the path.
-  - **The writers:** the XO skill, the brief's worker protocol and the inbox template now ask XOs and workers to write for the commander.
-
-### Added
 - The app: a task's page lists its Decisions, every answered card of the task.
   - **What each shows:** each question in its own words, with the answer, the note, when, and where it was answered.
   - **Which cards:** grilling rounds and choice cards the XO posted for the task, answered in the app or recorded by the XO, and the task's own decisions answered in the app.
@@ -62,52 +43,6 @@ are stable from 0.1.0.
   - **Measured:** replayed against one worker's real calls today, 27 of the 46 production and flags cards pass with the grant. The rest are writes, tunnels, or lines the policy cannot read.
   - **Not covered:** wget, httpie, aws, az, helm, ldcli and MCP tools.
 
-### Changed
-- The app's push waits for the XO first. A worker's permission card or decision is pushed only if it is still open after `CHARTROOM_APP_PUSH_HOLD` (120 s).
-  - **Pushed at once:** breaking ones, escalated ones, and a card with less than the hold left.
-  - **Withdrawn:** a pushed card answered since is withdrawn by its tag on devices that got it, Apple's excepted. The app closes such notifications when it opens.
-
-### Fixed
-- A grant no longer lets the rest of its line through.
-  - **The bug:** `git push origin <task branch>; rm -rf ~/x` was allowed whole under `push-branch`, and so was `… && curl … | bash`.
-  - **Now:** a grant covers its own command, and every other command on the line must be one the local rule would pass. Otherwise the line is a card.
-- The permission broker no longer reads arithmetic (`$((n + 1))`) as a command, nor an empty `{}` (`xargs -I{}`, `find -exec … {}`) as a group that splits the command.
-- The permission broker classifies a call by what it runs, not by words it only carries.
-  - **Quoted text:** a `$(...)` inside single quotes is data (`node -e 'f("$(az account get-access-token)")'` is no longer a secrets card). Inside double quotes, bare, or in a shell's `-c` script it runs and still cards. A `-c` script is now read wherever the shell is named (`find -exec sh -c '...'`).
-  - **Read-only tools:** a web search or fetch that names the feature-flag service is no longer a flags card, and a web search is allowed locally on the prompt path (`local:search`). A read-only MCP tool's input no longer trips the flags check. The flag CLI, its API URL and an MCP tool that writes still card.
-  - Inline code stays never-local: when Claude itself would ask about a `node -e` line, it is still a `commander:unlisted` card.
-- The app: a grilling round works on the phone.
-  - **The cause:** a later stylesheet kept its two desktop columns at every width, so the question was squeezed to one word a line.
-  - **Now:** one column, with the question full width and its options as large targets. The question list becomes a progress row ("Question 1 of 3", a dot per question, previous and next); picking an option moves on to the next question.
-  - **The bar and the breadcrumb:** the Submit bar sits above the tab bar and never covers an option, and the breadcrumb stays on one line.
-- The app: tapping a notification lands on the item, not just the app.
-  - **Where it lands:** a task's question, blocker or finished work opens the task's details; a grilling round its page; a permission card or a question with no task opens that card.
-  - **The cause:** the tap handler called `navigate()` on the open window. That fails for a window the service worker does not control, and Safari has no `navigate()`.
-  - **The fix:** the open window is now told where to go and answers that it heard. A closed app opens at the item, and a page that starts at the start page is sent there.
-- A Codex worker at an approval prompt no longer sits unnoticed. hc reports no state for Codex and
-  its notify fires only at a turn's end, so nothing woke the XO (one sat 45 minutes). Its terminal
-  title says `Action Required` while an approval is up: hc:codex reads that from `hc events` at once,
-  tmux:codex from the pane's title, cmux:codex from the screen, each as
-  `agent: awaiting-input: Codex approval prompt: <command>`, then `agent: prompt-cleared`.
-- `steer` no longer approves a Codex prompt. Text and Enter at its approval overlay ran the command,
-  because the overlay drops the text and Enter takes "Yes, proceed", and `hc send` does not refuse
-  an agent hc does not know is blocked. `steer` now refuses while a Codex worker is at a prompt.
-- A dialog no longer loses a brief or misreports one. Codex's "Hooks need review", which every
-  dispatch into a repo with Codex hooks meets, went unrecognised: hc dispatch said "did not take
-  the brief" though it was queued, and tmux, cmux and herdr typed the brief at the dialog, which
-  drops the text and answers it with Enter. Dispatch now raises it as `agent: awaiting-input` and
-  exits 0; on tmux, cmux and herdr the watch delivers the brief once it clears (a herdr start blocked
-  at a dialog no longer fails the dispatch). It is never trusted; `CHARTROOM_CODEX_HOOKS_DIALOG=skip`
-  takes Esc instead, in a worktree chartroom created.
-- Codex's title-generator thread no longer reads as the worker ending its turn. Its notify logged a
-  false `agent: turn-ended`, which woke the XO as "stopped its turn without reporting" while the
-  worker was just starting, and recorded that thread's id as the worker's `thread_id`.
-
-### Changed
-- hc and herdr's own `blocked` state now wakes as `agent: awaiting-input: hc: ...` (or `herdr: ...`),
-  logged like every other prompt, not as a bare `hc: ...` line.
-
-### Added
 - The chartroom app, slice 1: Needs me across every home on the brain, in a React PWA (`app/`,
   no build step: React 18.3.1 and htm 3.1.1 vendored) served by `chartroom app serve`
   (`lib/app/server.py`, stdlib Python) on 127.0.0.1:4516 for Tailscale Serve. Only
@@ -447,6 +382,26 @@ are stable from 0.1.0.
   and every 5 minutes regardless (once a minute after a failed read or for a home it cannot watch). The schedule (`schedule.js`) is unit-tested under node.
 
 ### Changed
+- **The README starts with a quickstart** and a table of what is new since 0.1.0, each feature marked stable or experimental with its default. Long sections moved to `docs/` (`dashboard.md`, `homes.md`, `crew-view.md`, `store.md`, `upgrading.md`, and the app's own section into `app.md`), word for word.
+- **The privacy gate** also fails on a tailnet's MagicDNS name and on any email address in a tracked file other than a reserved example domain, a GitHub noreply address or Anthropic's noreply.
+- `init` says how to set `CHARTROOM_PROJECT_ROOTS` even when it finds no likely directory; `app serve` with no registered home says how to register one; `install.sh` names the `install-skills` flag to pass.
+- chartroom cleans up after itself. The rule "branches are never deleted" becomes "**chartroom never deletes unlanded work**".
+  - **At close:** the task's branch is deleted once its work has landed: merged into its base, on origin at that very commit, or a merged pull request at it (asked of `gh`, so a squash merge counts). Otherwise it is kept, and close says why. A branch checked out elsewhere is kept, and a branch that moved during the check is left alone.
+  - **`sweep`:** it deletes the branches of closed tasks whose work landed after they closed, removing a leftover clean worktree first. A branch no task record names is never touched.
+
+- The app's cards read like a person wrote them.
+  - **What the app tidies, for display only:** chartroom's own ids, paths, page refs and carry notes are dropped; an inbox line's first sentence is its title and never repeats as its body; several questions or steps show as a list.
+  - **Finished tasks:** they wait in their own group, "Finished, waiting for your nod", with Accept all. Accept all leaves out any whose report still asks something.
+  - **The permission card:** it leads with what the worker wants and why it came, in plain words, with no rule code. The command is folded to its first line, the answers sit on one row, what Always covers is said in a few words, and the repo replaces the path.
+  - **The writers:** the XO skill, the brief's worker protocol and the inbox template now ask XOs and workers to write for the commander.
+
+- The app's push waits for the XO first. A worker's permission card or decision is pushed only if it is still open after `CHARTROOM_APP_PUSH_HOLD` (120 s).
+  - **Pushed at once:** breaking ones, escalated ones, and a card with less than the hold left.
+  - **Withdrawn:** a pushed card answered since is withdrawn by its tag on devices that got it, Apple's excepted. The app closes such notifications when it opens.
+
+- hc and herdr's own `blocked` state now wakes as `agent: awaiting-input: hc: ...` (or `herdr: ...`),
+  logged like every other prompt, not as a bare `hc: ...` line.
+
 - `watch` and `listen` wait on a doorbell instead of sleeping, so a wake comes within a fraction
   of a second instead of at the next poll: `chartroom event` (and every hook, note and steer
   record chartroom writes) rings the home's watches, `relay` the target home's, and a joined
@@ -873,6 +828,38 @@ are stable from 0.1.0.
   creates it (never overwrites), `chartroom status` prints a one-line count of open items,
   the XO skill keeps it current, and `bearings` folds its waiting items into "Needs you".
 
+- A worker's `done` no longer marks its task done: it puts it in a new `review` state (finished,
+  awaiting the commander's look), and only the commander ends that. `chartroom close <id>` closes
+  it as before; the new `chartroom accept <id>` marks it `done` without closing (a
+  `note: accepted` event; the worktree, branch and session stay). `review` shows in `status` and
+  `board`, leads into the dashboard's Needs you lane (after `awaiting-input`; its reason says PR
+  to review, PR merged or report to read), is on the todo list, is held by focus mode like the
+  other asks, and stays in the Claude Code panel in the input-needed colour (the panel still
+  hides `done`, now the commander's own accept). The dashboard's Ready for you lane holds accepted
+  tasks not yet closed. `sweep` treats `review` as finished but never closes one: it closes only
+  accepted (`done`) tasks, and lists a review task's open session as needing a human. Existing
+  records are not rewritten: the state is derived from the log, so a task whose `done` event has
+  no accept after it reads as `review`. The fleet radar docks a `review` task like a done one
+  (labelled review). The `chartroom`, `continue`, `bearings` and `sweep` skills say so.
+- `chartroom-panel` mirrors the board: it reads `chartroom board --json` (the dashboard's own lane
+  logic) instead of filtering `status --json`, and draws the same five lanes in the same order under
+  the same names (Needs you, In progress, On hold, Ready for you, Recently finished), each headed
+  with its count and held count as `chartroom board` heads it, each card with the board's reason
+  (a worker's finished work shows in Needs you as `awaiting review`, `PR to review` or `report to
+  read`), inbox questions included. The header counts what needs you. From the focused pane, `a`
+  completes the highlighted task (`chartroom accept`, two-press) beside the existing two-press `c`
+  close; both run the CLI with the full id, show its refusal verbatim, and re-poll so the card moves
+  as the board says. Enter (`/continue`) and `s` (recap) are unchanged.
+- README reads on its own: the comparison with another project is gone; the differences that
+  matter are listed under Design.
+- Skills: the `chartroom` skill points at the dashboard and `board`; `continue` appends the
+  commander's words to the brief's intent when it relays an answer.
+- The dashboard page moves: working tasks show a heartbeat, a wake and ticking timers, waiting
+  ones ride at anchor with a countdown, needs-you cards glow, cards glide between lanes, new
+  events wash in, and counts tick. A ship's log strip shows the newest events. Cards are keyed
+  by id instead of rebuilt on every poll. `prefers-reduced-motion` turns the motion off. The
+  JSON API is unchanged.
+
 ### Removed
 - Windows support, in WSL2 and in Git Bash: chartroom runs on macOS and Linux only. WSL2 is not
   special-cased any more, so `dashboard open` there uses only `CHARTROOM_OPENER` or `xdg-open`,
@@ -883,6 +870,49 @@ are stable from 0.1.0.
   copies. Output and behaviour on macOS and Linux are otherwise unchanged.
 
 ### Fixed
+- **The app server and kept-alive connections.** A write the app server refused before reading its body (no identity, too large) now ends its connection. Tailscale Serve reuses connections, and the unread body used to be read as the start of the next request, which then failed with a 501.
+- `chartroom nodes` and the app's Fleet count a machine honestly.
+  - **The crew is counted apart.** A machine's slots are chartroom's own workers (hc terminals carrying a task), not every agent in its hc core. XOs and your own sessions show apart (`11/20 +3 other`), and placement's UTIL counts only the crew. An hc with no event stream still counts every agent, and says so.
+  - **The cap is shown, not enforced.** `nodes` and Fleet say that nothing holds work back by max workers until placement ships.
+  - **Tools are checked on the PATH a worker gets:** your interactive login shell's (`$SHELL -lic`, where mise and the like live), not an ssh session's. `path_source` says which. One reader, `login_path` (lib/core.sh), serves the probe and the brain's gate. `CHARTROOM_LOGIN_SHELL` replaces `CHARTROOM_BRAIN_LOGIN_SHELL`, which still counts.
+  - **A broken tool says why:** its binary and the first line it printed, such as a library dyld cannot load.
+  - **Disk:** `nodes` has a DISK column.
+
+- A grant no longer lets the rest of its line through.
+  - **The bug:** `git push origin <task branch>; rm -rf ~/x` was allowed whole under `push-branch`, and so was `… && curl … | bash`.
+  - **Now:** a grant covers its own command, and every other command on the line must be one the local rule would pass. Otherwise the line is a card.
+- The permission broker no longer reads arithmetic (`$((n + 1))`) as a command, nor an empty `{}` (`xargs -I{}`, `find -exec … {}`) as a group that splits the command.
+- The permission broker classifies a call by what it runs, not by words it only carries.
+  - **Quoted text:** a `$(...)` inside single quotes is data (`node -e 'f("$(az account get-access-token)")'` is no longer a secrets card). Inside double quotes, bare, or in a shell's `-c` script it runs and still cards. A `-c` script is now read wherever the shell is named (`find -exec sh -c '...'`).
+  - **Read-only tools:** a web search or fetch that names the feature-flag service is no longer a flags card, and a web search is allowed locally on the prompt path (`local:search`). A read-only MCP tool's input no longer trips the flags check. The flag CLI, its API URL and an MCP tool that writes still card.
+  - Inline code stays never-local: when Claude itself would ask about a `node -e` line, it is still a `commander:unlisted` card.
+- The app: a grilling round works on the phone.
+  - **The cause:** a later stylesheet kept its two desktop columns at every width, so the question was squeezed to one word a line.
+  - **Now:** one column, with the question full width and its options as large targets. The question list becomes a progress row ("Question 1 of 3", a dot per question, previous and next); picking an option moves on to the next question.
+  - **The bar and the breadcrumb:** the Submit bar sits above the tab bar and never covers an option, and the breadcrumb stays on one line.
+- The app: tapping a notification lands on the item, not just the app.
+  - **Where it lands:** a task's question, blocker or finished work opens the task's details; a grilling round its page; a permission card or a question with no task opens that card.
+  - **The cause:** the tap handler called `navigate()` on the open window. That fails for a window the service worker does not control, and Safari has no `navigate()`.
+  - **The fix:** the open window is now told where to go and answers that it heard. A closed app opens at the item, and a page that starts at the start page is sent there.
+- A Codex worker at an approval prompt no longer sits unnoticed. hc reports no state for Codex and
+  its notify fires only at a turn's end, so nothing woke the XO (one sat 45 minutes). Its terminal
+  title says `Action Required` while an approval is up: hc:codex reads that from `hc events` at once,
+  tmux:codex from the pane's title, cmux:codex from the screen, each as
+  `agent: awaiting-input: Codex approval prompt: <command>`, then `agent: prompt-cleared`.
+- `steer` no longer approves a Codex prompt. Text and Enter at its approval overlay ran the command,
+  because the overlay drops the text and Enter takes "Yes, proceed", and `hc send` does not refuse
+  an agent hc does not know is blocked. `steer` now refuses while a Codex worker is at a prompt.
+- A dialog no longer loses a brief or misreports one. Codex's "Hooks need review", which every
+  dispatch into a repo with Codex hooks meets, went unrecognised: hc dispatch said "did not take
+  the brief" though it was queued, and tmux, cmux and herdr typed the brief at the dialog, which
+  drops the text and answers it with Enter. Dispatch now raises it as `agent: awaiting-input` and
+  exits 0; on tmux, cmux and herdr the watch delivers the brief once it clears (a herdr start blocked
+  at a dialog no longer fails the dispatch). It is never trusted; `CHARTROOM_CODEX_HOOKS_DIALOG=skip`
+  takes Esc instead, in a worktree chartroom created.
+- Codex's title-generator thread no longer reads as the worker ending its turn. Its notify logged a
+  false `agent: turn-ended`, which woke the XO as "stopped its turn without reporting" while the
+  worker was just starting, and recorded that thread's id as the worker's `thread_id`.
+
 - Every chartroom command starts with far fewer processes: the config
   file and the home's own config are read once, and the twenty-odd settings each run reads are
   set without a `$(...)`. Each setting forked twice, and ran a three-process `sed` pipeline when a
@@ -943,40 +973,6 @@ are stable from 0.1.0.
 - Short ids no longer fail under `nullglob` in a home with no tasks (a latent bug the artifact
   commands hit first).
 
-### Changed
-- A worker's `done` no longer marks its task done: it puts it in a new `review` state (finished,
-  awaiting the commander's look), and only the commander ends that. `chartroom close <id>` closes
-  it as before; the new `chartroom accept <id>` marks it `done` without closing (a
-  `note: accepted` event; the worktree, branch and session stay). `review` shows in `status` and
-  `board`, leads into the dashboard's Needs you lane (after `awaiting-input`; its reason says PR
-  to review, PR merged or report to read), is on the todo list, is held by focus mode like the
-  other asks, and stays in the Claude Code panel in the input-needed colour (the panel still
-  hides `done`, now the commander's own accept). The dashboard's Ready for you lane holds accepted
-  tasks not yet closed. `sweep` treats `review` as finished but never closes one: it closes only
-  accepted (`done`) tasks, and lists a review task's open session as needing a human. Existing
-  records are not rewritten: the state is derived from the log, so a task whose `done` event has
-  no accept after it reads as `review`. The fleet radar docks a `review` task like a done one
-  (labelled review). The `chartroom`, `continue`, `bearings` and `sweep` skills say so.
-- `chartroom-panel` mirrors the board: it reads `chartroom board --json` (the dashboard's own lane
-  logic) instead of filtering `status --json`, and draws the same five lanes in the same order under
-  the same names (Needs you, In progress, On hold, Ready for you, Recently finished), each headed
-  with its count and held count as `chartroom board` heads it, each card with the board's reason
-  (a worker's finished work shows in Needs you as `awaiting review`, `PR to review` or `report to
-  read`), inbox questions included. The header counts what needs you. From the focused pane, `a`
-  completes the highlighted task (`chartroom accept`, two-press) beside the existing two-press `c`
-  close; both run the CLI with the full id, show its refusal verbatim, and re-poll so the card moves
-  as the board says. Enter (`/continue`) and `s` (recap) are unchanged.
-- README reads on its own: the comparison with another project is gone; the differences that
-  matter are listed under Design.
-- Skills: the `chartroom` skill points at the dashboard and `board`; `continue` appends the
-  commander's words to the brief's intent when it relays an answer.
-- The dashboard page moves: working tasks show a heartbeat, a wake and ticking timers, waiting
-  ones ride at anchor with a countdown, needs-you cards glow, cards glide between lanes, new
-  events wash in, and counts tick. A ship's log strip shows the newest events. Cards are keyed
-  by id instead of rebuilt on every poll. `prefers-reduced-motion` turns the motion off. The
-  JSON API is unchanged.
-
-### Fixed
 - Checkouts are LF whatever `core.autocrlf` says (`.gitattributes`). A CRLF checkout stopped
   `bin/chartroom` at its first line.
 - A config file with CRLF line endings no longer leaves a CR on every value.
@@ -1019,3 +1015,7 @@ First public cut, extracted from a private tool and generalized.
   after its final result.
 - Requires bash ≥ 4 explicitly, with a clear error on macOS's bash 3.2.
 - The privacy gate also scans symlink targets and every commit's metadata.
+
+[Unreleased]: https://github.com/wolzey/chartroom/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/wolzey/chartroom/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/wolzey/chartroom/releases/tag/v0.1.0
