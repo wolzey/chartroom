@@ -140,11 +140,23 @@ CR_APP_LABEL=dev.chartroom.app
 app_plist() { printf '%s' "$HOME/Library/LaunchAgents/$CR_APP_LABEL.plist"; }
 app_service_loaded() { local lc; lc="$(device_launchctl)"; [[ -n "$lc" ]] && "$lc" print "gui/$(id -u)/$CR_APP_LABEL" >/dev/null 2>&1; }
 
+# Whether the LaunchAgent is this config's. The label is one per user, so a loaded service may serve
+# another config: its plist names that one's log, in its state directory.
+app_service_ours() {
+  local l
+  # (the way back from xml_esc; &amp; last)
+  l="$(sed -n 's|.*<key>StandardOutPath</key><string>\(.*\)</string>.*|\1|p' "$(app_plist)" 2>/dev/null |
+    sed -e 's/&lt;/</g' -e 's/&gt;/>/g' -e 's/&amp;/\&/g')" || return 1
+  [[ "$l" == */* ]] || return 1
+  [[ "${l%/*}" -ef "$(app_state_dir)" ]]
+}
+
 app_stop() {
   local pid port i
   # launchd would only start a killed server again: a service is booted out (it is back at the
-  # next login, or with chartroom app serve --daemon / app service on)
-  if app_service_loaded; then
+  # next login, or with chartroom app serve --daemon / app service on). Only this config's: another
+  # config's stop (a test's, a second setup's) leaves the machine's service running
+  if app_service_loaded && app_service_ours; then
     "$(device_launchctl)" bootout "gui/$(id -u)/$CR_APP_LABEL" 2>/dev/null || true
     for i in $(seq 1 50); do read -r pid port _ < <(app_running) || break; sleep 0.1; done
     rm -f "$(app_pidfile)"

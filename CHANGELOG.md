@@ -29,6 +29,8 @@ are stable from 0.1.0.
 - The app's note boxes (a grilling round's, a card's, a steer's) stayed one or two lines
   tall whatever was in them. They now grow with their text, typed or accepted from a writing
   assistant, and scroll past 320 px; the line being typed stays above the Submit bar.
+- `chartroom app stop` unloads the app's LaunchAgent only when that service runs for the config it
+  is called with. A stop with another config (a test's, a second setup's) took down the live app.
 
 ## [0.2.0] - 2026-11-22
 

@@ -17,7 +17,11 @@ setup() {
   export CHARTROOM_TAILSCALE=none CHARTROOM_OPENER=echo
 }
 
-teardown() { cr app stop >/dev/null 2>&1 || true; }
+teardown() {
+  cr app stop >/dev/null 2>&1 || true
+  local f
+  for f in "$BATS_TEST_TMPDIR"/*/kept.pid; do [[ ! -f "$f" ]] || kill "$(awk '{print $1}' "$f")" 2>/dev/null || true; done
+}
 
 start() { # [serve args...]: start on a free port; sets PORT
   run cr app serve --daemon --port 0 "$@"
@@ -308,4 +312,48 @@ PY
   [[ "$output" == *"first 403 close"* ]]
   [[ "$output" == *"200 ok"* ]]
   [[ "$output" != *"501"* ]]
+}
+
+@test "stop: another config's stop leaves the LaunchAgent running; its own boots it out" {
+  # a launchctl that runs the service as launchd would: its plist's command, up until it is booted out
+  cat >"$BIN/launchctl" <<'FAKE'
+#!/usr/bin/env bash
+case "$1" in
+  print) [[ -f "$LC_DIR/loaded" ]] ;;
+  bootstrap) : >"$LC_DIR/loaded"; CHARTROOM_CONFIG="$LC_DIR/config" nohup "$CHARTROOM" app serve >"$LC_DIR/app.log" 2>&1 </dev/null 3>&- & ;;
+  bootout) echo "$*" >>"$LC_DIR/bootouts"; rm -f "$LC_DIR/loaded"; kill "$(awk '{print $1}' "$LC_DIR/app.pid")" ;;
+esac
+FAKE
+  chmod +x "$BIN/launchctl"
+  mkdir -p "$BATS_TEST_TMPDIR/a&b" "$BATS_TEST_TMPDIR/other"
+  ln -s "$BATS_TEST_TMPDIR/a&b" "$BATS_TEST_TMPDIR/same"
+  export LC_DIR="$BATS_TEST_TMPDIR/a&b" CHARTROOM_LAUNCHCTL="$BIN/launchctl"
+  export CHARTROOM_APP_USER=me@example.com CHARTROOM_APP_PORT=0
+  run env CHARTROOM_CONFIG="$LC_DIR/config" "$CHARTROOM" app service on 3>&-
+  echo "$output"; [ "$status" -eq 0 ]
+  local svc other; svc="$(awk '{print $1}' "$LC_DIR/app.pid")"
+  run env CHARTROOM_CONFIG="$BATS_TEST_TMPDIR/other/config" "$CHARTROOM" app serve --daemon --port 0 --no-auth 3>&-
+  echo "$output"; [ "$status" -eq 0 ]
+  other="$(awk '{print $1}' "$BATS_TEST_TMPDIR/other/app.pid")"
+  echo "$svc" >"$BATS_TEST_TMPDIR/a&b/kept.pid"; echo "$other" >"$BATS_TEST_TMPDIR/other/kept.pid" # for teardown: a stop drops app.pid
+
+  # the other config's stop: its own server goes, the service stays
+  run env CHARTROOM_CONFIG="$BATS_TEST_TMPDIR/other/config" "$CHARTROOM" app stop
+  echo "$output"; [ "$status" -eq 0 ]
+  [[ "$output" == "app stopped (pid $other,"* ]]
+  [ ! -f "$LC_DIR/bootouts" ]
+  kill -0 "$svc"
+  run kill -0 "$other"; [ "$status" -ne 0 ]
+  # and again with nothing of its own running, as a script's stray stop is
+  run env CHARTROOM_CONFIG="$BATS_TEST_TMPDIR/other/config" "$CHARTROOM" app stop
+  [ "$output" = "app not running" ]
+  [ ! -f "$LC_DIR/bootouts" ]
+  kill -0 "$svc"
+
+  # its own config's stop, the directory spelled another way, boots it out
+  run env CHARTROOM_CONFIG="$BATS_TEST_TMPDIR/same/config" "$CHARTROOM" app stop
+  echo "$output"; [ "$status" -eq 0 ]
+  [[ "$output" == "app stopped (its LaunchAgent"* ]]
+  [ "$(cat "$LC_DIR/bootouts")" = "bootout gui/$(id -u)/dev.chartroom.app" ]
+  run kill -0 "$svc"; [ "$status" -ne 0 ]
 }

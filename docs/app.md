@@ -16,7 +16,7 @@ chartroom app serve --daemon     # 127.0.0.1:4516 (CHARTROOM_APP_PORT), for Tail
 chartroom app service on         # macOS: a LaunchAgent keeps it up and starts it again after a reboot
 chartroom app doctor             # the server, who may come in, and the Serve command to run
 chartroom app open               # this machine's browser (start it first with --no-auth)
-chartroom app stop               # (or: status)
+chartroom app stop               # (or: status); the LaunchAgent only when it runs for this config
 ```
 
 - **Who gets in.** The server listens on 127.0.0.1 only. `tailscale serve --bg --https=443
