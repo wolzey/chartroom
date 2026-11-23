@@ -440,9 +440,12 @@ chartroom migrate-home rollback --from laptop --home acme   # undoes move (and f
   column (`accept`, `close`, `keep`, `bundle`, `move`). Git facts it cannot read count as work, so
   nothing unread is ever closed as landed. `close` refuses a dirty worktree, and the task is kept:
   migrate-home never runs `--discard`.
+  `accept` and `close` both close the task on the client, which removes its clean worktree **with its
+  git-ignored files**, and a landed local branch: copy out any ignored file worth keeping first.
 - **What moves.** Every record, closed ones too, as records only: top-level files, artifacts and
-  messages of each task (at most 4 MB a file, except artifacts and messages). Clones, `node_modules` and screenshots in task dirs
-  stay behind; `skipped.tsv` lists them.
+  messages of each task (at most 4 MB a file, except artifacts and messages). Clones, `node_modules` and every other
+  subfolder of a task dir stay behind in the client's archive (`skipped.tsv` lists the oversized files). A login's token
+  cache (`gke_gcloud_auth_plugin_cache`) and the home's `permits/` (a task's grants) are never copied.
 
   For each open task that moves:
   - its Claude transcript (with its dir and file history) or Codex rollout;
@@ -453,6 +456,10 @@ chartroom migrate-home rollback --from laptop --home acme   # undoes move (and f
   A `move` task's worktree is rebuilt at once. A kept task's is rebuilt when its worker is first
   resumed: hc's revive calls `migrate-home materialize <id>`. A moved Claude task lands parked on
   `hc:claude` with its session id, so `steer` or `attach` resumes the same conversation here.
+- **Some of it now: `--except ID`** (repeatable; `triage`, `move`, `verify`, `status`). The named tasks and
+  the client home stay in use and untouched: no freeze, settle or finish, nothing written there. The other
+  tasks, `rulings.log` and the inbox come over. It refuses while another task is live, keeps its own state
+  (`<from>-<home>.partial`), and the full move later brings the rest.
 - **What merges, for a home both machines have.**
 
   | What | Rule |

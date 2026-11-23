@@ -571,4 +571,7 @@ teardown() {
   # Work (not a note) the client logged after the partial move, which the brain's record lacks: verify fails.
   printf '2026-01-09T00:00:00Z progress: more\n' >>"$(S)/staged/client/tasks/$A/events.log"
   run mh verify; [ "$status" -ne 0 ]; [[ "$output" == *"does not start with the client's log"* ]]
+  # The same when far more than a pipe's buffer follows that line.
+  awk 'BEGIN { for (i = 0; i < 20000; i++) print "2026-01-09T00:00:00Z note: filler" }' >>"$(S)/staged/client/tasks/$A/events.log"
+  run mh verify; [ "$status" -ne 0 ]; [[ "$output" == *"does not start with the client's log"* ]]
 }

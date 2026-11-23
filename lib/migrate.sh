@@ -1215,7 +1215,8 @@ mig_partial_log() { # <id> <brain log>
   f="$(jq -c --arg i "$1" 'select(.id == $i)' "$pb")"; [[ -n "$f" ]] || return 1
   sz="$(jq -r .log_bytes <<<"$f")"; sh="$(jq -r .log_sha <<<"$f")"
   [[ "$(mig_sha_prefix "$2" "$sz")" == "$sh" && "$(mig_sha_prefix "$c" "$sz")" == "$sh" ]] || return 1
-  ! tail -c "+$((sz + 1))" "$c" | grep -qvE '^[^ ]+ note: '
+  # awk reads to the end: grep -q would end tail early, and pipefail with ! would call that a pass.
+  tail -c "+$((sz + 1))" "$c" | awk '!/^[^ ]+ note: / { bad = 1 } END { exit bad }'
 }
 mig_verify_union() { # <source> <merged> <id regex> <name>: every id of the source is in the merged file
   [[ -f "$1" ]] || return 0
