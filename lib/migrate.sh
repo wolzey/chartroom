@@ -378,7 +378,10 @@ mig_fetch_branch() { # <facts json>
   else
     # A detached HEAD: that commit alone, kept under a ref of its own. A server that won't serve a bare
     # commit: every branch head is fetched aside (never in a partial move: one may be a task that stays).
-    if ! git -C "$proot" fetch --quiet --no-tags "$(mig_git_url "$root")" "$head" 2>/dev/null && ! mig_partial; then
+    # A commit the client has from its remote (nothing unpushed) is asked of this checkout's remote first.
+    if ! git -C "$proot" fetch --quiet --no-tags "$(mig_git_url "$root")" "$head" 2>/dev/null &&
+      ! { [[ "$(jq -r '.unpushed // 1' <<<"$f")" == 0 ]] && git -C "$proot" fetch --quiet --no-tags origin 2>/dev/null && git -C "$proot" cat-file -e "$head^{commit}" 2>/dev/null; } &&
+      ! mig_partial; then
       git -C "$proot" fetch --quiet --no-tags "$(mig_git_url "$root")" "+refs/heads/*:refs/chartroom/migrate-$id/*" >&2 || true
     fi
     git -C "$proot" cat-file -e "$head^{commit}" 2>/dev/null && git -C "$proot" update-ref "refs/chartroom/migrate/$id" "$head"
