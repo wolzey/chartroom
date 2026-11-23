@@ -602,14 +602,18 @@ short_ids_json() {
   task_meta_files
   local metas=("${TASK_METAS[@]+"${TASK_METAS[@]}"}")
   [[ -e "${metas[0]-}" ]] || { echo '{}'; return 0; } # (empty under nullglob)
+  # (a pool by its ids' last 4 characters: only ids that share those can share a longer suffix, so
+  # each id is compared with its few, not with the whole history)
   jq -n -c '
+    def pool: reduce .[] as $i ({}; .[$i[-4:]] += [$i]);
     def short($pool): . as $id
       | if ($id | test("-[0-9a-f]{4}$") | not) then $id else
-        ([range(4; $id | length) | $id[-.:] | select(startswith("-") | not)
-          | . as $s | select(all($pool[]; . == $id or (endswith($s) | not)))] | first) // $id end;
+        ($pool[$id[-4:]] // []) as $near
+        | (first(range(4; $id | length) | $id[-.:] | select(startswith("-") | not)
+          | . as $s | select(all($near[]; . == $id or (endswith($s) | not))))) // $id end;
     [inputs | {id, closed: ((.closed // "") != "")}] as $t
-    | ([$t[] | select(.closed | not) | .id]) as $open
-    | ($t | map(.id)) as $all
+    | ([$t[] | select(.closed | not) | .id] | pool) as $open
+    | ($t | map(.id) | pool) as $all
     | [$t[] | (if .closed then $all else $open end) as $pool | {key: .id, value: (.id | short($pool))}] | from_entries' "${metas[@]}"
 }
 

@@ -8,6 +8,7 @@ import { html, useState, useEffect, useRef } from "./html.js";
 import { HomeTag, Status, Linked, linkifyDom, PrCard, PrBadges, Menu, DecisionList } from "./ui.js";
 import { AskBody } from "./needs.js";
 import { taskFile } from "./api.js";
+import { useRead } from "./read.js";
 
 const M = window.AppModel;
 const EF = window.EventFmt;
@@ -75,8 +76,6 @@ function feedOf(t, pending) {
 }
 
 export function TicketPage({ home, hue, id, version, prs, item, machine, askProps, onAct, onBack, toast, cardHref }) {
-  const [t, setT] = useState(null);
-  const [err, setErr] = useState(null);
   const [report, setReport] = useState(null);
   const [editing, setEditing] = useState(null); // {heading: text} while the description is edited
   const [comment, setComment] = useState("");
@@ -89,17 +88,8 @@ export function TicketPage({ home, hue, id, version, prs, item, machine, askProp
   const [more, setMore] = useState(false);
   const fileInput = useRef(null);
   const base = "/api/v1/homes/" + encodeURIComponent(home) + "/tasks/" + encodeURIComponent(id);
+  const { value: t, err } = useRead(base, version);
 
-  useEffect(() => {
-    let live = true;
-    const timer = setTimeout(() => {
-      fetch(base, { cache: "no-store", credentials: "same-origin" })
-        .then((r) => (r.ok ? r.json() : r.json().then((j) => Promise.reject(new Error(j.error || r.status)))))
-        .then((j) => { if (live) { setT(j); setErr(null); } })
-        .catch((e) => { if (live) setErr(e.message); });
-    }, t ? 250 : 0);
-    return () => { live = false; clearTimeout(timer); };
-  }, [home, id, version]);
   useEffect(() => {
     if (!t || !(t.files || []).includes("report.md")) { setReport(null); return; }
     taskFile(home, id, "report.md").then(setReport).catch(() => setReport(null));

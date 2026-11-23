@@ -31,6 +31,10 @@ are stable from 0.1.0.
   assistant, and scroll past 320 px; the line being typed stays above the Submit bar.
 - `chartroom app stop` unloads the app's LaunchAgent only when that service runs for the config it
   is called with. A stop with another config (a test's, a second setup's) took down the live app.
+- The app's initiative page (and a ticket) no longer reads forever in a busy home: an answer is shown
+  even when the home's version moved while it was read, and one read runs at a time.
+- Short ids are worked out from the few ids that could share one, not the whole history: an
+  initiative of 22 tasks reads in 2 s instead of 14 in a home of 300, and every status read is faster.
 
 ## [0.2.0] - 2026-11-22
 

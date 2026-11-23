@@ -180,6 +180,7 @@ app/src/main.js         routes, data, actions, keyboard
 app/src/needs.js        the list and the quick view
 app/src/round.js        a card of several questions
 app/src/ticket.js       a task as a ticket: its question, PRs, description, plan, report, attachments, activity
+app/src/read.js         a ticket or an initiative, read one at a time and always shown
 app/src/outbox.js       every action queued, sent in the background, retried (pure)
 app/src/palette.js      ⌘K
 app/src/initiatives.js  initiatives: the list, the page (plan, stories, decisions, PRs), the approval checklist

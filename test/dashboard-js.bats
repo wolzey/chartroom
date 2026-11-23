@@ -29,4 +29,5 @@ js() { # <suite>
 @test "app-outbox: actions are instant, sent in the background, retried, failed and kept across a reload" { js app-outbox; }
 @test "app-contrast: every text colour of the app is at least 4.5:1, light and dark" { js app-contrast; }
 @test "app-push: the Web Push sender (RFC 8291 vector, VAPID, a send a browser can decrypt)" { js app-push; }
+@test "app-read: a slow read is shown though the version moves while it is under way" { js app-read; }
 @test "app-sw: a notification's tap lands on the item, the app closed, open, or on another page" { js app-sw; }

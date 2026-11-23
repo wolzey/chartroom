@@ -6,6 +6,7 @@
 // and the PRs. Every write is queued like any other action.
 import { html, useState, useEffect, useRef } from "./html.js";
 import { HomeTag, Status, Linked, linkifyDom, PrBadges, Tabs, DecisionList } from "./ui.js";
+import { useRead } from "./read.js";
 
 const M = window.AppModel;
 const MD = window.Markdown;
@@ -142,19 +143,9 @@ function Milestones({ ini, onStory }) {
 }
 
 export function InitiativePage({ home, hue, id, version, prs, tasksByHome, onAct, onBack, onOpenTask, onOpenRound, toast, cardHref }) {
-  const [ini, setIni] = useState(null);
-  const [err, setErr] = useState(null);
   const [tab, setTab] = useState("plan");
   const [confirm, setConfirm] = useState(false);
-  useEffect(() => {
-    let live = true;
-    const t = setTimeout(() => {
-      fetch("/api/v1/homes/" + encodeURIComponent(home) + "/initiatives/" + encodeURIComponent(id), { cache: "no-store", credentials: "same-origin" })
-        .then((r) => (r.ok ? r.json() : r.json().then((j) => Promise.reject(new Error(j.error || r.status)))))
-        .then((j) => { if (live) { setIni(j); setErr(null); } }).catch((e) => { if (live) setErr(e.message); });
-    }, ini ? 250 : 0);
-    return () => { live = false; clearTimeout(t); };
-  }, [home, id, version]);
+  const { value: ini, err } = useRead("/api/v1/homes/" + encodeURIComponent(home) + "/initiatives/" + encodeURIComponent(id), version);
   if (!ini) {
     return html`<main class="a-main"><header class="a-head"><div class="a-head-l"><button class="link faint" onClick=${onBack}>Initiatives</button><span class="faint">/</span><h1>${id}</h1></div></header>
       <div class="page-body"><p class=${err ? "err-t" : "dt-empty"}>${err || "Reading the initiative…"}</p></div></main>`;
