@@ -3,7 +3,7 @@
 // board (never navigates); o or Open details opens the ticket. With nothing selected, the slim
 // column sums the board up. Requests from the composer wait in Drafting until the XO briefs them.
 import { html, useState, useEffect, useRef } from "./html.js";
-import { HomeTag, Status, Linked, PrBadges, Menu, NoteBox } from "./ui.js";
+import { HomeTag, Status, Linked, PrBadges, Menu } from "./ui.js";
 
 const M = window.AppModel;
 const PRIO = { urgent: "!!!", high: "!!", medium: "!", low: "" };
@@ -101,9 +101,9 @@ export function TaskQuick({ t, onOpen, onAct, onClose, open, toast }) {
     ${t.line ? html`<div class=${"q-line q-" + t.column}>${t.column === "working" ? html`<span class="pulse"></span>` : html`<${Status} status=${t.column} only=${true} />`}<span class="grow">${t.line}</span></div>` : null}
     ${t.warning ? html`<p class="warn-t">${t.warning}</p>` : null}
     ${t.type === "request" ? html`<p class="muted">You asked for this; the ${t.home} XO briefs it and dispatches it (or asks you first). It moves along the board from there.</p>`
-      : t.column !== "done" ? html`<${NoteBox} key=${t.key} boxRef=${ref} value=${text} onInput=${(e) => setText(e.target.value)}
+      : t.column !== "done" ? html`<textarea class="input note" rows="2" ref=${ref} value=${text} onInput=${(e) => setText(e.target.value)}
           onKeyDown=${(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); e.stopPropagation(); send(); } }}
-          placeholder="Steer it: it reads this as your words. Start with @xo to ask the XO instead." />
+          placeholder="Steer it: it reads this as your words. Start with @xo to ask the XO instead."></textarea>
         <div class="a-detail-actions"><button class="btn primary" disabled=${!text.trim()} onClick=${send}>Send <kbd>⌘↵</kbd></button>
           ${t.column === "review" ? html`<button class="btn" onClick=${() => onAct(t.home, "accept", { task: t.task }, "Accepted " + t.short_id)}>Accept</button>` : null}</div>` : null}
   </aside>`;

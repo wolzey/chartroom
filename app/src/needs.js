@@ -2,7 +2,7 @@
 // quick view beside it where most items are answered without leaving the list. A row click selects
 // (never navigates); the full page opens only from Open details, o or Shift+Enter.
 import { html, useState, useRef, useEffect } from "./html.js";
-import { Pill, Glyph, HomeTag, Tabs, Empty, Options, Why, Menu, Linked, PrCard, PrBadges, NoteBox } from "./ui.js";
+import { Pill, Glyph, HomeTag, Tabs, Empty, Options, Why, Menu, Linked, PrCard, PrBadges } from "./ui.js";
 
 const M = window.AppModel;
 const EF = window.EventFmt;
@@ -105,8 +105,8 @@ function PermitBody({ it, note, setNote, noteRef, busy, onAct }) {
       ${showCmd ? html`<pre class="perm-cmd">${call}</pre>` : null}
     </div>
     ${late ? html`<p class="perm-late">The wait ran out. An allow still works: the worker is told to run it again.</p>` : null}
-    <${NoteBox} key=${it.key} boxRef=${noteRef} data-note="1" placeholder=${late || !it.blocking ? "A note for the worker (optional)" : "A note for the worker, sent with a deny (optional)"}
-      value=${note || ""} onInput=${(e) => setNote(e.target.value)} disabled=${busy} />
+    <textarea class="input note" rows="2" ref=${noteRef} data-note="1" placeholder=${late || !it.blocking ? "A note for the worker (optional)" : "A note for the worker, sent with a deny (optional)"}
+      value=${note || ""} onInput=${(e) => setNote(e.target.value)} disabled=${busy}></textarea>
     <div class="perm-acts">
       <button class="btn primary" disabled=${busy} onClick=${() => act("once")}>${late ? "Allow now" : "Allow once"}</button>
       <button class="btn" disabled=${busy} onClick=${() => act("always")}>Always for this task</button>
@@ -215,8 +215,8 @@ export function AskBody({ it, picks, setPick, note, setNote, busy, onAct, onDeta
   const xo = it.home + " XO";
   const hasAnswer = (picks && picks[1] != null) || (note && note.trim());
   const snoozeBtn = it.ref && setSnoozeOpen ? html`<button class="btn ghost" ref=${snoozeAnchorRef} onClick=${() => setSnoozeOpen(!snoozeOpen)} disabled=${busy}>Snooze <kbd>s</kbd></button>` : null;
-  const noteBox = (placeholder) => html`<${NoteBox} key=${it.key} boxRef=${noteRef} data-note="1" placeholder=${placeholder}
-      value=${note || ""} onInput=${(e) => setNote(e.target.value)} disabled=${busy || !!sent} />`;
+  const noteBox = (placeholder) => html`<textarea class="input note" rows="2" ref=${noteRef} data-note="1" placeholder=${placeholder}
+      value=${note || ""} onInput=${(e) => setNote(e.target.value)} disabled=${busy || !!sent}></textarea>`;
   let body = null;
   if (sent) {
     body = sent.pending ? html`<div class="qv-sent"><span><b>Sending…</b> It is queued here and goes as soon as the server takes it; nothing more to do.</span></div>`

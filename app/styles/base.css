@@ -247,12 +247,10 @@ kbd, .kbd {
 .qcard .qctx { margin: var(--s-2) 0 var(--s-4); color: var(--text-2); font-size: var(--fs-sm); }
 [data-dir="b"] .qcard .qctx { font-size: var(--fs-md); margin-bottom: var(--s-5); }
 .qcard .note { margin-top: var(--s-3); }
-/* a note box fits its text, typed or suggested: the engine lays an inline suggestion out as text, so
-   field-sizing counts it. Past the cap it scrolls (as it does where field-sizing is not known). */
+/* a note box fits its text: typed, accepted from a writing assistant, or an inline suggestion the
+   browser lays out in it. Past the cap it scrolls (as it does where field-sizing is not known). A
+   suggestion drawn over the page is not the box's text: no box on the page can measure it. */
 textarea.note { field-sizing: content; max-height: min(45vh, 320px); overflow-y: auto; overflow-wrap: anywhere; }
-/* in use: room for a few lines, for a suggestion drawn over the page by an extension or another app,
-   which no box on the page can measure */
-textarea.note.opened { min-height: calc(4lh + 14px); }
 .qcard.focus { border-color: var(--border-strong); box-shadow: 0 0 0 3px var(--accent-soft); }
 [data-dir="b"] .qcard.focus { box-shadow: var(--shadow-2); }
 

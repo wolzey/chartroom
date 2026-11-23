@@ -2,7 +2,7 @@
 // note, answered together and submitted once. The first answer wins: if the terminal answered it
 // first, the page says so and shows that answer.
 import { html, useEffect } from "./html.js";
-import { Pill, HomeTag, Options, Why, Linked, NoteBox } from "./ui.js";
+import { Pill, HomeTag, Options, Why, Linked } from "./ui.js";
 
 const M = window.AppModel;
 
@@ -80,8 +80,8 @@ export function RoundPage({ it, picks, notes, setPick, setNote, focus, setFocus,
               ${q.context ? html`<p class="qctx"><${Linked} text=${q.context} /></p>` : null}
               ${q.options.length ? html`<${Options} options=${q.options} picked=${picks[q.id]} onPick=${(l) => { setPick(q.id, l); if (i < total - 1 && !isDone(qs[i + 1]) && window.matchMedia("(max-width: 860px)").matches) setTimeout(() => goTo(i + 1), 220); }} />` : null}
               <${Why} text=${q.why} />
-              <${NoteBox} rows="1" placeholder=${q.options.length ? "Other answer or a note" : "Your answer"}
-                value=${notes[q.id] || ""} onInput=${(e) => setNote(q.id, e.target.value)} disabled=${busy} />
+              <textarea class="input note" rows="1" placeholder=${q.options.length ? "Other answer or a note" : "Your answer"}
+                value=${notes[q.id] || ""} onInput=${(e) => setNote(q.id, e.target.value)} disabled=${busy}></textarea>
             </article>`)}
         ${sent ? null : html`<p class="r-keys faint"><span><kbd>j</kbd><kbd>k</kbd> next question</span><span><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> choose</span><span><kbd>r</kbd> take the recommendation</span><span><kbd>⌘↵</kbd> submit</span></p>`}
       </div>
