@@ -1145,6 +1145,9 @@ mig_verify() {
     if [[ -n "$(jq -r '.closed // ""' "$d/meta.json")" ]]; then got=closed
     elif [[ -z "$(jq -r '.dispatched // ""' "$d/meta.json")" ]]; then got=drafting
     else got="$(awk "$CR_STATE_AWK" "$d/events.log")"; fi
+    # Accepted on both sides after a partial move: settle's accept also closes there, here it stays done.
+    if [[ "$want" == closed && "$got" == "done" ]] && mig_partial_log "$id" "$d/events.log" &&
+      grep -qE '^[^ ]+ note: accepted$' "$d/events.log" && grep -qE '^[^ ]+ note: accepted$' "$MIG_S/staged/client/tasks/$id/events.log"; then want="$got"; fi
     [[ "$want" == "$got" ]] || { fail "$id: state $got here, $want on the client"; continue; }
   done < <(jq -c . "$base")
   (( fails == 0 )) && pass "records: all $(jq -s length "$base") client tasks here, logs and states equal"

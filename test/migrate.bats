@@ -554,12 +554,15 @@ teardown() {
   fixture
   X="$(ctask "stays first")"; on_c worktree "$X" >/dev/null
   printf '%s done: built\n' "2026-01-02T00:00:00Z" >>"$CH/tasks/$X/events.log"
+  E="$(ctask "a clean one" scout)"; on_c worktree "$E" >/dev/null   # settle's accept closes it on the client
+  printf '%s done: read it\n' "2026-01-02T00:00:00Z" >>"$CH/tasks/$E/events.log"
   mh triage --except "$X" >/dev/null; mh move --except "$X" >/dev/null; mh verify --except "$X" >/dev/null
-  on_b accept "$A" >/dev/null
+  on_b accept "$A" >/dev/null; on_b accept "$E" >/dev/null
   mh triage >/dev/null
-  printf '%s\taccept\n%s\tmove\n' "$A" "$X" >"$T/dec.tsv"
+  printf '%s\taccept\n%s\taccept\n%s\tmove\n' "$A" "$E" "$X" >"$T/dec.tsv"
   frz >/dev/null; mh settle --decisions "$T/dec.tsv" >/dev/null
   grep -q 'note: accepted' "$CH/tasks/$A/events.log"
+  [ -n "$(jq -r '.closed // ""' "$CH/tasks/$E/meta.json")" ] && [ -z "$(bmeta "$E" '.closed // ""')" ]
   mh move >/dev/null
   [ -d "$(bmeta "$X" .worktree)" ] && [ -f "$BH/designs/plan.md" ]
   grep -q '^CHARTROOM_PROJECT_ROOTS=' "$BH/config"
