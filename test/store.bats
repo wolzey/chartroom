@@ -267,6 +267,8 @@ db() { python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); [print("|
     grep -vE '^lib/(ask|snooze|relay|tell|store)\.sh:' |
     # (the permission broker's own cards and answers, in the home's permits/<task>/: lib/permit.sh)
     grep -vE '^lib/permit\.sh:' |
+    # (migrate-home: another machine's records, and file homes only: it refuses one with a .home-id)
+    grep -vE '^lib/migrate\.sh:' |
     grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' |
     grep -vE '^bin/chartroom:[0-9]+:[[:space:]]{20,}' |
     grep -vE '^lib/app/server\.py:.*for rel in \("\.changed", ' |
@@ -290,10 +292,14 @@ db() { python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); [print("|
 @test "seams: no code outside lib/store.sh names a task's meta.json or events.log, but the known places" {
   # A read of tasks/<id>/meta.json or events.log of its own misses every store task: it must go
   # through meta_path, events_path or task_meta_files (lib/store.sh). The places allowed are the
-  # seams' own file halves, names in lists, and the file-task loops the watch keeps.
+  # seams' own file halves, names in lists, the file-task loops the watch keeps, and migrate-home,
+  # which reads another machine's records and staged copies (no seam reaches those) and refuses a
+  # home with anything in the store (test/migrate.bats).
   cat >"$BATS_TEST_TMPDIR/allowed" <<'PATTERNS'
 ^[^:]+:[0-9]+:[[:space:]]*#
 ^lib/store\.sh:
+^lib/migrate\.sh:
+^lib/migrate-client\.sh:
 \$\{m%/meta\.json\}
 CR_(DASHBOARD|RADAR)_FILES=
 TASK_FILES = \(

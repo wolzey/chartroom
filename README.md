@@ -460,6 +460,8 @@ chartroom migrate-home rollback --from laptop --home acme   # undoes move (and f
   the client home stay in use and untouched: no freeze, settle or finish, nothing written there. The other
   tasks, `rulings.log` and the inbox come over. It refuses while another task is live, keeps its own state
   (`<from>-<home>.partial`), and the full move later brings the rest.
+- **File records only.** A home with tasks in the SQLite store (it has a `.home-id`), on either machine,
+  is refused before anything is read or written: its store tasks would be left behind.
 - **What merges, for a home both machines have.**
 
   | What | Rule |

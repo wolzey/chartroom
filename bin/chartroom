@@ -1373,9 +1373,10 @@ WATCH_IVL_MS=3000 WATCH_SLOW_MS=60000 # cmd_watch's two intervals, from the sett
 # machine (migrate-home): its history was the other home's news, so it is read from where it was
 # when it moved (meta migrated_log_bytes).
 watch_seed_off() { # <id>: read with bash alone (no jq, no fork), as the light round must
-  local m="$CR_HOME/tasks/$1/meta.json" j
-  [[ -f "$m" ]] || return 0
-  j="$(<"$m")"
+  local j
+  meta_path "$1" # (a store task, lib/store.sh, carries no migrated_log_bytes and is read from its start)
+  [[ -f "$META_PATH" ]] || return 0
+  j="$(<"$META_PATH")"
   [[ "$j" =~ \"migrated_log_bytes\":[[:space:]]*\"([0-9]+)\" ]] && OFF[$1]="${BASH_REMATCH[1]}"
   return 0
 }

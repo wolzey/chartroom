@@ -254,6 +254,21 @@ full_move() {
   [ ! -d "$BH/tasks/$A" ]
 }
 
+@test "a home with tasks in the store is refused on either side: its store tasks would be left behind" {
+  fixture
+  local v
+  echo 0f0f0f0f-store-home >"$CH/.home-id"
+  for v in triage snapshot freeze settle move verify finish resync; do
+    run mh "$v"; [ "$status" -ne 0 ]; [[ "$output" == *"migrate-home $v: the client's home $CH has tasks in the store"* ]]
+  done
+  [ ! -e "$CH/.migrating" ]; [ ! -e "$BH/tasks/$A" ]; [ ! -e "$T/snaps" ]
+  mv "$CH/.home-id" "$BH/.home-id"
+  run mh move; [ "$status" -ne 0 ]; [[ "$output" == *"this machine's home $BH has tasks in the store"* ]]
+  [ ! -e "$BH/tasks/$A" ]
+  rm "$BH/.home-id"
+  mh triage >/dev/null
+}
+
 @test "rollback: the brain's files back byte for byte, the moved records gone, the client thawed" {
   fixture
   r="$(cksum <"$BH/rulings.log")"; c="$(cksum <"$BH/commander.md")"; i="$(cksum <"$BH/inbox.md")"; k="$(cksum <"$BH/config")"

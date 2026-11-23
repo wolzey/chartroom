@@ -169,6 +169,14 @@ mig_setup() {
   fi
 }
 
+# migrate-home reads and writes a task's record as files. A home whose tasks are in the SQLite store
+# (lib/store.sh: it has a .home-id) would move without them and still verify, so it is refused.
+mig_refuse_store() { # <verb>
+  local c; c="$(mig_client store "$MIG_CHOME")" || die "migrate-home: the client $MIG_FROM did not answer"
+  [[ "$c" == files ]] || die "migrate-home $1: the client's home $MIG_CHOME has tasks in the store (.home-id), which migrate-home cannot read yet; nothing was done"
+  [[ ! -e "$MIG_BHOME/.home-id" ]] || die "migrate-home $1: this machine's home $MIG_BHOME has tasks in the store (.home-id), which migrate-home cannot merge into yet; nothing was done"
+}
+
 mig_step_done() { jq -e --arg s "$1" '.steps[$s] // false' "$MIG_S/state.json" >/dev/null 2>&1; } # <step>
 mig_mark() { # <step> [json value]
   local f="$MIG_S/state.json"
@@ -1328,6 +1336,7 @@ cmd_migrate_home() {
     case "$verb" in triage|move|verify|status) ;; *) die "migrate-home $verb: not with --except (a partial move writes nothing on the client)" ;; esac
   fi
   mig_setup
+  case "$verb" in triage|snapshot|freeze|settle|move|verify|finish|resync) mig_refuse_store "$verb" ;; esac
   case "$verb" in
     triage) mig_triage ;;
     snapshot) mig_snapshot ;;

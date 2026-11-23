@@ -9,6 +9,7 @@
 #   whoami                        HOME and user
 #   capable <bin>                 exit 0 when that chartroom has migrate-home (it honours a freeze)
 #   homes                         this machine's registered homes, "name<TAB>path"
+#   store <home>                  "store" when the home has tasks in the SQLite store, else "files"
 #   status <home> <bin>           `chartroom status --json --all` in that home
 #   facts <home> <claude> <codex> <awk>  one JSON object per task: its record, its worktree's
 #                                 git, its session's transcript; <awk> derives a task's state from
@@ -63,6 +64,8 @@ case "$sub" in
     f="$HOME/.config/chartroom/homes"
     [ -f "$f" ] || exit 0
     grep -vE '^[[:space:]]*(#|$)' "$f" | sed "s|^\([^=]*\)=~|\1=$HOME|; s|=|	|" ;;
+  store)
+    if [ -e "$1/.home-id" ]; then echo store; else echo files; fi ;;
   status)
     CHARTROOM_HOME="$1" "$2" status --json --all ;;
   capable)
