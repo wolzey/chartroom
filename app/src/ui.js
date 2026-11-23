@@ -12,6 +12,14 @@ export function Linked({ text }) {
     : p.text));
 }
 
+// The note box of a card: one or two lines until it is used, then room to write, and it grows with
+// its text (base.css, .note). It keeps those lines once used, so leaving it does not move the
+// buttons and options below it out from under a click (only a suggestion taller than them does).
+export function NoteBox({ boxRef, rows, ...props }) {
+  const [opened, setOpened] = useState(false);
+  return html`<textarea class=${"input note" + (opened ? " opened" : "")} rows=${rows || 2} ref=${boxRef} onFocus=${() => setOpened(true)} ...${props}></textarea>`;
+}
+
 // The same for text rendered outside React (markdown.js's DOM): every URL in a text node, a link.
 export function linkifyDom(root) {
   const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);

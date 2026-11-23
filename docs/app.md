@@ -42,6 +42,10 @@ chartroom app stop               # (or: status)
   marker (`(1) RECOMMENDED: ...`) recommends an option, one per question at most. An ask with
   several questions is a grilling round, answered on its own page and submitted together. The
   first answer wins, from the app or the terminal (`chartroom ask answer`).
+- **The note box.** One or two lines until used, then four. It grows with what is in it, typed or
+  suggested inline by the browser, up to 320 px (less on a short screen), and scrolls past that. It
+  keeps the four lines after you leave it, so the buttons below stay put. A suggestion that an
+  extension or another program draws over the page is outside its reach: the four lines are for that.
 - **Readable.** Every text colour measures at least 4.5:1 (WCAG AA), light and dark, and every
   URL is a link; a GitHub PR or issue reads `repo#123`.
 - **Keys.** `j`/`k` move, `Enter` answers with the recommendation (or approves, or accepts),

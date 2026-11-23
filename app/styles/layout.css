@@ -96,6 +96,8 @@
 .r-meta { display: flex; flex-direction: column; align-items: flex-start; gap: var(--s-3); margin-top: var(--s-6); padding: var(--s-5) 6px 0; border-top: 1px solid var(--border); font-size: var(--fs-xs); }
 .r-qs { display: flex; flex-direction: column; gap: var(--s-5); min-width: 0; }
 .r-bar { position: fixed; z-index: 20; left: var(--sidebar-w); right: 0; bottom: 0; padding: var(--s-3) var(--page-pad); background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: blur(8px); border-top: 1px solid var(--border); }
+/* the line being typed scrolls clear of the bar, as a note box grows down to it */
+html:has(.r-bar) { scroll-padding-bottom: 84px; }
 .r-bar-in { display: flex; align-items: center; gap: var(--s-4); max-width: 1012px; }
 .r-bar-prog { display: flex; align-items: center; gap: var(--s-4); }
 .r-bar-prog .bar { width: 140px; }
@@ -297,6 +299,7 @@
   .qcard .opt { min-height: 48px; padding: 12px 14px; }
   .qcard .note { font-size: 16px; } /* 16px: iOS does not zoom into the field */
   .r-bar { left: 0; }
+  html:has(.r-bar) { scroll-padding-bottom: 148px; }
   .r-bar-in { gap: var(--s-3); }
   .r-bar-prog .bar { display: none; }
   .r-bar .r-submit kbd, .r-bar .r-submit-w { display: none; }

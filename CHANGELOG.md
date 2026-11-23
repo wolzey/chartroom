@@ -25,6 +25,11 @@ are stable from 0.1.0.
   A moved Claude worker resumes its own session in the same worktree path; its worktree is rebuilt
   on first use. The watch never replays a moved task's history.
 
+### Fixed
+- The app's note boxes (a grilling round's, a card's, a steer's) cut off a long inline suggestion:
+  the box stayed one line tall. It now grows with its text, typed or suggested, and scrolls past
+  320 px; it opens to four lines when used; and the line being typed stays above the Submit bar.
+
 ## [0.2.0] - 2026-11-22
 
 The first release since 0.1.0. Several features are experimental and off by default: the README's "What is new since 0.1.0" table says which.
