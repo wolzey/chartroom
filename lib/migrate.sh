@@ -244,9 +244,10 @@ mig_triage() {
     o="$(mig_brain_orphan "$id" "$proj")"
     [[ -n "$o" ]] && orphans="$(jq -c --arg i "$id" --arg o "$o" '.[$i] = $o' <<<"$orphans")"
   done < <(jq -r 'select(.closed | not) | [.id, .project, .worktree] | @tsv' "$MIG_S/facts.jsonl")
-  rows="$(jq -c -n --slurpfile st "$MIG_S/client-status.json" --slurpfile f "$MIG_S/facts.jsonl" --argjson prs "$prs" \
+  rows="$(jq -c -n --slurpfile st "$MIG_S/client-status.json" --slurpfile f "$MIG_S/facts.jsonl" --slurpfile prsf "$MIG_S/prs.json" \
     --argjson orph "$orphans" --arg ex "${MIG_EXCEPT:-}" '
-    ($f | map({(.id): .}) | add // {}) as $facts
+    $prsf[0] as $prs   # a file, never an argument: a home'"'"'s PRs can pass the argument limit
+    | ($f | map({(.id): .}) | add // {}) as $facts
     | ($prs | group_by(.repo + "\u0000" + .head_ref) | map({(.[0].repo + "\u0000" + .[0].head_ref): .}) | add // {}) as $byref
     | [$st[0][] | select(.closed == null) | select(.id as $i | $ex | contains(" " + $i + " ") | not) | . as $s | ($facts[$s.id] // {}) as $g
        | ($g.remote // "" | sub("^(ssh://)?(git@|https://)"; "") | sub("^(?<h>[^/:]+):"; "\(.h)/") | sub("\\.git$"; "")) as $repo
@@ -1139,7 +1140,7 @@ mig_verify() {
       fail "$id: not on the brain"; continue
     fi
     lb="$(jq -r .log_bytes <<<"$f")"; ls="$(jq -r .log_sha <<<"$f")"
-    if [[ "$lb" -gt 0 && "$(mig_sha_prefix "$d/events.log" "$lb")" != "$ls" ]]; then fail "$id: events.log does not start with the client's log"; continue; fi
+    if [[ "$lb" -gt 0 && "$(mig_sha_prefix "$d/events.log" "$lb")" != "$ls" ]] && ! mig_partial_log "$id" "$d/events.log"; then fail "$id: events.log does not start with the client's log"; continue; fi
     want="$(jq -r .state <<<"$f")"
     if [[ -n "$(jq -r '.closed // ""' "$d/meta.json")" ]]; then got=closed
     elif [[ -z "$(jq -r '.dispatched // ""' "$d/meta.json")" ]]; then got=drafting
@@ -1198,6 +1199,17 @@ mig_verify() {
   mig_mark verify
   mig_partial && { echo "verify: passed (partial: the client home stays in use; $MIG_EXCEPT stay there)"; return 0; }
   echo "verify: passed; next: chartroom migrate-home finish --from $MIG_FROM --home $MIG_HOME --brain <this machine's ssh name, as the client reaches it>"
+}
+# A record an earlier partial move (--except) brought here, which the client only noted on since (its
+# accept, at the full move's settle): the brain's log still starts with what that move took, and so does
+# the client's, whose lines after it are notes alone.
+mig_partial_log() { # <id> <brain log>
+  local pb="$MIG_S.partial/baseline.jsonl" c="$MIG_S/staged/client/tasks/$1/events.log" f sz sh
+  [[ -f "$pb" && -f "$c" ]] || return 1
+  f="$(jq -c --arg i "$1" 'select(.id == $i)' "$pb")"; [[ -n "$f" ]] || return 1
+  sz="$(jq -r .log_bytes <<<"$f")"; sh="$(jq -r .log_sha <<<"$f")"
+  [[ "$(mig_sha_prefix "$2" "$sz")" == "$sh" && "$(mig_sha_prefix "$c" "$sz")" == "$sh" ]] || return 1
+  ! tail -c "+$((sz + 1))" "$c" | grep -qvE '^[^ ]+ note: '
 }
 mig_verify_union() { # <source> <merged> <id regex> <name>: every id of the source is in the merged file
   [[ -f "$1" ]] || return 0

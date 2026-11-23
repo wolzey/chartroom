@@ -549,3 +549,23 @@ teardown() {
   run mh move --except "$X"
   [ "$status" -ne 0 ]; [[ "$output" == *"live on the client"* ]]; [ ! -e "$BH/tasks/$A" ]
 }
+
+@test "after move --except, the full move brings the rest; a record accepted on both sides verifies, a grown one fails" {
+  fixture
+  X="$(ctask "stays first")"; on_c worktree "$X" >/dev/null
+  printf '%s done: built\n' "2026-01-02T00:00:00Z" >>"$CH/tasks/$X/events.log"
+  mh triage --except "$X" >/dev/null; mh move --except "$X" >/dev/null; mh verify --except "$X" >/dev/null
+  on_b accept "$A" >/dev/null
+  mh triage >/dev/null
+  printf '%s\taccept\n%s\tmove\n' "$A" "$X" >"$T/dec.tsv"
+  frz >/dev/null; mh settle --decisions "$T/dec.tsv" >/dev/null
+  grep -q 'note: accepted' "$CH/tasks/$A/events.log"
+  mh move >/dev/null
+  [ -d "$(bmeta "$X" .worktree)" ] && [ -f "$BH/designs/plan.md" ]
+  grep -q '^CHARTROOM_PROJECT_ROOTS=' "$BH/config"
+  [ "$(grep -c 'i-c001' "$BH/inbox.md")" = 1 ] && [ "$(grep -c 'r-0001' "$BH/rulings.log")" = 1 ]
+  run mh verify; echo "$output"; [ "$status" -eq 0 ]
+  # Work (not a note) the client logged after the partial move, which the brain's record lacks: verify fails.
+  printf '2026-01-09T00:00:00Z progress: more\n' >>"$(S)/staged/client/tasks/$A/events.log"
+  run mh verify; [ "$status" -ne 0 ]; [[ "$output" == *"does not start with the client's log"* ]]
+}
