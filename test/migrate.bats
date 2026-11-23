@@ -495,3 +495,57 @@ teardown() {
   [ -z "$(jq -r '.worktree // ""' "$BH/tasks/$Y/meta.json")" ]
   ! grep -q 'note: worktree $' "$BH/tasks/$Y/events.log"
 }
+
+@test "move --except: the rest comes over, the named task and the client home stay as they are" {
+  fixture
+  # X stays, live with a local-only commit; Y is a scout at rest on a detached commit no branch holds.
+  X="$(ctask "stays and keeps running")"; on_c worktree "$X" >/dev/null
+  WX="$(jq -r .worktree "$CH/tasks/$X/meta.json")"; XB="$(jq -r .branch "$CH/tasks/$X/meta.json")"
+  echo x >"$WX/x.txt"; git -C "$WX" add x.txt; git -C "$WX" commit -qm "stays local"; XH="$(git -C "$WX" rev-parse HEAD)"
+  printf '%s progress: building\n' "2026-01-02T00:00:00Z" >>"$CH/tasks/$X/events.log"
+  Y="$(ctask "a scout on a detached commit" scout)"; on_c worktree "$Y" >/dev/null
+  WY="$(jq -r .worktree "$CH/tasks/$Y/meta.json")"
+  git -C "$WY" commit -q --allow-empty -m "detached work"; YH="$(git -C "$WY" rev-parse HEAD)"
+  printf '%s done: read it\n' "2026-01-02T00:00:00Z" >>"$CH/tasks/$Y/events.log"
+  mkdir -p "$CH/tasks/$Y/artifacts/kube" "$CH/permits/$X" "$BH/relays"
+  echo tok >"$CH/tasks/$Y/artifacts/kube/gke_gcloud_auth_plugin_cache"; echo k >"$CH/tasks/$Y/artifacts/kube/cfg.yaml"
+  echo '["prod-read"]' >"$CH/permits/$X/grants.json"
+  printf '{"id":"rl-1"}\n' >"$BH/relays/inbox.ndjson"; printf '@relays\t0\n' >"$BH/.watch-cursor"
+  before="$(snapshot "$CH" "$C/work" "$C/claude")"
+  P() { mh "$1" --except "$X" "${@:2}"; }
+  P triage >/dev/null
+  run P move; [ "$status" -eq 0 ]
+  P verify
+  # The rest is here, and X, its branch, its commit and its grant are not.
+  [ -f "$BH/tasks/$A/meta.json" ] && [ -f "$BH/tasks/$Z/meta.json" ] && [ -f "$BH/tasks/$Y/meta.json" ]
+  [ ! -e "$BH/tasks/$X" ] && [ ! -e "$BH/permits" ]
+  run git -C "$B/work/proj" cat-file -e "$XH"; [ "$status" -ne 0 ]
+  run git -C "$B/work/proj" rev-parse -q --verify "refs/heads/$XB"; [ "$status" -ne 0 ]
+  [ "$(git -C "$B/work/proj" rev-parse "refs/chartroom/migrate/$Y")" = "$YH" ]
+  # Rulings and the inbox hold both sides; preferences, config and other files are left for the full move.
+  grep -q 'topic=tone' "$BH/rulings.log" && grep -q 'i-c001' "$BH/inbox.md" && grep -q 'i-b001' "$BH/inbox.md"
+  grep -q 'brain-only preference line' "$BH/commander.md"
+  run grep -q 'From the brain' "$BH/commander.md"; [ "$status" -ne 0 ]
+  [ ! -e "$BH/designs" ]; run grep -q '^CHARTROOM_PROJECT_ROOTS=' "$BH/config"; [ "$status" -ne 0 ]
+  # A login's token cache is never copied; the brain's unread relay still wakes it.
+  [ -f "$BH/tasks/$Y/artifacts/kube/cfg.yaml" ] && [ ! -e "$BH/tasks/$Y/artifacts/kube/gke_gcloud_auth_plugin_cache" ]
+  grep -qx "$(printf '@relays\t0')" "$BH/.watch-cursor"
+  # Nothing on the client changed, and no verb that writes there runs.
+  [ "$(snapshot "$CH" "$C/work" "$C/claude")" = "$before" ]
+  for v in snapshot freeze settle resync finish rollback reap; do run P "$v"; [ "$status" -ne 0 ]; [[ "$output" == *"not with --except"* ]]; done
+  # Again is a no-op; another set of ids is refused; the full move's own state has no step done.
+  n="$(wc -l <"$BH/rulings.log")"; P move >/dev/null; [ "$(wc -l <"$BH/rulings.log")" = "$n" ]
+  run mh move --except "$A"; [ "$status" -ne 0 ]
+  run mh finish --brain b; [ "$status" -ne 0 ]
+}
+
+@test "move --except refuses while another task is live, or an id is unknown" {
+  fixture
+  run mh triage --except no-such-task-0000; [ "$status" -ne 0 ]; [[ "$output" == *"no such task"* ]]
+  rm -rf "$(S).partial"
+  X="$(ctask "stays")"; L="$(ctask "also live")"
+  mh triage --except "$X" >/dev/null
+  jq --arg l "$L" 'map(if .id == $l then .action = "move" else . end)' "$(S).partial/triage.json" >"$T/t.json" && cp "$T/t.json" "$(S).partial/triage.json"
+  run mh move --except "$X"
+  [ "$status" -ne 0 ]; [[ "$output" == *"live on the client"* ]]; [ ! -e "$BH/tasks/$A" ]
+}

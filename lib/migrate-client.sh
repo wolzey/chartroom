@@ -45,12 +45,13 @@ records_list() { # <home> -> NUL-separated relative paths
   local h="$1" f
   cd "$h" || exit 1
   find . -mindepth 1 -maxdepth 1 -type f ! -name '.*' ! -perm 0600 -size -4097k -print0
-  find . -mindepth 1 -maxdepth 1 -type d ! -name '.*' ! -name tasks ! -name worktrees ! -name secrets ! -name clones -print0 |
+  find . -mindepth 1 -maxdepth 1 -type d ! -name '.*' ! -name tasks ! -name worktrees ! -name secrets ! -name clones ! -name permits -print0 |
     while IFS= read -r -d '' f; do find "$f" -type f ! -perm 0600 -size -4097k ! -path '*/node_modules/*' ! -path '*/.git/*' -print0; done
   find ./tasks -mindepth 2 -maxdepth 2 -type f ! -name launch.sh ! -name claude-settings.json ! -name pane.log \
     ! -name hooks.log ! -name '.*' ! -name '*.tmp' -size -4097k -print0 2>/dev/null
-  # Artifacts and messages are the commander's records: whatever their size.
-  find ./tasks -mindepth 3 -type f \( -path './tasks/*/artifacts/*' -o -path './tasks/*/messages/*' -o -path './tasks/*/migrate/*' \) \
+  # Artifacts and messages are the commander's records: whatever their size. A login's token cache
+  # (kubectl's gcloud plugin) is no record, and a task's grants (permits/) are for the machine they were given on.
+  find ./tasks -mindepth 3 -type f \( -path './tasks/*/artifacts/*' -o -path './tasks/*/messages/*' -o -path './tasks/*/migrate/*' \) ! -name gke_gcloud_auth_plugin_cache \
     -print0 2>/dev/null
 }
 

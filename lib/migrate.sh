@@ -60,13 +60,16 @@ usage: chartroom migrate-home <verb> --from <ssh target|local> --home <name> [op
          materialize <id> | restore <id>          (in this home: no --from)
   options: --client-home PATH  --brain-home PATH  --dry-run  --prs FILE  --no-prs  --clone-missing
            --unguarded (freeze: a client chartroom without the freeze guard, on the commander's word)
+           --except ID (repeatable; triage, move, verify, status): a partial move of a client home that
+             stays in use. These tasks stay there, untouched; the other tasks, rulings.log and the inbox
+             come over. Nothing is written on the client: no freeze, settle or finish
 EOF
 }
 
 # Parses the shared options into MIG_*; the rest stay in MIG_ARGS.
 mig_opts() {
   MIG_FROM="" MIG_HOME="" MIG_CHOME="" MIG_BHOME="" MIG_DRY=0 MIG_PRS="" MIG_NOPRS=0 MIG_DECISIONS=""
-  MIG_BRAIN="" MIG_ALL=0 MIG_APPLY=0 MIG_CLONE=0 MIG_UNGUARDED=0 MIG_ARGS=() MIG_TASKS=""
+  MIG_BRAIN="" MIG_ALL=0 MIG_APPLY=0 MIG_CLONE=0 MIG_UNGUARDED=0 MIG_ARGS=() MIG_TASKS="" MIG_EXCEPT=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --from) MIG_FROM="${2:-}"; shift 2 ;;
@@ -83,6 +86,7 @@ mig_opts() {
       --clone-missing) MIG_CLONE=1; shift ;;
       --unguarded) MIG_UNGUARDED=1; shift ;;
       --task) [[ "${2:-}" =~ ^[A-Za-z0-9._-]+$ ]] || die "migrate-home: --task needs a task id"; MIG_TASKS+=" $2 "; shift 2 ;;
+      --except) [[ "${2:-}" =~ ^[A-Za-z0-9._-]+$ ]] || die "migrate-home: --except needs a full task id"; MIG_EXCEPT+=" $2 "; shift 2 ;;
       -h|--help) mig_usage; exit 0 ;;
       *) MIG_ARGS+=("$1"); shift ;;
     esac
@@ -90,6 +94,7 @@ mig_opts() {
 }
 
 mig_local() { [[ "$MIG_FROM" == local ]]; }
+mig_partial() { [[ -n "${MIG_EXCEPT:-}" ]]; }
 
 # Runs a lib/migrate-client.sh subcommand on the client; its stdout is the answer. DRY=1 when
 # --dry-run, for the subcommands that write.
@@ -150,11 +155,18 @@ mig_setup() {
   # of a whole home, bundles). A state dir from an older migrate-home, inside the home, is still used.
   MIG_S="${XDG_STATE_HOME:-$HOME/.local/state}/chartroom/migrate/$(mig_label)-$MIG_HOME"
   [[ -f "$MIG_BHOME/records/migrate/$(mig_label)-$MIG_HOME/state.json" ]] && MIG_S="$MIG_BHOME/records/migrate/$(mig_label)-$MIG_HOME"
+  # A partial move keeps its own state, so the home's full move later starts from nothing done.
+  if mig_partial; then MIG_S="${XDG_STATE_HOME:-$HOME/.local/state}/chartroom/migrate/$(mig_label)-$MIG_HOME.partial"; fi
   mkdir -p "$MIG_S"
   [[ -f "$MIG_S/state.json" ]] || jq -n --argjson v "$CR_MIG_STATE_V" --arg from "$MIG_FROM" --arg home "$MIG_HOME" \
     --arg c "$MIG_CHOME" --arg b "$MIG_BHOME" --arg stamp "$(date -u +%Y%m%dT%H%M%SZ)" \
     '{v: $v, from: $from, home: $home, client_home: $c, brain_home: $b, stamp: $stamp, steps: {}}' >"$MIG_S/state.json"
   MIG_STAMP="$(jq -r .stamp "$MIG_S/state.json")"
+  if mig_partial; then
+    local ex; ex="$(tr -s ' ' '\n' <<<"$MIG_EXCEPT" | grep . | sort -u | tr '\n' ' ')"
+    if [[ -f "$MIG_S/except.txt" ]]; then [[ "$(cat "$MIG_S/except.txt")" == "$ex" ]] || die "migrate-home: this partial move was started with --except $(cat "$MIG_S/except.txt")"
+    else printf '%s' "$ex" >"$MIG_S/except.txt"; fi
+  fi
 }
 
 mig_step_done() { jq -e --arg s "$1" '.steps[$s] // false' "$MIG_S/state.json" >/dev/null 2>&1; } # <step>
@@ -174,6 +186,14 @@ mig_ledger() { # <id|*> <outcome> [detail]: a dry run prints what it would recor
 mig_facts() {
   mig_client facts "$MIG_CHOME" "$MIG_CCLAUDE" "$MIG_CCODEX" "$CR_STATE_AWK" >"$MIG_S/facts.jsonl.tmp" ||
     die "migrate-home: could not read the client's task facts"
+  if mig_partial; then
+    local x
+    for x in $MIG_EXCEPT; do
+      jq -e -s --arg i "$x" 'any(.[]; .id == $i)' "$MIG_S/facts.jsonl.tmp" >/dev/null || die "migrate-home: --except $x: no such task on the client"
+    done
+    jq -c --arg x "$MIG_EXCEPT" 'select(.id as $i | $x | contains(" " + $i + " ") | not)' "$MIG_S/facts.jsonl.tmp" >"$MIG_S/facts.jsonl.tmp2" &&
+      mv "$MIG_S/facts.jsonl.tmp2" "$MIG_S/facts.jsonl.tmp"
+  fi
   mv "$MIG_S/facts.jsonl.tmp" "$MIG_S/facts.jsonl"
 }
 
@@ -225,10 +245,10 @@ mig_triage() {
     [[ -n "$o" ]] && orphans="$(jq -c --arg i "$id" --arg o "$o" '.[$i] = $o' <<<"$orphans")"
   done < <(jq -r 'select(.closed | not) | [.id, .project, .worktree] | @tsv' "$MIG_S/facts.jsonl")
   rows="$(jq -c -n --slurpfile st "$MIG_S/client-status.json" --slurpfile f "$MIG_S/facts.jsonl" --argjson prs "$prs" \
-    --argjson orph "$orphans" '
+    --argjson orph "$orphans" --arg ex "${MIG_EXCEPT:-}" '
     ($f | map({(.id): .}) | add // {}) as $facts
     | ($prs | group_by(.repo + "\u0000" + .head_ref) | map({(.[0].repo + "\u0000" + .[0].head_ref): .}) | add // {}) as $byref
-    | [$st[0][] | select(.closed == null) | . as $s | ($facts[$s.id] // {}) as $g
+    | [$st[0][] | select(.closed == null) | select(.id as $i | $ex | contains(" " + $i + " ") | not) | . as $s | ($facts[$s.id] // {}) as $g
        | ($g.remote // "" | sub("^(ssh://)?(git@|https://)"; "") | sub("^(?<h>[^/:]+):"; "\(.h)/") | sub("\\.git$"; "")) as $repo
        | ((if ($g.branch // "") != "" then $g.branch else ($s.branch // "") end)) as $br
        | $s + {wst: ($g.wst // "none"), dirty: $g.dirty, unpushed: $g.unpushed, ahead: $g.ahead, head: ($g.head // ""),
@@ -355,8 +375,11 @@ mig_fetch_branch() { # <facts json>
       ref="refs/chartroom/migrate/$id"
     fi
   else
-    # A detached HEAD: every branch head is fetched aside, and the commit kept under a ref of its own.
-    git -C "$proot" fetch --quiet --no-tags "$(mig_git_url "$root")" "+refs/heads/*:refs/chartroom/migrate-$id/*" >&2 || true
+    # A detached HEAD: that commit alone, kept under a ref of its own. A server that won't serve a bare
+    # commit: every branch head is fetched aside (never in a partial move: one may be a task that stays).
+    if ! git -C "$proot" fetch --quiet --no-tags "$(mig_git_url "$root")" "$head" 2>/dev/null && ! mig_partial; then
+      git -C "$proot" fetch --quiet --no-tags "$(mig_git_url "$root")" "+refs/heads/*:refs/chartroom/migrate-$id/*" >&2 || true
+    fi
     git -C "$proot" cat-file -e "$head^{commit}" 2>/dev/null && git -C "$proot" update-ref "refs/chartroom/migrate/$id" "$head"
     ref="refs/chartroom/migrate/$id"
   fi
@@ -441,7 +464,15 @@ mig_disk_check() { # <kb needed>
 
 mig_move() {
   mig_step_done triage || die "migrate-home: run triage first"
-  if [[ $MIG_DRY -eq 0 ]]; then
+  if mig_partial; then
+    # The client stays in use, so whatever comes over must be at rest there.
+    local live; live="$(jq -r '[.[] | select(.action == "move") | .id] | join(" ")' "$MIG_S/triage.json")"
+    [[ -z "$live" ]] || die "migrate-home: live on the client, and not in --except: $live"
+    if [[ $MIG_DRY -eq 0 ]] && ! mig_step_done brain-snapshot; then
+      mig_snapshot_brain "$MIG_BHOME" "${CHARTROOM_MIGRATE_SNAPSHOT_DIR:-$HOME/chartroom-migrate}/$MIG_STAMP/brain"
+      mig_mark brain-snapshot
+    fi
+  elif [[ $MIG_DRY -eq 0 ]]; then
     mig_step_done settle || die "migrate-home: run settle first (the commander's decisions)"
     mig_step_done freeze || die "migrate-home: the client home is not frozen (migrate-home freeze)"
   fi
@@ -460,7 +491,11 @@ mig_move() {
   rm -rf "$st"; mkdir -p "$st/client" "$st/merged"
   mig_client records "$MIG_CHOME" | tar -xf - -C "$st/client"
   mig_client skipped "$MIG_CHOME" >"$MIG_S/skipped.tsv" || true
-  mig_client xo "$MIG_CHOME" "$MIG_CCLAUDE" | tar -xf - -C "$st" 2>/dev/null || true
+  if mig_partial; then
+    local x; for x in $MIG_EXCEPT; do rm -rf "${st:?}/client/tasks/$x"; done
+  else
+    mig_client xo "$MIG_CHOME" "$MIG_CCLAUDE" | tar -xf - -C "$st" 2>/dev/null || true
+  fi
   if [[ ! -d "$MIG_BHOME/tasks" && $MIG_DRY -eq 0 ]]; then
     # A home only the client had: made here, registered, with its own workspace and port.
     CHARTROOM_HOME="$MIG_BHOME" "$CR_BIN" init --name "$MIG_HOME" >/dev/null || die "migrate-home: could not make the home $MIG_BHOME"
@@ -682,6 +717,7 @@ mig_merge_plan() {
   local c="$MIG_S/staged/client" b="$MIG_BHOME" m="$MIG_S/staged/merged" plan="$MIG_S/merge-plan.txt" f rel
   : >"$plan"
   mig_merge_rulings "$c/rulings.log" "$b/rulings.log" "$m/rulings.log" >>"$plan"
+  if mig_partial; then mig_merge_inbox "$c" "$b" "$m" >>"$plan"; mig_merge_sums; return 0; fi
   mig_merge_prefs "$c" "$b" "$m" >>"$plan"
   mig_merge_inbox "$c" "$b" "$m" >>"$plan"
   mig_merge_lines "$c/projects.md" "$b/projects.md" "$m/projects.md" projects.md >>"$plan"
@@ -700,10 +736,13 @@ mig_merge_plan() {
     fi
   done < <(find "$c" -type f -print0)
   mig_merge_xo >>"$plan"
-  # What the brain's files were when this merge was staged: the apply refuses if one changed since.
+  mig_merge_sums
+}
+# What the brain's files were when this merge was staged: the apply refuses if one changed since.
+mig_merge_sums() {
   ( cd "$b" && for f in rulings.log commander.md captain.md inbox.md projects.md config focus.json relays/inbox.ndjson relays/outbox.ndjson; do
       if [[ -f "$f" ]]; then printf '%s\t%s\n' "$f" "$(mig_sha <"$f")"; fi; done ) >"$MIG_S/brain-sums.tsv"
-  printf 'tasks: %s from the client (%s open)\n' "$(jq -s length "$MIG_S/facts.jsonl")" "$(jq -s '[.[] | select(.closed | not)] | length' "$MIG_S/facts.jsonl")" >>"$plan"
+  printf 'tasks: %s from the client (%s open)\n' "$(jq -s length "$MIG_S/facts.jsonl")" "$(jq -s '[.[] | select(.closed | not)] | length' "$MIG_S/facts.jsonl")" >>"$MIG_S/merge-plan.txt"
 }
 mig_alt_name() { # <rel path> -> <dir/base>.from-<label><.ext>
   local rel="$1" dir base ext=""
@@ -898,7 +937,7 @@ mig_merge_apply() {
   # The rulings block in commander.md, from the merged log.
   if [[ -f "$MIG_BHOME/rulings.log" ]]; then ( CR_HOME="$MIG_BHOME"; rules_render ) >/dev/null 2>&1 || warn "rule render failed in $MIG_BHOME"; fi
   # The relay mailbox merged: the watch cursor moves past it, so it rings nothing.
-  if [[ -f "$MIG_BHOME/.watch-cursor" && -f "$MIG_BHOME/relays/inbox.ndjson" ]]; then
+  if ! mig_partial && [[ -f "$MIG_BHOME/.watch-cursor" && -f "$MIG_BHOME/relays/inbox.ndjson" ]]; then
     local sz; sz="$(wc -c <"$MIG_BHOME/relays/inbox.ndjson" | tr -d ' ')"
     awk -F'\t' -v s="$sz" 'BEGIN { OFS = "\t" } $1 == "@relays" { $2 = s; done = 1 } { print } END { if (!done) print "@relays", s }' \
       "$MIG_BHOME/.watch-cursor" >"$MIG_BHOME/.watch-cursor.tmp" && mv "$MIG_BHOME/.watch-cursor.tmp" "$MIG_BHOME/.watch-cursor"
@@ -1157,6 +1196,7 @@ mig_verify() {
   cat "$out"
   if (( fails > 0 )); then echo "verify: $fails failure(s)"; return 1; fi
   mig_mark verify
+  mig_partial && { echo "verify: passed (partial: the client home stays in use; $MIG_EXCEPT stay there)"; return 0; }
   echo "verify: passed; next: chartroom migrate-home finish --from $MIG_FROM --home $MIG_HOME --brain <this machine's ssh name, as the client reaches it>"
 }
 mig_verify_union() { # <source> <merged> <id regex> <name>: every id of the source is in the merged file
@@ -1265,6 +1305,9 @@ cmd_migrate_home() {
   esac
   mig_opts "$@"
   (( ${#MIG_ARGS[@]} == 0 )) || die "migrate-home $verb: unexpected argument '${MIG_ARGS[0]}'"
+  if mig_partial; then
+    case "$verb" in triage|move|verify|status) ;; *) die "migrate-home $verb: not with --except (a partial move writes nothing on the client)" ;; esac
+  fi
   mig_setup
   case "$verb" in
     triage) mig_triage ;;
