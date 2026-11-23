@@ -123,6 +123,9 @@ sink_up() {
 lines() { if [[ -s "$BATS_TEST_TMPDIR/got" ]]; then wc -l <"$BATS_TEST_TMPDIR/got" | tr -d ' '; else echo 0; fi; }
 until_lines() { for _ in $(seq 1 "$((${2:-10} * 5))"); do [ "$(lines)" -ge "$1" ] && return 0; sleep 0.2; done; return 1; }
 
+# until_held <n>: the server holds exactly n items; as long as a slow machine needs to read the home
+until_held() { for _ in $(seq 1 300); do [ "$(pushinfo | jq -r .holding)" -eq "$1" ] && return 0; sleep 0.2; done; return 1; }
+
 @test "the XO answers first: a worker's decision answered within the hold is never pushed; one still open after it is; a breaking one, at once" {
   [[ -n "$NODE" ]] || skip "node not available"
   PATH="${NODE%/*}:$PATH"
@@ -132,25 +135,29 @@ until_lines() { for _ in $(seq 1 "$((${2:-10} * 5))"); do [ "$(lines)" -ge "$1" 
   t="$(cr status --json | jq -r '.[] | select(.title | test("sitemap"; "i")) | .id')"
   # asked, and answered by the XO (the worker carries on) within the hold: nothing reaches the commander
   cr event "$t" decision "Run the sitemap at 02:00 or 04:00 UTC?" >/dev/null
-  for _ in $(seq 1 50); do [ "$(pushinfo | jq -r .holding)" -eq 1 ] && break; sleep 0.2; done
-  [ "$(pushinfo | jq -r .holding)" -eq 1 ]
-  # the XO's answer reaching the worker (what `chartroom steer` records)
+  until_held 1
+  # the XO's answer reaching the worker (what `chartroom steer` records), in a home the server has not
+  # read again when the hold is over (a slow home, or nobody looking; here, its change stamp is not
+  # moved): it reads the home before it pushes, however long that read takes
   printf '%s steered: The XO: 02:00 UTC\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$(log_of "$t")"
-  printf . >"$CHARTROOM_HOME/.changed" # as chartroom's own writes do: the server reads the home again
-  sleep 8
+  until_held 0
+  sleep 2
   [ "$(lines)" -eq 0 ]
-  [ "$(pushinfo | jq -r .holding)" -eq 0 ]
   # asked, and left open: pushed once the hold is over, not before
   cr event "$t" decision "Purge the CDN before the run?" >/dev/null
   sleep 3
   [ "$(lines)" -eq 0 ]
-  until_lines 1 10
+  until_lines 1 60
   [ "$(lines)" -eq 1 ]
   [[ "$(jq -r .tag "$BATS_TEST_TMPDIR/got")" == "acme:ev-$t-"* ]]
   # breaking: no hold
   u="$(cr status --json | jq -r '.[] | select(.title | test("gift"; "i")) | .id')"
   cr event "$u" decision --breaking "Refunds are failing in production: roll back the payments change?" >/dev/null
-  until_lines 2 4
+  for _ in $(seq 1 300); do # never held on the way, however long the read takes
+    [ "$(pushinfo | jq -r .holding)" -eq 0 ]
+    [ "$(lines)" -ge 2 ] && break
+    sleep 0.2
+  done
   [ "$(lines)" -eq 2 ]
 }
 
@@ -177,14 +184,14 @@ until_lines() { for _ in $(seq 1 "$((${2:-10} * 5))"); do [ "$(lines)" -ge "$1" 
   run as_commander permit escalate p-5e6f --note "Your call: it goes to the shared repo"
   [ "$status" -eq 0 ]
   [[ "$output" == "escalated p-5e6f"* ]]
-  until_lines 1 6
+  until_lines 1 40 # (long before its 60 s hold, however slow the read)
   [ "$(lines)" -eq 1 ]
   [[ "$(jq -r .body "$BATS_TEST_TMPDIR/got")" == *"the XO left this one to you: Your call: it goes to the shared repo" ]]
   [ "$(cr app snapshot --json | jq -r '.needs[] | select(.permit == "p-5e6f") | .escalated.note')" = "Your call: it goes to the shared repo" ]
   # answered (here, through the app): the notification is withdrawn, never left to say it was answered
   [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -H 'X-Chartroom-App: 1' -H 'X-Chartroom-Action: a-esc-00001' \
       -d '{"id":"p-5e6f","answer":"once"}' "http://127.0.0.1:$PORT/api/v1/homes/acme/permit")" = 202 ]
-  until_lines 2 15
+  until_lines 2 60
   [ "$(sed -n 2p "$BATS_TEST_TMPDIR/got" | jq -c .)" = '{"type":"close","tag":"acme:p-5e6f"}' ]
   [ "$(pushinfo | jq -r '"\(.sent) \(.withdrawn)"')" = "1 1" ]
   # escalating a card no longer open says so

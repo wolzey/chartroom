@@ -35,6 +35,8 @@ are stable from 0.1.0.
   even when the home's version moved while it was read, and one read runs at a time.
 - Short ids are worked out from the few ids that could share one, not the whole history: an
   initiative of 22 tasks reads in 2 s instead of 14 in a home of 300, and every status read is faster.
+- Web Push: a worker's card or decision answered within its hold is not pushed, also when the home
+  was not read again in time (a slow home, or nobody looking): it is read once more before the push.
 
 ## [0.2.0] - 2026-11-22
 

@@ -149,6 +149,7 @@ class Home:
         self.error = None
         self.refreshed_at = None
         self.took = None
+        self.read_from = 0.0  # when the last finished read (even a failed one) began
         self.wake = threading.Event()
 
     def stamp(self):
@@ -269,7 +270,9 @@ class Hub:
             if due:
                 h.wake.clear()
                 last = now
+                began = time.time()  # (after the clear: a read asked for from here on is another one)
                 self.collect(h)
+                h.read_from = began
                 seen = st  # the stamp from before the read: a change made during it is read next time
             h.wake.wait(POLL)
 
@@ -625,7 +628,9 @@ class Pusher:
     The XO answers first. A worker's permission card or decision (or plan approval) wakes the XO at
     once, and is pushed only if it is still open after `hold` seconds (CHARTROOM_APP_PUSH_HOLD):
     at once if it is breaking, the XO handed it over (`chartroom permit escalate`), or a card has
-    less than the hold left on its clock. An item answered first is never pushed. One pushed and
+    less than the hold left on its clock. An item answered first is never pushed: when its hold is
+    over, its home is read once more and only what is still open then is pushed (a home is read
+    minutes apart when nobody looks, so the last read may be older than the answer). One pushed and
     then answered is withdrawn: a "close" push to the devices that got it (never to Apple's
     service, which revokes a subscription whose push shows nothing; the app clears it there when
     it opens)."""
@@ -634,6 +639,7 @@ class Pusher:
         self.hub, self.fleet = hub, fleet
         self.hold = max(0, int(hold))
         self.first, self.pushed, self.cur = {}, {}, {}
+        self.asked = {}  # a held item whose hold is over -> when the read that confirms it was asked for
         self.withdrawn = 0
         self.script = os.path.join(root, "lib", "app", "push.mjs")
         self.keys = os.path.join(state_dir, "app-push-keys.json") if state_dir else None
@@ -769,15 +775,20 @@ class Pusher:
         """One round after a read: hold what is new, push what is due and still open, withdraw
         what was pushed and is open no more."""
         now = time.time() if now is None else now
+        # before the scan: a read that ends during it confirms the next round, not this older list
+        reads = {n: h.read_from for n, h in list(self.hub.homes.items())}
         for key, home, it in self.scan():
             self.first[key] = now
         for key in list(self.first):
             hit = self.cur.get(key)
             if hit is None:  # answered (or gone) before it was pushed: never pushed
                 del self.first[key]
+                self.asked.pop(key, None)
                 continue
-            if now >= self.due(hit[1], self.first[key]):
+            due = self.due(hit[1], self.first[key])
+            if now >= due and (due == self.first[key] or self.confirmed(key, hit[0], now, reads)):
                 del self.first[key]
+                self.asked.pop(key, None)
                 if self.subs:
                     got = self.send(self.payload(key, hit[0], hit[1]))
                     if got:
@@ -786,9 +797,18 @@ class Pusher:
             if key not in self.cur:
                 self.withdraw(key, self.pushed.pop(key))
 
+    def confirmed(self, key, home, now, reads):
+        """Whether the home was read since this item's hold was over; asks for that read the first
+        time. A read that fails counts: an unanswered question is never kept back by one."""
+        if key not in self.asked:
+            self.asked[key] = now
+            self.hub.refresh(home)
+        return home not in reads or reads[home] >= self.asked[key]
+
     def next_due(self):
         """Seconds until the first held item is due, or None."""
-        ds = [self.due(self.cur[k][1], t) for k, t in self.first.items() if k in self.cur]
+        now = time.time()
+        ds = [now + 1 if k in self.asked else self.due(self.cur[k][1], t) for k, t in self.first.items() if k in self.cur]
         return max(0.2, min(ds) - time.time()) if ds else None
 
     def withdraw(self, key, endpoints):
