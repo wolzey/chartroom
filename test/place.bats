@@ -330,6 +330,11 @@ dry() { run cr dispatch "$1" --dry-run; echo "$output"; }
   ln -s /etc/hosts "$CHARTROOM_HOME/drafts/l.md"; stays "$CHARTROOM_HOME/drafts/l.md" "$CHARTROOM_HOME/drafts/l.md"
   head -c 1100000 /dev/zero | tr '\0' x >"$CHARTROOM_HOME/drafts/big.md"; stays "$CHARTROOM_HOME/drafts/big.md" "$CHARTROOM_HOME/drafts/big.md"
   stays "$CHARTROOM_HOME" "$CHARTROOM_HOME"
+  # a service of this machine's own
+  stays_for() { says "$id" "$1"; dry "$id"; [[ "$output" == "$id would run here"*"which is this machine"* ]]; }
+  stays_for "Try it against http://localhost:6002 first."
+  stays_for "Look at what runs on this Mac."
+  says "$id" "The redirect may be http on localhost only."; dry "$id"; [[ "$output" == "$id would run on m3"* ]]
   # in the project: tracked files are there too, others are not; a path that does not exist is prose
   goes "$PROJECT/README"
   goes "/api/v1/widgets and /no/such/file"

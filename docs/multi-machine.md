@@ -224,7 +224,8 @@ are hard requirements; what keeps a task on this machine whatever the others off
     This machine is held to it too.
 - **What stays on this machine:** a task pinned here; one whose worktree or branch is here already, or
   that was moved here; a base on no branch of origin; a project with no remote; a home that is not
-  registered; a runner other than hc; and a brief that names files other machines lack and that cannot
+  registered; a runner other than hc; a brief that speaks of this machine (`localhost:3000`, "on this
+  Mac"); and one that names files other machines lack and that cannot
   go along.
 - **Files that go along.** A brief often names files of the brain's home (a draft, another task's
   report). Those are sent with the dispatch, kept in the task's own folder on the device (`brain/`),

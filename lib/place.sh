@@ -21,7 +21,8 @@
 #
 # What keeps a task on this machine (PN .here): a pin (set node=here), a runner that is not hc, a
 # worker or branch it already has here, a base no other machine can fetch, a project with no
-# remote, or a brief that names files other machines do not have and that cannot go along.
+# remote, or a brief that speaks of this machine (localhost:3000, "on this Mac") or names files that
+# other machines do not have and that cannot go along.
 # What a node must have: hc answering, the task's agent installed and logged in, every tool the task
 # needs working (--needs, `needs=` in projects.md, and docker when the brief talks of it), and a
 # checkout of the project and of any other repo the brief points into.
@@ -70,7 +71,7 @@ place_tools() { # <id>
   p="$(grep -E "^- $(basename "$(meta "$id" project)"):" "$CR_HOME/projects.md" 2>/dev/null | grep -oE '(^|[;: ])needs=[a-z,]+' | head -1 | sed 's/.*needs=//' || true)"
   {
     tr ',' '\n' <<<"$own"; tr ',' '\n' <<<"$p"
-    if sed '/^## Authority/,/^## Worker protocol/d' "$(tdir "$id")/brief.md" 2>/dev/null | grep -qiE '(^|[^a-z0-9])(docker|docker-compose|testcontainers?)([^a-z0-9]|$)'; then echo docker; fi
+    if place_brief_words "$id" | grep -qiE '(^|[^a-z0-9])(docker|docker-compose|testcontainers?)([^a-z0-9]|$)'; then echo docker; fi
   } | grep -E "^($CR_NEEDS_TOOLS)$" | sort -u || true
 }
 
@@ -110,6 +111,9 @@ place_carry_ok() { # <path relative to the home>
   ! grep -qE -- '-----BEGIN [A-Z ]*PRIVATE KEY-----' "$CR_HOME/$rel"
 }
 
+# The words of the brief that are the task's own: not chartroom's protocol and authority text.
+place_brief_words() { sed '/^## Authority/,/^## Worker protocol/d' "$(tdir "$1")/brief.md" 2>/dev/null || true; } # <id>
+
 # Why a task stays on this machine, whatever its brief says ("" when it need not).
 place_stays() { # <id>
   local id="$1" project; project="$(meta "$id" project)"
@@ -120,6 +124,9 @@ place_stays() { # <id>
   elif [[ "$(meta "$id" kind)" == ship ]] && git -C "$project" rev-parse -q --verify "refs/heads/$(meta "$id" branch)" >/dev/null 2>&1; then echo "its branch is here"
   elif [[ ! "$(place_remote "$project")" =~ $CR_NODE_REMOTE_RE ]]; then echo "its project has no remote another machine could have a checkout of"
   elif [[ -z "$(git -C "$project" branch -r --contains "$(meta "$id" base_sha)" --list 'origin/*' 2>/dev/null | head -1)" ]]; then echo "its base is on no branch of the remote, only here"
+  else
+    local w; w="$(place_brief_words "$id" | grep -oiE '(localhost|127\.0\.0\.1)(:| port )[0-9]{2,5}|(on|from) this (mac|machine|computer)' | head -1 || true)"
+    [[ -z "$w" ]] || echo "its brief says \"$w\", which is this machine"
   fi
 }
 place_remote() { node_canon_remote "$(git -C "$1" config --get remote.origin.url 2>/dev/null || true)"; } # <checkout>

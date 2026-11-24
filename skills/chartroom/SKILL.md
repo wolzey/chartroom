@@ -159,7 +159,8 @@ most room under its CPU and memory limits) and says so. Don't place work by hand
 another tool to do its work or run its tests, say so when you create it (`--needs docker,ruby`): it then
 only lands where that works. A project that always needs it has `needs=docker` on its `projects.md` line.
 Files of this home that the brief names by full path go along; a file outside it (in `/tmp`, another
-home) keeps the task here. When no machine has room, dispatch refuses with each one's numbers:
+home) keeps the task here. If it needs something that runs only on this machine (a local stack, a
+signed-in browser), pin it here (`--node here`). When no machine has room, dispatch refuses with each one's numbers:
 dispatch again later, and pass `--over-limit` only on the commander's word.
 
 **6. Supervise.** See Supervision. Stay quiet while work is under way.
