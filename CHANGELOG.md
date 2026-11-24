@@ -41,8 +41,8 @@ are stable from 0.1.0.
 - The app's Fleet has two more views, Atom and Dashboard, beside its list. A session in either opens
   its quick view: answer, steer, accept, or its ticket.
 - `chartroom node probe` names each agent (a worker by its task, an XO by its home, any other by its
-  directory and tab) and measures CPU over a second. Fleet shows both, and docker where it is
-  installed; a machine on an older chartroom still shows how many agents, with no names.
+  directory and tab). Fleet shows them, its CPU and memory in use against its limits, and docker
+  where it is installed; a machine on an older chartroom still shows how many agents, with no names.
 
 ### Fixed
 - The app's note boxes (a grilling round's, a card's, a steer's) stayed one or two lines
