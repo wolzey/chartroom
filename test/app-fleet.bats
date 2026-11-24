@@ -34,7 +34,16 @@ teardown() { cr app stop >/dev/null 2>&1 || true; }
   [ "$(jq -r '.machines[] | select(.name == "mini") | .logins[] | select(.label == "codex sign-in") | "\(.ok) \(.detail)"' <<<"$j")" = "null cannot tell: codex itself does not answer" ]
 }
 
-@test "the crew and the other agents are apart: the slots are chartroom's own workers" {
+@test "use against limits: what a machine has in use, its two limits, and why it takes no new work" {
+  run env CHARTROOM_APP_NODES="$REPO_ROOT/test/fixtures/app-nodes.json" "$CHARTROOM" app fleet --json
+  [ "$status" -eq 0 ]
+  f() { jq -c --arg n "$1" '.machines[] | select(.name == $n) | [.cpu_use, .budgets.cpu, .mem_used_pct, .budgets.mem, .full]' <<<"$output"; }
+  [ "$(f studio)" = '[31,80,64,75,null]' ]
+  [ "$(f laptop)" = '[12,60,48,60,"paused: on battery"]' ]
+  [ "$(f mini)" = '[91,90,70,75,"CPU is at its limit"]' ]
+}
+
+@test "the crew and the other agents are apart, for information" {
   j="$(cr app fleet --json)"
   [ "$(jq -c '.machines[] | select(.name == "studio") | [.crew_live, .other_agents, .agents_live, .path_source]' <<<"$j")" = '[2,2,4,"login"]' ]
   # a probe from before the crew count: no crew number, and Fleet falls back to every agent

@@ -85,7 +85,7 @@ place_brief_paths() { # <id>
       p="${p%/}"; while [[ "$p" == *[.,:] ]]; do p="${p%?}"; done
       q="${p/#\~/$HOME}"
       case "$q" in
-        ""|/|/tmp|/private/tmp|"$HOME") continue ;;
+        ""|/|/tmp|/private/tmp|/dev|/etc|/usr|/bin|/opt|/var|"$HOME") continue ;;
         /usr/*|/bin/*|/sbin/*|/etc/*|/dev/*|/System/*|/Library/*|/opt/homebrew/*|/Applications/*) continue ;;
         "$CR_BIN"|"$d/report.md"|"$d/plan.md"|"$d/inbox.md"|"$d/brief.md"|"$d"/events.*|"$d/final.md") continue ;;
       esac
@@ -188,7 +188,9 @@ place_needs() { # <id> <backend it would run there, hc:claude ...>
 PLACE_JQ='
   def pc: (. + 0.5 | floor | tostring) + "%";
   def place_limit($held; $c; $mg):
-    if .cpu_use == null or .mem_used_pct == null or (.cores // 0) == 0 or (.mem_bytes // 0) == 0 then "its CPU or memory use could not be read"
+    if .cpu_use == null or .mem_used_pct == null or (.cores // 0) == 0 or (.mem_bytes // 0) == 0 then
+      # (this machine, unread, is the last resort: a probe that fails must not stop all work here)
+      (if .local then null else "its CPU or memory use could not be read" end)
     else (.budgets.cpu // 80) as $cl | (.budgets.mem // 80) as $ml
       | (100 * $c / .cores) as $cc | (100 * $mg * 1073741824 / .mem_bytes) as $mc
       | if .cpu_use >= $cl then "cpu \(.cpu_use | pc) in use, its limit is \($cl)%"
@@ -251,7 +253,7 @@ place_choose() { # <id> <needs json> <rows json> <excluded ids json> <dry 0|1> <
                elif .device.status != "online" then "it is " + .device.status
                elif (.device.caps | index("place")) == null then "its agent is older (chartroom node update \(.machine))"
                else null end)
-           // (if .contact != "ok" then "it could not be read: \(.error // .contact)" else null end)
+           // (if .contact != "ok" and (.local | not) then "it could not be read: \(.error // .contact)" else null end)
            // place_paused // place_lacks($n)
            // (if .local then null else place_remote_lacks($n) end)
            // (if $over == "1" then null else place_limit($h; $c; $mg) end))}]

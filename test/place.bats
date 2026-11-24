@@ -126,6 +126,10 @@ dry() { run cr dispatch "$1" --dry-run; echo "$output"; }
   dry "$id2"
   [ "$status" -ne 0 ]
   [[ "$output" == *"studio: cpu 70% of 80%, memory 30% of 75% (cpu 70% in use and about 15% for this worker"*"is over its 80% limit)"* ]]
+  # this machine when its use cannot be read: the last resort, never a stop to all work here
+  mv "$FAKE_NODE_DIR/vm_stat" "$FAKE_NODE_DIR/vm_stat.off"
+  dry "$id2"; [[ "$output" == "$id2 would run here"*"studio: cpu 70% of 80%, memory ? of 75%;"* ]]
+  mv "$FAKE_NODE_DIR/vm_stat.off" "$FAKE_NODE_DIR/vm_stat"
   # ninety workers on a machine with room change nothing
   tweak m3 $M3 $'s/^cpu_use\t.*/cpu_use\t10\t60/; $a\\\nagents_live\t90\\\ncrew_live\t90'
   dry "$id2"
