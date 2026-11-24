@@ -147,8 +147,10 @@ export function Menu({ anchor, title, items, picked, onPick, onClose }) {
   </div>`;
 }
 
-export function Toasts({ toasts, onUndo }) {
+export function Toasts({ toasts, onUndo, stale, onReload }) {
   return html`<div class="toasts" aria-live="polite">
+    ${stale ? html`<div class="toast"><span>A newer Chartroom is installed; this page still runs the old one.</span>
+      <button type="button" onClick=${onReload}>Reload</button></div>` : null}
     ${toasts.map((t) => html`<div key=${t.id} class="toast"><span>${t.text}</span>
       ${t.undo ? html`<button type="button" onClick=${() => onUndo(t)}>Undo</button>` : null}</div>`)}
   </div>`;

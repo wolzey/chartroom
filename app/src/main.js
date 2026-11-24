@@ -15,6 +15,7 @@ import { FleetPage, MachineDetail } from "./fleet.js";
 import * as N from "./notify.js";
 
 const M = window.AppModel;
+const PAGE = document.body.getAttribute("data-page"); // the code this page loaded (server.py, Page)
 const EF = window.EventFmt;
 const OB = window.Outbox;
 const OUTBOX_KEY = "chartroom-outbox";
@@ -639,7 +640,7 @@ function App() {
           setComposer(false);
           toast(viaXo("Sent to the " + h + " XO as a request; it waits in Drafting until it is briefed"));
         }} />` : null}
-    <${Toasts} toasts=${toasts} onUndo=${(t) => { setToasts((ts) => ts.filter((x) => x.id !== t.id)); t.undo(); }} />
+    <${Toasts} toasts=${toasts} stale=${M.pageStale(PAGE, data)} onReload=${() => location.reload()} onUndo=${(t) => { setToasts((ts) => ts.filter((x) => x.id !== t.id)); t.undo(); }} />
   </div>`;
 }
 

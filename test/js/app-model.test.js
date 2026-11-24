@@ -443,4 +443,10 @@ test("fleetProblems: offline, sign-ins with the command, docker, full, stalled a
   assert.strictEqual(p[0].cmd, "gh auth login");
 });
 
+test("pageStale: only when the server says another page is installed", () => {
+  assert.strictEqual(M.pageStale("aaa", { page: "bbb" }), true);
+  assert.deepStrictEqual([M.pageStale("aaa", { page: "aaa" }), M.pageStale("aaa", { page: "bbb", offline: "x" }), M.pageStale("aaa", {}), M.pageStale("aaa", null), M.pageStale(null, { page: "bbb" })],
+    [false, false, false, false, false]);
+});
+
 run();

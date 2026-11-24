@@ -1127,9 +1127,39 @@ def verb_for(action, body):
     raise KeyError(action)
 
 
+class Page:
+    """What the page is made of (app/, and lib/dashboard's shared scripts), as one short hash. "/" carries
+    it, and so does the state: an open page whose own differs runs older code than is installed, and
+    says so (app/src/main.js). Files are read again only when one's size or time moves."""
+
+    def __init__(self, app_dir, shared_dir):
+        self.app_dir, self.shared_dir = app_dir, shared_dir
+        self.lock = threading.Lock()
+        self.stamp = self.value = None
+
+    def rev(self):
+        files = [os.path.join(self.shared_dir, f) for f in SHARED]
+        for d, dirs, names in os.walk(self.app_dir):
+            dirs.sort()
+            files += [os.path.join(d, f) for f in sorted(names) if os.path.splitext(f)[1].lower() in STATIC_TYPES]
+        try:
+            stamp = [(f, st.st_size, st.st_mtime_ns) for f, st in ((f, os.stat(f)) for f in files)]
+            with self.lock:
+                if stamp != self.stamp:
+                    h = hashlib.sha256()
+                    for f in files:
+                        with open(f, "rb") as fh:
+                            h.update(hashlib.sha256(fh.read()).digest())
+                    self.stamp, self.value = stamp, h.hexdigest()[:12]
+                return self.value
+        except OSError:  # a file moved while an update writes them: what was known until the next look
+            return self.value
+
+
 def make_handler(hub, args, root, actions, prs, fleet, pusher, devices=None):
     app_dir = os.path.join(root, "app")
     shared_dir = os.path.join(root, "lib", "dashboard")
+    page = Page(app_dir, shared_dir)
     user = (args.user or "").strip().lower()
     tickets = {}  # (home, task) -> (time, hub version, body): a ticket asked for twice in a row is read once
 
@@ -1196,7 +1226,7 @@ def make_handler(hub, args, root, actions, prs, fleet, pusher, devices=None):
             if not self.who():
                 return self.send(403, "forbidden: this app opens only for its owner, over the tailnet\n", "text/plain; charset=utf-8")
             if path in ("/", "/index.html"):
-                return self.static(os.path.join(app_dir, "index.html"))
+                return self.index()
             if path in ("/sw.js", "/manifest.webmanifest"):
                 # at the root, so the service worker's scope is the whole app
                 return self.static(os.path.join(app_dir, path[1:]))
@@ -1209,7 +1239,7 @@ def make_handler(hub, args, root, actions, prs, fleet, pusher, devices=None):
             if path == "/api/v1/state":
                 hub.looked()
                 return self.json(200, dict(hub.state(), user=self.who(), actions=actions.recent(), prs=prs.states, gh_error=prs.error,
-                                           xo=xo_reads_app(args.bin), fleet=fleet.value))
+                                           xo=xo_reads_app(args.bin), fleet=fleet.value, page=page.rev()))
             if path == "/api/v1/stream":
                 hub.looked()
                 return self.stream()
@@ -1233,6 +1263,15 @@ def make_handler(hub, args, root, actions, prs, fleet, pusher, devices=None):
                 return None
             full = os.path.realpath(os.path.join(base, rel))
             return full if full.startswith(os.path.realpath(base) + os.sep) else None
+
+        def index(self):
+            rev = page.rev()  # before the file: a page changed in between says it is older, never newer
+            try:
+                with open(os.path.join(app_dir, "index.html"), "rb") as fh:
+                    data = fh.read()
+            except OSError:
+                return self.send(404, "not found\n", "text/plain; charset=utf-8")
+            return self.send(200, data.replace(b"<body ", b'<body data-page="%s" ' % (rev or "").encode(), 1), STATIC_TYPES[".html"])
 
         def static(self, f):
             ext = os.path.splitext(f or "")[1].lower()

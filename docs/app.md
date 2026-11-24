@@ -131,6 +131,7 @@ On the brain itself, before Serve is set up, `chartroom app serve --daemon --no-
 - **When.** A thread looks every 2 s at the home's change stamp and the few files the app writes. It reads again when one moves, and at least every 20 s, because a worker's live state changes with no record written.
 - **Fleet.** One background thread runs `chartroom app fleet --json`: `chartroom nodes` (each machine's probe, over ssh for the others) through `lib/app/fleet.jq`, which decides each machine's health. It runs every 5 minutes while the app is open, and at once on `POST /api/v1/fleet/check` (the page's Check again; it starts ssh probes, so it passes a write's checks). The result rides in the state as `fleet`; a failed sign-in in it is a Needs me item of no home.
 - **Updates.** The page loads `GET /api/v1/state`. It loads again on each `version` event from `GET /api/v1/stream` (server-sent events), and polls every 10 s when the stream is down.
+- **A newer version.** A page that stays open keeps the code it loaded. The page and the state both carry a hash of the app's own files; when an open page's differs from the state's, it says a newer Chartroom is installed, with a Reload button. It never reloads by itself, so nothing half typed is lost.
 
 ## What it writes
 

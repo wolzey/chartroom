@@ -45,6 +45,9 @@ are stable from 0.1.0.
   where it is installed; a machine on an older chartroom still shows how many agents, with no names.
 
 ### Fixed
+- The app says when a newer Chartroom is installed than the open page runs, with a Reload button. A
+  page left open across an update read the new data with its old code, so Fleet said "CPU not
+  measured there yet" for every machine.
 - The app's note boxes (a grilling round's, a card's, a steer's) stayed one or two lines
   tall whatever was in them. They now grow with their text, typed or accepted from a writing
   assistant, and scroll past 320 px; the line being typed stays above the Submit bar.

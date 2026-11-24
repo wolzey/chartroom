@@ -810,10 +810,16 @@ var AppModel = (function () {
     return { line, more: lines.length > 1 || line.length > 40 }; // a long line is cut in the card: it unfolds too
   }
 
+  // The page runs older code than the server now serves: "page" is what its own HTML said it is, the
+  // state's is what is installed. Not told by the service worker's last copy, nor by an older server.
+  function pageStale(own, state) {
+    return !!(own && state && state.page && !state.offline && state.page !== own);
+  }
+
   return { KINDS, GROUPS, STATUS, kind, items, homes, plain, shape, repeats, asks, view, taskIds,
     permitReason, permitLead, permitScope, firstLine, standing, visible, ordered, counts, projects, questions, details,
     primary, answerBody, answered, move, ago, agoText, snoozes, search, askText, headline, bulkPlan, range, promote, linkParts, BOARD, boardItems, boardFilter, boardColumns, initiatives, milestones,
-    freshItems, notice, noticeTarget, permitLeft,
+    freshItems, notice, noticeTarget, permitLeft, pageStale,
     FLEET_STATES, REST_DAYS, SIGN_IN, fleetState, fleetMap, fleetMeters, fleetProblems, fullness, crewOf, agentLabel, ageText };
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = AppModel;

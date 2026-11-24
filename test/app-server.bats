@@ -163,6 +163,33 @@ state() { # waits for both homes' first snapshot
   [ "$(get "http://127.0.0.1:$PORT/api/v1/homes/acme/tasks/..%2F..%2Fx/files/brief.md")" = 404 ]
 }
 
+@test "page: the page and the state carry one hash of the app's files; a changed file changes the state's" {
+  # a copy of the app under a root of its own, so a file of it can change
+  mkdir -p "$BATS_TEST_TMPDIR/root/lib"
+  cp -R "$REPO_ROOT/app" "$BATS_TEST_TMPDIR/root/app"
+  cp -R "$REPO_ROOT/lib/dashboard" "$BATS_TEST_TMPDIR/root/lib/dashboard"
+  run "$PY" - "$REPO_ROOT/lib/app/server.py" "$BATS_TEST_TMPDIR/root" <<'PYEOF'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("server", sys.argv[1]); s = importlib.util.module_from_spec(spec); spec.loader.exec_module(s)
+app = os.path.join(sys.argv[2], "app")
+p = s.Page(app, os.path.join(sys.argv[2], "lib", "dashboard"))
+a = p.rev(); f = os.path.join(app, "src", "model.js")
+assert len(a) == 12 and p.rev() == a
+os.utime(f, (1, 1)); assert p.rev() == a, "a new time alone is the same page"
+open(f, "a").write("// newer\n"); b = p.rev(); assert b != a
+open(os.path.join(app, "src", "new.js"), "w").write("//\n"); assert p.rev() not in (a, b)
+PYEOF
+  echo "$output"; [ "$status" -eq 0 ]
+  start --no-auth
+  state
+  rev="$(jq -r .page "$BATS_TEST_TMPDIR/app-state")"
+  [[ "$rev" =~ ^[0-9a-f]{12}$ ]]
+  [ "$(get "http://127.0.0.1:$PORT/")" = 200 ]
+  grep -q "<body data-page=\"$rev\" data-screen=\"needs\">" "$BATS_TEST_TMPDIR/body"
+  get "http://127.0.0.1:$PORT/index.html" >/dev/null
+  grep -q "data-page=\"$rev\"" "$BATS_TEST_TMPDIR/body"
+}
+
 @test "stream: a write in a home reaches the stream as a new version" {
   start --no-auth
   state
