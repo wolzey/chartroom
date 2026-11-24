@@ -187,10 +187,10 @@ place_needs() { # <id> <backend it would run there, hc:claude ...>
 # but the two limits. Shared by the brain's choice and the device's own check.
 PLACE_JQ='
   def pc: (. + 0.5 | floor | tostring) + "%";
-  def place_limit($held; $c; $mg):
+  def place_limit($held; $c; $mg; $unread_ok):
     if .cpu_use == null or .mem_used_pct == null or (.cores // 0) == 0 or (.mem_bytes // 0) == 0 then
       # (this machine, unread, is the last resort: a probe that fails must not stop all work here)
-      (if .local then null else "its CPU or memory use could not be read" end)
+      (if $unread_ok then null else "its CPU or memory use could not be read" end)
     else (.budgets.cpu // 80) as $cl | (.budgets.mem // 80) as $ml
       | (100 * $c / .cores) as $cc | (100 * $mg * 1073741824 / .mem_bytes) as $mc
       | if .cpu_use >= $cl then "cpu \(.cpu_use | pc) in use, its limit is \($cl)%"
@@ -256,7 +256,7 @@ place_choose() { # <id> <needs json> <rows json> <excluded ids json> <dry 0|1> <
            // (if .contact != "ok" and (.local | not) then "it could not be read: \(.error // .contact)" else null end)
            // place_paused // place_lacks($n)
            // (if .local then null else place_remote_lacks($n) end)
-           // (if $over == "1" then null else place_limit($h; $c; $mg) end))}]
+           // (if $over == "1" then null else place_limit($h; $c; $mg; .local) end))}]
     | . as $nodes
     | ([$nodes[] | select(.why == null)] | sort_by([(if $mode == "pack" then -(.u // 0) else (.u // 9) end), (if .local then 0 else 1 end), .name]) | .[0]) as $p
     | {pick: (if $p then {id: $p.id, name: $p.name} else null end), nodes: $nodes, mode: $mode}')" || { fleet_unlock; return 1; }
@@ -290,7 +290,7 @@ place_task() { # <id> <over 0|1> <dry 0|1> [refused ids json]
     if [[ -n "$row" && "$(jq -r .status <<<"$row")" == online && -z "$(meta "$id" dispatched)" ]] && jq -e '.caps | index("place")' <<<"$row" >/dev/null; then
       row="$(nodes_device_row "$row" "$(date +%s)")"
       why="$(jq -r --argjson h "$(place_holds | jq --arg i "$did" '.[$i] // 0')" --argjson c "$NODE_C" --argjson mg "$NODE_MG" --arg over "$over" \
-        "$PLACE_JQ"' place_paused // (if $over == "1" then null else place_limit($h; $c; $mg) end) // empty' <<<"$row")"
+        "$PLACE_JQ"' place_paused // (if $over == "1" then null else place_limit($h; $c; $mg; false) end) // empty' <<<"$row")"
       if [[ -n "$why" ]]; then
         [[ "$dry" == 1 ]] || log_event "$id" note "not dispatched: it is pinned to $(node_name_of "$id"), and $why"
         die "not dispatched: $id is pinned to $(node_name_of "$id"), and $why (--over-limit sends it all the same; chartroom set $id node=any lets it go where there is room)"
@@ -358,5 +358,5 @@ place_refuse_here() { # <needs json {agent, tools, repos}> <over 0|1>
   row="$(node_row_local)"; held="$(guest_recent_count "$(place_hold_s)")"
   jq -r --argjson n "$1" --argjson h "$held" --argjson c "$NODE_C" --argjson mg "$NODE_MG" --arg over "$2" "$PLACE_JQ"'
     (if .contact != "ok" then "it could not read itself: \(.error // .contact)" else null end)
-    // place_paused // place_lacks($n) // (if $over == "1" then null else place_limit($h; $c; $mg) end) // empty' <<<"$row"
+    // place_paused // place_lacks($n) // (if $over == "1" then null else place_limit($h; $c; $mg; false) end) // empty' <<<"$row"
 }

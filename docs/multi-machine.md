@@ -138,10 +138,11 @@ of workers is shown for information and gates nothing.
 ```bash
 chartroom node limits                 # every node's use against its limits, and whether it takes work
 chartroom node limits mini 80/70      # set one's (also: here 80/70, --cpu 80, --mem 70)
+chartroom node limits mini off        # it takes no new work at all (on: it does again)
 ```
 
 They are `CHARTROOM_NODE_CPU_BUDGET` and `CHARTROOM_NODE_MEM_BUDGET` in the node's own file; a device is
-sent them over the connection (the `limits` command) and changes those two lines only. Fleet shows
+sent them over the connection (the `limits` command) and changes those lines only. Fleet shows
 them beside the use.
 
 **What is measured** (lib/nodeprobe.sh, in each heartbeat):
@@ -377,6 +378,8 @@ uses too.
   brain appends each one verbatim, by offset (`meta.node_off`), so a replay never doubles one.
   report.md, plan.md and new permission cards come back the same way. An answer given on the
   brain is sent back as `permit-sync`.
+- **Its device lost.** A working task whose device is `lost` wakes the XO once (`stalled: mini has not been heard
+  from...`), and a note says when it is back.
 - **Reading its branch** before close: `chartroom git <id> log|diff|...` is read-only git in the worktree on
   the device.
 - **Liveness.** The heartbeat carries each pinned task's live word, and the brain's `status` reads

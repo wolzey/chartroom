@@ -147,7 +147,25 @@ node_dispatch_outcome() { # <id> <result json>
   return 1
 }
 
+declare -A NODE_LOOKED=()
+# A working task whose device is lost (not heard from for CHARTROOM_NODE_LOST_MINUTES): one wake, and
+# a note when it is back. Looked at twice a minute.
+node_watch_lost() { # <id>
+  (( SECONDS - ${NODE_LOOKED[$1]:--30} >= 30 )) || return 0
+  NODE_LOOKED[$1]=$SECONDS
+  local row st was; was="$(meta "$1" node_lost)"
+  row="$(fleet_device_json "$(meta "$1" node)")"; st="$(jq -r '.status // "unknown"' <<<"$row")"
+  if [[ "$st" == lost && -z "$was" && "$(state_of "$1")" == working ]]; then
+    meta_set "$1" node_lost 1
+    local msg; msg="stalled: $(node_name_of "$1") has not been heard from for $(jq -r '((.seen_age_s // 0) / 60 | floor)' <<<"$row") min; the worker and its work are there, and it carries on when that machine is back"
+    log_event "$1" note "$msg"; wake "$1" "$msg"
+  elif [[ "$st" == online && -n "$was" ]]; then
+    meta_set "$1" node_lost ""
+    log_event "$1" note "$(node_name_of "$1") is heard from again"
+  fi
+}
 node_watch() { # (each round of the brain's watch): a dispatch's answer that came after the dispatch
+  node_watch_lost "$1"
   local cid f; cid="$(meta "$1" node_cmd)"; [[ -n "$cid" ]] || return 0
   f="$(fleet_dir)/results/$cid.json"; [[ -f "$f" ]] || return 0
   meta_set "$1" node_cmd ""

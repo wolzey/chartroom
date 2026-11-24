@@ -506,6 +506,12 @@ EOF
   cr node limits here 15/85 >/dev/null
   run cr node limits
   [[ "${lines[1]}" == *"no: cpu at its limit" ]]
+  # off and on: its limits stay as they are
+  cr node limits here off >/dev/null; grep -qx CHARTROOM_NODE_ACCEPT=off "$CHARTROOM_NODE_CONFIG"
+  run cr node limits
+  [[ "${lines[1]}" == *"no: paused: not accepting" ]]
+  run cr node limits here on
+  [[ "$output" == *"under cpu 15% and memory 85% in use" ]]
   for bad in 0/80 80/101 eighty/70 80 "--cpu"; do
     run cr node limits here $bad
     [ "$status" -ne 0 ]

@@ -335,13 +335,14 @@ cmd_node_init() {
   [[ "$priority" != background ]] || echo "  note: background priority (taskpolicy -b) keeps workers on the efficiency cores on Apple silicon"
 }
 
-# The two limits, as "80/70", or --cpu 80 and/or --mem 70. Sets NL_CPU and NL_MEM ("" = as it is).
+# The two limits, as "80/70", or --cpu 80 and/or --mem 70. Sets NL_CPU and NL_MEM ("" = as it is), and NL_ACCEPT for on|off.
 node_limits_args() { # <args...>
-  NL_CPU="" NL_MEM=""
+  NL_CPU="" NL_MEM="" NL_ACCEPT=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --cpu) NL_CPU="${2:-}"; [[ -n "$NL_CPU" ]] || die "node limits: --cpu needs a percent"; shift 2 ;;
       --mem) NL_MEM="${2:-}"; [[ -n "$NL_MEM" ]] || die "node limits: --mem needs a percent"; shift 2 ;;
+      on|off) NL_ACCEPT="$1"; shift ;;
       */*) NL_CPU="${1%%/*}"; NL_MEM="${1#*/}"; shift ;;
       *) die "node limits: '$1' is not CPU/MEMORY (usage: chartroom node limits [<name|here> 80/70 | <name|here> [--cpu 80] [--mem 70]])" ;;
     esac
@@ -353,21 +354,24 @@ node_limits_args() { # <args...>
   NL_CPU="${NL_CPU%\%}"; NL_MEM="${NL_MEM%\%}"
 }
 
-# Sets this machine's own limits: those two lines of its node file, and nothing else in it.
-node_limits_set() { # <cpu or ""> <mem or "">
+# Sets this machine's own limits, or whether it takes new work at all: those lines of its node file,
+# and nothing else in it.
+node_limits_set() { # <cpu or ""> <mem or ""> [on|off or ""]
   local f k v tmp; f="$(node_config_path)"
   [[ -f "$f" ]] || { echo "this machine is not a node yet (chartroom node init)" >&2; return 1; }
-  for k in CPU MEM; do
-    if [[ $k == CPU ]]; then v="$1"; else v="$2"; fi
+  for k in CPU_BUDGET MEM_BUDGET ACCEPT; do
+    case "$k" in CPU_BUDGET) v="$1" ;; MEM_BUDGET) v="$2" ;; ACCEPT) v="${3:-}" ;; esac
     [[ -n "$v" ]] || continue
     tmp="$f.tmp.$$"
-    awk -v k="CHARTROOM_NODE_${k}_BUDGET" -v v="$v" '$0 ~ "^[[:space:]]*" k "[[:space:]]*=" { if (!d) print k "=" v; d = 1; next } { print } END { if (!d) print k "=" v }' "$f" >"$tmp" &&
+    awk -v k="CHARTROOM_NODE_$k" -v v="$v" '$0 ~ "^[[:space:]]*" k "[[:space:]]*=" { if (!d) print k "=" v; d = 1; next } { print } END { if (!d) print k "=" v }' "$f" >"$tmp" &&
       mv "$tmp" "$f" || { rm -f "$tmp"; return 1; }
   done
+  if [[ "$(cfg_value_in "$f" CHARTROOM_NODE_ACCEPT)" == off ]]; then echo "takes no new work (off)"; return 0; fi
   echo "takes new work under cpu $(cfg_value_in "$f" CHARTROOM_NODE_CPU_BUDGET)% and memory $(cfg_value_in "$f" CHARTROOM_NODE_MEM_BUDGET)% in use"
 }
 
 # chartroom node limits                       every node's use against its two limits
+# chartroom node limits <name|here> off|on    it takes no new work at all; or does again
 # chartroom node limits <name|here> 80/70     sets them: here in this machine's node file, on a device
 #                                             over the connection (one that is away takes it when back)
 cmd_node_limits() {
@@ -385,14 +389,14 @@ cmd_node_limits() {
   fi
   who="$1"; shift
   node_limits_args "$@"
-  [[ -n "$NL_CPU$NL_MEM" ]] || die "usage: chartroom node limits [<name|here> 80/70 | <name|here> [--cpu 80] [--mem 70]]"
+  [[ -n "$NL_CPU$NL_MEM$NL_ACCEPT" ]] || die "usage: chartroom node limits [<name|here> 80/70|off|on | <name|here> [--cpu 80] [--mem 70]]"
   if [[ "$who" == here || "$who" == "$(radar_machine_name)" ]]; then
-    printf 'here: '; node_limits_set "$NL_CPU" "$NL_MEM" || exit 1
+    printf 'here: '; node_limits_set "$NL_CPU" "$NL_MEM" "$NL_ACCEPT" || exit 1
     return 0
   fi
   id="$(fleet_resolve "$who")"; st="$(fleet_device_json "$id" | jq -r .status)"
   [[ "$st" != revoked ]] || die "node limits: $who is revoked"
-  local p; p="$(jq -cn --arg c "$NL_CPU" --arg m "$NL_MEM" '{cpu: $c, mem: $m}')"
+  local p; p="$(jq -cn --arg c "$NL_CPU" --arg m "$NL_MEM" --arg a "$NL_ACCEPT" '{cpu: $c, mem: $m, accept: $a}')"
   if [[ "$st" != online ]]; then
     fleet_enqueue "$id" limits "$p" >/dev/null
     echo "$who is $st: its limits are set when it is back"; return 0
@@ -432,7 +436,7 @@ cmd_node() {
     rotate) cmd_node_rotate "$@" ;;
     update) cmd_node_update "$@" ;;
     ping) cmd_node_ping "$@" ;;
-    *) die "usage: chartroom node probe [--json] | node init [--cpu PCT] [--mem PCT] [--battery pause|allow] [--priority normal|nice|background] [--project-roots DIRS] [--force] | node limits [<name|here> CPU/MEM] | node add [--name N] [--alias A]... [--replace NAME|ID] | node rename <name|id> <new> | node revoke <name|id> | node rotate <name|id> | node update <name|id>...|--all | node ping <name|id>" ;;
+    *) die "usage: chartroom node probe [--json] | node init [--cpu PCT] [--mem PCT] [--battery pause|allow] [--priority normal|nice|background] [--project-roots DIRS] [--force] | node limits [<name|here> CPU/MEM|off|on] | node add [--name N] [--alias A]... [--replace NAME|ID] | node rename <name|id> <new> | node revoke <name|id> | node rotate <name|id> | node update <name|id>...|--all | node ping <name|id>" ;;
   esac
 }
 

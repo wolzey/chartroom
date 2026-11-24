@@ -563,6 +563,8 @@ placed_setup() { # [agent heartbeat seconds]
   ( CHARTROOM_DEVICE_HEARTBEAT="${1:-1}" dev device run >/dev/null 2>&1 ) 3>&- &
   AGENTS="${AGENTS:-} $!"
   until_true 'cr fleet devices --json | jq -e ".[0].caps | index(\"place\")" >/dev/null'
+  # (the agent's own first heartbeat, after the one join made)
+  until_true '[ "$(grep -c "heartbeat ok" "$DEV/state/chartroom/device/agent.log")" -ge 2 ]'
 }
 
 @test "placed: a ship task nobody pinned runs on the device with room, its files with it, and its branch comes home at close" {
@@ -596,7 +598,16 @@ placed_setup() { # [agent heartbeat seconds]
 }
 
 @test "placed: the device checks its own limits when it takes the work, with what it uses then, and the next node takes it" {
-  placed_setup 60
+  export CHARTROOM_NODE_STALE_SECONDS=300
+  placed_setup 200
+  # it cannot read its own memory any more: it does not guess
+  mv "$BATS_TEST_TMPDIR/fake-dev/vm_stat" "$BATS_TEST_TMPDIR/vm_stat.off"
+  ID="$(new_task --backend command 2>/dev/null)"
+  run cr dispatch "$ID"
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"m3 did not take it: its CPU or memory use could not be read"* ]]
+  mv "$BATS_TEST_TMPDIR/vm_stat.off" "$BATS_TEST_TMPDIR/fake-dev/vm_stat"
   # it has filled up since its last heartbeat
   fake_use "$BATS_TEST_TMPDIR/fake-dev" "$DEV/state" 97 10
   ID="$(new_task --backend command 2>/dev/null)"
@@ -622,6 +633,7 @@ placed_setup() { # [agent heartbeat seconds]
   grep -qx CHARTROOM_NODE_CPU_BUDGET=85 "$DEV/node"; grep -qx CHARTROOM_NODE_MEM_BUDGET=65 "$DEV/node"
   [ "$(grep -vE '_(CPU|MEM)_BUDGET=' "$DEV/node")" = "$before" ]
   until_true '[ "$(cr node limits | grep "^m3" | tr -s " ")" = "m3 5% 85% 10% 65% yes" ]'
+  cr node limits m3 off; until_true 'cr node limits | grep "^m3" | grep -q "no: paused: not accepting"'; cr node limits m3 on
   run cr node limits m3 0/65
   [ "$status" -ne 0 ]
   for p in $AGENTS; do kill_tree_of "$p"; done; AGENTS=""

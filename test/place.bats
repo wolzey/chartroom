@@ -9,6 +9,7 @@ setup() {
   common_setup
   use_fake sysctl vm_stat
   export CHARTROOM_MACHINE_NAME=studio CHARTROOM_NODES=none CHARTROOM_TAILSCALE=none
+  export CHARTROOM_NODE_STALE_SECONDS=300 # (a loaded runner takes a while between a heartbeat and its test)
   export FAKE_NODE_DIR="$BATS_TEST_TMPDIR/fake"; fake_use "$FAKE_NODE_DIR" "$XDG_STATE_HOME" 20 30
   export CHARTROOM_NODE_CONFIG="$BATS_TEST_TMPDIR/nodecfg"
   export CHARTROOM_NODE_BACKENDS='hc:claude|hc:codex|command' CHARTROOM_COMMAND="$STUB {id}" STUB_MODE=silent
@@ -136,6 +137,31 @@ dry() { run cr dispatch "$1" --dry-run; echo "$output"; }
   [[ "$output" == "$id2 would run on m3"* ]]
 }
 
+@test "placement: a home can turn it off for itself" {
+  seed m3 $M3 5 10
+  id="$(new_task --backend command)"
+  echo "CHARTROOM_PLACEMENT=local" >"$CHARTROOM_HOME/config"
+  dry "$id"; [[ "$output" == *"(not placed)" ]]
+  rm "$CHARTROOM_HOME/config"; dry "$id"; [[ "$output" == *"run on m3"* ]]
+}
+
+@test "watch: a working task whose machine is lost wakes once, and says when it is back" {
+  seed m3 $M3 5 10; answering
+  id="$(new_task --backend command)"; cr dispatch "$id" >/dev/null
+  [ "$(where "$id")" = "$M3" ]
+  old() { jq -c --argjson a "$1" '.last_seen = (now | floor) - $a' "$FLEET/devices/$M3.seen.json" >"$FLEET/t" && mv "$FLEET/t" "$FLEET/devices/$M3.seen.json"; }
+  old 900
+  run cr watch --once --timeout 20
+  echo "$output"
+  events "$id"; cr status --json | jq -c '.[] | {id, state, live}'; cr fleet devices --json | jq -c '.[] | {status, seen_age_s}'
+  [[ "$output" == *"$id"*"stalled: m3 has not been heard from for 15 min"* ]]
+  cr watch --once --timeout 2 || true
+  [ "$(events "$id" | grep -c 'stalled: m3')" = 1 ]
+  old 0
+  cr watch --once --timeout 2 || true
+  events "$id" | grep -q "note: m3 is heard from again"
+}
+
 @test "placement: a burst spreads by what each was just given, and stops at the limits, before any number moves" {
   seed m3 $M3 5 10; answering
   local got=""
@@ -214,7 +240,7 @@ dry() { run cr dispatch "$1" --dry-run; echo "$output"; }
   no $'s/^cpu_use\t.*/cpu_use\t-\t-/' "its CPU or memory use could not be read"
   cp "$BATS_TEST_TMPDIR/good" "$BATS_TEST_TMPDIR/m3.probe"; seed m5 $M5 95 95; beat m3 $M3 '["commands","update","dispatch"]'
   dry "$id"; [[ "$output" == "$id would run here"*"its agent is older (chartroom node update m3)"* ]]
-  beat m3 $M3; jq -c '.last_seen -= 100' "$FLEET/devices/$M3.seen.json" >"$FLEET/t" && mv "$FLEET/t" "$FLEET/devices/$M3.seen.json"
+  beat m3 $M3; jq -c '.last_seen -= 400' "$FLEET/devices/$M3.seen.json" >"$FLEET/t" && mv "$FLEET/t" "$FLEET/devices/$M3.seen.json"
   dry "$id"; [[ "$output" == "$id would run here"*"it is stale"* ]]
 }
 

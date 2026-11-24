@@ -223,9 +223,10 @@ device_cmd_ping() { echo "pong from $(device_cfg NAME) at $(device_rev | cut -c1
 # This machine's two limits, set from the brain (chartroom node limits): those two lines of its node
 # file and nothing else.
 device_cmd_limits() { # <payload {cpu, mem}>
-  local c m; c="$(jq -r '.cpu // ""' <<<"$1")"; m="$(jq -r '.mem // ""' <<<"$1")"
-  node_limits_args ${c:+--cpu "$c"} ${m:+--mem "$m"}
-  node_limits_set "$NL_CPU" "$NL_MEM"
+  local c m a; a="$(jq -r '.accept // ""' <<<"$1")"; [[ "$a" =~ ^(on|off)?$ ]] || { echo "limits: accept is on or off" >&2; return 2; }
+  c="$(jq -r '.cpu // ""' <<<"$1")"; m="$(jq -r '.mem // ""' <<<"$1")"
+  node_limits_args ${c:+--cpu "$c"} ${m:+--mem "$m"} ${a:+"$a"}
+  node_limits_set "$NL_CPU" "$NL_MEM" "$NL_ACCEPT"
 }
 
 # Fast-forward this machine's chartroom to the brain's commit, which must be on this checkout's
