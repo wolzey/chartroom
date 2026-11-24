@@ -77,7 +77,7 @@ export function FleetPage({ fleet, workers, tasks, sel, setSel, onRefresh, onSes
             <span class="m-via faint">${via(m)}</span>
             <span class="grow"></span>
             <span class="m-power faint">${m.power === "battery" ? "on battery" + (m.battery_pct != null ? " " + m.battery_pct + "%" : "") : m.power === "ac" ? "plugged in" : ""}</span>
-            ${crew(m) != null ? html`<span class="m-slots faint" title="for information: the limits are its CPU and memory use">${crew(m)} worker${crew(m) === 1 ? "" : "s"}${m.other_agents ? " · " + m.other_agents + " other" : ""}</span>` : null}</div>
+            ${m.crew_live != null || m.agents_live != null ? html`<span class="m-slots faint" title="for information: the limits are its CPU and memory use">${crew(m)} worker${crew(m) === 1 ? "" : "s"}${m.other_agents ? " · " + m.other_agents + " other" : ""}</span>` : null}</div>
           <${Checks} m=${m} />
           ${m.state !== "down" ? html`<div class="m-l3"><${Use} label="CPU" use=${m.cpu_use} limit=${m.budgets && m.budgets.cpu} /><${Use} label="Memory" use=${m.mem_used_pct} limit=${m.budgets && m.budgets.mem} />
             ${m.full ? html`<span class="warn-t">Takes no new work: ${m.full}</span>` : m.budgets && m.budgets.cpu ? html`<span class="faint">Takes new work</span>` : null}</div>` : null}

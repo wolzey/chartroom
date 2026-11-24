@@ -31,7 +31,8 @@ usage: chartroom attachment add <id> [--name N] [--type MIME] [--caption C] [--b
        chartroom brief <id> --sections <file|->   replace sections of the brief: {"Commander's intent": "...", "Spec": "..."}
        chartroom set <id> priority=urgent|high|medium|low|none labels=a,b initiative=<id>|none milestone=<id>|none
        chartroom set <id> model=<m> effort=<e> sandbox=<mode> permission=<mode>   (before dispatch)
-       chartroom set <id> node=<device>|here                                       (before dispatch)
+       chartroom set <id> node=<device>|here|any                                   (before dispatch)
+       chartroom set <id> needs=docker,ruby,...|none
 EOF
 }
 
@@ -241,6 +242,12 @@ cmd_set() {
   [[ $# -ge 1 ]] || die "$(ticket_usage)"
   # node=<device>|here: where it runs (lib/backends/node.sh), set on its own
   if [[ "$1" == node=* ]]; then [[ $# -eq 1 ]] || die "set: node=... goes on its own"; node_pin "$id" "${1#node=}"; return; fi
+  # needs=docker,ruby|none: what a node must have for it (lib/place.sh), set on its own
+  if [[ "$1" == needs=* ]]; then
+    [[ $# -eq 1 ]] || die "set: needs=... goes on its own"
+    local needs; needs="$(needs_norm "${1#needs=}")" || exit 1
+    meta_set "$id" needs "$needs"; log_event "$id" note "needs: $needs"; echo "$id needs $needs"; return
+  fi
   local kv k v l keys=() vals=() json=()
   for kv in "$@"; do
     [[ "$kv" == *=* ]] || die "set: '$kv' is not key=value"

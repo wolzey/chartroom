@@ -1,9 +1,9 @@
 # Multi-machine crew dispatch
 
 Design for spreading the crew's work over several machines without the commander placing it.
-Status: **stage 1 is built** (`chartroom nodes`, `chartroom node probe`, `chartroom node init`:
-read-only discovery plus each node's own budgets); stages 2 to 4 are designed here and not yet
-built. "desk" and "mini" below are example labels: an always-on desktop that holds the home of
+Status: the devices (§12), pinned dispatch and **automatic placement (§5)** are built; the ssh protocol
+of §§3, 4 and 7 is superseded by devices, and the queue, hand-offs and yielding to a person at the
+keyboard are not built. "desk" and "mini" below are example labels: an always-on desktop that holds the home of
 record, and a laptop used headlessly.
 
 **Devices push to the brain** (the commander's direction, superseding the ssh protocol below where
@@ -11,8 +11,8 @@ they differ): each machine runs chartroom's device agent, keeps the one connecti
 the brain never reaches out to it, holds no key to it, and asks it to open no port.
 [§12](#12-devices-the-brain-never-reaches-out) describes what is built of that: enrolment, the
 device's own revocable token, heartbeats that Fleet and `chartroom nodes` read, commands over
-the connection, and pinned dispatch: a task pinned to a device runs there. Automatic placement is
-not built yet.
+the connection, and pinned dispatch: a task pinned to a device runs there. §5 describes automatic
+placement, which is built on them.
 
 ## 1. Goals and shape
 
@@ -127,59 +127,69 @@ messages go on **stdin as JSON**, never interpolated into the shell line. Remote
 
 ## 5. Placement
 
-**Inputs.** For each node `n`, taken from a fresh probe (≤ 30 s old):
+Built (lib/place.sh). `dispatch` sends each task that can run on another machine to the node with
+the most room. Nobody has to say where; the brain's own machine is a node like any other. With no
+device enrolled whose agent can report its use, nothing here happens and dispatch is as it was.
 
-| Symbol | Meaning |
-|---|---|
-| `C` | logical cores |
-| `B` | cpu budget (0–1] |
-| `W` | max workers |
-| `M` | memory budget (0–1] |
-| `R` | RAM |
-| `L` | 1-minute load average |
-| `F` | free memory fraction (macOS `kern.memorystatus_level`) |
-| `w` | live crew workers: the node's hc terminals carrying `chartroom.task` (from the first frame of `hc events --json`, which carries labels; `hc ls` does not). An XO or a person's own agent is not a slot, though its load counts through `L` and `F`. An hc with no event stream falls back to every live agent |
-| `r` | reservations younger than 180 s (the node's own, plus the dispatcher's in-flight placements) |
+**Two limits per node, its owner's.** The share of its CPU and the share of its memory that may be in
+use, such as 80% and 70%. A node at or over either takes no new task. There are no slots: the number
+of workers is shown for information and gates nothing.
 
-A worker's cost is `c` = `CHARTROOM_WORKER_CPU` (default 1.5 cores) and `m` = `CHARTROOM_WORKER_MEM_GB` (default 1.5;
-an idle Claude worker measured 1.06–1.11 GB in the park work).
-
-**Projected utilisation if this task lands on n:**
-
-```
-u_slots = (w + r + 1) / W
-u_cpu   = (L + c·(r + 1)) / (C · B)
-u_mem   = ((1 − F)·R + m·(r + 1)) / (R · M)
-U(n)    = max(u_slots, u_cpu, u_mem)
+```bash
+chartroom node limits                 # every node's use against its limits, and whether it takes work
+chartroom node limits mini 80/70      # set one's (also: here 80/70, --cpu 80, --mem 70)
 ```
 
-**Steps:**
+They are `CHARTROOM_NODE_CPU_BUDGET` and `CHARTROOM_NODE_MEM_BUDGET` in the node's own file; a device is
+sent them over the connection (the `limits` command) and changes those two lines only. Fleet shows
+them beside the use.
 
-1. **Hard filter** (section 6). Drop nodes that cannot run the task, are paused (on battery with `pause`, not accepting, or
-   in stage 4 the commander is at its keyboard), or have `U(n) > 1`. If nothing is left, the task is `queued`
-   (stage 3), or with `--machine` it fails with the numbers.
-2. **spread (default).** Take the lowest `U`. Nodes within **0.10** of it form a tie group, ranked by:
-   - locality: +2 the checkout already has `base_sha`; +1 recent `FETCH_HEAD` and installed deps
-     (`node_modules`, vendor/bundle); +1 the images the task needs are cached (stage 4); +1 the dispatcher's own machine;
-   - then lower `U`;
-   - then the label, so the choice is deterministic.
-3. **pack** (`CHARTROOM_PLACEMENT=pack`). Take the highest `U ≤ 1`: fill one node first. Ties use the same locality
-   ranking.
-4. **local** (`CHARTROOM_PLACEMENT=local`). Turns placement off: everything runs here, as today.
+**What is measured** (lib/nodeprobe.sh, in each heartbeat):
 
-Each node is measured against **its own** budget, so spreading evens out the *fractions*. A node with twice the
-capacity takes about twice the tasks. Reservations count at full cost for 180 s, because `load1` is an exponentially
-weighted average that reaches about 95% of a step after 3 minutes. Without that, a burst of five dispatches would all
-see the same idle node.
+| | macOS | Linux |
+|---|---|---|
+| CPU in use | the kernel's busy and idle tick counters (`iostat -w`, every row after the first), over all cores, averaged over the last minute by lib/cpuload.sh | `/proc/stat`, the same minute |
+| Memory in use | Activity Monitor's *Memory Used*: app memory (anonymous less purgeable pages) + wired + compressed, from `vm_stat`, over all memory | 1 − MemAvailable / MemTotal |
 
-**Worked example** (c = 1.5, no slot or memory pressure):
+- **Not the load average.** It counts waiting threads, lags by minutes, and on a Mac mixes
+  performance and efficiency cores.
+- **Not the kernel's free level** (`kern.memorystatus_level`, what `memory_pressure` prints). It counts
+  every page that is not wired or compressed as free: a machine with two thirds of its memory in
+  use by apps reads 87% free.
+- A device's agent and the brain's app server each keep the minute (lib/cpuload.sh). Where neither
+  runs, a probe takes a sample of 3 seconds.
 
-| Node | Capacity C·B | Load L | 1st task u_cpu | 2nd task |
-|---|---|---|---|---|
-| desk | 28 × 0.8 = 22.4 | 6 | (6 + 1.5) / 22.4 = 0.33 | 0.33 → **here** |
-| mini | 16 × 1.0 = 16 | 3 | (3 + 1.5) / 16 = 0.28 → **here** | (3 + 3) / 16 = 0.375 |
+**The choice.** For each node, with `h` workers placed there in the last `CHARTROOM_PLACE_HOLD_SECONDS`
+(180):
 
-Total usage climbs evenly instead of filling one machine to 100% first.
+```
+u_cpu = (cpu_use + 100·c·(h + 1) / cores) / cpu limit        c = CHARTROOM_WORKER_CPU    (1.5 cores)
+u_mem = (mem_used + 100·m·(h + 1) / RAM)  / memory limit     m = CHARTROOM_WORKER_MEM_GB (1.5 GB)
+U(n)  = max(u_cpu, u_mem)
+```
+
+1. Leave out every node that lacks something (§6), is away, on battery with `pause` or not accepting,
+   is at or over a limit, or would go over one (`U > 1`).
+2. `spread` (the default): the lowest `U`. `pack`: the highest. `local`: no placement. Equal: this machine
+   first, then the name. Each node is measured against its own limits, so the machines fill
+   evenly, and a bigger one takes more.
+3. None left: the dispatch is refused, with every node's numbers, and the task stays undispatched
+   (the queue is not built). `dispatch --over-limit` passes the limits; `dispatch --dry-run` only says
+   where a task would go and why.
+
+**A burst.** What a node reports is up to 15 s old and a minute's average, so ten dispatches in ten
+seconds would all see the same idle node. Each placement therefore leaves a hold
+(`fleet/placed/<home>.<id>.json`), counted at its full assumed cost for 180 s: longer than a worker takes
+to start and show in the average. The choice and its hold are made under one lock, for every
+home on the brain.
+
+**The device decides last.** It checks its own limits again when it takes the work (its use then, and the
+workers it was given in the last 180 s) before making anything of it. A refusal (exit 5; 6 when the
+checkout or the base is missing) undoes the placement and the task goes to the next node. Any other
+failure, or no answer, leaves the task with that device: it is never started twice.
+
+**A pin** (`--node`, `set node=`) is kept, and is refused with the numbers when its node is at a limit.
+`set node=here` keeps a task on this machine; `node=any` lets dispatch place it.
 
 **Never moved.** A running task never migrates. `steer`, `peek`, `attach`, `park`/resume and `close` always go to its
 node.
@@ -198,6 +208,9 @@ stop placing there). It never kills a worker.
 
 ## 6. Hard requirements (filter before scoring)
 
+Placement checks all of this from the node's last heartbeat. A task's agent, login, tools and checkout
+are hard requirements; what keeps a task on this machine whatever the others offer is listed below.
+
 - **What a task needs:**
   - its agent, present **and logged in**;
   - `git`;
@@ -205,7 +218,19 @@ stop placing there). It never kills a worker.
     stripped, so `git@host:o/r.git` ≡ `https://host/o/r`;
   - its `base_sha` reachable from that remote. The origin checks with `git branch -r --contains`. A base that exists
     only locally keeps the task on the origin;
-  - anything in `new --needs go,docker,ruby,node,gh` (stage 3), and optionally per project in `projects.md`.
+  - anything in `new --needs docker,ruby,go,node,gh` or `set <id> needs=...`, per project in `projects.md`
+    (`- app: ...; needs=docker`), and Docker when the brief's own words name it (`needs=none` overrides).
+    This machine is held to it too.
+- **What stays on this machine:** a task pinned here; one whose worktree or branch is here already, or
+  that was moved here; a base on no branch of origin; a project with no remote; a home that is not
+  registered; a runner other than hc; and a brief that names files other machines lack and that cannot
+  go along.
+- **Files that go along.** A brief often names files of the brain's home (a draft, another task's
+  report). Those are sent with the dispatch, kept in the task's own folder on the device (`brain/`),
+  and the brief's paths are moved to them. Only text and pictures, 1 MB each and 4 MB in all; never a
+  dotfile, a symlink, chartroom's own state, or a file whose name or first lines look like a
+  secret: such a file keeps the task here. A path in a git checkout must be tracked, and the node
+  must have that checkout.
 - **Capabilities are functional, checked in the worker's context:**
   - `claude auth status` → `loggedIn`; `codex login status`; `gh auth status` exit 0; `docker info` (daemon up, not
     only the binary); `go version`, `ruby -v`, `node -v`; bash ≥ 4.
@@ -237,8 +262,8 @@ stop placing there). It never kills a worker.
 
 ## 8. Security
 
-- **Credentials never move.** The only payloads are the brief, a meta subset and steer messages: no environment,
-  tokens or config. Each node uses **its own** claude, codex and gh logins, which the commander makes once per node.
+- **Credentials never move.** The only payloads are the brief, the files of the brain's home it names (§6), a
+  meta subset and steer messages: no environment, tokens or config. Each node uses **its own** claude, codex and gh logins, which the commander makes once per node.
 - **The node never connects back.** No node holds credentials for the origin. Events come back over the origin's
   outbound stream, and commits by the origin's `git fetch`.
 - **What a dispatcher can run on a node.** The protocol is a fixed set of verbs with validated arguments. The ssh key
@@ -285,7 +310,7 @@ stop placing there). It never kills a worker.
 |---|---|---|
 | **1** (built) | `lib/nodeprobe.sh`, `chartroom node probe`, `chartroom node init` (budgets file, written on the node itself), `chartroom nodes` table | No. The dispatcher only reads |
 | **2** | an `install.sh` node mode (an install with no home: today's install runs `chartroom init`, which makes one); `new/dispatch --machine <m>` end to end: lease, accept (fetch + worktree + login-session runner), stream into `watch`, `node.json`, steer, peek, attach, park, close, branch fetch-back, `recover`, `lost` | Yes: the protocol's M verbs |
-| **3** | Automatic placement (`spread`/`pack`/`local`), budgets enforced at `lease`, the `queued` state with a drain on capacity, `new --needs` | Yes |
+| **3** | Automatic placement (`spread`/`pack`/`local`), limits enforced by the device as it takes the work, `new --needs` (built, §5); the `queued` state with a drain on capacity (not built) | Yes |
 | **4** | Yield while the commander is at the keyboard (HID idle < `CHARTROOM_NODE_IDLE_MINUTES`: stop placing there, `background` priority for running guests), battery pause, cached images in locality, rebalancing the **queue** (never running workers) | Yes |
 
 **Later, not planned:** `chartroom adopt <id>` would let another home take over a task's record by moving its
@@ -294,8 +319,8 @@ stop placing there). It never kills a worker.
 ## 12. Devices: the brain never reaches out
 
 Built: enrolment and heartbeats (lib/fleet.sh on the brain, lib/device.sh on a device, the device
-routes in lib/app/server.py), commands, and pinned dispatch (below). Nothing places work on a
-device by itself yet.
+routes in lib/app/server.py), commands, and pinned dispatch (below), which automatic placement (§5)
+uses too.
 
 ```
  device (mini)                                          brain (the desk): its app server
@@ -338,7 +363,7 @@ device by itself yet.
 
 ### Pinned dispatch (built)
 
-- **Pinning.** `new --node <device>` or `set <id> node=<device>|here`, before dispatch, makes the
+- **Pinning.** `new --node <device>` or `set <id> node=<device>|here|any`, before dispatch, makes the
   task's backend `node:<agent>`. The device's id is in `meta.node`, and what runs there (hc:claude
   or hc:codex) is in `meta.node_backend`. A pin needs a device whose agent says it can take work
   (the `dispatch` capability in its heartbeat).
@@ -352,6 +377,8 @@ device by itself yet.
   brain appends each one verbatim, by offset (`meta.node_off`), so a replay never doubles one.
   report.md, plan.md and new permission cards come back the same way. An answer given on the
   brain is sent back as `permit-sync`.
+- **Reading its branch** before close: `chartroom git <id> log|diff|...` is read-only git in the worktree on
+  the device.
 - **Liveness.** The heartbeat carries each pinned task's live word, and the brain's `status` reads
   it from there.
 - **Close.** In this order, stopping at the first step that does not hold:
@@ -369,6 +396,5 @@ device by itself yet.
   - the brain's screen-based stuck checks for a remote worker (turn ends and hook prompts do
     arrive as events);
   - the 4-hour reminder for a pin whose device stays away;
-  - automatic placement;
   - handoff.
 

@@ -153,12 +153,21 @@ that for this kind of work.
 **5. Dispatch.** Run `chartroom dispatch <id>`. It prints the backend actually used and its
 steering mode. For `subagent`, it prints the exact call for you to make. Then confirm to the
 commander in a line, in outcome terms: "Got it. Someone's on the flaky login test in the web app."
+When other machines are enrolled, dispatch also chooses where an hc task runs (the machine with the
+most room under its CPU and memory limits) and says so. Don't place work by hand; pin it
+(`--node <name|here>`) only when the commander names a machine. If the task needs Docker or
+another tool to do its work or run its tests, say so when you create it (`--needs docker,ruby`): it then
+only lands where that works. A project that always needs it has `needs=docker` on its `projects.md` line.
+Files of this home that the brief names by full path go along; a file outside it (in `/tmp`, another
+home) keeps the task here. When no machine has room, dispatch refuses with each one's numbers:
+dispatch again later, and pass `--over-limit` only on the commander's word.
 
 **6. Supervise.** See Supervision. Stay quiet while work is under way.
 
 **7. Verify** before reporting `done`. Read `report.md` (and glance at the page, if the worker
 made one, so what the commander reads matches it). For ship work, check the branch yourself
-(read-only): `git -C <worktree> log --oneline <base>..HEAD`, `git diff --stat`, and confirm
+(read-only): `chartroom git <id> log --oneline <base>..HEAD` and `diff --stat <base>..HEAD` (it reads
+the worktree on whichever machine the worker runs), and confirm
 that the validation the report names was actually run and passed. If the evidence is thin, steer
 the worker to produce it. Don't escalate that to the commander.
 
@@ -265,9 +274,9 @@ hot or slow, run the `sweep` skill (`chartroom sweep --apply`, one line to relay
 `chartroom nodes` lists the machines that can take crew work (this one first) with their room,
 logins, tools and checkouts: an enrolled device from its last heartbeat (`online`, `stale`,
 `lost`), any other machine read-only over ssh. Use it to answer "which machine has room" or
-"can mini run this". Workers still run on this machine: dispatching onto another one arrives in a
-later release (docs/multi-machine.md), and you never place work by hand on a machine the
-commander has not made a node (`chartroom node init`, run there by the commander). Enrolling,
+"can mini run this" (`chartroom dispatch <id> --dry-run` says where a task would go). Each machine's two
+limits are the commander's: `chartroom node limits` shows them, and `chartroom node limits <name|here> 80/70`
+sets one when they say so. Enrolling,
 revoking or rotating a device (`chartroom node add|revoke|rotate`) changes who can reach the
 brain: do it only on the commander's word.
 

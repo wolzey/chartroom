@@ -5,7 +5,9 @@
 # comes back the same way: its event lines, report.md and plan.md, its permission cards, and at
 # close its branch, as a git bundle. The brain never opens a connection to the device.
 #
-#   chartroom new ... --node <name|id>   pins at birth; chartroom set <id> node=<name|id>|here
+# A task gets here pinned by the commander, or placed by dispatch itself (lib/place.sh; then
+# meta.node_placed is 1 and node_source is the backend_source it had).
+#   chartroom new ... --node <name|id|here>   pins at birth; chartroom set <id> node=<name|id>|here|any
 #   meta.node          the device's id (names are display only); meta.node_name its name then
 #   meta.node_backend  what it runs there: hc:claude or hc:codex (meta.backend reads node:<agent>)
 #   meta.node_attempt  which attempt the device is on; meta.node_off the lines of its log taken
@@ -34,15 +36,22 @@ node_home() { # this home's registered name (the device and the server know a ta
 }
 node_map() { printf '%s/tasks/%s/%s.json' "$(fleet_dir)" "$1" "$2"; } # <home> <id>
 
-# Pins a task to a device, or (here|none) back to this machine. Only before its dispatch.
-node_pin() { # <id> <name|id|here|none>
+# Pins a task to a device, or to this machine (here), or takes its pin away (any|none: dispatch
+# places it). Only before its dispatch.
+node_pin() { # <id> <name|id|here|any|none>
   local id="$1" want="$2" b did row name
   [[ -z "$(meta "$id" dispatched)" || -n "$(meta "$id" closed)" ]] || die "set: $id is dispatched already; a pin moves only work not started"
-  if [[ "$want" == here || "$want" == none ]]; then
-    [[ -n "$(meta "$id" node)" ]] || { echo "$id is not pinned"; return 0; }
-    meta_set "$id" backend "$(meta "$id" node_backend)"; meta_set "$id" node ""; meta_set "$id" node_name ""
-    log_event "$id" note "pin removed: it runs on this machine"
-    echo "$id runs on this machine"; return 0
+  if [[ "$want" =~ ^(here|any|none)$ ]]; then
+    if [[ -n "$(meta "$id" node)" ]]; then
+      meta_set "$id" backend "$(meta "$id" node_backend)"; meta_set "$id" node ""; meta_set "$id" node_name ""; meta_set "$id" node_placed ""
+      log_event "$id" note "pin removed"
+    fi
+    if [[ "$want" == here ]]; then
+      meta_set "$id" node_here 1; log_event "$id" note "pinned here: it runs on this machine"; echo "$id runs on this machine"
+    else
+      meta_set "$id" node_here ""; echo "$id is not pinned: dispatch places it"
+    fi
+    return 0
   fi
   is_joined "$id" && die "set: $id joined from a running session; it cannot move"
   did="$(fleet_resolve "$want")"; row="$(fleet_device_json "$did")"; name="$(jq -r .name <<<"$row")"
@@ -54,33 +63,55 @@ node_pin() { # <id> <name|id|here|none>
   [[ -z "$b" || "$b" == auto || "${b%%:*}" == node ]] && b=hc:claude
   local nb; nb="$(node_backends)"
   [[ "$b" =~ ^($nb)$ ]] || die "set: only ${nb//|/ and } run on another machine for now (this task is $b)"
-  meta_set "$id" node "$did"; meta_set "$id" node_name "$name"; meta_set "$id" node_backend "$b"
+  meta_set "$id" node "$did"; meta_set "$id" node_name "$name"; meta_set "$id" node_backend "$b"; meta_set "$id" node_here ""
   meta_set "$id" backend "node:${b#*:}"
   meta_set "$id" backend_source explicit
   log_event "$id" note "pinned to $name ($did): it runs there, as $b"
   echo "$id is pinned to $name: it runs there as $b ($(jq -r .status <<<"$row") now)"
 }
 
-node_payload() { # <id> <attempt>
-  local id="$1"
-  jq -cn --arg home "$(node_home)" --arg id "$id" --arg title "$(meta "$id" title)" --arg kind "$(meta "$id" kind)" \
-    --arg project "$(meta "$id" project)" --arg base "$(meta "$id" base_sha)" --arg branch "$(meta "$id" branch)" \
-    --arg backend "$(meta "$id" node_backend)" --arg plan_gate "$(meta "$id" plan_gate)" --arg permission "$(meta "$id" permission)" \
-    --arg model "$(meta "$id" model)" --rawfile brief "$(tdir "$id")/brief.md" --arg brain_home "$CR_HOME" \
-    --argjson grants "$(permit_grants_json "$id")" --argjson attempt "$2" --arg ws "$CR_WORKSPACE" \
-    '{home: $home, id: $id, title: $title, kind: $kind, project: $project, base: $base, branch: $branch, backend: $backend,
-      plan_gate: ($plan_gate == "1"), permission: $permission, model: $model, brief: $brief, brain_home: $brain_home,
-      grants: $grants, attempt: $attempt, workspace: $ws}'
+# The project's checkout on that device: the same path when its list has it, else its first
+# checkout of the same remote, else (an agent with no list) the same path.
+node_project_on() { # <device id> <brain project path>
+  local project="$2" want probe got pre
+  want="$(place_remote "$project")"; pre="$(git -C "$project" rev-parse --show-prefix 2>/dev/null || true)"; pre="${pre%/}"
+  local top="$project"; [[ -z "$pre" ]] || top="${project%/"$pre"}"
+  probe="$(fleet_device_json "$1" | jq -r '.probe // ""')"
+  got="$(awk -F'\t' -v w="$want" -v t="$top" '$1 == "checkout" && $2 == w { if ($3 == t) { print $3; f = 1; exit } if (!first) first = $3 } END { if (!f && first) print first }' <<<"$probe")"
+  printf '%s' "${got:-$top}${pre:+/$pre}"
 }
 
-node_launch() { # <id> <wt (none here)> <agent>
-  local id="$1" did home attempt cid res name st
+node_payload() { # <id> <attempt> <over 0|1>
+  local id="$1" carry f
+  f="$(mktemp)"; place_carry_json "$id" >"$f"
+  carry="$(jq -r '.missing // empty' "$f")"
+  [[ -z "$carry" ]] || log_event "$id" note "its brief on $(node_name_of "$id"): $carry" # (a pin goes all the same)
+  jq -cn --arg home "$(node_home)" --arg id "$id" --arg title "$(meta "$id" title)" --arg kind "$(meta "$id" kind)" \
+    --arg project "$(node_project_on "$(meta "$id" node)" "$(meta "$id" project)")" --arg base "$(meta "$id" base_sha)" --arg branch "$(meta "$id" branch)" \
+    --arg backend "$(meta "$id" node_backend)" --arg plan_gate "$(meta "$id" plan_gate)" --arg permission "$(meta "$id" permission)" \
+    --arg model "$(meta "$id" model)" --rawfile brief "$(tdir "$id")/brief.md" --arg brain_home "$CR_HOME" --arg tilde "${CR_HOME/#"$HOME"/\~}" \
+    --argjson grants "$(permit_grants_json "$id")" --argjson attempt "$2" --arg ws "$CR_WORKSPACE" --arg over "${3:-0}" \
+    --arg tools "$(place_tools "$id")" --slurpfile c "$f" \
+    '{home: $home, id: $id, title: $title, kind: $kind, project: $project, base: $base, branch: $branch, backend: $backend,
+      plan_gate: ($plan_gate == "1"), permission: $permission, model: $model, brief: $brief, brain_home: $brain_home,
+      brain_home_tilde: (if $tilde == $brain_home then "" else $tilde end),
+      grants: $grants, attempt: $attempt, workspace: $ws, over: ($over == "1"),
+      needs: {agent: ($backend | split(":") | .[1] // ""), tools: ($tools | split("\n") | map(select(length > 0))), repos: []},
+      carry: $c[0].carry, files: $c[0].files}'
+  rm -f "$f"
+}
+
+# Sets NODE_REFUSED (the device's reason) when the device would not take it and made nothing of it
+# (exit 5: its limits or what it lacks; 6: no checkout, or no such base): the caller places it again.
+node_launch() { # <id> <wt (none here)> <agent> [over 0|1]
+  local id="$1" did home attempt cid res name st rc
+  NODE_REFUSED=""
   did="$(meta "$id" node)"; home="$(node_home)"; name="$(node_name_of "$id")"
   attempt="$(meta "$id" node_attempt)"; attempt=$(( ${attempt:-0} + 1 ))
   fleet_write "$(node_map "$home" "$id")" "$(jq -cn --arg d "$did" --argjson a "$attempt" --arg h "$CR_HOME" --arg b "$(meta "$id" branch)" \
     --arg p "$(meta "$id" project)" '{device: $d, attempt: $a, home_path: $h, branch: $b, project: $p}')"
   meta_set "$id" node_attempt "$attempt"; meta_set "$id" node_off 0; meta_set "$id" node_name "$name"
-  cid="$(fleet_enqueue "$did" dispatch "$(node_payload "$id" "$attempt")")"
+  cid="$(fleet_enqueue "$did" dispatch "$(node_payload "$id" "$attempt" "${4:-0}")")"
   meta_set "$id" node_cmd "$cid"
   st="$(fleet_device_json "$did" | jq -r '.status // "unknown"')"
   if [[ "$st" != online ]]; then
@@ -89,6 +120,10 @@ node_launch() { # <id> <wt (none here)> <agent>
   fi
   if res="$(fleet_wait "$cid" 150)"; then
     meta_set "$id" node_cmd ""
+    rc="$(jq -r '.rc // 1' <<<"$res")"
+    if [[ "$rc" == 5 || ( "$rc" == 6 && -n "$(meta "$id" node_placed)" ) ]]; then
+      NODE_REFUSED="$(jq -r '.err // .out // "no reason given"' <<<"$res" | grep -v '^[[:space:]]*$' | tail -1)"; return 0
+    fi
     node_dispatch_outcome "$id" "$res" || die "the dispatch on $name failed: $(jq -r '.err // .out' <<<"$res" | tail -3)"
     jq -r '.out' <<<"$res" | tail -3
     echo "the worker runs on $name (attempt $attempt): steer, peek and close it from here"
@@ -101,6 +136,13 @@ node_launch() { # <id> <wt (none here)> <agent>
 node_dispatch_outcome() { # <id> <result json>
   local id="$1" rc; rc="$(jq -r '.rc // 1' <<<"$2")"
   if [[ "$rc" == 0 ]]; then return 0; fi
+  # (refused before anything was made there, in an answer that came late: it can be dispatched again)
+  if [[ "$rc" == 5 || ( "$rc" == 6 && -n "$(meta "$id" node_placed)" ) ]]; then
+    local why name; why="$(jq -r '.err // .out // ""' <<<"$2" | tr '\n' ' ' | cut -c1-300)"; name="$(node_name_of "$id")"
+    if [[ -n "$(meta "$id" node_placed)" ]]; then place_undo "$id"; else meta_set "$id" dispatched ""; fi
+    log_event "$id" failed "$name did not take it: $why (dispatch it again)"
+    return 1
+  fi
   log_event "$1" failed "the dispatch on $(node_name_of "$id") did not start a worker: $(jq -r '(.err // "") + " " + (.out // "")' <<<"$2" | tr '\n' ' ' | cut -c1-300)"
   return 1
 }
@@ -146,6 +188,10 @@ node_peek() { # <id> <n>
   echo "== on $(node_name_of "$1"): $st"
   [[ "$st" == online* ]] || return 0
   node_cmd "$1" peek "$(jq -cn --argjson n "${2:-15}" '{n: $n}')" 30 | sed -nE '/^== (pane|screen|terminal)/,$p' || true
+}
+node_git() { # <id> <read-only git args...>: in the worker's worktree, there
+  local id="$1"; shift; node_need_online "$id" "git"
+  node_cmd "$id" git "$(jq -cn --args '{args: $ARGS.positional}' -- "$@")" 60
 }
 node_attach() {
   die "the worker of $1 runs on $(node_name_of "$1"): attach there (chartroom attach $1, with CHARTROOM_HOME set to its guest home: chartroom peek $1 prints it), or with your own hc link to it"

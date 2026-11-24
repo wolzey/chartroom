@@ -101,6 +101,8 @@ source "$CR_ROOT/lib/nodes.sh"
 source "$CR_ROOT/lib/fleet.sh"
 # shellcheck source=../lib/device.sh
 source "$CR_ROOT/lib/device.sh"
+# shellcheck source=../lib/place.sh
+source "$CR_ROOT/lib/place.sh"
 # shellcheck source=../lib/guest.sh
 source "$CR_ROOT/lib/guest.sh"
 # shellcheck source=../lib/stuck.sh
@@ -306,7 +308,7 @@ cmd_project() {
 
 cmd_new() {
   migrating_guard new
-  local project="" title="" kind="ship" backend="" base="" id="" plan_gate=0 command="" permission="" model="" grants=() node=""
+  local project="" title="" kind="ship" backend="" base="" id="" plan_gate=0 command="" permission="" model="" grants=() node="" needs=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --project) project="$2"; shift 2 ;;
@@ -320,11 +322,12 @@ cmd_new() {
       --model) model="$2"; shift 2 ;;
       --plan-gate) plan_gate=1; shift ;;
       --grant) [[ "${2:-}" =~ ^($PERMIT_GRANTS)$ ]] || die "unknown grant '${2:-}' (names: ${PERMIT_GRANTS//|/, })"; grants+=("$2"); shift 2 ;;
-      --node) node="${2:-}"; [[ -n "$node" ]] || die "--node needs a device (chartroom nodes lists them)"; shift 2 ;;
+      --node) node="${2:-}"; [[ -n "$node" ]] || die "--node needs a device, or here (chartroom nodes lists them)"; shift 2 ;;
+      --needs) needs="$(needs_norm "${2:-}")" || exit 1; shift 2 ;;
       *) die "new: unknown arg $1" ;;
     esac
   done
-  [[ -n "$project" && -n "$title" ]] || die "usage: chartroom new --project PATH --title TEXT [--backend RUNNER:AGENT|command|subagent|auto] [--kind ship|scout] [--base REF] [--plan-gate] [--command TEMPLATE] [--permission MODE] [--model M] [--grant NAME]... [--node DEVICE]"
+  [[ -n "$project" && -n "$title" ]] || die "usage: chartroom new --project PATH --title TEXT [--backend RUNNER:AGENT|command|subagent|auto] [--kind ship|scout] [--base REF] [--plan-gate] [--command TEMPLATE] [--permission MODE] [--model M] [--grant NAME]... [--node DEVICE|here] [--needs docker,ruby,...]"
   [[ "$kind" =~ ^(ship|scout)$ ]] || die "kind must be ship or scout (got $kind)"
   local source=explicit
   if [[ -z "$backend" || "$backend" == auto ]]; then backend=""; source=auto
@@ -365,6 +368,7 @@ cmd_new() {
     jq -cn --args '$ARGS.positional | unique' "${grants[@]}" >"$(permit_tdir "$id")/grants.json"
     log_event "$id" note "grants: $(jq -r 'join(", ")' "$(permit_tdir "$id")/grants.json")"
   fi
+  [[ -z "$needs" ]] || meta_set "$id" needs "$needs"
   write_brief "$id"
   # pinned at birth: it runs on that device (lib/backends/node.sh); a pin that cannot be is said
   # and the task stays here, unpinned
@@ -666,8 +670,17 @@ cmd_worktree() {
 
 cmd_dispatch() {
   migrating_guard dispatch
-  local id="${1:-}"; [[ -n "$id" ]] || die "usage: chartroom dispatch <id>"; need_task "$id"
-  local kind wt="" runner agent
+  local id="" over=0 dry=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --over-limit) over=1; shift ;;
+      --dry-run) dry=1; shift ;;
+      -*) die "usage: chartroom dispatch <id> [--dry-run] [--over-limit]" ;;
+      *) [[ -z "$id" ]] || die "usage: chartroom dispatch <id> [--dry-run] [--over-limit]"; id="$1"; shift ;;
+    esac
+  done
+  [[ -n "$id" ]] || die "usage: chartroom dispatch <id> [--dry-run] [--over-limit]"; need_task "$id"
+  local kind wt="" runner agent refused='[]'
   kind="$(meta "$id" kind)"
   is_joined "$id" && die "task $id joined from a running session; it is never dispatched (steer it instead)"
   grep -qE '^## Spec' "$(tdir "$id")/brief.md" || die "brief is missing its Spec section"
@@ -675,21 +688,49 @@ cmd_dispatch() {
     die "brief has no commander's intent yet; fill it before dispatch"
   fi
   select_backend "$id"
-  meta_set "$id" backend "$SELECTED"
-  runner="${SELECTED%%:*}"; agent=""; [[ "$SELECTED" == *:* ]] && agent="${SELECTED#*:}"
-  # (a pinned task's worktree is made on its device)
-  if [[ "$runner" != node && ( "$runner" != subagent || "$kind" == ship ) ]]; then
-    wt="$(cmd_worktree "$id")" || exit 1
-    [[ -n "$wt" && -d "$wt" ]] || die "dispatch $id: no worktree to run in (got '${wt}')"
+  # where it runs: the node with the most room (lib/place.sh), unless nothing can be placed
+  if [[ $dry -eq 1 ]]; then
+    place_task "$id" "$over" 1
+    case "$PLACED" in
+      "") echo "$id would run here, as $SELECTED (not placed)" ;;
+      here) echo "$id would run here, as $SELECTED. $PLACE_WORDS" ;;
+      *) echo "$id would run on ${PLACE_NAME:-$(node_name_of "$id")}. $PLACE_WORDS" ;;
+    esac
+    return 0
   fi
-  # A parked worker is not resumed by a dispatch: that starts a fresh one on the brief.
-  if [[ -n "$(meta "$id" parked)" ]]; then
-    log_event "$id" note "the parked session $(meta "$id" session_id) is left behind: a dispatch starts a fresh worker"
-    meta_set "$id" parked ""
-  fi
-  log_event "$id" note "dispatched via $SELECTED"
-  meta_set "$id" dispatched "$(now)"
-  "${runner}_launch" "$id" "$wt" "$agent"
+  while true; do
+    place_task "$id" "$over" 0 "$refused"
+    meta_set "$id" backend "$SELECTED"
+    runner="${SELECTED%%:*}"; agent=""; [[ "$SELECTED" == *:* ]] && agent="${SELECTED#*:}"
+    # (a worktree of a task on another machine is made there)
+    if [[ "$runner" != node && ( "$runner" != subagent || "$kind" == ship ) ]]; then
+      wt="$(cmd_worktree "$id")" || exit 1
+      [[ -n "$wt" && -d "$wt" ]] || die "dispatch $id: no worktree to run in (got '${wt}')"
+    fi
+    # A parked worker is not resumed by a dispatch: that starts a fresh one on the brief.
+    if [[ -n "$(meta "$id" parked)" ]]; then
+      log_event "$id" note "the parked session $(meta "$id" session_id) is left behind: a dispatch starts a fresh worker"
+      meta_set "$id" parked ""
+    fi
+    log_event "$id" note "dispatched via $SELECTED"
+    meta_set "$id" dispatched "$(now)"
+    if [[ "$runner" != node ]]; then "${runner}_launch" "$id" "$wt" "$agent"; break; fi
+    NODE_REFUSED=""
+    node_launch "$id" "" "$agent" "$over"
+    [[ -n "$NODE_REFUSED" ]] || break
+    # the node would not take it, and made nothing of it: the next one, or (a pin) say so
+    local name did; name="$(node_name_of "$id")"; did="$(meta "$id" node)"
+    if [[ -z "$(meta "$id" node_placed)" ]]; then
+      meta_set "$id" dispatched ""; place_unhold "$id"; rm -f "$(node_map "$(node_home)" "$id")"
+      log_event "$id" note "not dispatched: $name did not take it: $NODE_REFUSED"
+      die "not dispatched: $name did not take $id: $NODE_REFUSED (--over-limit sends it past a limit; chartroom set $id node=any lets it go where there is room)"
+    fi
+    log_event "$id" note "$name did not take it: $NODE_REFUSED"
+    echo "$name did not take it: $NODE_REFUSED" >&2
+    place_undo "$id"
+    SELECTED="$(canon_backend "$(meta "$id" backend)")"
+    refused="$(jq -c --arg d "$did" '. + [$d]' <<<"$refused")"
+  done
   echo "steering: $(steer_mode_of "$SELECTED")"
 }
 
@@ -1841,6 +1882,7 @@ chartroom - run a crew of coding agents from one agent session (the XO)
   chartroom project <name|path>           resolve a repo: path, forge, default base, overrides
   chartroom new --project P --title T [--backend B] [--kind ship|scout] [--base REF] [--plan-gate]
                 [--command TEMPLATE] [--permission MODE] [--model M] [--grant NAME]...
+                [--node DEVICE|here] [--needs TOOLS]
                                           create a task record + brief scaffold. B is
                                           <runner>:<agent> (runners: hc herdr cmux tmux headless;
                                           agents: claude codex), command, subagent, or auto
@@ -1848,7 +1890,8 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           --grant (repeatable): push-branch, open-pr, merge-auto,
                                           comment-pr, prod-read, enforced by the permission hooks
                                           --node: pin it to an enrolled device (hc:claude or
-                                          hc:codex there); dispatch runs it on that device
+                                          hc:codex there), or here; unpinned, dispatch places it.
+                                          --needs docker,ruby,...: only a node where those work
   chartroom join [--title T] [--kind ship|scout] [--agent A]
                                           run INSIDE a running agent session (not launched by
                                           chartroom) from its directory: records it as a joined
@@ -1859,15 +1902,25 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           a joined worker's mailbox: block until the XO's next
                                           message, print it, mark it read (--check: do not block)
   chartroom worktree <id>                 create (or print) the task's isolated worktree
-  chartroom dispatch <id>                 launch the worker on its backend
+  chartroom dispatch <id> [--dry-run] [--over-limit]
+                                          launch the worker: on the node with the most room under
+                                          its CPU and memory limits (hc workers, when a device is
+                                          enrolled; CHARTROOM_PLACEMENT=spread|pack|local), else
+                                          here. Refused, with each node's numbers, when none can
+                                          take it. --dry-run only says where; --over-limit passes
+                                          the limits
   chartroom steer <id> [--inbox] <msg>    deliver an answer or follow-up to the worker (joined:
                                           to its mailbox; "delivered" only once it is read;
                                           a parked worker is resumed with it)
   chartroom stop <id>                     interrupt a worker
   chartroom set <id> key=value...         a task's settings before dispatch: model, effort,
                                           sandbox, permission (for a file or a store task)
-  chartroom set <id> node=<device>|here   where it runs: pinned to an enrolled device, or this
-                                          machine (before dispatch)
+  chartroom set <id> node=<device>|here|any
+                                          where it runs: pinned to an enrolled device or to this
+                                          machine, or (any) wherever dispatch places it
+  chartroom set <id> needs=docker,ruby|none
+                                          what a node must have for it (also new --needs, and
+                                          needs=... on a project's line in projects.md)
   chartroom remove <ref>... [--why T] [--stop] [--json]
                                           take tasks, inbox items (i-xxxx) and artifacts
                                           (<id>/<slug>) out of every view at once, touching no
@@ -2048,6 +2101,9 @@ chartroom - run a crew of coding agents from one agent session (the XO)
   chartroom focus [--json]                the focus and how many items it holds (--json: the
                                           held items too)
   chartroom focus off                     end it; prints what was held
+  chartroom git <id> <log|diff|show|status|...> [args]
+                                          read-only git in the task's worktree, on whichever
+                                          machine the worker runs
   chartroom peek <id> [n]                 recent events and worker output
   chartroom watch [--once [--timeout S]]  wake stream: one line per event that needs the XO,
                                           "[<id>] [<project>] <event>" ("[<id>] [<project>]
@@ -2081,9 +2137,10 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           saved ones); CHARTROOM_MACHINE_NAME labels this one
   chartroom nodes [--json] [--project PATH] [--ssh]
                                           the machines that can take crew work, this one first:
-                                          contact, role and budgets, cores and load, memory,
-                                          power, idle time, crew, logins, tools, checkouts and
-                                          UTIL (projected use with one more worker). An enrolled
+                                          contact, role, CPU and memory in use against the
+                                          node's limits, size, disk, power, idle time, crew,
+                                          logins, tools, checkouts and UTIL (how full it would be
+                                          with one more worker). An enrolled
                                           device's row is its last heartbeat; a machine not yet
                                           enrolled (CHARTROOM_NODES, else the radar's list) is
                                           read with the probe script over ssh. --project: which
@@ -2106,9 +2163,14 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           15 s and takes the brain's commands by long-poll; it
                                           opens no port and the brain never reaches it
   chartroom node probe [--json]           this machine's facts, as `nodes` reads them
-  chartroom node init [--max-workers N] [--cpu PCT] [--mem PCT] [--battery pause|allow]
+  chartroom node limits [<name|here> 80/70]
+                                          every node's CPU and memory use against its limits; or
+                                          set one's: at 80% CPU or 70% memory in use it takes
+                                          nothing new (also --cpu 80, --mem 70; a device takes it
+                                          over the connection)
+  chartroom node init [--cpu PCT] [--mem PCT] [--battery pause|allow]
                       [--priority normal|nice|background] [--project-roots DIRS] [--force]
-                                          make this machine a node: writes its budgets to
+                                          make this machine a node: writes its limits to
                                           ~/.config/chartroom/node (CHARTROOM_NODE_CONFIG);
                                           makes no home
   chartroom brain link <target> [--as NAME]
@@ -2168,7 +2230,7 @@ if [[ "$cmd" =~ ^(status|ls|board|todo|inbox|relay)$ ]]; then
   done
 fi
 case "$cmd" in
-  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|steer|stop|attach|park|accept|close|sweep|watch|dashboard|radar|node|nodes|fleet|device|doctor|homes|brain|tell|ask|snooze|app|attachment|link|brief|set|request|initiative|permit|version|help|store|remove|restore|done|removed) "cmd_$cmd" "$@" ;;
+  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|git|steer|stop|attach|park|accept|close|sweep|watch|dashboard|radar|node|nodes|fleet|device|doctor|homes|brain|tell|ask|snooze|app|attachment|link|brief|set|request|initiative|permit|version|help|store|remove|restore|done|removed) "cmd_$cmd" "$@" ;;
   migrate-home) cmd_migrate_home "$@" ;;
   install-skills) cmd_install_skills "$@" ;;
   ls) cmd_status "$@" ;;

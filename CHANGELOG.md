@@ -7,6 +7,20 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- **Placement:** `chartroom dispatch` sends each hc task to the machine with the most room, the brain
+  included, when a device is enrolled.
+  - **Two limits per node,** the share of its CPU and of its memory in use above which it takes
+    nothing new: `chartroom node limits` shows and sets them (`node limits mini 80/70`), and Fleet shows
+    them. Use is measured: CPU busy time over the last minute and Activity Monitor's Memory Used, not
+    load or the kernel's free level. `CHARTROOM_NODE_MAX_WORKERS` is no longer read.
+  - **What a task needs:** `new --needs docker`, `set <id> needs=`, `needs=` in `projects.md`; a node without it
+    never gets the task, nor one without the project's checkout or the agent's sign-in.
+  - **Files of the home that the brief names** go along with the task.
+  - A burst is spread by what each node was just given. The device checks its limits again as it
+    takes the work, and a refused task goes to the next node.
+  - `chartroom git <id> log|diff|...`: read-only git in a task's worktree on whichever machine it is.
+  - `CHARTROOM_PLACEMENT=spread|pack|local`, `dispatch --dry-run`, `dispatch --over-limit`, `--node here`,
+    `set node=any`. With no room anywhere, dispatch is refused with each node's numbers.
 - `chartroom migrate-home`: move a home from another machine into this one, one home at a time,
   triage first.
   - **triage:** every open task lands in a bucket (landed, needs the commander's word, stale with

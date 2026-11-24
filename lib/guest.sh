@@ -51,6 +51,40 @@ guest_project_ok() { # <path>
   echo "$p is outside this node's project roots ($roots)" >&2; return 1
 }
 
+# The workers the brain gave this machine in the last <seconds>: too new to show in what it measures.
+guest_recent_count() { # <seconds>
+  local f n=0 t now; now="$(date +%s)"
+  shopt -s nullglob
+  for f in "$(guest_root)"/*/.push/*.json; do
+    t="$(jq -r '.at // 0' "$f" 2>/dev/null || echo 0)"
+    [[ "$t" =~ ^[0-9]+$ ]] && (( now - t <= $1 )) && n=$((n + 1))
+  done
+  shopt -u nullglob
+  printf '%s' "$n"
+}
+
+# The files of the brain's home that the brief names, kept in the task's own folder here (brain/),
+# and the brief's paths moved to them. Only plain relative names; never over anything else.
+guest_carry() { # <payload> <guest dir> <id> <brief>  -> the brief
+  local p="$1" d="$2/tasks/$3/brain" brief="$4" bh bt rel i n
+  bh="$(jq -r '.brain_home // ""' <<<"$p")"; bt="$(jq -r '.brain_home_tilde // ""' <<<"$p")"
+  n="$(jq -r '.files // [] | length' <<<"$p")"
+  [[ "$n" =~ ^[0-9]+$ ]] && (( n <= CR_CARRY_MAX_FILES )) || n=0
+  for ((i = 0; i < n; i++)); do
+    rel="$(jq -r --argjson i "$i" '.files[$i].rel // ""' <<<"$p")"
+    [[ "$rel" =~ ^[A-Za-z0-9_@+][A-Za-z0-9._@+-]*(/[A-Za-z0-9_@+][A-Za-z0-9._@+-]*)*$ && "$rel" != *..* ]] || continue
+    mkdir -p "$d/$(dirname "$rel")"
+    jq -r --argjson i "$i" '.files[$i].b64 // ""' <<<"$p" | base64 -d >"$d/$rel" 2>/dev/null || rm -f "$d/$rel"
+  done
+  # (the longest names first: one may be a folder another is in)
+  while IFS= read -r rel; do
+    [[ -n "$rel" && -e "$d/$rel" ]] || continue
+    brief="${brief//"$bh/$rel"/"$d/$rel"}"
+    [[ -z "$bt" ]] || brief="${brief//"$bt/$rel"/"$d/$rel"}"
+  done < <(jq -r '.carry // [] | sort_by(-length) | .[]' <<<"$p")
+  printf '%s' "$brief"
+}
+
 device_cmd_dispatch() { # <payload>
   local p="$1" home id kind backend base branch project brief bh attempt g st args=() a
   home="$(jq -r '.home // ""' <<<"$p")"; id="$(jq -r '.id // ""' <<<"$p")"; kind="$(jq -r '.kind // ""' <<<"$p")"
@@ -68,7 +102,7 @@ device_cmd_dispatch() { # <payload>
     [[ "$branch" =~ ^[A-Za-z0-9._/-]{1,200}$ && "$branch" != *..* && "$branch" == *"$id" ]] || { echo "dispatch: the branch '$branch' is not one this task can have" >&2; return 2; }
   fi
   [[ "$bh" == /* ]] || { echo "dispatch: the brain's home path is needed" >&2; return 2; }
-  guest_project_ok "$project" || return 1
+  guest_project_ok "$project" || return 6
   g="$(guest_dir "$home")"
   mkdir -p "$g/.push"
   jq -r '.workspace // ""' <<<"$p" | grep -E '^[A-Za-z0-9._-]{1,64}$' >"$g/.workspace" || echo "$home-crew" >"$g/.workspace"
@@ -85,9 +119,12 @@ device_cmd_dispatch() { # <payload>
     # (made here before, but its worker never started: this attempt takes it over)
     jq -c --argjson a "$attempt" '.attempt = $a' "$g/.push/$id.json" >"$g/.push/$id.json.tmp" && mv "$g/.push/$id.json.tmp" "$g/.push/$id.json"
   else
+    # may it take one more? (5: no, and nothing was made here; asked only of new work)
+    a="$(place_refuse_here "$(jq -c '.needs // {agent: "", tools: [], repos: []}' <<<"$p")" "$(jq -r 'if .over then 1 else 0 end' <<<"$p")")"
+    [[ -z "$a" ]] || { echo "$a" >&2; return 5; }
     run_bounded 120 git -C "$project" fetch -q origin 2>&1 || echo "dispatch: git fetch in $project failed; trying with what is here" >&2
     git -C "$project" cat-file -e "$base^{commit}" 2>/dev/null ||
-      { echo "dispatch: the base ${base:0:12} is not in $project here, even after a fetch (push it, or dispatch it on the brain)" >&2; return 1; }
+      { echo "dispatch: the base ${base:0:12} is not in $project here, even after a fetch (push it, or dispatch it on the brain)" >&2; return 6; }
     args=(new --id "$id" --project "$project" --title "$(jq -r '.title // ""' <<<"$p")" --kind "$kind" --backend "$backend" --base "$base")
     [[ "$(jq -r '.plan_gate' <<<"$p")" != true ]] || args+=(--plan-gate)
     a="$(jq -r '.permission // ""' <<<"$p")"; [[ -z "$a" ]] || args+=(--permission "$a")
@@ -95,16 +132,27 @@ device_cmd_dispatch() { # <payload>
     while IFS= read -r a; do [[ -n "$a" ]] && args+=(--grant "$a"); done < <(jq -r '.grants[]? // empty' <<<"$p")
     CHARTROOM_BRANCH_PREFIX="${branch%"$id"}" guest_run "$home" "${args[@]}" >/dev/null
     # the brain's brief, with its home's paths moved to this guest home
-    brief="$(jq -r '.brief // ""' <<<"$p")"
+    brief="$(guest_carry "$p" "$g" "$id" "$(jq -r '.brief // ""' <<<"$p")")"
     printf '%s\n' "${brief//"$bh"/"$g"}" >"$g/tasks/$id/brief.md"
     jq -cn --argjson a "$attempt" --argjson o "$(wc -l <"$(guest_log_file "$g" "$id")" | tr -d ' ')" \
-      '{attempt: $a, off: $o, files: {}, cards: []}' >"$g/.push/$id.json"
+      --argjson at "$(date +%s)" '{attempt: $a, off: $o, files: {}, cards: [], at: $at}' >"$g/.push/$id.json"
   fi
   guest_run "$home" dispatch "$id"
 }
 
 device_cmd_steer() { guest_check "$1" || return; guest_run "$G_HOME" steer "$G_ID" "$(jq -r '.text // ""' <<<"$1")"; }
 device_cmd_stop() { guest_check "$1" || return; guest_run "$G_HOME" stop "$G_ID"; }
+# Read-only git in the worker's worktree (chartroom git on the brain): the XO checks a branch there
+# before it comes home at close. Refused there and here alike.
+device_cmd_git() {
+  guest_check "$1" || return
+  local args=() wt why
+  wt="$(jq -r '.worktree // ""' "$(guest_meta_file "$G_DIR" "$G_ID")")"
+  [[ -n "$wt" && -d "$wt" ]] || { echo "$G_ID has no worktree on this machine" >&2; return 1; }
+  mapfile -d '' -t args < <(jq -j '.args[]? | (tostring, "\u0000")' <<<"$1")
+  why="$(git_readonly_refuses "${args[@]+"${args[@]}"}")"; [[ -z "$why" ]] || { echo "$why" >&2; return 2; }
+  git_readonly "$wt" "${args[@]}"
+}
 device_cmd_peek() {
   guest_check "$1" || return
   echo "guest home: $G_DIR"

@@ -211,23 +211,23 @@ today chartroom reads what each machine has room for and what it can run.
 chartroom nodes                      # every node, this machine first
 chartroom nodes --project ~/src/shop # ... and which of them have a checkout of that project
 chartroom nodes --json
-chartroom node init --cpu 100 --battery allow   # on a machine: make it a node, with its own budgets
+chartroom node init --cpu 100 --battery allow   # on a machine: make it a node, with its own limits
 chartroom node probe [--json]        # this machine's facts, as `nodes` reads them
 ```
 
 ```
-NODE           CONTACT  ROLE                     CPU                    MEM           DISK      POWER              IDLE  CREW          LOGINS                    TOOLS                       CHECKOUTS  UTIL
-desk (here)    ok       node: 10w cpu80% mem75%  28 (20P+8E) load 6.0  96G 79% free  22% free  AC                 2m    4/10 +3 other claude:ok codex:ok gh:ok  13 ok                       42         0.5
-mini           ok       node: 6w cpu100% mem75%  16 (12P+4E) load 1.2  48G 92% free  26% free  AC (battery 100%)  1h    0/6           claude:ok codex:ok gh:ok  11 ok error:node down:docker   131        0.17
+NODE         CONTACT    ROLE  CPU USED    MEM USED    SIZE          DISK      POWER              IDLE  CREW        LOGINS                    TOOLS                      CHECKOUTS  UTIL
+desk (here)  ok         node  31% of 80%  64% of 75%  28 cores 96G  22% free  AC                 2m    4 +3 other  claude:ok codex:ok gh:ok  13 ok                      42         0.88
+mini         online 4s  node  6% of 90%   22% of 75%  16 cores 48G  26% free  AC (battery 100%)  1h    0           claude:ok codex:ok gh:ok  11 ok error:node down:docker  131      0.34
 mini: node is broken: /opt/homebrew/bin/node: dyld[812]: Library not loaded: /opt/homebrew/opt/simdjson/lib/libsimdjson.34.dylib
-CREW is chartroom's workers against max workers (XOs and other agents shown apart); nothing enforces it until placement ships
+a node at either limit (the % after "of") takes no new task; chartroom node limits <name|here> 80/70 sets its CPU/memory limits. UTIL: how full it would be with one more worker
 ```
 
 - **Which machines.** `CHARTROOM_NODES` (`label[=ssh-target] ...`, or `none`), else the radar's
   list: `CHARTROOM_RADAR_MACHINES`, else herdr's enabled saved machines. This machine is always first.
-- **A node opts in.** `chartroom node init`, run on that machine, writes its budgets to
-  `~/.config/chartroom/node` (`CHARTROOM_NODE_CONFIG` moves it): at most N workers, a share of its
-  cores and memory, whether it may work on battery, the priority its workers will get, and where
+- **A node opts in.** `chartroom node init`, run on that machine, writes its limits to
+  `~/.config/chartroom/node` (`CHARTROOM_NODE_CONFIG` moves it): the share of its CPU and memory that may
+  be in use, whether it may work on battery, the priority its workers will get, and where
   its project checkouts are. It makes no home: a node has no XO. Without that file a machine is
   listed as "not a node" and will never be given work. `CHARTROOM_NODE_ACCEPT=off` in it
   withdraws the machine at once.
@@ -246,24 +246,24 @@ CREW is chartroom's workers against max workers (XOs and other agents shown apar
   read the login keychain, so claude, codex and gh would all read logged out: the probe runs those
   checks inside the machine's hc core (`hc exec`), which runs in the login session, and only when
   that core already answers (it never starts one). With no core, logins read `unknown` over ssh.
-- **CREW** is chartroom's own workers there (hc terminals carrying a task), against the node's
-  max workers. An XO or your own agent session is shown apart (`+3 other`): it is not a slot,
-  though its load still counts. **Nothing enforces max workers yet**: until placement ships, a
-  machine at its budget still takes what is dispatched to it.
-- **UTIL** is what the node's use would be with one more worker, against its own budgets:
-  the largest of (crew + 1) / max workers, (load + `CHARTROOM_WORKER_CPU`) / (cores × cpu share),
-  and (memory in use + `CHARTROOM_WORKER_MEM_GB`) / (memory × memory share). Placement will put
-  each new task where it is lowest, so the machines fill evenly, each against its own budget.
-  Above 1 the node is full.
-- **On macOS, budgets are admission control,** not hard caps: there are no cgroups. A worker's own
+- **CPU USED and MEM USED** are measured, against the node's two limits (`64% of 80%`): the busy share of
+  all cores over the last minute, and Activity Monitor's Memory Used. A node at or over either
+  takes no new task. `chartroom node limits` shows them, and `chartroom node limits <name|here> 80/70`
+  sets a node's ([how they are measured](multi-machine.md#5-placement)).
+- **CREW** is chartroom's own workers there (hc terminals carrying a task), for information. An XO or
+  your own agent session is shown apart (`+3 other`).
+- **UTIL** is how full the node would be with one more worker, against its own limits: the larger of
+  (CPU used + `CHARTROOM_WORKER_CPU` cores) / CPU limit and (memory used + `CHARTROOM_WORKER_MEM_GB`) /
+  memory limit. `dispatch` sends each new task where it is lowest.
+- **On macOS, limits are admission control,** not hard caps: there are no cgroups. A worker's own
   builds can still push a node past its share; placement then sends new work elsewhere.
 
 ### Devices: machines that report to the brain
 
 A machine can instead **report** to the brain: it runs chartroom's device agent, which sends its
 probe to the brain's app server every 15 seconds. The brain never reaches out to it, holds no key
-to it, and asks it to open no port. Its row in `nodes` and Fleet is its last heartbeat. A task runs on
-a device only when you pin it there; nothing spreads work across devices by itself yet
+to it, and asks it to open no port. Its row in `nodes` and Fleet is its last heartbeat. `dispatch` sends
+new tasks to the machine with the most room, devices included, and you can pin one
 ([docs/multi-machine.md §12](multi-machine.md#12-devices-the-brain-never-reaches-out)).
 
 ```bash

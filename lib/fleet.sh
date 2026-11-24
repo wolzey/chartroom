@@ -155,8 +155,9 @@ fleet_enqueue() { # <device id> <type> <payload json> [ttl seconds]
   [[ "$did" =~ $CR_DEVICE_ID_RE ]] || die "fleet: no device $did"
   cid="c-$(fleet_ms)-$(fleet_rand_hex 3)"
   (( ttl > 0 )) && exp=$(( $(date +%s) + ttl ))
-  fleet_write "$(fleet_dir)/queue/$did/$cid.json" "$(jq -cn --arg id "$cid" --arg t "$type" --argjson p "$payload" \
-    --arg at "$(now)" --argjson e "$exp" '{id: $id, type: $t, payload: $p, at: $at, expires: $e}')"
+  # (the payload on stdin: a dispatch carries files, past what a command line holds)
+  fleet_write "$(fleet_dir)/queue/$did/$cid.json" "$(jq -c --arg id "$cid" --arg t "$type" \
+    --arg at "$(now)" --argjson e "$exp" '{id: $id, type: $t, payload: ., at: $at, expires: $e}' <<<"$payload")"
   printf '%s' "$cid"
 }
 

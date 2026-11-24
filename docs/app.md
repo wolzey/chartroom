@@ -198,7 +198,7 @@ app/src/read.js         a ticket or an initiative, read one at a time and always
 app/src/outbox.js       every action queued, sent in the background, retried (pure)
 app/src/palette.js      ⌘K
 app/src/initiatives.js  initiatives: the list, the page (plan, stories, decisions, PRs), the approval checklist
-app/src/fleet.js        Fleet: the machines, their checks and budgets, the workers
+app/src/fleet.js        Fleet: the machines, their checks, use and limits, the workers
 app/src/fleetviews.js   Fleet as an atom and as a dashboard (model.js decides what is on each machine)
 app/src/notify.js       the service worker's registration, notifications, the push subscription
 app/sw.js               the service worker: the offline shell and last state, notifications

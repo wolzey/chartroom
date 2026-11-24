@@ -157,13 +157,13 @@ device_do_join() {
 }
 
 # What this agent can be asked to do over the connection (the brain refuses a pin without it).
-CR_DEVICE_CAPS="commands update dispatch"
+CR_DEVICE_CAPS="commands update dispatch limits place"
 device_rev() { git -C "$CR_ROOT" rev-parse HEAD 2>/dev/null || true; }
 
 device_heartbeat_body() { # <file> <started>
-  # (the rev before the probe, which takes a second or more: an update that lands meanwhile is this
-  # agent's checkout, not yet this agent, and `node update` waits for the agent that runs it)
-  local rev probe tasks='{}'; rev="$(device_rev)"; probe="$(node_probe_local 2>/dev/null || true)"
+  # (the rev this agent runs, as it started: an update that lands meanwhile is this agent's checkout,
+  # not yet this agent, and `node update` waits for the agent that runs it)
+  local rev probe tasks='{}'; rev="${DEV_RUN_REV:-$(device_rev)}"; probe="$(CR_PROBE_CHECKOUTS=1 node_probe_local 2>/dev/null || true)"
   if declare -F guest_tasks_json >/dev/null; then tasks="$(guest_tasks_json 2>/dev/null || echo '{}')"; fi
   jq -cn --arg id "$(device_cfg ID)" --arg v "$CR_VERSION" --argjson p "$CR_FLEET_PROTOCOL" --argjson c "$(date +%s)" \
     --argjson s "$2" --arg probe "$probe" --arg rev "$rev" --arg caps "$CR_DEVICE_CAPS" --argjson t "$tasks" \
@@ -199,7 +199,7 @@ device_run_command() { # <command json> <token>
   if [[ ! -f "$cache" ]]; then
     out="$(mktemp)"; err="$(mktemp)"
     case "$type" in
-      ping|update|dispatch|steer|stop|peek|close|close-done|permit-sync)
+      ping|update|limits|dispatch|steer|stop|peek|git|close|close-done|permit-sync)
         ( "device_cmd_${type//-/_}" "$(jq -c '.payload // {}' <<<"$c")" ) >"$out" 2>"$err" </dev/null || rc=$? ;;
       *) echo "this agent does not know the command '$type' (chartroom node update)" >"$err"; rc=2 ;;
     esac
@@ -219,6 +219,14 @@ device_run_command() { # <command json> <token>
 }
 
 device_cmd_ping() { echo "pong from $(device_cfg NAME) at $(device_rev | cut -c1-7)"; }
+
+# This machine's two limits, set from the brain (chartroom node limits): those two lines of its node
+# file and nothing else.
+device_cmd_limits() { # <payload {cpu, mem}>
+  local c m; c="$(jq -r '.cpu // ""' <<<"$1")"; m="$(jq -r '.mem // ""' <<<"$1")"
+  node_limits_args ${c:+--cpu "$c"} ${m:+--mem "$m"}
+  node_limits_set "$NL_CPU" "$NL_MEM"
+}
 
 # Fast-forward this machine's chartroom to the brain's commit, which must be on this checkout's
 # own origin/main; the agent then restarts onto it (exit 75: launchd starts it again).
@@ -254,7 +262,8 @@ device_rotate() { # <current token>
 
 cmd_device_run() {
   local once=0 every started tok body last="" st next=0 now_s
-  DEV_POLLER="" # (globals: the EXIT trap reads them after this function has returned)
+  DEV_RUN_REV="$(device_rev)" # (what this agent runs: an update moves the checkout before it restarts)
+  DEV_POLLER="" DEV_CPU="" # (globals: the EXIT trap reads them after this function has returned)
   [[ "${1:-}" == --once ]] && once=1
   every="$(cfg DEVICE_HEARTBEAT '' 15)"
   [[ "$every" =~ ^[0-9]+$ ]] && (( every >= 1 )) || die "CHARTROOM_DEVICE_HEARTBEAT is whole seconds (got '$every')"
@@ -265,7 +274,7 @@ cmd_device_run() {
   rm -f "$(device_state_dir)/restart"
   device_log "agent started (chartroom $CR_VERSION at $(device_rev | cut -c1-7), pid $$, brain $(device_cfg BRAIN), every ${every}s)"
   # shellcheck disable=SC2064 # the poller's pid, when it exits
-  trap '[[ -z "${DEV_POLLER:-}" ]] || kill "$DEV_POLLER" 2>/dev/null; rm -f "${DEV_HB_BODY:-}"' EXIT
+  trap '[[ -z "${DEV_POLLER:-}" ]] || kill "$DEV_POLLER" 2>/dev/null; [[ -z "${DEV_CPU:-}" ]] || kill "$DEV_CPU" 2>/dev/null; rm -f "${DEV_HB_BODY:-}"' EXIT
   trap 'exit 143' TERM INT # (so the EXIT trap ends the poller too)
   while true; do
     if [[ -f "$(device_state_dir)/join-code" ]]; then
@@ -281,6 +290,10 @@ cmd_device_run() {
     # the second loop, for commands (not with --once: one heartbeat, nothing else)
     if (( ! once )) && { [[ -z "$DEV_POLLER" ]] || ! pid_alive "$DEV_POLLER"; }; then
       device_poll_loop & DEV_POLLER=$!
+    fi
+    # how busy the CPUs are, kept while the agent runs (the probe reads it: a minute's average)
+    if (( ! once )) && [[ "$(cfg CPU_SAMPLER '' on)" == on ]] && { [[ -z "$DEV_CPU" ]] || ! pid_alive "$DEV_CPU"; }; then
+      bash "$CR_ROOT/lib/cpuload.sh" "$(node_cpu_file)" $$ </dev/null >/dev/null 2>&1 & DEV_CPU=$!
     fi
     now_s="$(date +%s)"
     if declare -F guest_push_all >/dev/null; then guest_push_all || true; fi

@@ -852,8 +852,11 @@ machine), then `~/.config/chartroom/config` (`KEY=VALUE`, no shell evaluation;
 | `CHARTROOM_KEYCHAIN` / `CHARTROOM_LAUNCHCTL` | `/usr/bin/security` / `/bin/launchctl` on macOS | on a device: where its token is kept and how its agent is run; `none` for a 0600 file and an agent you run yourself (`chartroom device run`) |
 | `CHARTROOM_FLEET_DIR` | `fleet/` beside the config file | environment only: the brain's device registry (beside the app server's own state) |
 | `CHARTROOM_LOGIN_SHELL` | `$SHELL` | the shell whose interactive login PATH (`-lic`) the probe checks tools on and what the brain's gate runs gets; `none` keeps the caller's PATH (`CHARTROOM_BRAIN_LOGIN_SHELL` still counts) |
-| `CHARTROOM_WORKER_CPU` / `CHARTROOM_WORKER_MEM_GB` | `1.5` / `1.5` | a worker's assumed cost in cores and GB, in a node's UTIL |
-| `CHARTROOM_NODE_CONFIG` | `~/.config/chartroom/node` | environment only: this machine's node file (`chartroom node init`), with `CHARTROOM_NODE_MAX_WORKERS`, `_CPU_BUDGET`, `_MEM_BUDGET` (percent), `_ON_BATTERY` (`pause`/`allow`), `_PRIORITY` (`normal`/`nice`/`background`), `_PROJECT_ROOTS` and `_ACCEPT` (`on`/`off`) |
+| `CHARTROOM_WORKER_CPU` / `CHARTROOM_WORKER_MEM_GB` | `1.5` / `1.5` | a worker's assumed cost in cores and GB: in a node's UTIL, and for each worker just placed |
+| `CHARTROOM_PLACEMENT` | `spread` | where `dispatch` sends a task: `spread` (the node with the most room), `pack` (the fullest with room) or `local` (this machine, always) ([placement](docs/multi-machine.md#5-placement)) |
+| `CHARTROOM_PLACE_HOLD_SECONDS` | `180` | how long a worker just placed counts at its assumed cost, on top of what its node measures |
+| `CHARTROOM_CPU_SAMPLER` | `on` | `off`: the app server and a device's agent do not keep the minute's CPU use |
+| `CHARTROOM_NODE_CONFIG` | `~/.config/chartroom/node` | environment only: this machine's node file (`chartroom node init`), with `CHARTROOM_NODE_CPU_BUDGET`, `_MEM_BUDGET` (its limits, percent in use: `chartroom node limits`), `_ON_BATTERY` (`pause`/`allow`), `_PRIORITY` (`normal`/`nice`/`background`), `_PROJECT_ROOTS` and `_ACCEPT` (`on`/`off`) |
 | `CHARTROOM_RADAR_REMOTE_PATH` | `$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin` | put first on PATH on another machine (its non-interactive ssh shell lacks them) |
 | `CHARTROOM_RADAR_LOCAL_MIN_SECONDS` / `_LOCAL_MAX_SECONDS` / `_REMOTE_SECONDS` | `15` / `60` / `60` | while the radar is open: this machine is re-read on a change at most this often, and at least this often; another machine this often |
 | `CHARTROOM_RADAR_DONE_HOURS` / `_STALE_DAYS` | `24` / `3` | the radar's "active only" view archives a docked task quiet this many hours, and a task whose session is gone and quiet this many days |

@@ -194,11 +194,22 @@ chartroom nodes                      # every machine: contact, load, memory, dis
 
 The app's Fleet tab shows the same.
 
-### Pinned work
+### Work on your devices
 
-A task can run on a device you name. The device needs the project checked out at the same path
-as on the brain, inside its node's project roots, and hc with Claude Code or Codex signed in:
-only hc:claude and hc:codex run on a device. On the device, once:
+`chartroom dispatch` sends each new task to the machine with the most room, the brain included.
+Each machine has two limits, the share of its CPU and of its memory in use above which it takes
+nothing new; `chartroom node limits` shows them all, and sets one:
+
+```bash
+chartroom node limits                 # use against limits, and whether each takes work
+chartroom node limits mini 80/70      # at 80% CPU or 70% memory in use, mini takes no new task
+chartroom dispatch <id> --dry-run     # where a task would go, and why
+```
+
+A device needs the project checked out inside its node's project roots, and hc with Claude Code or
+Codex signed in: only hc:claude and hc:codex run on a device. A task that needs more of a machine
+says so (`new --needs docker`, or `needs=docker` on the project's line in `projects.md`), and never lands on
+one without it. On the device, once:
 
 ```bash
 chartroom node init --force --project-roots ~/src   # the directories that hold your checkouts, colon-separated
@@ -207,18 +218,19 @@ chartroom node init --force --project-roots ~/src   # the directories that hold 
 `device join` wrote that node file with no project roots, so `--force` rewrites it; it keeps the
 device's id, and the brain's `chartroom nodes` then counts its checkouts.
 
-On the brain:
+To choose the machine yourself, pin it:
 
 ```bash
 chartroom new --project ~/src/app --title "…" --backend hc:claude --node mini
-chartroom set <id> node=here                 # before dispatch: run it on the brain after all (node=mini pins it again)
+chartroom set <id> node=here                 # before dispatch: run it on the brain (node=mini pins it again; node=any: wherever there is room)
 chartroom dispatch <id>                      # the device runs it; its events, report and cards come back here
 ```
 
 The record stays on the brain, so the board and the app show the task as any other, with its
 machine, and `status` shows its runner as `node:claude`. Steer, stop, peek and `close` go to the device over its connection, and
-`close` brings the branch to the brain before the device deletes its copy. A pinned task never
-moves by itself: if its device is away, it waits. Nothing places work on a device for you yet.
+`close` brings the branch to the brain before the device deletes its copy. A running task never
+moves. A pinned one whose device is away waits for it. When no machine has room, dispatch says so
+with each one's numbers, and the task stays undispatched (`--over-limit` sends it all the same).
 [docs/multi-machine.md §12](multi-machine.md#pinned-dispatch-built) has the protocol.
 
 ## 6. Permission cards

@@ -38,7 +38,7 @@ brain_class() { # <command>
     version|help|-h|--help|-v|--version|homes|node|fleet|device|install-skills|brain) echo local ;;
     join|hook) echo refuse ;;
     watch|attach|dashboard|doctor|artifact|init|sweep|rule|new|project) echo hybrid ;;
-    worktree|dispatch|event|listen|status|ls|board|resolve|show|todo|inbox|relay|focus|peek|steer|stop|park|accept|close|radar|nodes|tell|ask|snooze|link|brief|set|request|initiative|store|remove|restore|done|removed|permit) echo forward ;;
+    worktree|dispatch|git|event|listen|status|ls|board|resolve|show|todo|inbox|relay|focus|peek|steer|stop|park|accept|close|radar|nodes|tell|ask|snooze|link|brief|set|request|initiative|store|remove|restore|done|removed|permit) echo forward ;;
     app|attachment) echo local ;; # each refuses in a client home itself: the app runs on the brain; a file to attach must be there
     *) echo local ;; # an unknown command dies here as anywhere
   esac
@@ -640,21 +640,40 @@ gate_cat() { # <header>
 
 # Read-only git in a task's worktree (brain git), so a client XO can verify a branch.
 gate_git() { # <header>
-  local id args=() wt sub a
+  local id args=()
   id="$(jq -r '.id // empty' <<<"$1")"
   [[ "$id" =~ $CR_RADAR_ID_RE ]] || gate_die "no such task: $id"
   CR_HOME="$GATE_HOME"; STORE_UID_FOR=""; meta_path "$id"
   [[ -n "$META_PATH" ]] || gate_die "no such task: $id"
-  wt="$(jq -r '.worktree // empty' "$META_PATH")"
-  [[ -n "$wt" && -d "$wt" ]] || gate_die "task $id has no worktree here"
   mapfile -d '' -t args < <(jq -j '.args[]? | (tostring, "\u0000")' <<<"$1")
-  sub="${args[0]:-}"
-  [[ "$sub" =~ ^(log|diff|show|status|rev-parse|branch|rev-list|shortlog|ls-files|merge-base)$ ]] || gate_die "brain git runs only read-only commands (log diff show status rev-parse branch rev-list shortlog ls-files merge-base), not '$sub'"
-  for a in "${args[@]:1}"; do
-    case "$a" in --output*|-o|--ext-diff|--exec*|-c|--no-index|--upload-pack*|--textconv|-D|-d|-m|-M|--delete|--move|--copy|-C|--set-upstream*|--unset-upstream|--edit-description|--force|-f) gate_die "brain git refuses $a" ;; esac
+  local why; why="$(git_readonly_refuses "${args[@]+"${args[@]}"}")"; [[ -z "$why" ]] || gate_die "$why"
+  cmd_git "$id" "${args[@]}"
+}
+
+# chartroom git <id> <args...>: read-only git in a task's worktree, on whichever machine it is.
+cmd_git() {
+  [[ $# -ge 2 ]] || die "usage: chartroom git <id> <log|diff|show|status|...> [args]"
+  local id="$1" wt; shift; need_task "$id"
+  if [[ -n "$(meta "$id" node)" && -n "$(meta "$id" dispatched)" ]]; then
+    local why; why="$(git_readonly_refuses "$@")"; [[ -z "$why" ]] || die "$why"
+    node_git "$id" "$@"; return
+  fi
+  wt="$(meta "$id" worktree)"
+  [[ -n "$wt" && -d "$wt" ]] || die "task $id has no worktree here"
+  git_readonly "$wt" "$@"
+}
+git_readonly_refuses() { # <args...>: why they are not read-only git, or nothing
+  local sub="${1:-}" a
+  [[ "$sub" =~ ^(log|diff|show|status|rev-parse|branch|rev-list|shortlog|ls-files|merge-base)$ ]] || { echo "git here runs only read-only commands (log diff show status rev-parse branch rev-list shortlog ls-files merge-base), not '$sub'"; return 0; }
+  for a in "${@:2}"; do
+    case "$a" in --output*|-o|--ext-diff|--exec*|-c|--no-index|--upload-pack*|--textconv|-D|-d|-m|-M|--delete|--move|--copy|-C|--set-upstream*|--unset-upstream|--edit-description|--force|-f) echo "git here refuses $a"; return 0 ;; esac
+    if [[ "$sub" == branch && "$a" != -* ]]; then echo "git branch here only lists (no names)"; return 0; fi
   done
-  [[ "$sub" == branch ]] && for a in "${args[@]:1}"; do [[ "$a" == -* ]] || gate_die "brain git branch only lists (no names)"; done
-  git -C "$wt" --no-pager -c core.pager=cat -c diff.external= -c core.fsmonitor= "${args[@]}"
+}
+git_readonly() { # <worktree> <args...>
+  local wt="$1" why; shift
+  why="$(git_readonly_refuses "$@")"; [[ -z "$why" ]] || die "$why"
+  git -C "$wt" --no-pager -c core.pager=cat -c diff.external= -c core.fsmonitor= "$@"
 }
 
 # rsync's server side, read-only, for a pull of a registered home's path.

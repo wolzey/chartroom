@@ -17,6 +17,11 @@ setup() {
   cr init >/dev/null; cr homes add acme "$CHARTROOM_HOME" >/dev/null
   FLEET="$BATS_TEST_TMPDIR/fleet" # beside the config file, as the app server's own state
   DEV="$BATS_TEST_TMPDIR/dev"; mkdir -p "$DEV/home"; : >"$DEV/config"
+  # three machines whose use the tests set: this one, and the two devices
+  use_fake sysctl vm_stat
+  fake_use "$BATS_TEST_TMPDIR/fake-brain" "$XDG_STATE_HOME" 20 30; export FAKE_NODE_DIR="$BATS_TEST_TMPDIR/fake-brain"
+  fake_use "$BATS_TEST_TMPDIR/fake-dev" "$DEV/state" 5 10
+  fake_use "$BATS_TEST_TMPDIR/fake-dev2" "$BATS_TEST_TMPDIR/dev2/state" 5 10
   DEV2="$BATS_TEST_TMPDIR/dev2"; mkdir -p "$DEV2/home"; : >"$DEV2/config"
 }
 
@@ -45,10 +50,10 @@ start() {
 }
 # the device: its own HOME, config and state; same chartroom
 dev() { HOME="$DEV/home" XDG_STATE_HOME="$DEV/state" CHARTROOM_CONFIG="$DEV/config" CHARTROOM_NODE_CONFIG="$DEV/node" \
-  CHARTROOM_HOME="$DEV/nohome" CHARTROOM_MACHINE_NAME=m3 "${DEVBIN:-$CHARTROOM}" "$@" 3>&-; }
+  CHARTROOM_HOME="$DEV/nohome" CHARTROOM_MACHINE_NAME=m3 FAKE_NODE_DIR="$BATS_TEST_TMPDIR/fake-dev" "${DEVBIN:-$CHARTROOM}" "$@" 3>&-; }
 # a second device (its own hardware)
 dev2() { HOME="$DEV2/home" XDG_STATE_HOME="$DEV2/state" CHARTROOM_CONFIG="$DEV2/config" CHARTROOM_NODE_CONFIG="$DEV2/node" \
-  CHARTROOM_HOME="$DEV2/nohome" CHARTROOM_MACHINE_NAME=m5 CHARTROOM_HW_UUID=test-hw-0002 "$CHARTROOM" "$@" 3>&-; }
+  CHARTROOM_HOME="$DEV2/nohome" CHARTROOM_MACHINE_NAME=m5 FAKE_NODE_DIR="$BATS_TEST_TMPDIR/fake-dev2" CHARTROOM_HW_UUID=test-hw-0002 "$CHARTROOM" "$@" 3>&-; }
 agent() { # the device's agent in the background, a heartbeat a second (as launchd would run it)
   ( CHARTROOM_DEVICE_HEARTBEAT=1 dev device run >/dev/null 2>&1 ) 3>&- &
   AGENTS="${AGENTS:-} $!"
@@ -260,9 +265,9 @@ joined() { # enrols the device as m3 and answers one heartbeat
   cr node init >/dev/null
   id="$(sed -n 's/^CHARTROOM_NODE_ID=//p' "$CHARTROOM_NODE_CONFIG")"
   [[ "$id" =~ ^n-[0-9a-f]{12}$ ]]
-  cr node init --force --max-workers 3 >/dev/null
+  cr node init --force --cpu 33 >/dev/null
   [ "$(sed -n 's/^CHARTROOM_NODE_ID=//p' "$CHARTROOM_NODE_CONFIG")" = "$id" ]
-  grep -q '^CHARTROOM_NODE_MAX_WORKERS=3$' "$CHARTROOM_NODE_CONFIG"
+  grep -q '^CHARTROOM_NODE_CPU_BUDGET=33$' "$CHARTROOM_NODE_CONFIG"
   # a node file from before ids: join appends one and changes nothing else
   start
   printf 'CHARTROOM_NODE_MAX_WORKERS=6\nCHARTROOM_NODE_ACCEPT=on\n' >"$DEV/node"
@@ -543,4 +548,87 @@ ev_has() { grep -q -- "$1" "$CHARTROOM_HOME/tasks/$ID/events.log"; }
   echo "$output"
   [ "$status" -eq 0 ]
   [[ "$output" == *"m3 is revoked: the record closes here"* ]]
+}
+
+# A project with a remote both machines have a checkout of (its URL stands for a local bare).
+placed_setup() { # [agent heartbeat seconds]
+  export CHARTROOM_NODE_BACKENDS='hc:claude|hc:codex|command' CHARTROOM_COMMAND="$STUB {id}" CHARTROOM_PROJECT_ROOTS="$BATS_TEST_TMPDIR"
+  git clone -q --bare "$PROJECT" "$BATS_TEST_TMPDIR/origin.git"
+  export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.$BATS_TEST_TMPDIR/origin.git.insteadOf" GIT_CONFIG_VALUE_0=https://git.example/acme/proj
+  git -C "$PROJECT" remote add origin https://git.example/acme/proj; git -C "$PROJECT" fetch -q origin; git -C "$PROJECT" remote set-head origin main
+  git clone -q https://git.example/acme/proj "$BATS_TEST_TMPDIR/devproj"
+  export CHARTROOM_GUEST_PROJECT_MAP="$PROJECT:$BATS_TEST_TMPDIR/devproj"
+  cr node init --cpu 80 --mem 75 --battery allow --project-roots "$BATS_TEST_TMPDIR" >/dev/null
+  joined
+  ( CHARTROOM_DEVICE_HEARTBEAT="${1:-1}" dev device run >/dev/null 2>&1 ) 3>&- &
+  AGENTS="${AGENTS:-} $!"
+  until_true 'cr fleet devices --json | jq -e ".[0].caps | index(\"place\")" >/dev/null'
+}
+
+@test "placed: a ship task nobody pinned runs on the device with room, its files with it, and its branch comes home at close" {
+  export STUB_COMMIT=1
+  placed_setup
+  mkdir -p "$CHARTROOM_HOME/drafts"; echo "the plan" >"$CHARTROOM_HOME/drafts/plan.md"
+  ID="$(new_task --backend command 2>/dev/null)"
+  perl -0pi -e "s|Please do the thing\\.|Read $CHARTROOM_HOME/drafts/plan.md first.|" "$CHARTROOM_HOME/tasks/$ID/brief.md"
+  run cr dispatch "$ID"
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"placed on m3: studio: cpu 20% of 80%, memory 30% of 75%; m3: cpu 5% of 50%"* || "$output" == *"placed on m3: studio: cpu 20% of 80%, memory 30% of 75%; m3: cpu 5% of 80%"* ]]
+  [[ "$output" == *"the worker runs on m3 (attempt 1)"* ]]
+  G="$DEV/state/chartroom/node/guests/acme/tasks/$ID"
+  grep -q "Read $G/brain/drafts/plan.md first." "$G/brief.md"
+  [ "$(cat "$G/brain/drafts/plan.md")" = "the plan" ]
+  until_true 'ev_has " done: stub finished"'
+  cr status --json | jq -e --arg i "$ID" '.[] | select(.id == $i) | .machine == "m3"'
+  # its branch is read there before it comes home, read-only
+  run cr git "$ID" log --oneline -1
+  echo "$output"
+  [[ "$output" == *"feat: stub change"* ]]
+  run cr git "$ID" commit -m x
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"read-only"* ]]
+  run cr close "$ID"
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"is on this machine at"*"(from m3)"* ]]
+  git -C "$PROJECT" show "refs/heads/$(jq -r .branch "$CHARTROOM_HOME/tasks/$ID/meta.json"):stub.txt"
+}
+
+@test "placed: the device checks its own limits when it takes the work, with what it uses then, and the next node takes it" {
+  placed_setup 60
+  # it has filled up since its last heartbeat
+  fake_use "$BATS_TEST_TMPDIR/fake-dev" "$DEV/state" 97 10
+  ID="$(new_task --backend command 2>/dev/null)"
+  run cr dispatch "$ID"
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"placed on m3"*"m3 did not take it: cpu 97% in use, its limit is"* ]]
+  [ -z "$(jq -r '.node // ""' "$CHARTROOM_HOME/tasks/$ID/meta.json")" ]
+  [ -d "$(jq -r .worktree "$CHARTROOM_HOME/tasks/$ID/meta.json")" ]
+  [ ! -e "$DEV/state/chartroom/node/guests/acme/tasks/$ID" ]
+  until_true 'ev_has " done: stub finished"'
+  [ "$(grep -c ' done: stub finished' "$CHARTROOM_HOME/tasks/$ID/events.log")" = 1 ]
+}
+
+@test "node limits: a device takes its limits from the brain, in its own node file, and reports them; one away takes them when back" {
+  joined; agent
+  until_true 'cr fleet devices --json | jq -e ".[0].caps | index(\"limits\")" >/dev/null'
+  before="$(grep -vE '_(CPU|MEM)_BUDGET=' "$DEV/node")"
+  run cr node limits m3 85/65
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == "m3: takes new work under cpu 85% and memory 65% in use" ]]
+  grep -qx CHARTROOM_NODE_CPU_BUDGET=85 "$DEV/node"; grep -qx CHARTROOM_NODE_MEM_BUDGET=65 "$DEV/node"
+  [ "$(grep -vE '_(CPU|MEM)_BUDGET=' "$DEV/node")" = "$before" ]
+  until_true '[ "$(cr node limits | grep "^m3" | tr -s " ")" = "m3 5% 85% 10% 65% yes" ]'
+  run cr node limits m3 0/65
+  [ "$status" -ne 0 ]
+  for p in $AGENTS; do kill_tree_of "$p"; done; AGENTS=""
+  until_true '[ "$(CHARTROOM_NODE_STALE_SECONDS=2 cr fleet devices --json | jq -r ".[0].status")" = stale ]'
+  run env CHARTROOM_NODE_STALE_SECONDS=2 "$CHARTROOM" node limits m3 --cpu 70
+  [[ "$output" == *"m3 is stale: its limits are set when it is back"* ]]
+  agent
+  until_true 'grep -qx CHARTROOM_NODE_CPU_BUDGET=70 "$DEV/node"'
+  grep -qx CHARTROOM_NODE_MEM_BUDGET=65 "$DEV/node"
 }
