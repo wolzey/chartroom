@@ -134,6 +134,7 @@ function App() {
   const [boardFilters, setBoardFiltersRaw] = useState(load("chartroom-board-filters", {}));
   const setBoardFilters = (f) => { setBoardFiltersRaw(f); save("chartroom-board-filters", f); };
   const [boardSel, setBoardSel] = useState(null);
+  const [fleetSel, setFleetSel] = useState(null); // the session picked on Fleet, by its task's key
   const [composer, setComposer] = useState(false);
   const [newInit, setNewInit] = useState(false);
   const inits = useMemo(() => M.initiatives(data), [data]);
@@ -146,6 +147,9 @@ function App() {
   const boardAll = useMemo(() => M.boardItems(data), [data]);
   const boardList = useMemo(() => M.boardFilter(boardAll, boardFilters), [boardAll, boardFilters]);
   const boardOrder = useMemo(() => M.boardColumns(boardList).flatMap((c) => c.cards), [boardList]);
+
+  // leaving Fleet lets its picked session go, with its sheet
+  useEffect(() => { if (route.name !== "fleet" && fleetSel) { setFleetSel(null); setQvOpen(false); } }, [route.name]);
 
   const toast = (text, undo) => {
     const id = Math.random().toString(36).slice(2);
@@ -313,9 +317,10 @@ function App() {
   // question, the board card's; on every other page there is none (never a hidden Needs me row).
   const openFor = (home, task) => all.find((x) => x.home === home && x.task === task && M.standing(x, local) === "open") || null;
   const boardCard = route.name === "board" ? boardList.find((x) => x.key === boardSel) : null;
+  const fleetTask = route.name === "fleet" && fleetSel ? boardAll.find((x) => x.key === fleetSel) : null;
   const active = route.name === "needs" ? cur : route.name === "task" ? openFor(route.home, route.id)
-    : boardCard ? openFor(boardCard.home, boardCard.task) : null;
-  const state = { list, sel, cur, active, route, roundItem, focusQ, palette, snoozeOpen, picked, composer: composer || newInit, boardOrder, boardSel };
+    : boardCard ? openFor(boardCard.home, boardCard.task) : fleetTask ? openFor(fleetTask.home, fleetTask.task) : null;
+  const state = { list, sel, cur, active, route, roundItem, focusQ, palette, snoozeOpen, picked, composer: composer || newInit, boardOrder, boardSel, fleetTask };
   const ref = useRef(state); ref.current = state;
   useEffect(() => {
     const onKey = (e) => {
@@ -339,7 +344,7 @@ function App() {
       if (e.key === "/") { e.preventDefault(); setPalette(true); return; }
       if (e.key === "c" && !e.shiftKey) { e.preventDefault(); setComposer(true); return; }
       if (s.route.name === "initiative" || s.route.name === "initiatives") { if (e.key === "Escape") go(s.route.name === "initiative" ? "#/i" : "#/"); return; }
-      if (s.route.name === "fleet") { if (e.key === "Escape") go("#/"); return; }
+      if (s.route.name === "fleet") { if (e.key === "Escape") { if (s.fleetTask) { setFleetSel(null); setQvOpen(false); } else go("#/"); } return; }
       if (s.route.name === "board") {
         const order = s.boardOrder, i = order.findIndex((t) => t.key === s.boardSel);
         if (e.key === "j" || e.key === "ArrowDown") { e.preventDefault(); const t = order[M.move(i < 0 ? null : i, 1, order.length)]; if (t) setBoardSel(t.key); }
@@ -535,6 +540,17 @@ function App() {
     }
     return null;
   };
+  // a task's quick view, on the board and on Fleet: the item the commander owes an answer on, answered
+  // in place; else what it is doing, a steer, and the ticket
+  const quickOf = (t, close) => {
+    const item = openFor(t.home, t.task);
+    const act = (home, action, body, label) => { setOutbox((o) => o.concat([OB.create(home, action, body, item ? item.key : null, label, Date.now())])); if (action === "accept") toast(label); };
+    return item ? html`<${QuickView} it=${item} open=${qvOpen} undelivered=${undelivered} onClose=${close}
+        picks=${picks[item.key]} setPick=${(q, l) => pick(item.key, q, l)} note=${(notes[item.key] || {})[1]} setNote=${(x) => note(item.key, 1, x)} busy=${false}
+        onAct=${perform} onDetails=${openDetails} prs=${(data && data.prs) || {}} />`
+      : html`<${TaskQuick} t=${t} open=${qvOpen} toast=${toast} onAct=${act} onClose=${close}
+        onOpen=${(x) => go("#/t/" + encodeURIComponent(x.home) + "/" + encodeURIComponent(x.task))} />`;
+  };
   let main, aside = null;
   if (!data && !loadErr) main = html`<main class="a-main"><div class="a-head"><div class="a-head-l"><h1>Needs me</h1></div></div><div class="notice"><span>Reading every home…</span></div></main>`;
   else if (route.name === "round") {
@@ -547,21 +563,22 @@ function App() {
     main = html`<${BoardPage} all=${boardAll} list=${boardList} filters=${boardFilters} setFilters=${setBoardFilters}
       selKey=${boardSel} setSelKey=${(k) => { setBoardSel(k); if (!wide()) setQvOpen(true); }} prs=${prsMap} onCompose=${() => setComposer(true)} />`;
     const t = boardList.find((x) => x.key === boardSel);
-    // a card the commander owes an answer on gets that item's quick view, answered in place
-    const item = t && all.find((x) => x.home === t.home && x.task === t.task && M.standing(x, local) === "open");
-    const boardAct = (home, action, body, label) => { setOutbox((o) => o.concat([OB.create(home, action, body, item ? item.key : null, label, Date.now())])); if (action === "accept") toast(label); };
-    aside = !t ? html`<${BoardSummary} list=${boardList} prs=${prsMap} />`
-      : item ? html`<${QuickView} it=${item} open=${qvOpen} undelivered=${undelivered} onClose=${() => { setBoardSel(null); setQvOpen(false); }}
-          picks=${picks[item.key]} setPick=${(q, l) => pick(item.key, q, l)} note=${(notes[item.key] || {})[1]} setNote=${(x) => note(item.key, 1, x)} busy=${false}
-          onAct=${perform} onDetails=${openDetails} prs=${prsMap} />`
-      : html`<${TaskQuick} t=${t} open=${qvOpen} toast=${toast} onAct=${boardAct} onClose=${() => { setBoardSel(null); setQvOpen(false); }}
-          onOpen=${(x) => go("#/t/" + encodeURIComponent(x.home) + "/" + encodeURIComponent(x.task))} />`;
+    aside = t ? quickOf(t, () => { setBoardSel(null); setQvOpen(false); }) : html`<${BoardSummary} list=${boardList} prs=${prsMap} />`;
   } else if (route.name === "fleet") {
     const ms = (fleet && fleet.machines) || [];
     const m = ms.find((x) => x.name === route.machine) || ms[0];
-    main = html`<${FleetPage} fleet=${fleet} workers=${workers} sel=${m && m.name} setSel=${(name) => go("#/fleet/" + encodeURIComponent(name))}
+    const clear = () => { setFleetSel(null); setQvOpen(false); };
+    // a session picked in the atom or the dashboard: its quick view beside it, or (asked for) over it
+    const onSession = (t, open) => { setFleetSel(t ? t.key : null); setQvOpen(!!t && open && !wide()); };
+    const actionFor = (t) => {
+      if (t.status === "closed") return null;
+      const it = openFor(t.home, t.task);
+      return it ? (it.kind === "review" ? "Review" : "Answer") : t.column === "done" ? null : "Steer";
+    };
+    main = html`<${FleetPage} fleet=${fleet} workers=${workers} tasks=${boardAll} sel=${m && m.name} setSel=${(name) => { clear(); go("#/fleet/" + encodeURIComponent(name)); }}
+      onSession=${onSession} actionFor=${actionFor} toast=${toast}
       onRefresh=${() => { checkFleet(); toast("Checking every machine; it takes up to a minute"); }} />`;
-    aside = html`<${MachineDetail} m=${m} workers=${workers} names=${ms.map((x) => x.name)} />`;
+    aside = fleetTask && (wide() || qvOpen) ? quickOf(fleetTask, clear) : html`<${MachineDetail} m=${m} workers=${workers} names=${ms.map((x) => x.name)} />`;
   } else if (route.name === "initiatives") {
     main = html`<${InitiativesList} list=${inits} onNew=${() => setNewInit(true)}
       onOpen=${(i) => go("#/i/" + encodeURIComponent(i.home) + "/" + encodeURIComponent(i.id))} />`;

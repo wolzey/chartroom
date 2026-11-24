@@ -161,10 +161,12 @@ CR_DEVICE_CAPS="commands update dispatch"
 device_rev() { git -C "$CR_ROOT" rev-parse HEAD 2>/dev/null || true; }
 
 device_heartbeat_body() { # <file> <started>
-  local probe tasks='{}'; probe="$(node_probe_local 2>/dev/null || true)"
+  # (the rev before the probe, which takes a second or more: an update that lands meanwhile is this
+  # agent's checkout, not yet this agent, and `node update` waits for the agent that runs it)
+  local rev probe tasks='{}'; rev="$(device_rev)"; probe="$(node_probe_local 2>/dev/null || true)"
   if declare -F guest_tasks_json >/dev/null; then tasks="$(guest_tasks_json 2>/dev/null || echo '{}')"; fi
   jq -cn --arg id "$(device_cfg ID)" --arg v "$CR_VERSION" --argjson p "$CR_FLEET_PROTOCOL" --argjson c "$(date +%s)" \
-    --argjson s "$2" --arg probe "$probe" --arg rev "$(device_rev)" --arg caps "$CR_DEVICE_CAPS" --argjson t "$tasks" \
+    --argjson s "$2" --arg probe "$probe" --arg rev "$rev" --arg caps "$CR_DEVICE_CAPS" --argjson t "$tasks" \
     '{id: $id, version: $v, protocol: $p, clock: $c, started: $s, probe: $probe, rev: $rev,
       caps: ($caps | split(" ")), tasks: $t}' >"$1"
 }

@@ -2,15 +2,17 @@
 // disk), their budgets and the workers on them, from `chartroom app fleet --json` (lib/app/fleet.jq,
 // over `chartroom nodes`). A machine row selects it; its detail sits in the slim column. Until remote
 // dispatch (one brain, step 4) every worker runs on the brain, at attempt 1; attempts and conn
-// holders show as not tracked yet rather than as made-up data.
+// holders show as not tracked yet rather than as made-up data. The same machines as an atom or a
+// dashboard: fleetviews.js.
 import { html, useState } from "./html.js";
 import { Status, Linked, Tabs } from "./ui.js";
+import { ViewSwitch, savedView, saveView, AtomView, DashView } from "./fleetviews.js";
 
 const M = window.AppModel;
 const STATE = { healthy: "Healthy", degraded: "Needs a look", down: "Unreachable" };
 
 function pct(n) { return n == null ? "—" : Math.round(n) + "%"; }
-function secs(s) { return s == null ? "" : s < 60 ? s + "s" : s < 3600 ? Math.floor(s / 60) + "m" : Math.floor(s / 3600) + "h"; }
+const secs = M.ageText;
 // How the brain knows a machine: itself, an enrolled device's heartbeat (pushed by the device; the
 // brain never reaches out), or, until it enrols, the probe over ssh.
 function via(m) {
@@ -25,7 +27,7 @@ function via(m) {
 }
 // The slots are chartroom's own workers there; an XO or a person's own agent is shown apart. An hc
 // with no event stream cannot tell them apart, so then every live agent counts.
-function crew(m) { return m.crew_live != null ? m.crew_live : m.agents_live || 0; }
+const crew = M.crewOf;
 function slotsTitle(m) {
   return m.crew_live != null
     ? m.crew_live + " crew worker(s) against a budget of " + m.budgets.max_workers + (m.other_agents ? "; " + m.other_agents + " other agent(s) (XOs, your own sessions) not counted" : "")
@@ -34,15 +36,18 @@ function slotsTitle(m) {
 
 function Checks({ m }) {
   const all = [{ ok: m.state !== "down", label: "network", detail: m.state === "down" ? m.error || "not reached" : "reached" }]
-    .concat(m.logins, m.tools,
+    .concat(m.logins, m.tools, (m.extra || []).map((c) => Object.assign({ warn: true }, c)),
       m.disk_free_pct != null ? [{ ok: m.disk_free_pct >= 15, label: "disk", detail: pct(m.disk_free_pct) + " free" }] : []);
-  // ok: true passes, false fails, null cannot be told (a sign-in behind a broken tool): shown, never counted
-  return html`<div class="m-l2">${all.map((c) => html`<span key=${c.label} class=${"ck" + (c.ok ? " ok" : c.ok === false ? " bad" : " unk")} title=${c.detail || ""}>
-    <span class="ck-i">${c.ok ? "✓" : c.ok === false ? "✕" : "?"}</span>${c.label}</span>`)}</div>`;
+  // ok: true passes, false fails (warn: it never changes the machine's health), null cannot be told (a
+  // sign-in behind a broken tool): shown, never counted
+  return html`<div class="m-l2">${all.map((c) => html`<span key=${c.label} class=${"ck" + (c.ok ? " ok" : c.ok === false ? (c.warn ? " warn" : " bad") : " unk")} title=${c.detail || ""}>
+    <span class="ck-i">${c.ok ? "✓" : c.ok === false ? (c.warn ? "!" : "✕") : "?"}</span>${c.label}</span>`)}</div>`;
 }
 
-export function FleetPage({ fleet, workers, sel, setSel, onRefresh }) {
+export function FleetPage({ fleet, workers, tasks, sel, setSel, onRefresh, onSession, actionFor, toast }) {
   const [tab, setTab] = useState("machines");
+  const [view, setView] = useState(savedView);
+  const pickView = (v) => { setView(v); saveView(v); onSession(null, false); };
   const ms = (fleet && fleet.machines) || [];
   if (!fleet) {
     return html`<main class="a-main"><header class="a-head"><div class="a-head-l"><h1>Fleet</h1></div></header>
@@ -61,8 +66,11 @@ export function FleetPage({ fleet, workers, sel, setSel, onRefresh }) {
     <div class="page-body">
       <div class="fleet-sum"><span class=${"glyph " + (bad.length ? "blocked" : "ok")}></span><p>${sum}</p></div>
       ${fleet.error ? html`<p class="err-t">${fleet.error}</p>` : null}
-      <${Tabs} tabs=${tabs} active=${tab} onPick=${setTab} />
-      ${tab === "machines" ? html`<div class="m-list">${ms.map((m) => html`<div key=${m.name} class=${"m-row" + (sel === m.name ? " sel" : "")} onClick=${() => setSel(m.name)}>
+      <div class="fv-bar"><${ViewSwitch} view=${view} onPick=${pickView} /></div>
+      ${view === "atom" ? html`<${AtomView} fleet=${fleet} tasks=${tasks} sel=${sel} onSelect=${setSel} onSession=${onSession} actionFor=${actionFor} />`
+      : view === "dash" ? html`<${DashView} fleet=${fleet} tasks=${tasks} sel=${sel} onSelect=${setSel} onSession=${onSession} actionFor=${actionFor} toast=${toast} />` : null}
+      ${view !== "list" ? null : html`<${Tabs} tabs=${tabs} active=${tab} onPick=${setTab} />`}
+      ${view !== "list" ? null : tab === "machines" ? html`<div class="m-list">${ms.map((m) => html`<div key=${m.name} class=${"m-row" + (sel === m.name ? " sel" : "")} onClick=${() => setSel(m.name)}>
           <div class="m-l1"><span class=${"glyph " + (m.state === "healthy" ? "ok" : "blocked")}></span><span class="m-name">${m.name}</span>
             <span class="m-role faint">${m.brain ? "brain" : m.role}</span><span class=${m.state === "healthy" ? "faint" : "warn-t"}>${STATE[m.state]}</span>
             <span class="m-via faint">${via(m)}</span>
@@ -88,7 +96,7 @@ export function MachineDetail({ m, workers, names }) {
   if (!m) return html`<aside class="a-detail slim"><p class="faint q-keys">Select a machine.</p></aside>`;
   // a worker runs on its home's machine; one whose machine Fleet does not list runs on the brain
   const mine = workers.filter((w) => w.machine === m.name || (m.brain && !(names || []).includes(w.machine)));
-  const fixes = { "claude sign-in": "claude /login", "codex sign-in": "codex login", "gh sign-in": "gh auth login" };
+  const fixes = M.SIGN_IN, own = (m.agents || []).filter((a) => a.kind !== "crew");
   return html`<aside class="a-detail slim" aria-label=${m.name}>
     <h2 class="a-detail-title">${m.name} <span class="m-role faint">${m.brain ? "the brain" : m.role}</span></h2>
     <dl class="sp">
@@ -96,10 +104,12 @@ export function MachineDetail({ m, workers, names }) {
       <dt>Connection</dt><dd>${via(m)}${m.device && m.device.version ? html` <span class="faint">· chartroom ${m.device.version}</span>` : null}</dd>
       ${m.failing.length ? html`<dt>To fix</dt><dd><ul class="checks">${m.failing.map((f) => html`<li key=${f}><span class="glyph blocked"></span><span><b>${f}</b>
         ${fixes[f] ? html`<br /><span class="faint">on ${m.name}: <code>${fixes[f]}</code></span>` : null}</span></li>`)}</ul></dd>` : null}
+      ${m.cpu_busy_pct != null ? html`<dt>CPU</dt><dd>${m.cpu_busy_pct}% busy <span class="faint">over a second</span></dd>` : null}
       <dt>Load</dt><dd>${m.load ? m.load.map((x) => x.toFixed(1)).join(" · ") : "—"}${m.cores ? html` <span class="faint">on ${m.cores} cores</span>` : null}</dd>
       <dt>Memory free</dt><dd>${pct(m.mem_free_pct)}</dd>
       <dt>Disk free</dt><dd>${pct(m.disk_free_pct)}</dd>
       <dt>Agents</dt><dd>${m.crew_live != null ? html`${m.crew_live} crew${m.other_agents ? html` <span class="faint">· ${m.other_agents} other (XOs, your own sessions)</span>` : null}` : m.agents_live != null ? html`${m.agents_live} <span class="faint">(crew and others together)</span>` : "—"}</dd>
+      ${own.length ? html`<dt>XOs and your sessions</dt><dd><div class="sp-ms">${own.map((a) => html`<div key=${a.address} class="sp-m" title=${a.where || ""}><span class="grow truncate">${M.agentLabel(a)}</span><span class="faint">${a.state === "done" ? "idle" : a.state || ""}</span></div>`)}</div></dd>` : null}
       <dt>Budgets</dt><dd>${m.budgets ? html`${m.budgets.max_workers} workers · CPU ${m.budgets.cpu}% · memory ${m.budgets.mem}%${m.budgets.on_battery ? " · on battery: " + m.budgets.on_battery : ""}` : html`<span class="faint">Not a node yet (chartroom node init)</span>`}</dd>
       <dt>Power</dt><dd>${m.power === "battery" ? "On battery" + (m.battery_pct != null ? " (" + m.battery_pct + "%)" : "") : m.power === "ac" ? "Plugged in" : "—"}</dd>
       <dt>Workers</dt><dd>${mine.length ? html`<div class="sp-ms">${mine.map((w) => html`<div key=${w.key} class="sp-m"><${Status} status="working" only=${true} /><span class="grow truncate">${w.title}</span></div>`)}</div>` : html`<span class="faint">None</span>`}</dd>

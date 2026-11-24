@@ -127,7 +127,7 @@ NODES_ROW_JQ='
       {host: (one("host")[1] | s), os: ([one("os")[1], one("os")[2]] | map(s) | map(select(. != null)) | join(" ") | s),
        model: (one("model")[1] | s), clock: (one("clock")[1] | n),
        cores: (one("cores")[1] | n), cores_perf: (one("cores_perf")[1] | n), cores_eff: (one("cores_eff")[1] | n),
-       mem_bytes: (one("mem_bytes")[1] | n), load: [one("load")[1, 2, 3] | n], mem_free_pct: (one("mem_free_pct")[1] | n),
+       mem_bytes: (one("mem_bytes")[1] | n), load: [one("load")[1, 2, 3] | n], cpu_busy_pct: (one("cpu_busy_pct")[1] | n), mem_free_pct: (one("mem_free_pct")[1] | n),
        disk_free_pct: (one("disk_free_pct")[1] | n),
        power: (one("power")[1] | s), battery_pct: (one("battery_pct")[1] | n), hid_idle_s: (one("hid_idle_s")[1] | n),
        initialised: (one("initialised")[1] == "1"), config: (one("config")[1] | s),
@@ -136,6 +136,8 @@ NODES_ROW_JQ='
        runner: {hc: (one("runner")[2] | s), hc_version: (one("runner")[3] | s)},
        context: (one("context")[1] | s), agents_live: (one("agents_live")[1] | n),
        crew_live: (one("crew_live")[1] | n), other_agents: (one("other_agents")[1] | n),
+       agents: ([$r[] | select(.[0] == "agent" and (.[1] | IN("crew", "xo", "other"))) | map(.[0:120])
+         | {kind: .[1], address: (.[2] | s), state: (.[3] | s), name: (.[4] | s), where: (.[5] | s)}] | .[0:80]),
        path_source: (one("path_source")[1] | s),
        tools: ([$r[] | select(.[0] == "tool") | {key: .[1], value: {status: .[2], version: (.[3] | s)}}] | from_entries),
        logins: ([$r[] | select(.[0] == "login" and .[1] != "-") | {key: .[1], value: {status: .[2], detail: (.[3] | s)}}] | from_entries),

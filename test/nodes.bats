@@ -8,7 +8,7 @@ load test_helper
 
 setup() {
   common_setup
-  use_fake ssh sysctl pmset ioreg
+  use_fake ssh sysctl pmset ioreg iostat
   export CHARTROOM_MACHINE_NAME=studio
   export CHARTROOM_NODES=none
   export FAKE_NODE_DIR="$BATS_TEST_TMPDIR/node"
@@ -240,6 +240,57 @@ remote_probe() { # <target> [initialised 0|1]
   [ "$(probe_val crew_live)" = - ]
   run cr nodes
   grep -q "(all agents)" <<<"$output"
+}
+
+@test "node probe: agents by name: a worker by its task, an XO by its home; no title, message or path leaves the machine" {
+  hc_core_up; export FAKE_HC_EVENTS=1
+  mkdir -p "$FAKE_HC_DIR/terms" "$BATS_TEST_TMPDIR/homes/.acme/tasks" "$BATS_TEST_TMPDIR/work/shop/tasks"
+  touch "$BATS_TEST_TMPDIR/homes/.acme/commander.md"
+  term() { jq -n --arg a "$1" --argjson x "$2" '{address: $a, state: "live", agent: "claude-code", title: "SECRET title", status: {app: "claude-code", state: "done", msg: "SECRET msg"}} + $x' >"$FAKE_HC_DIR/terms/$1.json"; }
+  term t1 '{"labels": {"chartroom.task": "a-1111", "where": "crew / SECRET task title"}, "status": {"app": "claude-code", "state": "working"}}'
+  # its shell began elsewhere: where its program is now is what counts
+  term t2 "$(jq -n --arg d "$BATS_TEST_TMPDIR/homes/.acme" '{cwd: "/elsewhere", foreground: {cwd: $d}, labels: {where: "XO / Acme\tmain"}}')"
+  # a tasks directory alone is not a home
+  term t3 "$(jq -n --arg d "$BATS_TEST_TMPDIR/work/shop" '{foreground: {cwd: $d}, labels: {}, status: {app: "codex", state: "error"}}')"
+  term t4 '{"labels": null, "status": {"app": "claude-code"}}'
+  term t5 '{"labels": {}, "status": null}'
+  run cr node probe
+  [ "$status" -eq 0 ]
+  [ "$(grep -c $'^agent\t' <<<"$output")" -eq 4 ]
+  grep -qxF $'agent\tcrew\tt1\tworking\ta-1111\t-' <<<"$output"
+  grep -qxF $'agent\txo\tt2\tdone\tacme\tXO / Acme main' <<<"$output"
+  grep -qxF $'agent\tother\tt3\terror\tshop\t-' <<<"$output"
+  grep -qxF $'agent\tother\tt4\t-\t-\t-' <<<"$output"
+  if grep -qE "SECRET|$BATS_TEST_TMPDIR/(homes|work)" <<<"$output"; then false; fi
+  run cr node probe --json
+  [ "$(jq -c '[.agents[] | [.kind, .name, .state, .where]]' <<<"$output")" = '[["crew","a-1111","working",null],["xo","acme","done","XO / Acme main"],["other","shop","error",null],["other",null,null,null]]' ]
+  # the brain trusts no probe to keep its own limits: 80 agents, 120 characters each
+  mkdir -p "$SSHD/studio2"; run cr node probe
+  { printf '%s\n' "$output" | grep -v $'^agent\t'; printf 'agent\tboss\tt0\tdone\tx\t-\n'
+    for i in $(seq 1 90); do printf 'agent\tother\tt%s\tdone\t%0300d\t-\n' "$i" 7; done; } >"$SSHD/studio2/probe.tsv"
+  run env FAKE_SSH_DIR="$SSHD" CHARTROOM_NODES=studio2 "$CHARTROOM" nodes --json
+  [ "$(jq -c '.nodes[] | select(.machine == "studio2") | [(.agents | length), (.agents | map(.kind) | unique), (.agents[0].name | length)]' <<<"$output")" = '[80,["other"],120]' ]
+  # with no event stream there are none, and the count is all there is
+  unset FAKE_HC_EVENTS
+  run cr node probe --json
+  [ "$(jq -c .agents <<<"$output")" = '[]' ]
+}
+
+@test "node probe: CPU is the share in use over a second; a machine that cannot say leaves it out" {
+
+  # the first report is since boot; the last is the second
+  printf '      cpu    load average\n us sy id   1m   5m   15m\n  8  5 87  3.00 2.50 2.00\n 27 30 43  3.00 2.50 2.00\n' >"$FAKE_NODE_DIR/iostat"
+  run cr node probe
+  [ "$(probe_val cpu_busy_pct)" = 57 ]
+  run cr node probe --json
+  [ "$(jq -c '[.cpu_busy_pct, .load[0]]' <<<"$output")" = '[57,3]' ]
+  # only the report since boot, or none: not a share over the second
+  printf '      cpu    load average\n us sy id   1m   5m   15m\n  8  5 87  3.00 2.50 2.00\n' >"$FAKE_NODE_DIR/iostat"
+  run cr node probe
+  [ "$(probe_val cpu_busy_pct)" = - ]
+  rm "$FAKE_NODE_DIR/iostat"
+  run cr node probe --json
+  [ "$(jq -c .cpu_busy_pct <<<"$output")" = null ]
 }
 
 @test "node probe: degrades on a machine without sysctl, pmset or ioreg (Linux)" {

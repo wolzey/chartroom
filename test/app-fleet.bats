@@ -41,6 +41,24 @@ teardown() { cr app stop >/dev/null 2>&1 || true; }
   [ "$(jq -c '.machines[] | select(.name == "mini") | [.crew_live, .agents_live]' <<<"$j")" = '[null,1]' ]
 }
 
+@test "docker shows where it is installed; one that does not answer never changes a machine's health" {
+  j="$(cr app fleet --json)"
+  [ "$(jq -c '[.machines[] | [.name, .state, (.extra | map([.label, .ok]))]] | map(select(.[0] != "spare"))' <<<"$j")" = \
+    '[["studio","healthy",[["docker",true]]],["laptop","degraded",[["docker",false]]],["mini","degraded",[]]]' ]
+  [ "$(jq -r '.machines[] | select(.name == "laptop") | .failing | join(",")' <<<"$j")" = "gh sign-in" ]
+  # with its sign-in back, laptop is healthy though its docker still does not answer
+  jq '(.nodes[] | select(.machine == "laptop") | .logins.gh.status) = "ok"' "$CHARTROOM_APP_NODES" >"$BATS_TEST_TMPDIR/n.json"
+  j="$(CHARTROOM_APP_NODES="$BATS_TEST_TMPDIR/n.json" cr app fleet --json)"
+  [ "$(jq -c '.machines[] | select(.name == "laptop") | [.state, .extra[0].ok]' <<<"$j")" = '["healthy",false]' ]
+}
+
+@test "each agent by name and the CPU share pass through; a machine that does not say has none" {
+  j="$(cr app fleet --json)"
+  [ "$(jq -c '.machines[] | select(.name == "studio") | [.cpu_busy_pct, (.agents | map([.kind, .name]))]' <<<"$j")" = \
+    '[24,[["crew","old-errand-0a1b"],["crew","nightly-report-2c3d"],["xo","acme"],["other","shop"]]]' ]
+  [ "$(jq -c '.machines[] | select(.name == "mini") | [.cpu_busy_pct, .agents]' <<<"$j")" = '[null,[]]' ]
+}
+
 @test "the probe reports the share of disk free" {
   run cr node probe
   [ "$status" -eq 0 ]

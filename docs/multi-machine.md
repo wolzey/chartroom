@@ -74,7 +74,7 @@ messages go on **stdin as JSON**, never interpolated into the shell line. Remote
 
 | Verb (on the node) | R/M | Stage | What it does |
 |---|---|---|---|
-| `bash -s` < `lib/nodeprobe.sh` | **R** | 1 | Agentless probe. Prints `key<TAB>value` lines (`probe_schema 1`): capacity, power, HID idle, budgets if the node is initialised, tools and logins checked functionally (section 6), project checkouts. Needs nothing installed; bash 3.2-safe; starts no hc core |
+| `bash -s` < `lib/nodeprobe.sh` | **R** | 1 | Agentless probe. Prints `key<TAB>value` lines (`probe_schema 1`): capacity, CPU in use over a second (`cpu_busy_pct`), power, HID idle, budgets if the node is initialised, tools and logins checked functionally (section 6), each agent (`agent`: a worker by its task, an XO by its home, any other by its directory's name and its tab; no title, message or path), project checkouts. Needs nothing installed; bash 3.2-safe; starts no hc core |
 | `chartroom node probe [--json]` | **R** | 1 | The same script, run by an installed chartroom, plus its leases and guests (stage 3) |
 | `chartroom node lease --origin K --task ID --cost CPU,MEM --ttl S` | **M** | 2 | Under the slot lock: re-checks budgets, then grants a `reserved` lease or refuses with numbers (JSON) |
 | `chartroom node release --origin K --task ID` | **M** | 2 | Drops a lease (idempotent) |

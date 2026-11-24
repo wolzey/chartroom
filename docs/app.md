@@ -56,6 +56,20 @@ chartroom app stop               # (or: status); the LaunchAgent only when it ru
   asks the XO). The board shows every home's tasks in seven columns, filtered by home, project,
   initiative and machine. `c` anywhere writes a new task, which goes to that home's XO as a
   request (`chartroom request`).
+- **Fleet.** The machines as a list, an atom or a dashboard; each device remembers its choice, and
+  `?fleet=atom` or `?fleet=dash` in a link picks one.
+  - **Atom:** a machine is a nucleus, named, with how full it is round it; its sessions orbit it, each
+    state its own shape and colour, and a ring marks an XO or your own session. Offline and full
+    read at a glance. A session not touched for 7 days is folded into a count.
+  - **Dashboard:** a card per machine: CPU, load, memory, disk and workers against their budgets,
+    its sessions by state, and its problems, worst first (offline, a failed sign-in with the command to
+    copy, docker not answering, full, failed or stalled tasks).
+  - **A session** opens its quick view, as on the board: answer it, steer it, accept it, or open its ticket.
+  - **CPU and load are two things.** CPU is the share of the cores in use over one second. Load is
+    how many processes wanted to run, over the last minute; a machine's CPU budget is measured
+    against load, so that is where its tick is.
+  - **Named, or only counted.** A machine names its agents, and measures its CPU, once its own
+    chartroom has this version; until then it has only how many there are.
 - **Every home.** It reads each registered home on the machine (`chartroom homes`) in the
   background with `chartroom app snapshot --json`, again whenever a home's records change. A
   client home is left out, and refuses `chartroom app`: the app runs on its brain.
@@ -185,6 +199,7 @@ app/src/outbox.js       every action queued, sent in the background, retried (pu
 app/src/palette.js      ⌘K
 app/src/initiatives.js  initiatives: the list, the page (plan, stories, decisions, PRs), the approval checklist
 app/src/fleet.js        Fleet: the machines, their checks and budgets, the workers
+app/src/fleetviews.js   Fleet as an atom and as a dashboard (model.js decides what is on each machine)
 app/src/notify.js       the service worker's registration, notifications, the push subscription
 app/sw.js               the service worker: the offline shell and last state, notifications
 app/manifest.webmanifest, app/icons/   what makes it installable

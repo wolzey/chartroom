@@ -6,6 +6,8 @@
 #   healthy   reached, no sign-in found signed out, the crew's tools answer, disk free >= 15%
 #   degraded  reached, with a check failing (signed out, a tool missing or broken, low disk), or a
 #             device whose heartbeat is late (stale: what it last said is shown)
+# Docker is not one of the crew's tools: it shows where it is installed, and one that does not
+# answer is a warning that never changes the machine's health.
 #   down      not reached (its contact failed; for a device: lost, revoked, or not heard yet)
 # A signed-out tool is also a Needs me item: only the commander can sign in again (one brain: an
 # expired login goes to the inbox). A sign-in that cannot be told is shown, never counted.
@@ -28,6 +30,7 @@ def login_check($tools):
     | [ ($n.logins // {} | to_entries[] | login_check($n.tools // {})) ] as $logins
     | [ ($n.tools // {} | to_entries[] | select(.key | test("^(git|jq|bash|claude|codex|gh|chartroom)$"))
         | check(.value | tool_ok; .key; (.value.version // .value.status))) ] as $tools
+    | [ $n.tools.docker // empty | select(.status != "missing") | check(tool_ok; "docker"; (.version // .status)) ] as $extra
     | ($n.disk_free_pct // null) as $disk
     | ([$logins[], $tools[]] | map(select(.ok == false))) as $failing
     | ($n.device // null) as $dev
@@ -38,12 +41,15 @@ def login_check($tools):
        source: ($n.via // null), device: $dev,
        error: ($n.error // null), contact: ($n.contact // null),
        power: ($n.power // null), battery_pct: ($n.battery_pct // null), idle_s: ($n.hid_idle_s // null),
-       cores: ($n.cores // null), load: ($n.load // null), mem_free_pct: ($n.mem_free_pct // null), disk_free_pct: $disk,
+       cores: ($n.cores // null), load: ($n.load // null), cpu_busy_pct: ($n.cpu_busy_pct // null), mem_free_pct: ($n.mem_free_pct // null), disk_free_pct: $disk,
        budgets: ($n.budgets // null), util: ($n.util // null), agents_live: ($n.agents_live // null),
        # the crew (chartroom's workers, the slots against max_workers) and the other agents apart;
        # null crew: an hc with no event stream, where every live agent is all that can be told
-       crew_live: ($n.crew_live // null), other_agents: ($n.other_agents // null), path_source: ($n.path_source // null),
-       logins: $logins, tools: $tools,
+       crew_live: ($n.crew_live // null), other_agents: ($n.other_agents // null),
+       # each by name (a crew worker by its task, an XO by its home); fewer than the counts, or none,
+       # from a chartroom whose probe does not name them yet
+       agents: ($n.agents // []), path_source: ($n.path_source // null),
+       logins: $logins, tools: $tools, extra: $extra,
        failing: ($late + [$failing[] | .label] + (if $disk != null and $disk < 15 then ["disk below 15% free"] else [] end)),
        on_battery: (($n.power // "") == "battery")}]
 | {machines: (sort_by([(if .brain then 0 else 1 end), .name])),

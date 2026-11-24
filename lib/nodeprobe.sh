@@ -24,13 +24,18 @@
 #
 # Lines (a value of "-" is unknown):
 #   probe_schema 1 | host H | os NAME VERSION | model M | clock EPOCH
-#   cores N | cores_perf N | cores_eff N | mem_bytes N | load L1 L5 L15 | mem_free_pct N | disk_free_pct N
+#   cores N | cores_perf N | cores_eff N | mem_bytes N | load L1 L5 L15 | cpu_busy_pct N | mem_free_pct N | disk_free_pct N
+#   (cpu_busy_pct: the share of all cores in use over one second, sampled before the tools are asked)
 #   power ac|battery|- | battery_pct N | hid_idle_s N
 #   initialised 0|1 | config PATH | budget KEY VALUE (max_workers cpu mem on_battery priority project_roots accept)
 #   runner hc up|down|none VERSION | context core|shell|ssh | agents_live N
 #   crew_live N | other_agents N   (hc terminals here that carry chartroom.task, and the other
 #                                   agents: an XO, a session chartroom did not start; "-" on an hc
 #                                   without an event stream, where agents_live is all there is)
+#   agent crew|xo|other ADDRESS STATE NAME WHERE   (each of those, at most 80: a crew worker by its
+#                                   task; an agent whose directory is a chartroom home as the XO of
+#                                   it; any other by its directory's name. WHERE is the workspace and
+#                                   tab a person sees it in. No title, message or path is sent.)
 #   path_source login|inherited
 #   tool NAME ok|old|down|missing|error VERSION-OR-WHY  (error: the binary and its first line)
 #   login NAME ok|no|unknown|missing DETAIL
@@ -119,6 +124,18 @@ canon() { # <remote url>
 # (GNU stat first: its -f is the file system's status, which takes %m and prints no mtime)
 mtime() { local m; m="$(stat -c %Y "$1" 2>/dev/null)" || m="$(stat -f %m "$1" 2>/dev/null)"; [[ "$m" =~ ^[0-9]+$ ]] && printf '%s' "$m"; }
 
+# The share of all cores in use over one second, or nothing. A Mac's iostat prints its first
+# report since boot and its second for the interval; Linux counts ticks in /proc/stat.
+cpu_busy() {
+  if sysctl_n hw.ncpu >/dev/null; then
+    have iostat || return 0
+    bounded 5 iostat -n 0 -c 2 -w 1 2>/dev/null | awk '/ id( |$)/ {for (i = 1; i <= NF; i++) if ($i == "id") c = i; next}
+      c && $c ~ /^[0-9]+$/ {v = 100 - $c; n++} END {if (n > 1 && v >= 0) print v}'
+  elif [[ -r /proc/stat ]]; then
+    { sed -n 1p /proc/stat; sleep 1; sed -n 1p /proc/stat; } | awk '$1 == "cpu" {t = 0; for (i = 2; i <= 9; i++) t += $i; d = $5 + $6; if (NR > 1 && t > pt) printf "%d", 100 * (1 - (d - pd) / (t - pt)) + 0.5; pt = t; pd = d}'
+  fi
+}
+
 # The login shell's PATH (see the header), or nothing.
 login_path_probe() {
   local sh="${CHARTROOM_LOGIN_SHELL:-${SHELL:-}}" f out p
@@ -173,6 +190,8 @@ probe_main() {
   # shellcheck disable=SC2086 # three numbers, split on purpose
   set -- $load
   kv load "$(num_or_dash "${1:-}")" "$(num_or_dash "${2:-}")" "$(num_or_dash "${3:-}")"
+
+  kv cpu_busy_pct "$(num_or_dash "$(cpu_busy)")"
 
   # macOS: the kernel's own "how much memory is free" level (what memory_pressure prints).
   free="$(sysctl_n kern.memorystatus_level || true)"
@@ -245,7 +264,7 @@ probe_main() {
 
   # The crew among them: terminals carrying chartroom.task (hc ls shows no labels; the first
   # frame of hc's event stream does). The rest are other agents: an XO, a person's own session.
-  crew=- others=-
+  crew=- others=- named=""
   if [[ "$hc_state" == up ]] && have jq; then
     frame="$(first_line 10 env -u HC_TERMINAL_ID "$hcb" events --json 2>/dev/null || true)"
     if [[ -n "$frame" ]]; then
@@ -253,10 +272,33 @@ probe_main() {
         | [(map(select((.labels // {})["chartroom.task"] != null)) | length),
            (map(select((.labels // {})["chartroom.task"] == null and ((.status // {}).app // null) != null)) | length)] | @tsv' <<<"$frame" 2>/dev/null || true)"
       if [[ -n "$counts" ]]; then crew="${counts%%$'\t'*}"; others="${counts#*$'\t'}"; fi
+      # (no field is empty: a tab-separated read would close the gap)
+      named="$(jq -r 'select((.terminals | type) == "array")
+        | def f($n): if . == null then "-" else tostring | gsub("[[:cntrl:]]"; " ") | .[0:$n] | if test("^ *$") then "-" else . end end;
+        [.terminals[] | select((.address | tostring | contains("/")) | not) | select(.state == "live")
+          | (.labels // {}) as $l | $l["chartroom.task"] as $t | select($t != null or ((.status // {}).app // null) != null)
+          | ((.foreground // {}).cwd // .cwd // null) as $d
+          | [(if $t then "crew" else "other" end), (.address | f(40)), ((.status // {}).state | f(20)), (if $t then $t | f(80) else "-" end),
+             (if $t then "-" else $l.where | f(120) end), (if $t then "-" else $d | f(1000) end)]]
+        | .[0:80][] | join("\t")' <<<"$frame" 2>/dev/null || true)"
     fi
   fi
   kv crew_live "$(num_or_dash "$crew")"
   kv other_agents "$(num_or_dash "$others")"
+  while IFS=$'\t' read -r a_kind a_addr a_state a_name a_where a_dir; do
+    [[ -n "$a_kind" ]] || continue
+    if [[ "$a_kind" == other && "$a_dir" == /* ]]; then
+      a_name="${a_dir%/}"; a_name="${a_name##*/}"; a_name="${a_name#.}"
+      # a chartroom home (chartroom init): its agent is that home's XO. Never looked for where macOS
+      # asks the person before a program may look, nor on a volume that may be away.
+      case "$a_dir" in
+        "$HOME"/Documents*|"$HOME"/Desktop*|"$HOME"/Downloads*|"$HOME"/Library/*|/Volumes/*|/Network/*) ;;
+        *) if [[ -d "$a_dir/tasks" ]] && [[ -f "$a_dir/commander.md" || -f "$a_dir/captain.md" ]]; then a_kind=xo; fi ;;
+      esac
+      [[ "$a_dir" != "$HOME" && -n "$a_name" ]] || a_name=-
+    fi
+    kv agent "$a_kind" "$a_addr" "$a_state" "$a_name" "$a_where"
+  done <<<"$named"
 
   # ---------------------------------------------------------------- tools and logins
   # (on the login shell's PATH when there is one: the tools a worker launched here would run)

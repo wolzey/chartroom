@@ -360,4 +360,78 @@ test("move, ago and search: the keyboard's selection, short times, the palette's
   assert.deepStrictEqual(M.search(entries, "globex").map((e) => e.label), ["Only globex", "Rate limits for the public API"]);
 });
 
+// Fleet's atom and dashboard (fleetviews.js)
+const fleetOf = (over) => ({ machines: [Object.assign({ name: "studio", brain: true, state: "healthy", crew_live: 3, other_agents: 2, agents_live: 5, cores: 10, load: [4, 4, 4],
+  cpu_busy_pct: 24, mem_free_pct: 60, disk_free_pct: 40, budgets: { max_workers: 6, cpu: 80, mem: 75, on_battery: "pause" }, logins: [], tools: [], extra: [], failing: [], agents: [] }, over),
+  { name: "desk", brain: false, state: "healthy", crew_live: 1, other_agents: 0, device: { aliases: ["desk-old"] }, logins: [], tools: [], extra: [], failing: [], agents: [] }] });
+const ft = (task, o) => Object.assign({ type: "task", task, key: "acme:" + task, home: "acme", title: task, status: "working", state: "working", live: "working", last_at: ago(60) }, o);
+
+test("fleetMap: a task sits on its own machine (an alias too), an unlisted one on the brain; only open sessions count", () => {
+  const by = M.fleetMap(fleetOf(), [ft("a"), ft("b", { machine: "desk-old" }), ft("c", { machine: "elsewhere" }), ft("d", { live: "parked" }), ft("e", { status: "closed" }),
+    { type: "request", key: "r", status: "drafting" }]);
+  assert.deepStrictEqual(by.studio.sessions.map((s) => s.task.task), ["a", "c"]);
+  assert.deepStrictEqual(by.desk.sessions.map((s) => s.task.task), ["b"]);
+  assert.deepStrictEqual(by.studio.tasks.map((t) => t.task), ["a", "c", "d"]);
+});
+
+test("fleetMap: agents are named where the machine names them; the rest stay a count, a session at rest never twice", () => {
+  const rest = ft("old", { live: "done", last_at: ago(9 * 86400) });
+  // a machine that only counts: 3 crew, two of them these tasks (one at rest), so one is unnamed
+  let o = M.fleetMap(fleetOf(), [ft("a"), rest]).studio;
+  assert.deepStrictEqual([o.sessions.length, o.rest.length, o.agents.length, o.crew, o.others], [1, 1, 0, 1, 2]);
+  // the same machine naming them
+  const agents = [{ kind: "crew", address: "t1", state: "working", name: "a" }, { kind: "crew", address: "t2", state: "done", name: "old" }, { kind: "crew", address: "t3", state: "working", name: "gone-1a2b" },
+    { kind: "xo", address: "t4", state: "done", name: "acme", where: "XO / Acme" }, { kind: "other", address: "t5", state: null, name: "shop" }];
+  o = M.fleetMap(fleetOf({ agents }), [ft("a"), rest]).studio;
+  assert.deepStrictEqual([o.crew, o.others], [0, 0]);
+  assert.deepStrictEqual(o.agents.map((a) => [M.agentLabel(a), a.state]), [["gone-1a2b", "working"], ["XO of acme", "waiting"], ["shop", "other"]]);
+  // a closed task's worker whose terminal is still open keeps its title
+  o = M.fleetMap(fleetOf({ agents }), [ft("gone-1a2b", { status: "closed", title: "Gone" })]).studio;
+  assert.strictEqual(o.agents.find((a) => a.kind === "crew" && a.name === "gone-1a2b").task.title, "Gone");
+  // an open task's worker whose terminal says nothing yet stands as its task does
+  o = M.fleetMap(fleetOf({ agents: [{ kind: "crew", address: "t3", state: null, name: "quiet" }] }), [ft("quiet", { live: "idle", status: "done", state: "done" })]).studio;
+  assert.deepStrictEqual(o.agents.map((a) => [a.state, a.task.task]), [["review", "quiet"]]);
+  // an hc that cannot tell the crew apart: what no task accounts for
+  o = M.fleetMap(fleetOf({ crew_live: null, other_agents: null, agents_live: 4 }), [ft("a")]).studio;
+  assert.deepStrictEqual([o.crew, o.others], [0, 3]);
+});
+
+test("fleetState: working, waiting, needs me, stalled, finished; an agent that ended on an error is stalled", () => {
+  const st = (o) => M.fleetState(ft("x", o));
+  assert.deepStrictEqual([st({}), st({ status: "waiting", state: "waiting" }), st({ status: "needs", state: "decision" }), st({ state: "stopped-silent" }), st({ state: "awaiting-input" }),
+    st({ status: "review", state: "review" }), st({ live: "gone" })], ["working", "waiting", "needs", "stalled", "stalled", "review", "stalled"]);
+  const agents = [{ kind: "crew", address: "t1", state: "error", name: "a" }, { kind: "crew", address: "t2", state: "error", name: "q" }];
+  const o = M.fleetMap(fleetOf({ agents }), [ft("a"), ft("q", { status: "needs", state: "decision" })]).studio;
+  assert.deepStrictEqual(o.sessions.map((s) => [s.task.task, s.state, !!s.error]), [["q", "needs", false], ["a", "stalled", true]]);
+  assert.deepStrictEqual(M.fleetProblems(fleetOf({ agents }).machines[0], o).map((p) => p.text), ["1 agent ended on an error"]);
+});
+
+test("fleetMeters: CPU is the measured share, never load; the CPU budget's tick is on load", () => {
+  const of = (over) => Object.fromEntries(M.fleetMeters(fleetOf(over).machines[0]).map((x) => [x.id, x]));
+  let x = of({});
+  assert.deepStrictEqual([x.cpu.used, x.cpu.text, x.cpu.tick], [24, "24% busy", null]);
+  assert.deepStrictEqual([x.load.used, x.load.text, x.load.tick, x.load.level], [40, "4.0 on 10 cores", 80, null]);
+  assert.deepStrictEqual([x.mem.used, x.disk.used, x.workers.used, x.workers.text], [40, 60, 50, "3 of 6"]);
+  // not measured there (an older chartroom): said, with no bar, and load is not shown in its place
+  x = of({ cpu_busy_pct: null });
+  assert.deepStrictEqual([x.cpu.used, x.cpu.text, x.load.used], [null, "not measured there yet", 40]);
+  x = of({ load: [12, 9, 8], mem_free_pct: 4, disk_free_pct: 9, crew_live: 8 });
+  assert.deepStrictEqual([x.load.word, x.mem.word, x.disk.word, x.workers.word], ["over", "very high", "very low", "over"]);
+  assert.strictEqual(of({ crew_live: 6 }).workers.word, "full");
+  x = of({ budgets: null, load: [null, null, null], mem_free_pct: null });
+  assert.deepStrictEqual([x.load.text, x.mem.text, x.workers.text], ["not read", "not read", "3 (no limit set)"]);
+});
+
+test("fleetProblems: offline, sign-ins with the command, docker, full, stalled and failed tasks; the worst first, the old apart", () => {
+  const probs = (over, tasks) => { const f = fleetOf(over); return M.fleetProblems(f.machines[0], M.fleetMap(f, tasks || []).studio); };
+  assert.deepStrictEqual(probs({}), []);
+  assert.deepStrictEqual(probs({ state: "down", error: "no answer", device: { seen_age_s: 7200 } }).map((p) => [p.level, p.text, p.sub]), [["bad", "Offline: no answer", "last heartbeat 2h ago"]]);
+  const p = probs({ failing: ["gh sign-in", "codex"], logins: [{ ok: false, label: "gh sign-in", detail: "token expired" }, { ok: null, label: "codex sign-in", detail: "cannot tell" }],
+    tools: [{ ok: false, label: "codex", detail: "missing" }], extra: [{ ok: false, label: "docker", detail: "daemon not answering" }], crew_live: 6, power: "battery", battery_pct: 40 },
+    [ft("f", { state: "failed", live: "gone" }), ft("s", { state: "stopped-silent", live: "gone" }), ft("w", { state: "waiting-overdue", status: "waiting" }), ft("z", { state: "failed", live: "gone", last_at: ago(30 * 86400) })]);
+  assert.deepStrictEqual(p.map((x) => x.level + ": " + x.text), ["bad: gh sign-in failed", "bad: codex is not working", "bad: 1 failed task", "bad: 1 stopped without reporting",
+    "warn: docker is not working", "warn: codex sign-in cannot be told", "warn: On battery, 40%", "warn: Full: 6 of 6 workers", "warn: 1 waiting past its time", "old: 1 more stalled, untouched for 7 days"]);
+  assert.strictEqual(p[0].cmd, "gh auth login");
+});
+
 run();

@@ -320,6 +320,123 @@ var AppModel = (function () {
       .sort((a, b) => String(b.last_at || b.created || "").localeCompare(String(a.last_at || a.created || ""))) }));
   }
 
+  // Fleet's atom and dashboard (fleetviews.js): what each machine holds, and what is wrong on it.
+  const FLEET_STATES = { working: "Working", waiting: "Waiting", needs: "Needs me", stalled: "Stalled", review: "Finished", other: "Unknown" };
+  const REST_DAYS = 7; // a session whose task has not moved for this long is "at rest": a count until shown
+  const OPEN_LIVE = ["working", "blocked", "done", "in-session"]; // a session is open; parked, gone, stopped: none
+  const rank = (s) => Object.keys(FLEET_STATES).indexOf(s);
+  function fleetState(t) {
+    if (t.state === "stopped-silent" || t.state === "waiting-overdue" || t.state === "failed" || t.live === "gone") return "stalled";
+    if (t.status === "needs") return "needs";
+    if (t.state === "awaiting-input") return "stalled"; // at a prompt in its terminal, for the XO
+    if (t.status === "waiting") return "waiting";
+    if (t.status === "review" || t.status === "done") return "review";
+    return "working";
+  }
+  // an agent as its terminal reports it (an XO, a person's own session): at rest it waits on someone
+  function agentState(a) { return { working: "working", blocked: "needs", error: "stalled" }[a.state] || (a.state ? "waiting" : "other"); }
+  // chartroom's own workers against the budget; an hc that cannot tell the crew apart: every agent
+  function crewOf(m) { return m.crew_live != null ? m.crew_live : m.agents_live || 0; }
+  function fullness(m) { const b = m.budgets && m.budgets.max_workers; return b ? crewOf(m) / b : null; }
+  function stale(t, now) { return !!t.last_at && now - Date.parse(t.last_at) > REST_DAYS * 86400e3; }
+
+  // Each machine's tasks, its open sessions (those at rest apart) and its other agents by name. What a
+  // machine only counts (a probe that does not name them yet) is a number: crew, others.
+  function fleetMap(fleet, tasks, nowMs) {
+    const now = nowMs == null ? Date.now() : nowMs;
+    const ms = (fleet && fleet.machines) || [], brain = ms.find((m) => m.brain) || ms[0], out = {};
+    for (const m of ms) out[m.name] = { tasks: [], sessions: [], rest: [], agents: [], crew: 0, others: 0 };
+    const named = {}, mine = {};
+    for (const m of ms) for (const a of m.agents || []) if (a.kind === "crew" && a.name) named[a.name] = a;
+    for (const t of tasks) {
+      if (t.type !== "task" || t.status === "closed") continue;
+      // its own machine, by name or a device's alias; one Fleet does not list runs on the brain
+      const m = ms.find((x) => x.name === t.machine || (x.device && (x.device.aliases || []).includes(t.machine))) || brain;
+      if (!m) continue;
+      const o = out[m.name];
+      o.tasks.push(t);
+      if (!OPEN_LIVE.includes(t.live)) continue;
+      let state = fleetState(t);
+      // its agent ended its turn on an error (a spend limit, a dropped network): it moves nothing
+      const err = !!named[t.task] && named[t.task].state === "error" && (state === "working" || state === "waiting");
+      if (err) state = "stalled";
+      (stale(t, now) && t.live !== "working" ? o.rest : o.sessions).push({ id: t.key, state, task: t, error: err || undefined });
+      mine[t.task] = true;
+    }
+    for (const m of ms) {
+      const o = out[m.name], list = m.agents || [];
+      const by = (a, b) => rank(a.state) - rank(b.state) || (a.id < b.id ? -1 : 1);
+      o.sessions.sort(by); o.rest.sort(by);
+      for (const a of list) {
+        // a crew worker is its task's session; one of no open task here is shown as its own
+        if (a.kind === "crew" && mine[a.name]) continue;
+        const t = a.kind === "crew" ? tasks.find((x) => x.type === "task" && x.task === a.name) : null;
+        o.agents.push({ id: "a:" + a.address, state: t && t.status !== "closed" ? fleetState(t) : agentState(a), kind: a.kind, name: a.name || a.where || null, where: a.where || null, task: t || undefined });
+      }
+      o.agents.sort(by);
+      const n = list.filter((a) => a.kind === "crew").length;
+      const seen = o.sessions.length + o.rest.length;
+      o.crew = m.crew_live == null ? 0 : Math.max(0, m.crew_live - (n || seen));
+      // (an hc that cannot tell the crew apart: what its tasks do not account for)
+      o.others = Math.max(0, m.crew_live == null ? (m.agents_live || 0) - seen : (m.other_agents || 0) - (list.length - n));
+    }
+    return out;
+  }
+  function agentLabel(a) {
+    return a.kind === "xo" ? (a.name ? "XO of " + a.name : "An XO") : a.kind === "crew" ? a.name || "A crew worker" : a.name || "An agent";
+  }
+
+  // A machine's meters, 0-100: what is used, the budget as a tick, and a word when it matters.
+  // CPU is what the cores did over a second; load (how many wanted to run, over a minute) is what
+  // the CPU budget is measured against, so that tick is on load.
+  function fleetMeters(m) {
+    const b = m.budgets || {}, out = [], crew = crewOf(m), load = m.load && m.load[0] != null && m.cores ? m.load[0] : null;
+    const add = (id, label, used, text, o) => {
+      const x = o || {};
+      const lvl = used == null ? null : x.bad != null && used >= x.bad ? "bad" : x.warn != null && used >= x.warn ? "warn" : null;
+      out.push({ id, label, used, text, tick: x.tick || null, tickText: x.tickText || null, level: lvl, word: lvl ? (x.words || ["high", "very high"])[lvl === "bad" ? 1 : 0] : null });
+    };
+    const budget = (n) => (n ? "budget " + n + "%" : null);
+    add("cpu", "CPU", m.cpu_busy_pct, m.cpu_busy_pct == null ? "not measured there yet" : m.cpu_busy_pct + "% busy", { warn: 85, bad: 97 });
+    add("load", "Load", load == null ? null : 100 * load / m.cores, load == null ? "not read" : load.toFixed(1) + " on " + m.cores + " cores",
+      { tick: b.cpu, tickText: budget(b.cpu), warn: b.cpu || 80, bad: 100, words: ["high", "over"] });
+    const mem = m.mem_free_pct == null ? null : 100 - m.mem_free_pct;
+    add("mem", "Memory", mem, mem == null ? "not read" : mem + "% used", { tick: b.mem, tickText: budget(b.mem), warn: b.mem || 75, bad: 92 });
+    const disk = m.disk_free_pct == null ? null : 100 - m.disk_free_pct;
+    add("disk", "Disk", disk, disk == null ? "not read" : m.disk_free_pct + "% free", { tick: 85, tickText: "flagged under 15% free", warn: 80, bad: 85.01, words: ["low", "very low"] });
+    add("workers", "Workers", b.max_workers ? 100 * crew / b.max_workers : null, b.max_workers ? crew + " of " + b.max_workers : crew + " (no limit set)",
+      { warn: 100, words: [b.max_workers && crew > b.max_workers ? "over" : "full"] });
+    return out;
+  }
+
+  // What is wrong on a machine, worst first: {level: bad|warn|old, text, sub, cmd, tasks}.
+  const SIGN_IN = { "claude sign-in": "claude /login", "codex sign-in": "codex login", "gh sign-in": "gh auth login" };
+  function fleetProblems(m, o, nowMs) {
+    const now = nowMs == null ? Date.now() : nowMs, out = [], b = m.budgets || {};
+    if (m.state === "down") out.push({ level: "bad", text: "Offline: " + (m.error || "not reached"), sub: m.device && m.device.seen_age_s != null ? "last heartbeat " + ageText(m.device.seen_age_s) + " ago" : null });
+    for (const f of m.failing || []) {
+      const c = (m.logins || []).concat(m.tools || []).find((x) => x.label === f);
+      out.push({ level: "bad", text: /sign-in$/.test(f) ? f + " failed" : c ? f + " is not working" : f[0].toUpperCase() + f.slice(1), sub: c && c.detail, cmd: SIGN_IN[f] || null });
+    }
+    for (const c of (m.extra || []).filter((x) => x.ok === false)) out.push({ level: "warn", text: c.label + " is not working", sub: c.detail });
+    for (const c of (m.logins || []).filter((x) => x.ok === null)) out.push({ level: "warn", text: c.label + " cannot be told", sub: c.detail });
+    if (m.power === "battery") out.push({ level: "warn", text: "On battery" + (m.battery_pct != null ? ", " + m.battery_pct + "%" : ""), sub: b.on_battery === "pause" ? "new work pauses here" : null });
+    const f = fullness(m);
+    if (f != null && f >= 1) out.push({ level: "warn", text: (f > 1 ? "Over its limit: " : "Full: ") + crewOf(m) + " of " + b.max_workers + " workers" });
+    const fresh = o.tasks.filter((t) => !stale(t, now));
+    const group = (level, n, one, many, list) => { if (list.length) out.push({ level, id: n, text: list.length + " " + (list.length === 1 ? one : many), tasks: list }); };
+    group("bad", "failed", "failed task", "failed tasks", fresh.filter((t) => t.state === "failed"));
+    group("bad", "silent", "stopped without reporting", "stopped without reporting", fresh.filter((t) => t.state === "stopped-silent" || (t.live === "gone" && t.status === "working" && t.state !== "failed")));
+    group("bad", "error", "agent ended on an error", "agents ended on an error", o.sessions.filter((s) => s.error).map((s) => s.task));
+    group("warn", "overdue", "waiting past its time", "waiting past their time", fresh.filter((t) => t.state === "waiting-overdue"));
+    group("warn", "prompt", "at a prompt in a terminal", "at a prompt in a terminal", fresh.filter((t) => t.state === "awaiting-input"));
+    for (const a of o.agents.filter((x) => x.state === "stalled")) out.push({ level: "warn", text: agentLabel(a) + " ended on an error", sub: a.where });
+    group("old", "old", "more stalled, untouched for " + REST_DAYS + " days", "more stalled, untouched for " + REST_DAYS + " days", o.tasks.filter((t) => stale(t, now) && fleetState(t) === "stalled"));
+    const worst = { bad: 0, warn: 1, old: 2 };
+    return out.sort((x, y) => worst[x.level] - worst[y.level]);
+  }
+  function ageText(s) { return s == null ? "" : s < 60 ? s + "s" : s < 3600 ? Math.floor(s / 60) + "m" : s < 86400 ? Math.floor(s / 3600) + "h" : Math.floor(s / 86400) + "d"; }
+
   // Initiatives (slice 4): every home's, each with its home and hue.
   function initiatives(state) {
     const out = [];
@@ -693,6 +810,7 @@ var AppModel = (function () {
   return { KINDS, GROUPS, STATUS, kind, items, homes, plain, shape, repeats, asks, view, taskIds,
     permitReason, permitLead, permitScope, firstLine, standing, visible, ordered, counts, projects, questions, details,
     primary, answerBody, answered, move, ago, agoText, snoozes, search, askText, headline, bulkPlan, range, promote, linkParts, BOARD, boardItems, boardFilter, boardColumns, initiatives, milestones,
-    freshItems, notice, noticeTarget, permitLeft };
+    freshItems, notice, noticeTarget, permitLeft,
+    FLEET_STATES, REST_DAYS, SIGN_IN, fleetState, fleetMap, fleetMeters, fleetProblems, fullness, crewOf, agentLabel, ageText };
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = AppModel;
