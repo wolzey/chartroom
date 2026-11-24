@@ -18,20 +18,23 @@
 # so it needs nothing installed there and runs exactly this chartroom's probe. Every probe runs
 # side by side and is ended after CHARTROOM_NODES_TIMEOUT seconds (45).
 #
-# UTIL is the projected utilisation if one more worker landed there, against that node's own
-# budgets, the score placement will rank by (docs/multi-machine.md, Placement):
-#   max((crew + 1) / max_workers, (load1 + c) / (cores * cpu%), (used memory + m) / (RAM * mem%))
-# with c = CHARTROOM_WORKER_CPU cores (1.5) and m = CHARTROOM_WORKER_MEM_GB (1.5). The crew is the
-# workers chartroom started there (hc terminals carrying chartroom.task); an XO or a person's own
-# agent is not a slot, though its load still counts through load1 and memory. On an hc with no
-# event stream the crew cannot be told apart, and every live agent counts. Nothing enforces
-# max_workers yet: until placement ships, a machine "at its budget" still takes what is
-# dispatched to it.
+# A node has two limits, its owner's: the share of its CPU and of its memory that may be in use
+# (CHARTROOM_NODE_CPU_BUDGET and CHARTROOM_NODE_MEM_BUDGET in its node file, percent; `chartroom node
+# limits` shows and sets them). What is in use is measured, not estimated: cpu_use (the busy share of
+# all cores over the last minute) and mem_used_pct (Activity Monitor's Memory Used); lib/nodeprobe.sh
+# says how. Worker counts are shown and gate nothing (an older node file's CHARTROOM_NODE_MAX_WORKERS is not read).
+#
+# UTIL is how full the node would be, against its own limits, if one more worker landed there: the
+# score placement (lib/place.sh) ranks by, with the workers it has just placed counted too.
+#   max((cpu_use + c / cores) / cpu limit, (mem_used + m / RAM) / memory limit)
+# with c = CHARTROOM_WORKER_CPU cores (1.5) and m = CHARTROOM_WORKER_MEM_GB (1.5).
 
 CR_NODE_LABEL_RE='^[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}$'
 CR_NODE_TARGET_RE='^[A-Za-z0-9][A-Za-z0-9_.@:-]{0,253}$'
 CR_NODE_REMOTE_RE='^[a-z0-9][a-z0-9._-]*(:[0-9]+)?(/[a-z0-9._~-]+)+$'
 
+# How busy this machine's CPUs are, kept by lib/cpuload.sh and read by the probe.
+node_cpu_file() { printf '%s' "${XDG_STATE_HOME:-$HOME/.local/state}/chartroom/node/cpu"; }
 node_config_path() { printf '%s' "${CHARTROOM_NODE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/chartroom/node}"; }
 
 # A git remote as host/owner/repo, lowercased (git@h:o/r.git, https://h/o/r and ssh://u@h/o/r
@@ -127,12 +130,13 @@ NODES_ROW_JQ='
       {host: (one("host")[1] | s), os: ([one("os")[1], one("os")[2]] | map(s) | map(select(. != null)) | join(" ") | s),
        model: (one("model")[1] | s), clock: (one("clock")[1] | n),
        cores: (one("cores")[1] | n), cores_perf: (one("cores_perf")[1] | n), cores_eff: (one("cores_eff")[1] | n),
-       mem_bytes: (one("mem_bytes")[1] | n), load: [one("load")[1, 2, 3] | n], cpu_busy_pct: (one("cpu_busy_pct")[1] | n), mem_free_pct: (one("mem_free_pct")[1] | n),
+       cpu_use: (one("cpu_use")[1] | n), cpu_window_s: (one("cpu_use")[2] | n), mem_used_pct: (one("mem_used_pct")[1] | n),
+       mem_bytes: (one("mem_bytes")[1] | n), load: [one("load")[1, 2, 3] | n], mem_free_pct: (one("mem_free_pct")[1] | n),
        disk_free_pct: (one("disk_free_pct")[1] | n),
        power: (one("power")[1] | s), battery_pct: (one("battery_pct")[1] | n), hid_idle_s: (one("hid_idle_s")[1] | n),
        initialised: (one("initialised")[1] == "1"), config: (one("config")[1] | s),
        budgets: ([$r[] | select(.[0] == "budget") | {key: .[1], value: (.[2] | s)}] | from_entries
-         | with_entries(if (.key | IN("max_workers", "cpu", "mem")) then .value |= n else . end)),
+         | with_entries(if (.key | IN("cpu", "mem")) then .value |= n else . end)),
        runner: {hc: (one("runner")[2] | s), hc_version: (one("runner")[3] | s)},
        context: (one("context")[1] | s), agents_live: (one("agents_live")[1] | n),
        crew_live: (one("crew_live")[1] | n), other_agents: (one("other_agents")[1] | n),
@@ -142,18 +146,19 @@ NODES_ROW_JQ='
        tools: ([$r[] | select(.[0] == "tool") | {key: .[1], value: {status: .[2], version: (.[3] | s)}}] | from_entries),
        logins: ([$r[] | select(.[0] == "login" and .[1] != "-") | {key: .[1], value: {status: .[2], detail: (.[3] | s)}}] | from_entries),
        checkouts: (one("checkouts")[1] | n), checkouts_scanned: (one("checkouts")[1] != "-"),
-       project: (if $want == "" then null else ([$r[] | select(.[0] == "checkout") | {remote: .[1], path: .[2], fetch_age_s: (.[3] | n)}] | .[0]) end)}
+       repos: [$r[] | select(.[0] == "checkout") | {remote: .[1], path: .[2], fetch_age_s: (.[3] | n)}]}
+      | .checkouts_listed = ((.checkouts // 0) == 0 or (.repos | length) > 0)
+      | .project = (if $want == "" then null else ([.repos[] | select(.remote == $want)] | .[0]) end)
       | .skew_s = (if .clock then .clock - $now else null end)
       | .role = (if .initialised | not then "not a node"
                  elif .budgets.accept == "off" then "paused: not accepting"
                  elif .power == "battery" and .budgets.on_battery != "allow" then "paused: on battery"
                  else "node" end)
-      | .util = (if .initialised and .cores and .budgets.cpu and .budgets.max_workers and .budgets.mem and .mem_bytes
-                    and .load[0] != null and .mem_free_pct != null then
-                   {slots: (((.crew_live // .agents_live // 0) + 1) / .budgets.max_workers),
-                    cpu: ((.load[0] + $c) / (.cores * .budgets.cpu / 100)),
-                    mem: (((1 - .mem_free_pct / 100) * .mem_bytes + $mg * 1073741824) / (.mem_bytes * .budgets.mem / 100))}
-                   | .max = ([.slots, .cpu, .mem] | max) | map_values(r3)
+      | .util = (if .initialised and .cores and .budgets.cpu and .budgets.mem and .mem_bytes
+                    and .cpu_use != null and .mem_used_pct != null then
+                   {cpu: ((.cpu_use + 100 * $c / .cores) / .budgets.cpu),
+                    mem: ((.mem_used_pct + 100 * $mg * 1073741824 / .mem_bytes) / .budgets.mem)}
+                   | .max = ([.cpu, .mem] | max) | map_values(r3)
                  else null end)
     end)'
 
@@ -185,15 +190,15 @@ nodes_json() { # <remote to look for, or ""> [ssh: 1 for the ssh list alone]
         --argjson c "$NODE_C" --argjson mg "$NODE_MG" "$NODES_ROW_JQ"
     done
     n="$(jq length <<<"$devs")"
-    for ((i = 0; i < n; i++)); do nodes_device_row "$(jq -c --argjson i "$i" '.[$i]' <<<"$devs")" "$now"; done
+    for ((i = 0; i < n; i++)); do nodes_device_row "$(jq -c --argjson i "$i" '.[$i]' <<<"$devs")" "$now" "$want"; done
   } | jq -s --arg want "$want" --argjson c "$NODE_C" --argjson mg "$NODE_MG" \
-    '{nodes: ., project: (if $want == "" then null else $want end), settings: {worker_cpu: $c, worker_mem_gb: $mg}}'
+    '{nodes: map(del(.repos)), project: (if $want == "" then null else $want end), settings: {worker_cpu: $c, worker_mem_gb: $mg}}'
   rm -rf "$dir"
 }
 
 # One enrolled device's row, from its last heartbeat: online and stale devices show what they last
 # said (a stale one marked so); a lost, new, revoked or unheard one shows only why.
-nodes_device_row() { # <device json> <now>
+nodes_device_row() { # <device json> <now> [remote to look for]
   local d="$1" st contact err probe at
   st="$(jq -r .status <<<"$d")"
   case "$st" in
@@ -205,8 +210,8 @@ nodes_device_row() { # <device json> <now>
   esac
   probe="$(jq -r '.probe // ""' <<<"$d")"; at="$(jq -r --argjson now "$2" '.last_seen // $now' <<<"$d")"
   jq -n --argjson m "$(jq -c '{machine: .name, local: false, target: null, via: "heartbeat",
-        device: {id, status, last_seen, seen_age_s, version, enrolled, aliases}}' <<<"$d")" \
-    --arg probe "$probe" --arg contact "$contact" --arg err "$err" --arg want "" --argjson now "$at" \
+        device: {id, status, last_seen, seen_age_s, version, enrolled, aliases, caps}}' <<<"$d")" \
+    --arg probe "$probe" --arg contact "$contact" --arg err "$err" --arg want "${3:-}" --argjson now "$at" \
     --argjson c "$NODE_C" --argjson mg "$NODE_MG" "$NODES_ROW_JQ"
 }
 
@@ -215,23 +220,24 @@ NODES_TABLE_JQ='
   def d: if . == null then "-" else tostring end;
   def ago: if . == null then "-" elif . < 60 then "\(.)s" elif . < 3600 then "\(. / 60 | floor)m" elif . < 172800 then "\(. / 3600 | floor)h" else "\(. / 86400 | floor)d" end;
   def gb: if . == null then "-" else "\(. / 1073741824 | floor)G" end;
+  def pc: if . == null then "-" else "\(.)%" end;
   def two: if . == null then "-" else (. * 100 + 0.5 | floor) / 100 | tostring end;
   .project as $p
-  | (["NODE", "CONTACT", "ROLE", "CPU", "MEM", "DISK", "POWER", "IDLE", "CREW", "LOGINS", "TOOLS", "CHECKOUTS", "UTIL"] + (if $p then ["PROJECT"] else [] end)),
+  | (["NODE", "CONTACT", "ROLE", "CPU USED", "MEM USED", "SIZE", "DISK", "POWER", "IDLE", "CREW", "LOGINS", "TOOLS", "CHECKOUTS", "UTIL"] + (if $p then ["PROJECT"] else [] end)),
     (.nodes[] |
       [ .machine + (if .local then " (here)" else "" end),
         (if .device and .contact == "ok" then "\(.device.status) \(.device.seen_age_s | ago)"
          else .contact + (if .error then ": " + (.error | .[0:60]) else "" end) end) ]
-      + (if .contact != "ok" then ["-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-"] + (if $p then ["-"] else [] end) else
-        [ (if .role == "node" then "node: \(.budgets.max_workers | d)w cpu\(.budgets.cpu | d)% mem\(.budgets.mem | d)%" else .role end),
-          "\(.cores | d)" + (if .cores_perf then " (\(.cores_perf)P+\(.cores_eff | d)E)" else "" end) + " load \(.load[0] | d)",
-          "\(.mem_bytes | gb) \(.mem_free_pct | d)% free",
+      + (if .contact != "ok" then ["-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-"] + (if $p then ["-"] else [] end) else
+        [ .role,
+          (.cpu_use | pc) + (if .budgets.cpu then " of \(.budgets.cpu)%" else "" end) + (if .budgets.cpu and .cpu_use != null and .cpu_use >= .budgets.cpu then " (full)" else "" end),
+          (.mem_used_pct | pc) + (if .budgets.mem then " of \(.budgets.mem)%" else "" end) + (if .budgets.mem and .mem_used_pct != null and .mem_used_pct >= .budgets.mem then " (full)" else "" end),
+          "\(.cores | d) cores \(.mem_bytes | gb)",
           (if .disk_free_pct == null then "-" else "\(.disk_free_pct)% free" + (if .disk_free_pct < 15 then " (low)" else "" end) end),
           (if .power == "ac" then "AC" + (if .battery_pct then " (battery \(.battery_pct)%)" else "" end)
            elif .power == "battery" then "battery \(.battery_pct | d)%" else "-" end),
           (.hid_idle_s | ago),
           (if .crew_live != null then "\(.crew_live)" else "\(.agents_live | d)" end)
-          + (if .budgets.max_workers then "/\(.budgets.max_workers)" else "" end)
           + (if .crew_live != null and (.other_agents // 0) > 0 then " +\(.other_agents) other" elif .crew_live == null and .agents_live != null then " (all agents)" else "" end),
           ([.logins | to_entries[] | "\(.key):\(.value.status)"] | join(" ") | if . == "" then "-" else . end),
           ([.tools | to_entries[] | select(.value.status == "ok")] | length) as $ok
@@ -239,7 +245,7 @@ NODES_TABLE_JQ='
           | "\($ok) ok" + (if $bad == "" then "" else " " + $bad end),
           (if .checkouts_scanned then (.checkouts | d) else "- (no roots)" end),
           (if .util == null then "-" elif .util.max > 1 then "\(.util.max | two) (full)" else (.util.max | two) end) ]
-        + (if $p then [if .device then "- (not in a heartbeat yet)" elif .project then .project.path elif .checkouts_scanned then "no checkout" else "no roots" end] else [] end)
+        + (if $p then [if .device and .checkouts_listed != true then "- (its agent is older)" elif .project then .project.path elif .checkouts_scanned then "no checkout" else "no roots" end] else [] end)
       end))
   | @tsv'
 
@@ -263,11 +269,11 @@ cmd_nodes() {
   if [[ $json -eq 1 ]]; then printf '%s\n' "$doc"; return; fi
   [[ -z "$want" ]] || echo "project: $want"
   jq -r "$NODES_TABLE_JQ" <<<"$doc" | table
-  # why a tool is broken (the binary and its first line), and what the budget means today
+  # why a tool is broken (the binary and its first line)
   jq -r '.nodes[] | select(.contact == "ok") | .machine as $m | (.tools // {}) | to_entries[]
     | select(.value.status == "error") | "\($m): \(.key) is broken: \(.value.version // "no detail")"' <<<"$doc"
-  if jq -e 'any(.nodes[]; .budgets.max_workers != null)' <<<"$doc" >/dev/null; then
-    echo "CREW is chartroom's workers against max workers (XOs and other agents shown apart); nothing enforces it until placement ships"
+  if jq -e 'any(.nodes[]; .budgets.cpu != null)' <<<"$doc" >/dev/null; then
+    echo "a node at either limit (the % after \"of\") takes no new task; chartroom node limits <name|here> 80/70 sets its CPU/memory limits. UTIL: how full it would be with one more worker"
   fi
 }
 
@@ -276,23 +282,23 @@ cmd_nodes() {
 # (this machine's login shell as chartroom's settings name it, the config file included)
 node_probe_local() { CHARTROOM_LOGIN_SHELL="$(login_shell)" CR_PROBE_PROJECT="${1:-}" bash "$CR_ROOT/lib/nodeprobe.sh" </dev/null; }
 
-# Writes this machine's node file: its budgets, so `chartroom nodes` (and, from stage 3, placement)
-# counts it in. Defaults from its own probe: half its performance cores as workers, cpu 100% on
-# a machine without a battery and 50% on one with, memory 75%, pause on battery, nice priority,
-# and CHARTROOM_PROJECT_ROOTS as the project roots. It writes that one file and nothing else:
-# a node has no home.
+# Writes this machine's node file: its limits, so `chartroom nodes` and placement count it in.
+# Defaults: cpu 80% on a machine without a battery (its own probe says) and 50% on one with, memory
+# 75%, pause on battery, nice priority, and CHARTROOM_PROJECT_ROOTS as the project roots. It writes
+# that one file and nothing else: a node has no home. (--max-workers is taken, and ignored, from
+# older scripts: a node is limited by its use, not a count.)
 cmd_node_init() {
-  local workers="" cpu="" mem="" battery="" priority="" roots="" force=0 f probe cores perf bat tmp
+  local cpu="" mem="" battery="" priority="" roots="" force=0 f probe bat tmp
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --max-workers) workers="${2:-}"; shift 2 ;;
+      --max-workers) warn "node init: --max-workers is no longer a limit (a node is limited by its CPU and memory use); ignored"; shift 2 ;;
       --cpu) cpu="${2:-}"; shift 2 ;;
       --mem) mem="${2:-}"; shift 2 ;;
       --battery) battery="${2:-}"; shift 2 ;;
       --priority) priority="${2:-}"; shift 2 ;;
       --project-roots) roots="${2-}"; [[ $# -ge 2 ]] || die "--project-roots needs dirs"; shift 2 ;;
       --force) force=1; shift ;;
-      *) die "node init: unknown arg $1 (usage: chartroom node init [--max-workers N] [--cpu PCT] [--mem PCT] [--battery pause|allow] [--priority normal|nice|background] [--project-roots DIRS] [--force])" ;;
+      *) die "node init: unknown arg $1 (usage: chartroom node init [--cpu PCT] [--mem PCT] [--battery pause|allow] [--priority normal|nice|background] [--project-roots DIRS] [--force])" ;;
     esac
   done
   f="$(node_config_path)"
@@ -301,14 +307,10 @@ cmd_node_init() {
   local nid=""; [[ -f "$f" ]] && nid="$(cfg_value_in "$f" CHARTROOM_NODE_ID)"
   [[ "$nid" =~ $CR_DEVICE_ID_RE ]] || nid="n-$(fleet_rand_hex 6)"
   probe="$(node_probe_local)"
-  cores="$(awk -F'\t' '$1 == "cores" {print $2}' <<<"$probe")"; perf="$(awk -F'\t' '$1 == "cores_perf" {print $2}' <<<"$probe")"
   bat="$(awk -F'\t' '$1 == "battery_pct" {print $2}' <<<"$probe")"
-  [[ "$perf" =~ ^[0-9]+$ ]] || perf="$cores"
-  if [[ -z "$workers" ]]; then workers=1; [[ "$perf" =~ ^[0-9]+$ ]] && (( perf / 2 > 1 )) && workers=$((perf / 2)); fi
-  if [[ -z "$cpu" ]]; then if [[ "$bat" =~ ^[0-9]+$ ]]; then cpu=50; else cpu=100; fi; fi
+  if [[ -z "$cpu" ]]; then if [[ "$bat" =~ ^[0-9]+$ ]]; then cpu=50; else cpu=80; fi; fi
   mem="${mem:-75}"; battery="${battery:-pause}"; priority="${priority:-nice}"
   [[ -n "$roots" ]] || roots="$(cfg PROJECT_ROOTS CAP_PROJECT_ROOTS '')"
-  [[ "$workers" =~ ^[0-9]+$ ]] && (( workers >= 1 && workers <= 256 )) || die "node init: --max-workers is 1-256 (got '$workers')"
   [[ "$cpu" =~ ^[0-9]+$ ]] && (( cpu >= 1 && cpu <= 100 )) || die "node init: --cpu is a percent of this machine's cores, 1-100 (got '$cpu')"
   [[ "$mem" =~ ^[0-9]+$ ]] && (( mem >= 1 && mem <= 100 )) || die "node init: --mem is a percent of this machine's memory, 1-100 (got '$mem')"
   [[ "$battery" =~ ^(pause|allow)$ ]] || die "node init: --battery is pause or allow (got '$battery')"
@@ -318,8 +320,8 @@ cmd_node_init() {
   tmp="$f.tmp.$$"
   {
     echo "# chartroom node settings (written by chartroom node init, $(now)): this machine takes crew work"
-    echo "# within these budgets. It has no home of its own. CHARTROOM_NODE_ACCEPT=off withdraws it at once."
-    echo "CHARTROOM_NODE_MAX_WORKERS=$workers"
+    echo "# while its CPU and memory use are under these limits (percent; chartroom node limits sets them)."
+    echo "# It has no home of its own. CHARTROOM_NODE_ACCEPT=off withdraws it at once."
     echo "CHARTROOM_NODE_CPU_BUDGET=$cpu"
     echo "CHARTROOM_NODE_MEM_BUDGET=$mem"
     echo "CHARTROOM_NODE_ON_BATTERY=$battery"
@@ -329,8 +331,87 @@ cmd_node_init() {
     echo "CHARTROOM_NODE_ID=$nid"
   } >"$tmp" && mv "$tmp" "$f"
   echo "this machine is a node: $f"
-  echo "  max workers $workers, cpu $cpu%, memory $mem%, on battery: $battery, priority: $priority, project roots: ${roots:-(none: no checkouts are counted)}"
+  echo "  takes work under cpu $cpu% and memory $mem% in use, on battery: $battery, priority: $priority, project roots: ${roots:-(none: no checkouts are counted)}"
   [[ "$priority" != background ]] || echo "  note: background priority (taskpolicy -b) keeps workers on the efficiency cores on Apple silicon"
+}
+
+# The two limits, as "80/70", or --cpu 80 and/or --mem 70. Sets NL_CPU and NL_MEM ("" = as it is).
+node_limits_args() { # <args...>
+  NL_CPU="" NL_MEM=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --cpu) NL_CPU="${2:-}"; [[ -n "$NL_CPU" ]] || die "node limits: --cpu needs a percent"; shift 2 ;;
+      --mem) NL_MEM="${2:-}"; [[ -n "$NL_MEM" ]] || die "node limits: --mem needs a percent"; shift 2 ;;
+      */*) NL_CPU="${1%%/*}"; NL_MEM="${1#*/}"; shift ;;
+      *) die "node limits: '$1' is not CPU/MEMORY (usage: chartroom node limits [<name|here> 80/70 | <name|here> [--cpu 80] [--mem 70]])" ;;
+    esac
+  done
+  local v
+  for v in ${NL_CPU:+"$NL_CPU"} ${NL_MEM:+"$NL_MEM"}; do
+    [[ "${v%\%}" =~ ^[0-9]{1,3}$ ]] && (( 10#${v%\%} >= 1 && 10#${v%\%} <= 100 )) || die "node limits: a limit is a percent, 1-100 (got '$v')"
+  done
+  NL_CPU="${NL_CPU%\%}"; NL_MEM="${NL_MEM%\%}"
+}
+
+# Sets this machine's own limits: those two lines of its node file, and nothing else in it.
+node_limits_set() { # <cpu or ""> <mem or "">
+  local f k v tmp; f="$(node_config_path)"
+  [[ -f "$f" ]] || { echo "this machine is not a node yet (chartroom node init)" >&2; return 1; }
+  for k in CPU MEM; do
+    if [[ $k == CPU ]]; then v="$1"; else v="$2"; fi
+    [[ -n "$v" ]] || continue
+    tmp="$f.tmp.$$"
+    awk -v k="CHARTROOM_NODE_${k}_BUDGET" -v v="$v" '$0 ~ "^[[:space:]]*" k "[[:space:]]*=" { if (!d) print k "=" v; d = 1; next } { print } END { if (!d) print k "=" v }' "$f" >"$tmp" &&
+      mv "$tmp" "$f" || { rm -f "$tmp"; return 1; }
+  done
+  echo "takes new work under cpu $(cfg_value_in "$f" CHARTROOM_NODE_CPU_BUDGET)% and memory $(cfg_value_in "$f" CHARTROOM_NODE_MEM_BUDGET)% in use"
+}
+
+# chartroom node limits                       every node's use against its two limits
+# chartroom node limits <name|here> 80/70     sets them: here in this machine's node file, on a device
+#                                             over the connection (one that is away takes it when back)
+cmd_node_limits() {
+  local doc who id rc=0 st
+  if [[ $# -eq 0 ]]; then
+    nodes_settings; doc="$(nodes_json "" 0)" || exit 1
+    jq -r 'def pc: if . == null then "-" else "\(.)%" end;
+      ["NODE", "CPU USED", "CPU LIMIT", "MEMORY USED", "MEMORY LIMIT", "TAKES NEW WORK"],
+      (.nodes[] | [.machine + (if .local then " (here)" else "" end), (.cpu_use | pc), (.budgets.cpu | pc), (.mem_used_pct | pc), (.budgets.mem | pc),
+        (if .contact != "ok" then "no: \(.contact)" elif .role != "node" then "no: \(.role)"
+         elif .util == null then "no: its use is not known"
+         elif .cpu_use >= .budgets.cpu then "no: cpu at its limit" elif .mem_used_pct >= .budgets.mem then "no: memory at its limit" else "yes" end)])
+      | @tsv' <<<"$doc" | table
+    return 0
+  fi
+  who="$1"; shift
+  node_limits_args "$@"
+  [[ -n "$NL_CPU$NL_MEM" ]] || die "usage: chartroom node limits [<name|here> 80/70 | <name|here> [--cpu 80] [--mem 70]]"
+  if [[ "$who" == here || "$who" == "$(radar_machine_name)" ]]; then
+    printf 'here: '; node_limits_set "$NL_CPU" "$NL_MEM" || exit 1
+    return 0
+  fi
+  id="$(fleet_resolve "$who")"; st="$(fleet_device_json "$id" | jq -r .status)"
+  [[ "$st" != revoked ]] || die "node limits: $who is revoked"
+  local p; p="$(jq -cn --arg c "$NL_CPU" --arg m "$NL_MEM" '{cpu: $c, mem: $m}')"
+  if [[ "$st" != online ]]; then
+    fleet_enqueue "$id" limits "$p" >/dev/null
+    echo "$who is $st: its limits are set when it is back"; return 0
+  fi
+  printf '%s: ' "$who"
+  fleet_call "$id" limits "$p" 30 || rc=$?
+  (( rc != 124 )) || die "node limits: $who did not take it within 30s; nothing was set"
+  return "$rc"
+}
+
+# This machine's row, every checkout listed (what placement goes by, lib/place.sh).
+node_row_local() {
+  local dir; dir="$(mktemp -d)"; nodes_settings
+  CR_PROBE_CHECKOUTS=1 node_probe_local >"$dir/out" 2>"$dir/err" && echo 0 >"$dir/rc" || echo $? >"$dir/rc"
+  node_contact "$dir/out" "$dir/err" "$dir/rc"
+  jq -cn --argjson m "$(jq -cn --arg m "$(radar_machine_name)" '{machine: $m, local: true, target: null, via: "this machine"}')" \
+    --rawfile probe "$dir/out" --arg contact "$NODE_CONTACT" --arg err "$NODE_ERR" --arg want "" --argjson now "$(date +%s)" \
+    --argjson c "$NODE_C" --argjson mg "$NODE_MG" "$NODES_ROW_JQ"
+  rm -rf "$dir"
 }
 
 cmd_node() {
@@ -340,23 +421,18 @@ cmd_node() {
       case "${1:-}" in
         "") node_probe_local ;;
         --json)
-          local dir; dir="$(mktemp -d)"; nodes_settings
-          node_probe_local >"$dir/out" 2>"$dir/err" && echo 0 >"$dir/rc" || echo $? >"$dir/rc"
-          node_contact "$dir/out" "$dir/err" "$dir/rc"
-          jq -n --argjson m "$(jq -cn --arg m "$(radar_machine_name)" '{machine: $m, local: true, target: null, via: "this machine"}')" \
-            --rawfile probe "$dir/out" --arg contact "$NODE_CONTACT" --arg err "$NODE_ERR" --arg want "" --argjson now "$(date +%s)" \
-            --argjson c "$NODE_C" --argjson mg "$NODE_MG" "$NODES_ROW_JQ"
-          rm -rf "$dir" ;;
+          nodes_settings; node_row_local | jq . ;;
         *) die "usage: chartroom node probe [--json]" ;;
       esac ;;
     init) cmd_node_init "$@" ;;
+    limits) cmd_node_limits "$@" ;;
     add) cmd_node_add "$@" ;;
     rename) cmd_node_rename "$@" ;;
     revoke) cmd_node_revoke "$@" ;;
     rotate) cmd_node_rotate "$@" ;;
     update) cmd_node_update "$@" ;;
     ping) cmd_node_ping "$@" ;;
-    *) die "usage: chartroom node probe [--json] | node init [--max-workers N] [--cpu PCT] [--mem PCT] [--battery pause|allow] [--priority normal|nice|background] [--project-roots DIRS] [--force] | node add [--name N] [--alias A]... [--replace NAME|ID] | node rename <name|id> <new> | node revoke <name|id> | node rotate <name|id> | node update <name|id>...|--all | node ping <name|id>" ;;
+    *) die "usage: chartroom node probe [--json] | node init [--cpu PCT] [--mem PCT] [--battery pause|allow] [--priority normal|nice|background] [--project-roots DIRS] [--force] | node limits [<name|here> CPU/MEM] | node add [--name N] [--alias A]... [--replace NAME|ID] | node rename <name|id> <new> | node revoke <name|id> | node rotate <name|id> | node update <name|id>...|--all | node ping <name|id>" ;;
   esac
 }
 
@@ -364,7 +440,7 @@ cmd_node() {
 node_doctor_line() {
   local f k v out=""; f="$(node_config_path)"
   if [[ ! -f "$f" ]]; then echo "node:     not a node (chartroom node init makes this machine one; chartroom nodes lists them)"; return; fi
-  for k in MAX_WORKERS CPU_BUDGET MEM_BUDGET ON_BATTERY PRIORITY ACCEPT; do
+  for k in CPU_BUDGET MEM_BUDGET ON_BATTERY PRIORITY ACCEPT; do
     v="$(cfg_value_in "$f" "CHARTROOM_NODE_$k")"; out+=" ${k,,}=${v:--}"
   done
   echo "node:     $f:$out"

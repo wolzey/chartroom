@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# fake vm_stat: prints $FAKE_NODE_DIR/vm_stat (fails without it).
+[[ -n "${FAKE_NODE_DIR:-}" && -f "$FAKE_NODE_DIR/vm_stat" ]] || exit 1
+cat "$FAKE_NODE_DIR/vm_stat"

@@ -26,6 +26,10 @@ common_setup() {
   # Never the real keychain, launchd or hardware id (lib/device.sh): a device's token goes to a
   # 0600 file and its agent is run by the test itself.
   export CHARTROOM_KEYCHAIN=none CHARTROOM_LAUNCHCTL=none CHARTROOM_HW_UUID=test-hw-0001
+  # no test starts the CPU sampler (lib/cpuload.sh) behind an agent or an app server; a probe's own
+  # sample is short
+  export CHARTROOM_CPU_SAMPLER=off CR_PROBE_SAMPLE=1
+  unset CHARTROOM_PLACEMENT CHARTROOM_PLACE_HOLD_SECONDS CHARTROOM_GUEST
   unset CHARTROOM_FLEET_DIR CHARTROOM_BRAIN_URL CHARTROOM_DEVICE_HEARTBEAT CHARTROOM_NODE_STALE_SECONDS CHARTROOM_NODE_LOST_MINUTES
   # (A runner's own would move herdr's socket away from this test's HOME: see herdr_sock_up.)
   unset XDG_CONFIG_HOME
@@ -70,6 +74,15 @@ use_fake() { local f; for f in "$@"; do ln -sf "$REPO_ROOT/test/fakes/$f" "$BIN/
 # fd 3 is bats' own: a worker or dashboard a test leaves behind must not hold it, or bats
 # waits for it after the last test.
 cr() { "$CHARTROOM" "$@" 3>&-; }
+
+# A machine with 10 cores and 100 GB whose CPUs are <cpu>% busy and memory <mem>% used, for probes run
+# with FAKE_NODE_DIR=<fake dir> and XDG_STATE_HOME=<state dir> (needs use_fake sysctl vm_stat).
+fake_use() { # <fake dir> <state dir> <cpu> <mem>
+  mkdir -p "$1/sysctl" "$2/chartroom/node"
+  echo 10 >"$1/sysctl/hw.ncpu"; echo 107374182400 >"$1/sysctl/hw.memsize"; echo '{ 1.00 1.00 1.00 }' >"$1/sysctl/vm.loadavg"
+  printf 'Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages wired down: 0.\nPages purgeable: 0.\nAnonymous pages: %s.\nPages occupied by compressor: 0.\n' $(( $4 * 65536 )) >"$1/vm_stat"
+  echo "$(( $(date +%s) + 3600 )) $3 60" >"$2/chartroom/node/cpu"
+}
 
 # Create a task and give its brief a commander's intent; prints the id.
 new_task() {

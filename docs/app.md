@@ -61,14 +61,14 @@ chartroom app stop               # (or: status); the LaunchAgent only when it ru
   - **Atom:** a machine is a nucleus, named, with how full it is round it; its sessions orbit it, each
     state its own shape and colour, and a ring marks an XO or your own session. Offline and full
     read at a glance. A session not touched for 7 days is folded into a count.
-  - **Dashboard:** a card per machine: CPU, load, memory, disk and workers against their budgets,
+  - **Dashboard:** a card per machine: CPU and memory against its limits, load, disk and workers,
     its sessions by state, and its problems, worst first (offline, a failed sign-in with the command to
     copy, docker not answering, full, failed or stalled tasks).
   - **A session** opens its quick view, as on the board: answer it, steer it, accept it, or open its ticket.
-  - **CPU and load are two things.** CPU is the share of the cores in use over one second. Load is
-    how many processes wanted to run, over the last minute; a machine's CPU budget is measured
-    against load, so that is where its tick is.
-  - **Named, or only counted.** A machine names its agents, and measures its CPU, once its own
+  - **CPU and memory are what placement goes by:** the share of all cores' time spent busy over the
+    last minute, and the memory in use, each with the machine's own limit as its tick. At either, the
+    machine takes no new task. Load (how many processes wanted to run) and workers are for information.
+  - **Named, or only counted.** A machine names its agents, and measures its CPU and memory, once its own
     chartroom has this version; until then it has only how many there are.
 - **Every home.** It reads each registered home on the machine (`chartroom homes`) in the
   background with `chartroom app snapshot --json`, again whenever a home's records change. A

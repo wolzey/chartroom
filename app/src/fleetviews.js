@@ -1,7 +1,7 @@
 // fleetviews.js - Fleet's other two views, over the same data as its list (state.fleet and the homes'
 // tasks; model.js, fleetMap, decides what is on each machine and how it stands):
 //   Atom: a machine is a nucleus (its name, how full it is); its sessions orbit it, by state.
-//   Dashboard: a card per machine: CPU, load, memory, disk and workers as meters, and its problems.
+//   Dashboard: a card per machine: CPU and memory against their limits, load, disk and workers, and its problems.
 // A session opens its quick view (an answer, a steer, its ticket), as on the board. Plain SVG and CSS.
 import { html, useState, useEffect, useRef } from "./html.js";
 import { Linked } from "./ui.js";
@@ -110,8 +110,8 @@ function Atom({ m, o, pick, setPick, showRest, setShowRest, sel, onSelect, onSes
         ${f != null && !down ? html`<circle class="fv-nuc-track" r="62" /><circle class="fv-nuc-fill" r="62" transform="rotate(-90)" strokeDasharray=${`${Math.min(1, f) * arc} ${arc}`} />` : null}
         <text class="fv-nuc-name" y="-10">${m.name.length > 14 ? m.name.slice(0, 13) + "…" : m.name}</text>
         ${down ? html`<text class="fv-nuc-n" y="14">offline</text><text class="fv-nuc-s" y="30">${m.device && m.device.seen_age_s != null ? "seen " + M.ageText(m.device.seen_age_s) + " ago" : ""}</text>`
-          : html`<text class="fv-nuc-n" y="14">${m.budgets && m.budgets.max_workers ? M.crewOf(m) + "/" + m.budgets.max_workers : es.length}</text>
-            <text class="fv-nuc-s" y="31">${f > 1 ? "over its limit" : isFull ? "full" : m.state === "degraded" ? "needs a look" : f != null ? "workers" : "agents"}</text>`}
+          : html`<text class="fv-nuc-n" y="14">${f != null ? Math.round(f * 100) + "%" : es.length}</text>
+            <text class="fv-nuc-s" y="31">${f > 1 ? "over its limit" : isFull ? "at its limit" : m.state === "degraded" ? "needs a look" : f != null ? "of its limit" : "agents"}</text>`}
       </g>
     </svg>
     <div class="fv-cap" aria-live="polite">${here ? html`<${Picked} e=${here} m=${m} onSession=${onSession} actionFor=${actionFor} onClose=${() => { setPick(null); onSession(null, false); }} />`

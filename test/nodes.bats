@@ -8,7 +8,7 @@ load test_helper
 
 setup() {
   common_setup
-  use_fake ssh sysctl pmset ioreg iostat
+  use_fake ssh sysctl pmset ioreg vm_stat iostat
   export CHARTROOM_MACHINE_NAME=studio
   export CHARTROOM_NODES=none
   export FAKE_NODE_DIR="$BATS_TEST_TMPDIR/node"
@@ -23,13 +23,26 @@ teardown() {
   [[ -z "${CORE_SOCK:-}" ]] || rm -f "$CORE_SOCK"
 }
 
-# A Mac-shaped machine: 16 cores (12P+4E), 48 GB, load 3, 92% free, on AC with a full battery,
-# idle 40 minutes.
+# A Mac-shaped machine: 16 cores (12P+4E), 48 GB, load 3, CPUs 20% busy, memory 25% used (12 GB:
+# 8 GB app, 2 GB of it purgeable and so not counted, 4 GB wired, 2 GB compressed; the kernel's
+# pressure level says 92% free), on AC with a full battery, idle 40 minutes.
 mac_like() {
   local s="$FAKE_NODE_DIR/sysctl"; mkdir -p "$s"
   echo Mac15,8 >"$s/hw.model"; echo 16 >"$s/hw.ncpu"; echo 12 >"$s/hw.perflevel0.physicalcpu"
   echo 4 >"$s/hw.perflevel1.physicalcpu"; echo 51539607552 >"$s/hw.memsize"
   echo '{ 3.00 2.50 2.00 }' >"$s/vm.loadavg"; echo 92 >"$s/kern.memorystatus_level"
+  printf '      cpu    load average\n us sy id   1m   5m   15m\n  8  5 87  3.00 2.50 2.00\n 13  7 80  3.00 2.50 2.00\n' >"$FAKE_NODE_DIR/iostat"
+  cat >"$FAKE_NODE_DIR/vm_stat" <<'VM'
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                              1000000.
+Pages active:                             900000.
+Pages wired down:                         262144.
+Pages purgeable:                          131072.
+Anonymous pages:                          524288.
+File-backed pages:                        700000.
+Pages stored in compressor:               400000.
+Pages occupied by compressor:             131072.
+VM
   printf "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1)\t100%%; charged; 0:00 remaining present: true\n" >"$FAKE_NODE_DIR/pmset"
   printf '    | |   "HIDIdleTime" = 2400000000000\n' >"$FAKE_NODE_DIR/ioreg"
 }
@@ -68,7 +81,7 @@ login_line() { grep -E "^login	$1	" <<<"$output" | cut -f3; }
 # A remote machine's canned probe output: this machine's own, with a few values changed.
 remote_probe() { # <target> [initialised 0|1]
   mkdir -p "$SSHD/$1"
-  if [[ "${2:-0}" == 1 ]]; then cr node init --max-workers 6 --cpu 100 --battery allow --project-roots "" >/dev/null; fi
+  if [[ "${2:-0}" == 1 ]]; then cr node init --cpu 100 --battery allow --project-roots "" >/dev/null; fi
   cr node probe >"$SSHD/$1/probe.tsv"
   rm -f "$CHARTROOM_NODE_CONFIG"
 }
@@ -83,6 +96,8 @@ remote_probe() { # <target> [initialised 0|1]
   [ "$(probe_val mem_bytes)" = 51539607552 ]
   [ "$(probe_val load)" = $'3.00\t2.50\t2.00' ]
   [ "$(probe_val mem_free_pct)" = 92 ]
+  [ "$(probe_val mem_used_pct)" = 25 ]
+  [ "$(probe_val cpu_use)" = $'20\t1' ]
   [ "$(probe_val power)" = ac ]
   [ "$(probe_val battery_pct)" = 100 ]
   [ "$(probe_val hid_idle_s)" = 2400 ]
@@ -227,13 +242,13 @@ remote_probe() { # <target> [initialised 0|1]
   [ "$(probe_val crew_live)" = 2 ]
   [ "$(probe_val other_agents)" = 1 ]
   # placement's slot count is the crew, and the table shows the others apart
-  cr node init --max-workers 4 --cpu 100 --battery allow --project-roots "" >/dev/null
+  cr node init --cpu 100 --battery allow --project-roots "" >/dev/null
   run cr node probe --json
-  [ "$(jq -c '[.crew_live, .other_agents, .util.slots]' <<<"$output")" = '[2,1,0.75]' ]
+  [ "$(jq -c '[.crew_live, .other_agents]' <<<"$output")" = '[2,1]' ]
   run cr nodes
   [ "$status" -eq 0 ]
-  grep -q $'2/4 +1 other' <<<"$output"
-  grep -q "nothing enforces it until placement ships" <<<"$output"
+  grep -q $'2 +1 other' <<<"$output"
+  grep -q "takes no new task" <<<"$output"
   # an hc with no event stream cannot tell them apart: every live agent counts, and says so
   unset FAKE_HC_EVENTS
   run cr node probe
@@ -276,23 +291,6 @@ remote_probe() { # <target> [initialised 0|1]
   [ "$(jq -c .agents <<<"$output")" = '[]' ]
 }
 
-@test "node probe: CPU is the share in use over a second; a machine that cannot say leaves it out" {
-
-  # the first report is since boot; the last is the second
-  printf '      cpu    load average\n us sy id   1m   5m   15m\n  8  5 87  3.00 2.50 2.00\n 27 30 43  3.00 2.50 2.00\n' >"$FAKE_NODE_DIR/iostat"
-  run cr node probe
-  [ "$(probe_val cpu_busy_pct)" = 57 ]
-  run cr node probe --json
-  [ "$(jq -c '[.cpu_busy_pct, .load[0]]' <<<"$output")" = '[57,3]' ]
-  # only the report since boot, or none: not a share over the second
-  printf '      cpu    load average\n us sy id   1m   5m   15m\n  8  5 87  3.00 2.50 2.00\n' >"$FAKE_NODE_DIR/iostat"
-  run cr node probe
-  [ "$(probe_val cpu_busy_pct)" = - ]
-  rm "$FAKE_NODE_DIR/iostat"
-  run cr node probe --json
-  [ "$(jq -c .cpu_busy_pct <<<"$output")" = null ]
-}
-
 @test "node probe: degrades on a machine without sysctl, pmset or ioreg (Linux)" {
   rm -rf "$FAKE_NODE_DIR"
   run cr node probe
@@ -326,7 +324,7 @@ remote_probe() { # <target> [initialised 0|1]
   [ "$status" -eq 0 ]
   [[ "$output" == *"this machine is a node: $CHARTROOM_NODE_CONFIG"* ]]
   # 12 performance cores -> 6 workers; a battery -> cpu 50%
-  grep -qx CHARTROOM_NODE_MAX_WORKERS=6 "$CHARTROOM_NODE_CONFIG"
+  ! grep -q MAX_WORKERS "$CHARTROOM_NODE_CONFIG"
   grep -qx CHARTROOM_NODE_CPU_BUDGET=50 "$CHARTROOM_NODE_CONFIG"
   grep -qx CHARTROOM_NODE_MEM_BUDGET=75 "$CHARTROOM_NODE_CONFIG"
   grep -qx CHARTROOM_NODE_ON_BATTERY=pause "$CHARTROOM_NODE_CONFIG"
@@ -344,16 +342,16 @@ remote_probe() { # <target> [initialised 0|1]
   grep -qx 'CHARTROOM_NODE_PROJECT_ROOTS=~/src:/opt/repos' "$CHARTROOM_NODE_CONFIG"
   run cr node probe
   [ "$(probe_val initialised)" = 1 ]
-  [ "$(grep $'^budget\tmax_workers\t' <<<"$output" | cut -f3)" = 3 ]
+  [ "$(grep $'^budget\tcpu\t' <<<"$output" | cut -f3)" = 100 ]
   # a desktop (no battery) gets cpu 100% by default
   rm -f "$CHARTROOM_NODE_CONFIG"; printf "Now drawing from 'AC Power'\n" >"$FAKE_NODE_DIR/pmset"
   cr node init >/dev/null
-  grep -qx CHARTROOM_NODE_CPU_BUDGET=100 "$CHARTROOM_NODE_CONFIG"
+  grep -qx CHARTROOM_NODE_CPU_BUDGET=80 "$CHARTROOM_NODE_CONFIG"
 }
 
 @test "node init: refuses values out of range, before writing anything" {
   local bad
-  for bad in "--cpu 0" "--cpu 101" "--mem x" "--max-workers 0" "--battery maybe" "--priority high" "--project-roots a;b"; do
+  for bad in "--cpu 0" "--cpu 101" "--mem x" "--battery maybe" "--priority high" "--project-roots a;b"; do
     # shellcheck disable=SC2086
     run cr node init $bad
     [ "$status" -ne 0 ]
@@ -363,7 +361,7 @@ remote_probe() { # <target> [initialised 0|1]
   [[ "$output" == *"node:     not a node"* ]]
   cr node init >/dev/null
   run cr doctor
-  [[ "$output" == *"node:     $CHARTROOM_NODE_CONFIG: max_workers=6 cpu_budget=50"* ]]
+  [[ "$output" == *"node:     $CHARTROOM_NODE_CONFIG: cpu_budget=50"* ]]
 }
 
 @test "nodes: CHARTROOM_NODES, else the radar's machines, else herdr's; none is this machine only" {
@@ -401,13 +399,13 @@ remote_probe() { # <target> [initialised 0|1]
   [ "$(jq -r '.nodes[] | select(.machine == "down") | .error' <<<"$output")" = "ssh: connect to host down port 22: Operation timed out" ]
   [ "$(jq -r '.nodes[] | select(.machine == "newer") | .error' <<<"$output")" = "probe schema 2; this chartroom reads 1" ]
   [ "$(jq -r '.nodes[] | select(.machine == "odd") | .error' <<<"$output")" = "zsh: something went wrong" ]
-  [ "$(jq -c '.nodes[] | select(.machine == "good") | [.budgets.max_workers, .budgets.cpu, .budgets.on_battery]' <<<"$output")" = '[6,100,"allow"]' ]
+  [ "$(jq -c '.nodes[] | select(.machine == "good") | [.budgets.cpu, .budgets.mem, .budgets.on_battery]' <<<"$output")" = '[100,75,"allow"]' ]
   # the table: one row each, this machine first
   run env FAKE_SSH_DIR="$SSHD" CHARTROOM_NODES="good down" "$CHARTROOM" nodes
   [ "$status" -eq 0 ]
   [[ "${lines[0]}" == NODE*CONTACT*ROLE*UTIL ]]
   [[ "${lines[1]}" == "studio (here)"*"not a node"* ]]
-  [[ "${lines[2]}" == good*ok*"node: 6w cpu100% mem75%"*"16 (12P+4E) load 3"*"48G 92% free"*"AC (battery 100%)"*40m* ]]
+  [[ "${lines[2]}" == good*ok*node*"20% of 100%"*"25% of 75%"*"16 cores 48G"*"AC (battery 100%)"*40m* ]]
   [[ "${lines[3]}" == down*"unreachable: ssh: connect to host down"* ]]
 }
 
@@ -449,30 +447,107 @@ EOF
   [ "$(jq -c '.nodes[1] | [.machine, .contact, .error]' <<<"$output")" = '["slow","timeout","no answer within 1s"]' ]
 }
 
-@test "nodes: UTIL is the projected use with one more worker, against each node's own budget" {
-  # the design doc's worked example: a 28-core node at 80%, load 6, and a 16-core one at 100%, load 3
+@test "nodes: use is measured against each node's two limits; UTIL is with one more worker; a count gates nothing" {
+  # m3: 16 cores 20% busy, 48 GB 25% used, limits 100% and 75%; studio2: 28 cores 70% busy, limit 80%
   remote_probe m3 1
   mkdir -p "$SSHD/studio2"
-  sed -e $'s/^cores\t.*/cores\t28/; s/^load\t.*/load\t6.00\t6.00\t6.00/; s/^budget\tcpu\t.*/budget\tcpu\t80/' "$SSHD/m3/probe.tsv" >"$SSHD/studio2/probe.tsv"
+  sed -e $'s/^cores\t.*/cores\t28/; s/^cpu_use\t.*/cpu_use\t70\t60/; s/^budget\tcpu\t.*/budget\tcpu\t80/' "$SSHD/m3/probe.tsv" >"$SSHD/studio2/probe.tsv"
   run env FAKE_SSH_DIR="$SSHD" CHARTROOM_NODES="studio2 m3" "$CHARTROOM" nodes --json
   [ "$status" -eq 0 ]
-  # m3: cpu (3 + 1.5) / 16 = 0.281; slots (0 + 1) / 6 = 0.167; mem ((1 - .92) * 48G + 1.5G) / (48G * .75) = 0.148
-  [ "$(jq -c '.nodes[] | select(.machine == "m3") | .util' <<<"$output")" = '{"slots":0.167,"cpu":0.281,"mem":0.148,"max":0.281}' ]
-  # studio2: (6 + 1.5) / (28 * .8) = 0.335
-  [ "$(jq -c '.nodes[] | select(.machine == "studio2") | .util.max' <<<"$output")" = 0.335 ]
-  # a slot-bound node: 6 live agents on 6 workers is over its budget
-  sed -e $'s/^agents_live\t.*/agents_live\t6/' "$SSHD/m3/probe.tsv" >"$SSHD/studio2/probe.tsv"
-  run env FAKE_SSH_DIR="$SSHD" CHARTROOM_NODES="studio2" "$CHARTROOM" nodes
-  [[ "${lines[2]}" == studio2*"6/6"*"1.17 (full)" ]]
+  # m3: cpu (20 + 100 * 1.5 / 16) / 100 = 0.294; mem (25 + 100 * 1.5 / 48) / 75 = 0.375
+  [ "$(jq -c '.nodes[] | select(.machine == "m3") | [.cpu_use, .cpu_window_s, .mem_used_pct, .util]' <<<"$output")" = '[20,1,25,{"cpu":0.294,"mem":0.375,"max":0.375}]' ]
+  # studio2: (70 + 100 * 1.5 / 28) / 80 = 0.942
+  [ "$(jq -c '.nodes[] | select(.machine == "studio2") | .util.max' <<<"$output")" = 0.942 ]
+  # at a limit: full; thirty agents and no use: not
+  sed -e $'s/^cpu_use\t.*/cpu_use\t80\t60/; s/^agents_live\t.*/agents_live\t30/' "$SSHD/studio2/probe.tsv" >"$SSHD/m3/probe.tsv"
+  run env FAKE_SSH_DIR="$SSHD" CHARTROOM_NODES="m3" "$CHARTROOM" nodes
+  [[ "${lines[2]}" == m3*"80% of 80% (full)"*"25% of 75%"* ]]
+  [[ "$output" == *"takes no new task"* ]]
+  sed -i.bak -e $'s/^cpu_use\t.*/cpu_use\t5\t60/' "$SSHD/m3/probe.tsv"
+  run env FAKE_SSH_DIR="$SSHD" CHARTROOM_NODES="m3" "$CHARTROOM" nodes
+  [[ "${lines[2]}" == m3*"5% of 80% "* && "$output" != *"(full)"* ]]
+  # a machine whose use is not known has no UTIL (never 0)
+  sed -i.bak -e $'s/^cpu_use\t.*/cpu_use\t-\t-/' "$SSHD/m3/probe.tsv"
+  run env FAKE_SSH_DIR="$SSHD" CHARTROOM_NODES="m3" "$CHARTROOM" nodes --json
+  [ "$(jq -c '.nodes[1].util' <<<"$output")" = null ]
   # the cost is a setting
-  run env FAKE_SSH_DIR="$SSHD" CHARTROOM_NODES="m3" CHARTROOM_WORKER_CPU=5 "$CHARTROOM" nodes --json
-  [ "$(jq -c '.nodes[1].util.cpu' <<<"$output")" = 0.5 ]
+  sed -i.bak -e $'s/^cpu_use\t.*/cpu_use\t20\t60/; s/^budget\tcpu\t.*/budget\tcpu\t100/' "$SSHD/m3/probe.tsv"
+  run env FAKE_SSH_DIR="$SSHD" CHARTROOM_NODES="m3" CHARTROOM_WORKER_CPU=14 "$CHARTROOM" nodes --json
+  [ "$(jq -c '.nodes[1].util.cpu' <<<"$output")" = 0.7 ]
   run env CHARTROOM_WORKER_CPU=lots "$CHARTROOM" nodes
   [ "$status" -ne 0 ]
   # paused on battery when it may not run on one
   sed -e $'s/^power\t.*/power\tbattery/; s/^budget\ton_battery\t.*/budget\ton_battery\tpause/' "$SSHD/m3/probe.tsv" >"$SSHD/studio2/probe.tsv"
   run env FAKE_SSH_DIR="$SSHD" CHARTROOM_NODES="studio2" "$CHARTROOM" nodes --json
   [ "$(jq -r '.nodes[1].role' <<<"$output")" = "paused: on battery" ]
+}
+
+@test "node limits: shows use against limits, and sets a node's own two, touching nothing else in its file" {
+  run cr node limits here 80/70
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not a node yet"* ]]
+  cr node init --cpu 50 --mem 60 --battery allow --project-roots "" >/dev/null
+  printf '# a note of mine\nCHARTROOM_NODE_MAX_WORKERS=20\n' >>"$CHARTROOM_NODE_CONFIG"
+  before="$(grep -vE '_(CPU|MEM)_BUDGET=' "$CHARTROOM_NODE_CONFIG")"
+  run cr node limits here 80/70
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"under cpu 80% and memory 70% in use"* ]]
+  grep -qx CHARTROOM_NODE_CPU_BUDGET=80 "$CHARTROOM_NODE_CONFIG"
+  grep -qx CHARTROOM_NODE_MEM_BUDGET=70 "$CHARTROOM_NODE_CONFIG"
+  [ "$(grep -vE '_(CPU|MEM)_BUDGET=' "$CHARTROOM_NODE_CONFIG")" = "$before" ]
+  # one alone leaves the other
+  cr node limits here --mem 85% >/dev/null
+  grep -qx CHARTROOM_NODE_CPU_BUDGET=80 "$CHARTROOM_NODE_CONFIG"
+  grep -qx CHARTROOM_NODE_MEM_BUDGET=85 "$CHARTROOM_NODE_CONFIG"
+  run cr node limits
+  [ "$status" -eq 0 ]
+  [[ "${lines[1]}" == "studio (here)"*"20%"*"80%"*"25%"*"85%"*"yes" ]]
+  cr node limits here 15/85 >/dev/null
+  run cr node limits
+  [[ "${lines[1]}" == *"no: cpu at its limit" ]]
+  for bad in 0/80 80/101 eighty/70 80 "--cpu"; do
+    run cr node limits here $bad
+    [ "$status" -ne 0 ]
+  done
+  grep -qx CHARTROOM_NODE_CPU_BUDGET=15 "$CHARTROOM_NODE_CONFIG"
+  run cr node limits nosuch 80/70
+  [ "$status" -ne 0 ]
+}
+
+@test "node probe: the minute a sampler keeps is used while fresh; every checkout is listed when asked" {
+  mkdir -p "$XDG_STATE_HOME/chartroom/node"
+  echo "$(date +%s) 33 60" >"$XDG_STATE_HOME/chartroom/node/cpu"
+  run cr node probe
+  [ "$(probe_val cpu_use)" = $'33\t60' ]
+  echo "$(( $(date +%s) - 120 )) 33 60" >"$XDG_STATE_HOME/chartroom/node/cpu"
+  run cr node probe
+  [ "$(probe_val cpu_use)" = $'20\t1' ]
+  roots="$BATS_TEST_TMPDIR/repos"; mkdir -p "$roots/o"
+  git init -q "$roots/o/a"; git -C "$roots/o/a" remote add upstream https://git.example/x/y; git -C "$roots/o/a" remote add origin git@git.example:O/A.git
+  git init -q "$roots/o/b"; git -C "$roots/o/b" remote add origin https://git.example/o/b
+  git init -q "$roots/o/none"
+  cr node init --project-roots "$roots" >/dev/null
+  run env CR_PROBE_CHECKOUTS=1 "$CHARTROOM" node probe
+  [ "$(grep -c $'^checkout\t' <<<"$output")" = 2 ]
+  [[ "$output" == *$'checkout\tgit.example/o/a\t'"$roots/o/a"$'\t-'* ]]
+  run cr node probe
+  ! grep -q $'^checkout\t' <<<"$output"
+}
+
+@test "cpuload: keeps the busy share of the kernel's counters, the first row (since boot) left out, and ends with its process" {
+  # (the fake iostat's rows: a header, since boot 13% busy, then 20% and 40%)
+  printf '      cpu    load average\n us sy id   1m   5m   15m\n  8  5 87  3 2 2\n 13  7 80  3 2 2\n 30 10 60  3 2 2\n' >"$FAKE_NODE_DIR/iostat"
+  run bash "$REPO_ROOT/lib/cpuload.sh" "$BATS_TEST_TMPDIR/cpu" $$
+  [ "$status" -eq 0 ]
+  read -r at pct secs <"$BATS_TEST_TMPDIR/cpu"
+  [ "$pct" = 30 ] && [ "$secs" = 10 ]
+  (( $(date +%s) - at < 30 ))
+  # a process that is gone: nothing is written
+  rm -f "$BATS_TEST_TMPDIR/cpu"
+  ( exit 0 ) & gone=$!; wait "$gone" || true
+  run bash "$REPO_ROOT/lib/cpuload.sh" "$BATS_TEST_TMPDIR/cpu" "$gone"
+  [ ! -e "$BATS_TEST_TMPDIR/cpu" ]
 }
 
 @test "nodes --project: a node knows a project by its canonical remote" {
@@ -500,7 +575,7 @@ EOF
 @test "nodes: help lists node and nodes" {
   run cr help
   [[ "$output" == *"chartroom nodes [--json] [--project PATH]"* ]]
-  [[ "$output" == *"chartroom node init [--max-workers N]"* ]]
+  [[ "$output" == *"chartroom node init [--cpu PCT]"* ]]
   run cr node
   [ "$status" -ne 0 ]
   [[ "$output" == *"usage: chartroom node probe"* ]]

@@ -24,10 +24,13 @@
 #
 # Lines (a value of "-" is unknown):
 #   probe_schema 1 | host H | os NAME VERSION | model M | clock EPOCH
-#   cores N | cores_perf N | cores_eff N | mem_bytes N | load L1 L5 L15 | cpu_busy_pct N | mem_free_pct N | disk_free_pct N
-#   (cpu_busy_pct: the share of all cores in use over one second, sampled before the tools are asked)
+#   cores N | cores_perf N | cores_eff N | mem_bytes N | load L1 L5 L15 | mem_free_pct N | disk_free_pct N
+#   cpu_use PCT SECONDS   (the share of all cores' time spent busy over that window: lib/cpuload.sh's
+#                          minute when one runs here, else this probe's own few seconds)
+#   mem_used_pct N        (what Activity Monitor calls Memory Used, over all memory: app memory, wired
+#                          and compressed; not the kernel's pressure level, which is mem_free_pct)
 #   power ac|battery|- | battery_pct N | hid_idle_s N
-#   initialised 0|1 | config PATH | budget KEY VALUE (max_workers cpu mem on_battery priority project_roots accept)
+#   initialised 0|1 | config PATH | budget KEY VALUE (cpu mem on_battery priority project_roots accept)
 #   runner hc up|down|none VERSION | context core|shell|ssh | agents_live N
 #   crew_live N | other_agents N   (hc terminals here that carry chartroom.task, and the other
 #                                   agents: an XO, a session chartroom did not start; "-" on an hc
@@ -39,9 +42,11 @@
 #   path_source login|inherited
 #   tool NAME ok|old|down|missing|error VERSION-OR-WHY  (error: the binary and its first line)
 #   login NAME ok|no|unknown|missing DETAIL
-#   checkouts N | checkout CANONICAL-REMOTE PATH FETCH-AGE-SECONDS  (the latter only for $CR_PROBE_PROJECT)
+#   checkouts N | checkout CANONICAL-REMOTE PATH FETCH-AGE-SECONDS  (the latter only for $CR_PROBE_PROJECT,
+#                          or every one, its age not read, with CR_PROBE_CHECKOUTS=1)
 # Settings it reads: CHARTROOM_NODE_CONFIG (default ${XDG_CONFIG_HOME:-~/.config}/chartroom/node),
-# CR_PROBE_PROJECT (a canonical remote, host/owner/repo, to look for among the checkouts), and
+# CR_PROBE_PROJECT (a canonical remote, host/owner/repo, to look for among the checkouts),
+# CR_PROBE_CHECKOUTS=1 (list them all), CR_PROBE_SAMPLE (seconds its own CPU sample takes, 3), and
 # HC_SOCKET / HC_SESSION / XDG_STATE_HOME as hc reads them.
 
 set -u
@@ -124,18 +129,6 @@ canon() { # <remote url>
 # (GNU stat first: its -f is the file system's status, which takes %m and prints no mtime)
 mtime() { local m; m="$(stat -c %Y "$1" 2>/dev/null)" || m="$(stat -f %m "$1" 2>/dev/null)"; [[ "$m" =~ ^[0-9]+$ ]] && printf '%s' "$m"; }
 
-# The share of all cores in use over one second, or nothing. A Mac's iostat prints its first
-# report since boot and its second for the interval; Linux counts ticks in /proc/stat.
-cpu_busy() {
-  if sysctl_n hw.ncpu >/dev/null; then
-    have iostat || return 0
-    bounded 5 iostat -n 0 -c 2 -w 1 2>/dev/null | awk '/ id( |$)/ {for (i = 1; i <= NF; i++) if ($i == "id") c = i; next}
-      c && $c ~ /^[0-9]+$/ {v = 100 - $c; n++} END {if (n > 1 && v >= 0) print v}'
-  elif [[ -r /proc/stat ]]; then
-    { sed -n 1p /proc/stat; sleep 1; sed -n 1p /proc/stat; } | awk '$1 == "cpu" {t = 0; for (i = 2; i <= 9; i++) t += $i; d = $5 + $6; if (NR > 1 && t > pt) printf "%d", 100 * (1 - (d - pd) / (t - pt)) + 0.5; pt = t; pd = d}'
-  fi
-}
-
 # The login shell's PATH (see the header), or nothing.
 login_path_probe() {
   local sh="${CHARTROOM_LOGIN_SHELL:-${SHELL:-}}" f out p
@@ -160,9 +153,40 @@ first_line() { # <seconds> <cmd...>
     my $l = <$fh>; kill "TERM", $pid; print $l if defined $l; exit 0' "$s" "$@"
 }
 
+# How busy the CPUs are, "<percent> <seconds>": the minute lib/cpuload.sh keeps here when it is
+# fresh, else a sample of our own (the second row of iostat, the first being since boot).
+cpu_use() {
+  local f at pct secs s="${CR_PROBE_SAMPLE:-3}" a b
+  f="${XDG_STATE_HOME:-$HOME/.local/state}/chartroom/node/cpu"
+  if [[ -f "$f" ]] && read -r at pct secs <"$f"; then
+    case "$at$pct$secs" in ''|*[!0-9]*) ;; *) if (( $(date +%s) - at <= 30 )); then echo "$pct $secs"; return 0; fi ;; esac
+  fi
+  if have iostat && sysctl_n hw.ncpu >/dev/null; then
+    bounded $((s + 5)) iostat -n 0 -w "$s" -c 2 2>/dev/null | awk -v s="$s" '$1 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ { n++; id = $3 } END { if (n > 1) print 100 - id, s }'
+  elif [[ -r /proc/stat ]]; then
+    a="$(awk '/^cpu / { t = 0; for (i = 2; i <= 9; i++) t += $i; print t - $5 - $6, t; exit }' /proc/stat)"; sleep "$s"
+    b="$(awk '/^cpu / { t = 0; for (i = 2; i <= 9; i++) t += $i; print t - $5 - $6, t; exit }' /proc/stat)"
+    awk -v a="$a" -v b="$b" -v s="$s" 'BEGIN { split(a, x, " "); split(b, y, " "); if (y[2] > x[2]) printf "%.0f %s\n", (y[1] - x[1]) * 100 / (y[2] - x[2]), s }'
+  fi
+}
+
+# Memory used, in percent of all of it (see the header).
+mem_used_pct() { # <mem bytes>
+  if have vm_stat && [[ "$1" =~ ^[0-9]+$ ]]; then
+    vm_stat 2>/dev/null | awk -v m="$1" '
+      /page size of/ { for (i = 1; i <= NF; i++) if ($i == "of") ps = $(i + 1) }
+      { v = $NF; sub(/\.$/, "", v) }
+      /^Anonymous pages:/ { a = v } /^Pages purgeable:/ { p = v } /^Pages wired down:/ { w = v } /^Pages occupied by compressor:/ { c = v }
+      END { if (ps > 0 && a != "" && w != "" && m > 0) printf "%.0f", (a - p + w + c) * ps * 100 / m }'
+  elif [[ -r /proc/meminfo ]]; then
+    awk '/^MemTotal:/ { t = $2 } /^MemAvailable:/ { a = $2 } END { if (t > 0 && a > 0) printf "%.0f", (t - a) * 100 / t }' /proc/meminfo
+  fi
+}
+
 # The whole probe is one function, read in full before any of it runs: under `bash -s` the
 # script is stdin, which a command reading stdin would otherwise eat (hence </dev/null too).
 probe_main() {
+  exec 9< <(cpu_use) # (its sample, if it takes one, runs while the rest is read)
   # ---------------------------------------------------------------- the machine
   host="$(uname -n 2>/dev/null || echo -)"; host="${host%%.*}"
   os="$(uname -s 2>/dev/null || echo -)"; osv=-
@@ -191,14 +215,13 @@ probe_main() {
   set -- $load
   kv load "$(num_or_dash "${1:-}")" "$(num_or_dash "${2:-}")" "$(num_or_dash "${3:-}")"
 
-  kv cpu_busy_pct "$(num_or_dash "$(cpu_busy)")"
-
   # macOS: the kernel's own "how much memory is free" level (what memory_pressure prints).
   free="$(sysctl_n kern.memorystatus_level || true)"
   if [[ -z "$free" && -r /proc/meminfo ]]; then
     free="$(awk '/^MemTotal:/ {t = $2} /^MemAvailable:/ {a = $2} END {if (t > 0 && a > 0) printf "%d", a * 100 / t}' /proc/meminfo)"
   fi
   kv mem_free_pct "$(num_or_dash "$free")"
+  kv mem_used_pct "$(num_or_dash "$(mem_used_pct "$mem")")"
 
   # Disk: the share free on the volume that holds the home directory (worktrees and homes live there).
   free="$(df -Pk "$HOME" 2>/dev/null | awk 'NR == 2 && ($3 + $4) > 0 {printf "%d", $4 * 100 / ($3 + $4)}')"
@@ -228,7 +251,7 @@ probe_main() {
   if [[ -f "$cfgf" ]]; then
     kv initialised 1
     kv config "$cfgf"
-    for k in MAX_WORKERS:max_workers CPU_BUDGET:cpu MEM_BUDGET:mem ON_BATTERY:on_battery PRIORITY:priority PROJECT_ROOTS:project_roots ACCEPT:accept; do
+    for k in CPU_BUDGET:cpu MEM_BUDGET:mem ON_BATTERY:on_battery PRIORITY:priority PROJECT_ROOTS:project_roots ACCEPT:accept; do
       v="$(cfgv "CHARTROOM_NODE_${k%%:*}")"
       kv budget "${k#*:}" "${v:--}"
     done
@@ -321,6 +344,7 @@ probe_main() {
   # worktrees are not counted), each known by its canonical remote: host/owner/repo, lowercased.
   n=0 want="${CR_PROBE_PROJECT:-}" nowt="$(date +%s)"
   if [[ -n "$roots" ]]; then
+    all=()
     oldifs="$IFS"; IFS=:
     # shellcheck disable=SC2206 # colon-separated on purpose
     dirs=($roots)
@@ -331,6 +355,7 @@ probe_main() {
       [[ -d "$r" ]] || continue
       while IFS= read -r g; do
         repo="${g%/.git}"; n=$((n + 1))
+        [[ "${CR_PROBE_CHECKOUTS:-}" != 1 ]] || all[${#all[@]}]="$g/config"
         [[ -n "$want" ]] || continue
         url="$(git -C "$repo" config --get remote.origin.url 2>/dev/null || true)"
         [[ -n "$url" && "$(canon "$url")" == "$want" ]] || continue
@@ -339,9 +364,18 @@ probe_main() {
       done < <(find "$r" -mindepth 2 -maxdepth 3 -name .git -type d -prune 2>/dev/null)
     done
     kv checkouts "$n"
+    # (every one, from its config files read in one go: too many to ask git of each, every 15 s)
+    if (( ${#all[@]} > 0 )); then
+      awk 'FNR == 1 { o = 0; done = 0 } /^[[:space:]]*\[/ { o = ($0 ~ /^[[:space:]]*\[remote "origin"\]/) }
+        o && !done && $1 == "url" { p = FILENAME; sub(/\/\.git\/config$/, "", p); sub(/^[[:space:]]*url[[:space:]]*=[[:space:]]*/, ""); done = 1; print $0 "\t" p }' "${all[@]}" 2>/dev/null |
+        while IFS=$'\t' read -r url repo; do kv checkout "$(canon "$url")" "$repo" -; done
+    fi
   else
     kv checkouts -
   fi
+
+  cpu="" secs=""; IFS=' ' read -r cpu secs <&9 || true; exec 9<&-
+  kv cpu_use "$(num_or_dash "$cpu")" "$(num_or_dash "$secs")"
 }
 
 probe_main </dev/null

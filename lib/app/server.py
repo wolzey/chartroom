@@ -1659,6 +1659,7 @@ def main():
     ap.add_argument("--push-subject", default="mailto:chartroom@example.com", help="the VAPID contact (CHARTROOM_APP_PUSH_SUBJECT)")
     ap.add_argument("--push-hold", type=int, default=120, help="seconds a worker's card or decision waits for the XO before it is pushed (CHARTROOM_APP_PUSH_HOLD)")
     ap.add_argument("--fleet-dir", help="the device registry (lib/fleet.sh): device routes are served only with it")
+    ap.add_argument("--cpu-file", default="", help="keep this machine's CPU use in this file (lib/cpuload.sh)")
     args = ap.parse_args()
     if not args.no_auth and not (args.user or "").strip():
         sys.exit("chartroom app: --user (CHARTROOM_APP_USER) or --no-auth")
@@ -1682,11 +1683,17 @@ def main():
         os.environ["CHARTROOM_FLEET_DIR"] = args.fleet_dir  # the fleet verbs this server runs read the same registry
         devices = Devices(args.bin, args.fleet_dir, fleet)
         devices.start()
+    sampler = None
+    if args.cpu_file:  # (it ends by itself when this process does)
+        sampler = subprocess.Popen(["bash", os.path.join(args.root, "lib", "cpuload.sh"), args.cpu_file, str(os.getpid())],
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     httpd.RequestHandlerClass = make_handler(hub, args, args.root, actions, prs, fleet, pusher, devices)
 
     def cleanup(*_):
         if devices:
             devices.stop()
+        if sampler:
+            sampler.terminate()
         if args.pidfile:
             try:
                 with open(args.pidfile) as fh:

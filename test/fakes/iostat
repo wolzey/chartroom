@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
-# fake iostat: `iostat -n 0 -c 2 -w 1` prints $FAKE_NODE_DIR/iostat (fails without it).
-[[ "$*" == "-n 0 -c 2 -w 1" && -n "${FAKE_NODE_DIR:-}" && -f "$FAKE_NODE_DIR/iostat" ]] || exit 1
+# fake iostat: `iostat -n 0 -w S -c 2` prints $FAKE_NODE_DIR/iostat at once (fails without it).
+[[ -n "${FAKE_NODE_DIR:-}" && -f "$FAKE_NODE_DIR/iostat" ]] || exit 1
 cat "$FAKE_NODE_DIR/iostat"

@@ -1,9 +1,8 @@
 // fleet.js - Fleet (slice 5): the machines that run the crew, their health (contact, logins, tools,
-// disk), their budgets and the workers on them, from `chartroom app fleet --json` (lib/app/fleet.jq,
-// over `chartroom nodes`). A machine row selects it; its detail sits in the slim column. Until remote
-// dispatch (one brain, step 4) every worker runs on the brain, at attempt 1; attempts and conn
-// holders show as not tracked yet rather than as made-up data. The same machines as an atom or a
-// dashboard: fleetviews.js.
+// disk), what they have in use against their limits, and the workers on them, from `chartroom app
+// fleet --json` (lib/app/fleet.jq, over `chartroom nodes`). A machine row selects it; its detail sits
+// in the slim column. Hand-offs and conn holders show as not tracked yet rather than as made-up data. The same
+// machines as an atom or a dashboard: fleetviews.js.
 import { html, useState } from "./html.js";
 import { Status, Linked, Tabs } from "./ui.js";
 import { ViewSwitch, savedView, saveView, AtomView, DashView } from "./fleetviews.js";
@@ -25,13 +24,15 @@ function via(m) {
   }
   return "read over ssh (not enrolled)";
 }
-// The slots are chartroom's own workers there; an XO or a person's own agent is shown apart. An hc
-// with no event stream cannot tell them apart, so then every live agent counts.
+// Its workers, for information: an XO or a person's own agent is shown apart. An hc with no event
+// stream cannot tell them apart, so then every live agent counts.
 const crew = M.crewOf;
-function slotsTitle(m) {
-  return m.crew_live != null
-    ? m.crew_live + " crew worker(s) against a budget of " + m.budgets.max_workers + (m.other_agents ? "; " + m.other_agents + " other agent(s) (XOs, your own sessions) not counted" : "")
-    : "every live agent (this hc cannot tell the crew apart)";
+// What is in use against the node's limit: at or over it, the node takes no new task.
+function Use({ label, use, limit }) {
+  const over = use != null && limit != null && use >= limit;
+  return html`<span class=${"m-use" + (over ? " warn-t" : "")} title=${label + " in use" + (limit != null ? "; at " + limit + "% it takes no new task" : "")}>
+    <span class="faint">${label}</span><span class="m-bar"><i style=${{ width: Math.min(100, use || 0) + "%" }} class=${over ? "over" : ""}></i>${limit != null ? html`<b style=${{ left: limit + "%" }}></b>` : null}</span>
+    ${pct(use)}${limit != null ? html` <span class="faint">of ${limit}%</span>` : null}</span>`;
 }
 
 function Checks({ m }) {
@@ -76,17 +77,16 @@ export function FleetPage({ fleet, workers, tasks, sel, setSel, onRefresh, onSes
             <span class="m-via faint">${via(m)}</span>
             <span class="grow"></span>
             <span class="m-power faint">${m.power === "battery" ? "on battery" + (m.battery_pct != null ? " " + m.battery_pct + "%" : "") : m.power === "ac" ? "plugged in" : ""}</span>
-            ${m.budgets && m.budgets.max_workers ? html`<span class="m-slots faint" title=${slotsTitle(m)}><span class="slots">${Array.from({ length: m.budgets.max_workers }, (_, i) =>
-              html`<i key=${i} class=${i < crew(m) ? "on" : ""}></i>`)}</span> ${crew(m)}/${m.budgets.max_workers}${m.other_agents ? " · " + m.other_agents + " other" : ""}</span>` : null}</div>
+            ${crew(m) != null ? html`<span class="m-slots faint" title="for information: the limits are its CPU and memory use">${crew(m)} worker${crew(m) === 1 ? "" : "s"}${m.other_agents ? " · " + m.other_agents + " other" : ""}</span>` : null}</div>
           <${Checks} m=${m} />
-          ${m.util ? html`<div class="m-l3"><span class=${m.util.max >= 1 ? "warn-t" : "faint"}>${m.util.max >= 1 ? "At its budget (not enforced yet: work still lands here until placement ships). " : ""}With one more worker:
-            CPU ${pct(m.util.cpu * 100)}, memory ${pct(m.util.mem * 100)} of its budget</span></div>` : null}
+          ${m.state !== "down" ? html`<div class="m-l3"><${Use} label="CPU" use=${m.cpu_use} limit=${m.budgets && m.budgets.cpu} /><${Use} label="Memory" use=${m.mem_used_pct} limit=${m.budgets && m.budgets.mem} />
+            ${m.full ? html`<span class="warn-t">Takes no new work: ${m.full}</span>` : m.budgets && m.budgets.cpu ? html`<span class="faint">Takes new work</span>` : null}</div>` : null}
         </div>`)}</div>`
       : tab === "workers" ? html`<div class="w-table">${workers.length ? workers.map((t) => html`<div key=${t.key} class="w-row">
           <span class="pulse"></span><span class="faint">${t.short_id}</span><span class="w-title truncate"><${Linked} text=${t.title} /></span>
           <span class="faint">${t.machine || "the brain"}</span><span class="w-att faint">attempt 1</span><span class="faint">${t.dispatched ? M.ago(t.dispatched) : ""}</span>
           <span class="w-state truncate">${t.line || ""}</span><span class="faint">${t.home}</span></div>`) : html`<p class="dt-empty" style=${{ padding: "16px" }}>No worker is running.</p>`}</div>`
-      : html`<p class="dt-empty">${tab === "attempts" ? "Attempts and hand-offs between machines come with remote dispatch (one brain, step 4). Today every worker runs on the brain, at attempt 1."
+      : html`<p class="dt-empty">${tab === "attempts" ? "Hand-offs between machines come later: a running worker stays on the machine it started on."
           : "Who holds each home's conn comes with the conn lease (one brain, step 3). Until then, answers wait in each home's mailbox for its XO's next watch."}</p>`}
     </div>
   </main>`;
@@ -104,13 +104,13 @@ export function MachineDetail({ m, workers, names }) {
       <dt>Connection</dt><dd>${via(m)}${m.device && m.device.version ? html` <span class="faint">· chartroom ${m.device.version}</span>` : null}</dd>
       ${m.failing.length ? html`<dt>To fix</dt><dd><ul class="checks">${m.failing.map((f) => html`<li key=${f}><span class="glyph blocked"></span><span><b>${f}</b>
         ${fixes[f] ? html`<br /><span class="faint">on ${m.name}: <code>${fixes[f]}</code></span>` : null}</span></li>`)}</ul></dd>` : null}
-      ${m.cpu_busy_pct != null ? html`<dt>CPU</dt><dd>${m.cpu_busy_pct}% busy <span class="faint">over a second</span></dd>` : null}
       <dt>Load</dt><dd>${m.load ? m.load.map((x) => x.toFixed(1)).join(" · ") : "—"}${m.cores ? html` <span class="faint">on ${m.cores} cores</span>` : null}</dd>
-      <dt>Memory free</dt><dd>${pct(m.mem_free_pct)}</dd>
+      <dt>CPU in use</dt><dd>${pct(m.cpu_use)}${m.budgets && m.budgets.cpu ? html` <span class="faint">limit ${m.budgets.cpu}%, over the last minute</span>` : null}</dd>
+      <dt>Memory in use</dt><dd>${pct(m.mem_used_pct)}${m.budgets && m.budgets.mem ? html` <span class="faint">limit ${m.budgets.mem}%, as Activity Monitor counts it</span>` : null}</dd>
       <dt>Disk free</dt><dd>${pct(m.disk_free_pct)}</dd>
       <dt>Agents</dt><dd>${m.crew_live != null ? html`${m.crew_live} crew${m.other_agents ? html` <span class="faint">· ${m.other_agents} other (XOs, your own sessions)</span>` : null}` : m.agents_live != null ? html`${m.agents_live} <span class="faint">(crew and others together)</span>` : "—"}</dd>
       ${own.length ? html`<dt>XOs and your sessions</dt><dd><div class="sp-ms">${own.map((a) => html`<div key=${a.address} class="sp-m" title=${a.where || ""}><span class="grow truncate">${M.agentLabel(a)}</span><span class="faint">${a.state === "done" ? "idle" : a.state || ""}</span></div>`)}</div></dd>` : null}
-      <dt>Budgets</dt><dd>${m.budgets ? html`${m.budgets.max_workers} workers · CPU ${m.budgets.cpu}% · memory ${m.budgets.mem}%${m.budgets.on_battery ? " · on battery: " + m.budgets.on_battery : ""}` : html`<span class="faint">Not a node yet (chartroom node init)</span>`}</dd>
+      <dt>Limits</dt><dd>${m.budgets ? html`CPU ${m.budgets.cpu}% · memory ${m.budgets.mem}%${m.budgets.on_battery ? " · on battery: " + m.budgets.on_battery : ""}<br /><span class="faint">change: <code>chartroom node limits ${m.brain ? "here" : m.name} 80/70</code></span>` : html`<span class="faint">Not a node yet (chartroom node init)</span>`}</dd>
       <dt>Power</dt><dd>${m.power === "battery" ? "On battery" + (m.battery_pct != null ? " (" + m.battery_pct + "%)" : "") : m.power === "ac" ? "Plugged in" : "—"}</dd>
       <dt>Workers</dt><dd>${mine.length ? html`<div class="sp-ms">${mine.map((w) => html`<div key=${w.key} class="sp-m"><${Status} status="working" only=${true} /><span class="grow truncate">${w.title}</span></div>`)}</div>` : html`<span class="faint">None</span>`}</dd>
     </dl>

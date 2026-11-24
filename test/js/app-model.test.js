@@ -362,7 +362,7 @@ test("move, ago and search: the keyboard's selection, short times, the palette's
 
 // Fleet's atom and dashboard (fleetviews.js)
 const fleetOf = (over) => ({ machines: [Object.assign({ name: "studio", brain: true, state: "healthy", crew_live: 3, other_agents: 2, agents_live: 5, cores: 10, load: [4, 4, 4],
-  cpu_busy_pct: 24, mem_free_pct: 60, disk_free_pct: 40, budgets: { max_workers: 6, cpu: 80, mem: 75, on_battery: "pause" }, logins: [], tools: [], extra: [], failing: [], agents: [] }, over),
+  cpu_use: 24, mem_used_pct: 40, disk_free_pct: 40, budgets: { cpu: 80, mem: 75, on_battery: "pause" }, logins: [], tools: [], extra: [], failing: [], agents: [] }, over),
   { name: "desk", brain: false, state: "healthy", crew_live: 1, other_agents: 0, device: { aliases: ["desk-old"] }, logins: [], tools: [], extra: [], failing: [], agents: [] }] });
 const ft = (task, o) => Object.assign({ type: "task", task, key: "acme:" + task, home: "acme", title: task, status: "working", state: "working", live: "working", last_at: ago(60) }, o);
 
@@ -406,20 +406,29 @@ test("fleetState: working, waiting, needs me, stalled, finished; an agent that e
   assert.deepStrictEqual(M.fleetProblems(fleetOf({ agents }).machines[0], o).map((p) => p.text), ["1 agent ended on an error"]);
 });
 
-test("fleetMeters: CPU is the measured share, never load; the CPU budget's tick is on load", () => {
+test("fleetMeters: CPU and memory are the measures placement goes by, each against its limit; load and workers are for information", () => {
   const of = (over) => Object.fromEntries(M.fleetMeters(fleetOf(over).machines[0]).map((x) => [x.id, x]));
   let x = of({});
-  assert.deepStrictEqual([x.cpu.used, x.cpu.text, x.cpu.tick], [24, "24% busy", null]);
-  assert.deepStrictEqual([x.load.used, x.load.text, x.load.tick, x.load.level], [40, "4.0 on 10 cores", 80, null]);
-  assert.deepStrictEqual([x.mem.used, x.disk.used, x.workers.used, x.workers.text], [40, 60, 50, "3 of 6"]);
+  assert.deepStrictEqual([x.cpu.used, x.cpu.text, x.cpu.tick, x.cpu.level], [24, "24% in use", 80, null]);
+  assert.deepStrictEqual([x.mem.used, x.mem.text, x.mem.tick, x.mem.level], [40, "40% in use", 75, null]);
+  assert.deepStrictEqual([x.load.used, x.load.text, x.load.tick, x.load.level], [40, "4.0 on 10 cores", null, null]);
+  assert.deepStrictEqual([x.disk.used, x.workers.used, x.workers.text], [60, null, "3"]);
   // not measured there (an older chartroom): said, with no bar, and load is not shown in its place
-  x = of({ cpu_busy_pct: null });
-  assert.deepStrictEqual([x.cpu.used, x.cpu.text, x.load.used], [null, "not measured there yet", 40]);
-  x = of({ load: [12, 9, 8], mem_free_pct: 4, disk_free_pct: 9, crew_live: 8 });
-  assert.deepStrictEqual([x.load.word, x.mem.word, x.disk.word, x.workers.word], ["over", "very high", "very low", "over"]);
-  assert.strictEqual(of({ crew_live: 6 }).workers.word, "full");
-  x = of({ budgets: null, load: [null, null, null], mem_free_pct: null });
-  assert.deepStrictEqual([x.load.text, x.mem.text, x.workers.text], ["not read", "not read", "3 (no limit set)"]);
+  x = of({ cpu_use: null, mem_used_pct: null });
+  assert.deepStrictEqual([x.cpu.used, x.cpu.text, x.mem.used, x.mem.text, x.load.used], [null, "not measured there yet", null, "not measured there yet", 40]);
+  // at a limit; a high load and many workers alone are no warning
+  x = of({ cpu_use: 80, mem_used_pct: 74, load: [12, 9, 8], disk_free_pct: 9, crew_live: 30 });
+  assert.deepStrictEqual([x.cpu.word, x.mem.word, x.load.word, x.disk.word, x.workers.word], ["at its limit", null, null, "very low", null]);
+  // no limits set: high is still said
+  x = of({ budgets: null, cpu_use: 90, load: [null, null, null], mem_used_pct: null });
+  assert.deepStrictEqual([x.cpu.word, x.cpu.tick, x.load.text, x.mem.text], ["high", null, "not read", "not measured there yet"]);
+});
+
+test("fullness: the greater of CPU and memory over their limits; not known without both uses and both limits", () => {
+  const f = (over) => M.fullness(fleetOf(over).machines[0]);
+  assert.strictEqual(f({ cpu_use: 40, mem_used_pct: 30 }), 0.5);
+  assert.strictEqual(f({ cpu_use: 10, mem_used_pct: 75, crew_live: 0 }), 1);
+  assert.deepStrictEqual([f({ cpu_use: null }), f({ mem_used_pct: null }), f({ budgets: null })], [null, null, null]);
 });
 
 test("fleetProblems: offline, sign-ins with the command, docker, full, stalled and failed tasks; the worst first, the old apart", () => {
@@ -427,10 +436,10 @@ test("fleetProblems: offline, sign-ins with the command, docker, full, stalled a
   assert.deepStrictEqual(probs({}), []);
   assert.deepStrictEqual(probs({ state: "down", error: "no answer", device: { seen_age_s: 7200 } }).map((p) => [p.level, p.text, p.sub]), [["bad", "Offline: no answer", "last heartbeat 2h ago"]]);
   const p = probs({ failing: ["gh sign-in", "codex"], logins: [{ ok: false, label: "gh sign-in", detail: "token expired" }, { ok: null, label: "codex sign-in", detail: "cannot tell" }],
-    tools: [{ ok: false, label: "codex", detail: "missing" }], extra: [{ ok: false, label: "docker", detail: "daemon not answering" }], crew_live: 6, power: "battery", battery_pct: 40 },
+    tools: [{ ok: false, label: "codex", detail: "missing" }], extra: [{ ok: false, label: "docker", detail: "daemon not answering" }], cpu_use: 83, mem_used_pct: 60, power: "battery", battery_pct: 40 },
     [ft("f", { state: "failed", live: "gone" }), ft("s", { state: "stopped-silent", live: "gone" }), ft("w", { state: "waiting-overdue", status: "waiting" }), ft("z", { state: "failed", live: "gone", last_at: ago(30 * 86400) })]);
   assert.deepStrictEqual(p.map((x) => x.level + ": " + x.text), ["bad: gh sign-in failed", "bad: codex is not working", "bad: 1 failed task", "bad: 1 stopped without reporting",
-    "warn: docker is not working", "warn: codex sign-in cannot be told", "warn: On battery, 40%", "warn: Full: 6 of 6 workers", "warn: 1 waiting past its time", "old: 1 more stalled, untouched for 7 days"]);
+    "warn: docker is not working", "warn: codex sign-in cannot be told", "warn: On battery, 40%", "warn: Takes no new work: CPU 83% of its 80% limit", "warn: 1 waiting past its time", "old: 1 more stalled, untouched for 7 days"]);
   assert.strictEqual(p[0].cmd, "gh auth login");
 });
 

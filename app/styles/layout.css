@@ -415,13 +415,14 @@ a.t-row:hover { background: var(--hover); text-decoration: none; }
 .ck { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: var(--r-pill); font-size: var(--fs-xs); background: var(--gray-soft); color: var(--text-2); }
 .ck.ok .ck-i { color: var(--green); }
 .ck.bad { background: var(--rose-soft); color: var(--rose); font-weight: 500; }
-.m-l3 { display: grid; grid-template-columns: auto 120px 1fr; align-items: center; gap: var(--s-4); padding-left: 26px; font-size: var(--fs-sm); }
-.m-l3:not(:has(.bar)) { grid-template-columns: 1fr; }
+.m-l3 { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-4); padding-left: 26px; font-size: var(--fs-sm); }
+.m-use { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.m-bar { position: relative; width: 96px; height: 6px; border-radius: 3px; background: var(--sunken); border: 1px solid var(--border-strong); }
+.m-bar i { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--accent); }
+.m-bar i.over { background: var(--amber); }
+.m-bar b { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--text-2); }
 .m-grace-k { font-size: var(--fs-xs); white-space: nowrap; font-weight: 500; color: var(--amber); }
 .m-grace-t { color: var(--text-2); }
-.slots { display: inline-flex; gap: 3px; }
-.slots i { width: 7px; height: 12px; border-radius: 2px; background: var(--sunken); border: 1px solid var(--border-strong); }
-.slots i.on { background: var(--accent); border-color: var(--accent); }
 .bar.warn > i { background: var(--amber); }
 .m-role { font-size: var(--fs-sm); font-weight: 400; }
 .d-h { margin: var(--s-4) 0 0; font-size: var(--fs-xs); font-weight: 600; color: var(--text-2); }
@@ -506,7 +507,7 @@ a.t-row:hover { background: var(--hover); text-decoration: none; }
   .i-needs .a-row { grid-template-columns: 14px minmax(0, 1fr) 30px; padding: 8px var(--s-4); }
   .i-item { flex-wrap: wrap; }
   .i-checks { max-width: none; }
-  .m-l3 { grid-template-columns: 1fr; padding-left: 0; }
+  .m-l3 { padding-left: 0; }
   .m-l2 { padding-left: 0; }
   .w-row { grid-template-columns: 14px minmax(0, 1fr) auto; row-gap: 2px; padding: 8px var(--s-4); }
   .w-row .t-id, .w-row .chip, .w-att { display: none; }

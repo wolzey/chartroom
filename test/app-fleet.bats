@@ -52,11 +52,11 @@ teardown() { cr app stop >/dev/null 2>&1 || true; }
   [ "$(jq -c '.machines[] | select(.name == "laptop") | [.state, .extra[0].ok]' <<<"$j")" = '["healthy",false]' ]
 }
 
-@test "each agent by name and the CPU share pass through; a machine that does not say has none" {
+@test "each agent by name and its CPU and memory in use pass through; a machine that does not name its agents has none" {
   j="$(cr app fleet --json)"
-  [ "$(jq -c '.machines[] | select(.name == "studio") | [.cpu_busy_pct, (.agents | map([.kind, .name]))]' <<<"$j")" = \
-    '[24,[["crew","old-errand-0a1b"],["crew","nightly-report-2c3d"],["xo","acme"],["other","shop"]]]' ]
-  [ "$(jq -c '.machines[] | select(.name == "mini") | [.cpu_busy_pct, .agents]' <<<"$j")" = '[null,[]]' ]
+  [ "$(jq -c '.machines[] | select(.name == "studio") | [.cpu_use, .mem_used_pct, (.agents | map([.kind, .name]))]' <<<"$j")" = \
+    '[31,64,[["crew","old-errand-0a1b"],["crew","nightly-report-2c3d"],["xo","acme"],["other","shop"]]]' ]
+  [ "$(jq -c '.machines[] | select(.name == "mini") | [.cpu_use, .mem_used_pct, .agents]' <<<"$j")" = '[91,70,[]]' ]
 }
 
 @test "the probe reports the share of disk free" {

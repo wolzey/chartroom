@@ -267,6 +267,8 @@ cmd_app() {
   local args=("$CR_ROOT/lib/app/server.py" --port "$port" --pidfile "$(app_pidfile)" --bin "$CR_BIN" --root "$CR_ROOT")
   # the device routes (lib/fleet.sh): devices push their heartbeats here, under this machine's registry
   args+=(--fleet-dir "$(fleet_dir)")
+  # how busy this machine's CPUs are, kept while the server runs (lib/cpuload.sh; placement reads it)
+  [[ "$(cfg CPU_SAMPLER '' on)" != on ]] || args+=(--cpu-file "$(node_cpu_file)")
   if [[ $noauth -eq 1 ]]; then args+=(--no-auth); else args+=(--user "$user"); fi
   # Web Push (slice 6): off unless the brain's config turns it on; it sends through the browser
   # maker's push service, encrypted end to end

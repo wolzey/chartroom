@@ -41,9 +41,15 @@ def login_check($tools):
        source: ($n.via // null), device: $dev,
        error: ($n.error // null), contact: ($n.contact // null),
        power: ($n.power // null), battery_pct: ($n.battery_pct // null), idle_s: ($n.hid_idle_s // null),
-       cores: ($n.cores // null), load: ($n.load // null), cpu_busy_pct: ($n.cpu_busy_pct // null), mem_free_pct: ($n.mem_free_pct // null), disk_free_pct: $disk,
+       cores: ($n.cores // null), load: ($n.load // null), cpu_use: ($n.cpu_use // null), mem_used_pct: ($n.mem_used_pct // null), disk_free_pct: $disk,
        budgets: ($n.budgets // null), util: ($n.util // null), agents_live: ($n.agents_live // null),
-       # the crew (chartroom's workers, the slots against max_workers) and the other agents apart;
+       # why it takes no new task now, or null: at a limit, paused, or its use not known
+       full: (if ($up | not) or ($n.budgets.cpu // null) == null then null
+              elif ($n.role // "node") != "node" then $n.role
+              elif ($n.cpu_use // null) == null or ($n.mem_used_pct // null) == null then "its CPU and memory use are not known (its chartroom is older)"
+              elif $n.cpu_use >= $n.budgets.cpu then "CPU is at its limit"
+              elif $n.mem_used_pct >= $n.budgets.mem then "memory is at its limit" else null end),
+       # the crew (chartroom's workers) and the other agents apart, for information;
        # null crew: an hc with no event stream, where every live agent is all that can be told
        crew_live: ($n.crew_live // null), other_agents: ($n.other_agents // null),
        # each by name (a crew worker by its task, an XO by its home); fewer than the counts, or none,

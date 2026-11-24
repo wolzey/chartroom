@@ -335,9 +335,14 @@ var AppModel = (function () {
   }
   // an agent as its terminal reports it (an XO, a person's own session): at rest it waits on someone
   function agentState(a) { return { working: "working", blocked: "needs", error: "stalled" }[a.state] || (a.state ? "waiting" : "other"); }
-  // chartroom's own workers against the budget; an hc that cannot tell the crew apart: every agent
+  // chartroom's own workers, for information; an hc that cannot tell the crew apart: every agent
   function crewOf(m) { return m.crew_live != null ? m.crew_live : m.agents_live || 0; }
-  function fullness(m) { const b = m.budgets && m.budgets.max_workers; return b ? crewOf(m) / b : null; }
+  // How near its limits a machine is: the greater of its CPU and its memory in use over their limits,
+  // 1 at a limit, where it takes no new task. Null without limits, or with either use not known.
+  function fullness(m) {
+    const b = m.budgets || {};
+    return b.cpu && b.mem && m.cpu_use != null && m.mem_used_pct != null ? Math.max(m.cpu_use / b.cpu, m.mem_used_pct / b.mem) : null;
+  }
   function stale(t, now) { return !!t.last_at && now - Date.parse(t.last_at) > REST_DAYS * 86400e3; }
 
   // Each machine's tasks, its open sessions (those at rest apart) and its other agents by name. What a
@@ -386,9 +391,9 @@ var AppModel = (function () {
     return a.kind === "xo" ? (a.name ? "XO of " + a.name : "An XO") : a.kind === "crew" ? a.name || "A crew worker" : a.name || "An agent";
   }
 
-  // A machine's meters, 0-100: what is used, the budget as a tick, and a word when it matters.
-  // CPU is what the cores did over a second; load (how many wanted to run, over a minute) is what
-  // the CPU budget is measured against, so that tick is on load.
+  // A machine's meters, 0-100: what is used, its limit as a tick, and a word when it matters. CPU and
+  // memory are the measures placement goes by (the CPU time spent busy over the last minute, and the
+  // memory in use), each against the machine's own limit. Load and workers are for information.
   function fleetMeters(m) {
     const b = m.budgets || {}, out = [], crew = crewOf(m), load = m.load && m.load[0] != null && m.cores ? m.load[0] : null;
     const add = (id, label, used, text, o) => {
@@ -396,16 +401,13 @@ var AppModel = (function () {
       const lvl = used == null ? null : x.bad != null && used >= x.bad ? "bad" : x.warn != null && used >= x.warn ? "warn" : null;
       out.push({ id, label, used, text, tick: x.tick || null, tickText: x.tickText || null, level: lvl, word: lvl ? (x.words || ["high", "very high"])[lvl === "bad" ? 1 : 0] : null });
     };
-    const budget = (n) => (n ? "budget " + n + "%" : null);
-    add("cpu", "CPU", m.cpu_busy_pct, m.cpu_busy_pct == null ? "not measured there yet" : m.cpu_busy_pct + "% busy", { warn: 85, bad: 97 });
-    add("load", "Load", load == null ? null : 100 * load / m.cores, load == null ? "not read" : load.toFixed(1) + " on " + m.cores + " cores",
-      { tick: b.cpu, tickText: budget(b.cpu), warn: b.cpu || 80, bad: 100, words: ["high", "over"] });
-    const mem = m.mem_free_pct == null ? null : 100 - m.mem_free_pct;
-    add("mem", "Memory", mem, mem == null ? "not read" : mem + "% used", { tick: b.mem, tickText: budget(b.mem), warn: b.mem || 75, bad: 92 });
+    const limit = (n) => (n ? "limit " + n + "%: at it, no new task" : null), at = ["at its limit", "at its limit"];
+    add("cpu", "CPU", m.cpu_use, m.cpu_use == null ? "not measured there yet" : m.cpu_use + "% in use", { tick: b.cpu, tickText: limit(b.cpu), warn: b.cpu || 85, words: b.cpu ? at : undefined });
+    add("mem", "Memory", m.mem_used_pct, m.mem_used_pct == null ? "not measured there yet" : m.mem_used_pct + "% in use", { tick: b.mem, tickText: limit(b.mem), warn: b.mem || 85, words: b.mem ? at : undefined });
+    add("load", "Load", load == null ? null : 100 * load / m.cores, load == null ? "not read" : load.toFixed(1) + " on " + m.cores + " cores", {});
     const disk = m.disk_free_pct == null ? null : 100 - m.disk_free_pct;
     add("disk", "Disk", disk, disk == null ? "not read" : m.disk_free_pct + "% free", { tick: 85, tickText: "flagged under 15% free", warn: 80, bad: 85.01, words: ["low", "very low"] });
-    add("workers", "Workers", b.max_workers ? 100 * crew / b.max_workers : null, b.max_workers ? crew + " of " + b.max_workers : crew + " (no limit set)",
-      { warn: 100, words: [b.max_workers && crew > b.max_workers ? "over" : "full"] });
+    add("workers", "Workers", null, String(crew), {});
     return out;
   }
 
@@ -422,7 +424,8 @@ var AppModel = (function () {
     for (const c of (m.logins || []).filter((x) => x.ok === null)) out.push({ level: "warn", text: c.label + " cannot be told", sub: c.detail });
     if (m.power === "battery") out.push({ level: "warn", text: "On battery" + (m.battery_pct != null ? ", " + m.battery_pct + "%" : ""), sub: b.on_battery === "pause" ? "new work pauses here" : null });
     const f = fullness(m);
-    if (f != null && f >= 1) out.push({ level: "warn", text: (f > 1 ? "Over its limit: " : "Full: ") + crewOf(m) + " of " + b.max_workers + " workers" });
+    if (f != null && f >= 1) out.push({ level: "warn", text: "Takes no new work: " + [["CPU", m.cpu_use, b.cpu], ["memory", m.mem_used_pct, b.mem]].filter((x) => x[1] >= x[2])
+      .map((x) => x[0] + " " + x[1] + "% of its " + x[2] + "% limit").join(", ") });
     const fresh = o.tasks.filter((t) => !stale(t, now));
     const group = (level, n, one, many, list) => { if (list.length) out.push({ level, id: n, text: list.length + " " + (list.length === 1 ? one : many), tasks: list }); };
     group("bad", "failed", "failed task", "failed tasks", fresh.filter((t) => t.state === "failed"));
