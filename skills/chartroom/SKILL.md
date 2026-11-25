@@ -182,6 +182,19 @@ landed (merged, on origin at that commit, or a merged PR at it); an unlanded bra
 only the commander marks it done. When they accept it without closing yet (they want the
 worktree kept, say), run `chartroom accept <id>`, which also parks its worker.
 
+## Context handoff
+
+Your context costs on every wake. When the watch says `[xo] context: this session holds about Nk tokens`
+(over `CHARTROOM_XO_HANDOFF_TOKENS`, 200k), hand off at the next quiet moment, never mid-decision:
+
+1. Write `handoffs/xo-<date>-<time>.md` in the home: what is in flight and why, decisions asked and not yet
+   answered (with their card or event), promises you made the commander, anything said that is not yet a
+   ruling (record it with `chartroom rule` if it is one), and what you were about to do. Not what
+   `status`, `board` and the records already hold.
+2. Tell the commander in one line that you are handing off, and start the fresh session (or ask them to:
+   `/clear`, then the chartroom skill), which reads commander.md, the rulings and that note first.
+3. The fresh session's start of session is the usual one; the note is its first read after the rulings.
+
 ## Supervision
 
 Don't poll, sleep, or peek on a timer. Wait on the wake stream: `chartroom watch` (a stream)

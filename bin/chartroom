@@ -1473,6 +1473,21 @@ wake() {
   printf '[%s] %s%s%s\n' "$1" "${p:+[$p] }" "$held" "$2"; WOKE=1
 }
 
+# The XO's own context (the session that runs this watch: CLAUDE_CODE_SESSION_ID, its transcript under
+# ~/.claude/projects): once its last turn held more than CHARTROOM_XO_HANDOFF_TOKENS (200000), one wake
+# a session, to hand off (the chartroom skill, "Context handoff"). Nothing for a worker, or with no transcript.
+watch_xo_context() {
+  local sid="${CLAUDE_CODE_SESSION_ID:-}" max f n mark
+  [[ -n "$sid" && "$sid" =~ ^[A-Za-z0-9-]{8,64}$ && -z "${CHARTROOM_TASK:-}" ]] || return 0
+  max="$(cfg XO_HANDOFF_TOKENS '' 200000)"; [[ "$max" =~ ^[0-9]+$ ]] && (( max > 0 )) || return 0
+  mark="$CR_HOME/.xo-handoff-woke"; [[ "$(cat "$mark" 2>/dev/null)" != "$sid" ]] || return 0
+  f="$(ls -t "$HOME"/.claude/projects/*/"$sid.jsonl" 2>/dev/null | head -1)"; [[ -n "$f" && -f "$f" ]] || return 0
+  n="$(tail -c 400000 "$f" 2>/dev/null | grep -o '"usage":{[^}]*}' | tail -1 | grep -oE '"(input_tokens|cache_creation_input_tokens|cache_read_input_tokens)":[0-9]+' | awk -F: '{ s += $2 } END { if (NR) print s }' || true)"
+  [[ "$n" =~ ^[0-9]+$ ]] && (( n > max )) || return 0
+  printf '%s\n' "$sid" >"$mark"
+  printf '[xo] context: this session holds about %sk tokens, over %sk. Write the handoff note and start a fresh session (chartroom skill: Context handoff)\n' "$((n / 1000))" "$((max / 1000))"; WOKE=1
+}
+
 watch_scan_lines() { # <id> <from-offset> <to-offset>
   local id="$1" from="$2" to="$3" line kind f pos n
   events_path "$id"; f="$EVENTS_PATH"; pos="$from"
@@ -1708,6 +1723,7 @@ cmd_watch() {
       park_due >/dev/null 2>&1 || true
       MC=()
       watch_relays
+      watch_xo_context
       clock_ms
       if [[ $covered -eq 1 ]]; then next=$((NOW_MS + WATCH_SLOW_MS)); else next=$((NOW_MS + WATCH_IVL_MS)); fi
       if [[ $LOOK_ANY -eq 1 ]] && (( next > NOW_MS + LOOK_MS )); then next=$((NOW_MS + LOOK_MS)); fi

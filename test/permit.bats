@@ -583,3 +583,18 @@ SH
   CHARTROOM_GUEST=1 bash -c "source '$REPO_ROOT/lib/core.sh'; source '$REPO_ROOT/lib/agents.sh'; CR_BIN='$CHARTROOM'; load_config; claude_settings_file '$id' all" >/dev/null
   jq -e '.includeCoAuthoredBy == false and .attribution.commit == "" and (.permissions.additionalDirectories | length) == 1' "$f"
 }
+
+@test "watch: the XO's own session past its context limit wakes it once to hand off; a worker's never does" {
+  task_with_worktree --backend command --command "$STUB {id}"
+  sid=0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b; d="$HOME/.claude/projects/-some-home"; mkdir -p "$d"
+  turn() { printf '{"type":"assistant","message":{"usage":{"input_tokens":%s,"cache_creation_input_tokens":1000,"cache_read_input_tokens":%s,"output_tokens":5}}}\n' 2 "$1" >>"$d/$sid.jsonl"; }
+  turn 150000
+  run env CLAUDE_CODE_SESSION_ID=$sid "$CHARTROOM" watch --once --timeout 2; [[ "$output" != *"[xo] context"* ]]
+  turn 230000
+  run env CLAUDE_CODE_SESSION_ID=$sid "$CHARTROOM" watch --once --timeout 2; echo "$output"
+  [[ "$output" == *"[xo] context: this session holds about 231k tokens, over 200k"* ]]
+  run env CLAUDE_CODE_SESSION_ID=$sid "$CHARTROOM" watch --once --timeout 2; [[ "$output" != *"[xo] context"* ]]
+  # a new session, or another limit
+  run env CLAUDE_CODE_SESSION_ID=$sid CHARTROOM_XO_HANDOFF_TOKENS=300000 "$CHARTROOM" watch --once --timeout 2; [[ "$output" != *"[xo] context"* ]]
+  run env CLAUDE_CODE_SESSION_ID=$sid CHARTROOM_TASK="$id" "$CHARTROOM" watch --once --timeout 2; [[ "$output" != *"[xo] context"* ]]
+}
