@@ -248,6 +248,13 @@ always_for() { # <command> <rule> <why> <card id>
            "gh run view 1 > /u/me/out" 'gh run view $(cat /u/me/id)' "FOO=1 gh run view 1" "gh run view 1 | sh" "gh run view 1 | xargs rm"; do
     [[ "$(ALWAYS="$A" verdict pre-tool [] Bash "$(jq -cn --arg c "$c" '{command: $c}')")" != allow* ]] || { echo "allowed: $c"; false; }
   done
+  # where the word reader could see one command and the shell several, or a wrapper's flag runs one
+  for c in "gh run view \$'\\'' ; rm -rf /u/me/x ; echo \$'\\''" "gh run view \\' ; rm -rf /u/me/x ; echo \\'" \
+           "env -S'rm -rf /u/me/x' gh run view 1" "timeout -s KILL 9 gh run view 1" 'gh run view ${X:-1}' 'gh run view ${(e)X}' \
+           "gh run view 1 | sort -o /u/me/x" "gh run view 1 | rg --pre /u/me/x y" "gh run view 1 | uniq - /u/me/x"; do
+    [[ "$(ALWAYS="$A" verdict pre-tool [] Bash "$(jq -cn --arg c "$c" '{command: $c}')")" != allow* ]] || { echo "allowed: $c"; false; }
+  done
+  [ "$(ALWAYS="$A" verdict pre-tool [] Bash '{"command":"gh run view ${RUN} | head -3"}')" = "allow always:p-1" ]
   # exactly-offered commands match only themselves
   A="$(always_for 'cd /w/wt && bats test/permit.bats' commander:unlisted "no rule covers it" p-2)"
   [ "$(ALWAYS="$A" verdict pre-tool [] Bash '{"command":"cd /w/wt && bats test/permit.bats"}')" = "allow always:p-2" ]

@@ -491,13 +491,18 @@ def bash_local($R): bash_local($R; []);
 # leading words (`gh run view:*`), not the whole line, so the next run with another id or flag
 # matches. It reads only plain lines: no $(...), backticks, < or >(...), redirects only to
 # /dev/null and the like, no VAR=value, sudo or xargs, and no shell or eval running a script.
+# Nor what the word reader could take for one command where the shell sees several: $'...',
+# a quote escaped outside quotes, ${...} other than a plain name, a wrapper given flags (env -S).
 def plain_line($cmd; $segs):
-  ($cmd | test("`|\\$\\(|<|>\\(") | not) and ($segs | length) > 0
+  ($cmd | test("`|\\$\\(|<|>\\(|\\$'|\\\\[\"']|\\$\\{(?![A-Za-z_][A-Za-z0-9_]*\\})") | not)
+  and ($cmd | test("(^|[[:space:];&|(])(env|sudo|doas|exec|command|builtin|nohup|nice|time|timeout|gtimeout|setsid|caffeinate)[[:space:]]+-") | not)
+  and ($segs | length) > 0
   and ($segs | all((.env | length) == 0 and (.sudo | not) and (.xargs | not)
                    and (.head | IN(shells[], "eval", "source", ".") | not)
                    and (.redirs | all(IN(dev_roots[]) or startswith("/dev/fd/")))));
 # Read-only filters a pipe ends in: their name alone is the pattern (`grep:*`).
-def filters: ["grep", "egrep", "fgrep", "rg", "head", "tail", "wc", "cut", "sort", "uniq", "tr", "jq", "column", "cat", "ls", "echo", "printf", "nl", "diff", "true"];
+# (Not rg, sort or uniq: `rg --pre`, `sort --compress-program` run a program; `sort -o`, `uniq in out` write.)
+def filters: ["grep", "egrep", "fgrep", "head", "tail", "wc", "cut", "tr", "jq", "column", "cat", "ls", "echo", "printf", "nl", "diff", "true"];
 # Programs whose next word is a script, a host or a package to run: never widened, only exact.
 def no_widen: ["python", "python3", "node", "ruby", "perl", "php", "deno", "bun", "bunx", "npx", "pnpx", "osascript", "ssh", "scp", "sftp", "mosh", "awk", "gawk", "sed", "find", "exec", "command"];
 # Verbs whose target is the part a prefix would leave open (the branch, the API method, what is
