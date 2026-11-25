@@ -506,4 +506,11 @@ SH
   [ "$(jq -r '.hooks.PreToolUse[0].matcher // "all"' "$f")" = all ]
   jq -e '.hooks.PermissionRequest[0].hooks[0].command | test("hook '"$id"' permission$")' "$f"
   [ "$(bash -c "source '$REPO_ROOT/lib/brain.sh'; brain_class permit")" = forward ]
+  # commit and PR attribution off in every mode, and for a device's guest worker too (r-cb1b)
+  for m in all prompt headless; do
+    bash -c "source '$REPO_ROOT/lib/core.sh'; source '$REPO_ROOT/lib/agents.sh'; CR_BIN='$CHARTROOM'; load_config; claude_settings_file '$id' $m" >/dev/null
+    jq -e '.includeCoAuthoredBy == false and .attribution == {commit: "", pr: ""}' "$f"
+  done
+  CHARTROOM_GUEST=1 bash -c "source '$REPO_ROOT/lib/core.sh'; source '$REPO_ROOT/lib/agents.sh'; CR_BIN='$CHARTROOM'; load_config; claude_settings_file '$id' all" >/dev/null
+  jq -e '.includeCoAuthoredBy == false and .attribution.commit == "" and (.permissions.additionalDirectories | length) == 1' "$f"
 }

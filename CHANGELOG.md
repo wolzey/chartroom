@@ -60,6 +60,8 @@ are stable from 0.1.0.
   where it is installed; a machine on an older chartroom still shows how many agents, with no names.
 
 ### Fixed
+- Claude workers on a machine whose own Claude settings leave commit attribution on (a new device) added
+  the AI attribution trailer to commits. Every worker's settings now turn commit and PR attribution off.
 - A finished worker that its parent never reaped (a zombie) no longer counts as still running at close.
 - Closing a task on another machine while its worker there was still running closed the record here and left the worker
   running there. That close now fails as the machine refuses it; `recall` stops the worker and waits for it.
