@@ -2072,6 +2072,7 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           permission cards a Claude worker's hooks raised (open
                                           ones; --all: answered, expired and lapsed too)
   chartroom permit show <p-id>            one card as JSON: the call, why, the rule, the answer
+                                          (here and below, <task>/<p-id> names a task's card)
   chartroom permit answer <p-id> once|always|deny [--note T] [--by commander|app] [--via xo|terminal|app]
                                           answer a card on the commander's word: once allows
                                           that call, always allows its pattern until the task

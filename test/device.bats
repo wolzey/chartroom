@@ -519,6 +519,17 @@ ev_has() { grep -q -- "$1" "$CHARTROOM_HOME/tasks/$ID/events.log"; }
   [ "$status" -eq 0 ]
   until_true '[ -f "$g/p-abcd.answer.json" ]' 40
   jq -e '.answer == "once" and .note == "go ahead"' "$g/p-abcd.answer.json"
+  # a card of the same id under another task here, long answered, does not stand in for the device's
+  mkdir -p "$CHARTROOM_HOME/permits/an-older-task"
+  cp "$g/p-abcd.json" "$CHARTROOM_HOME/permits/an-older-task/p-dcba.json"
+  printf '{"answer":"once","by":"commander","at":"2026-01-01T00:00:00Z"}\n' >"$CHARTROOM_HOME/permits/an-older-task/p-dcba.answer.json"
+  jq -c '.id = "p-dcba"' "$g/p-abcd.json" >"$g/p-dcba.json"
+  until_true '[ -f "$CHARTROOM_HOME/permits/$ID/p-dcba.json" ]'
+  run as_commander permit answer p-dcba deny
+  echo "$output"
+  [ "$status" -eq 0 ]
+  until_true '[ -f "$g/p-dcba.answer.json" ]' 40
+  jq -e '.answer == "deny"' "$g/p-dcba.answer.json"
   # and the device never sends an answer back as if it were a card
   sleep 3
   [ ! -e "$CHARTROOM_HOME/permits/$ID/p-abcd.answer.json.json" ]

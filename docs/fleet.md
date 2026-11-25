@@ -243,7 +243,7 @@ minutes (`CHARTROOM_PERMIT_WAIT_SECONDS`) before the call is denied.
 
 ```bash
 chartroom permit ls                          # open cards
-chartroom permit answer <p-id> once          # or: always (this pattern, until the task closes), deny --note "…"
+chartroom permit answer <p-id> once          # (or <task>/<p-id>) or: always (this pattern, until the task closes), deny --note "…"
 chartroom permit grant <task-id> push-branch # what a task may do without asking: push-branch, open-pr, merge-auto, comment-pr, prod-read
 ```
 

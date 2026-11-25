@@ -231,7 +231,7 @@ function App() {
     else if (what.type === "snooze") { action = "snooze"; body = Object.assign({ ref: it.ref }, what.body); msg = "Snoozed for " + what.label.toLowerCase(); }
     else if (what.type === "permit") {
       // a permission card: the broker answers the worker's waiting call (or steers a retry)
-      action = "permit"; body = { id: it.permit, answer: what.answer, note: n.trim() || undefined };
+      action = "permit"; body = { id: it.permit, task: it.task, answer: what.answer, note: n.trim() || undefined };
       const late = it.missed || (M.permitLeft(it) || {}).over;
       msg = (what.answer === "deny" ? "Denied " : what.answer === "always" ? "Allowed for the rest of the task: " : "Allowed once: ") + (it.desc || "the call") +
         (late && what.answer !== "deny" ? "; the worker is told to run it again" : "");

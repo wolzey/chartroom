@@ -233,7 +233,8 @@ On a wake:
 - **permit asks**: relay it to the commander as it is, with its call, why and rule, and the
   three answers: Allow once, Always for this task, Deny (with an optional note). It is theirs:
   the policy already answered everything routine (lib/permit.jq). On their word only, answer it:
-  `chartroom permit answer <p-id> once|always|deny [--note "<their words>"] --via xo`. Never
+  `chartroom permit answer <p-id> once|always|deny [--note "<their words>"] --via xo` (`<task>/<p-id>` when
+  it says two tasks have that id). Never
   answer a card on your own judgment, and never relax the policy to make cards go away. A card
   that runs out denies the call and the worker posts a `decision`; an allow given after that is
   still kept (`permit answer` pre-approves the call and tells the worker to run it again). A

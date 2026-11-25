@@ -28,7 +28,13 @@ chartroom permit show p-1a2b             # one card as JSON
 chartroom permit answer p-1a2b once      # allow this call
 chartroom permit answer p-1a2b always    # allow this pattern until the task closes
 chartroom permit answer p-1a2b deny --note "use the staging project instead"
+chartroom permit answer 71b6/p-1a2b once # the card of that task (its id or short id)
 ```
+
+- **A card's id** is `p-` and 8 hex digits, never one another card of this home had. Cards from a worker on a
+  device are made there, where this home's ids cannot be seen; if two tasks ever have one id, a plain id means
+  the one card of them still open. With none or several open, the answer is refused and names each as
+  `<task>/<p-id>`: an answer lets a call run, so it is never guessed. The app always names the task.
 
 - **The first answer wins.** A second answer is refused and names the first.
 - **The wait.** The hook waits up to `CHARTROOM_PERMIT_WAIT_SECONDS` (900), then denies. The

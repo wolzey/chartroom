@@ -313,6 +313,80 @@ EOF
   [[ "$output" == *"already answered: deny by commander"*"first answer wins"* ]]
 }
 
+# A card as a worker's hook writes one, put in the record directly: <task> <p-id> <seconds it still
+# waits> <command>. As one comes in from a device, whose own home could not see this home's ids.
+put_card() {
+  local d="$CHARTROOM_HOME/permits/$1" now; now="$(date +%s)"; mkdir -p "$d"
+  jq -cn --arg t "$1" --arg p "$2" --argjson now "$now" --argjson w "$3" --arg c "$4" '{id: $p, task: $t, created: ($now | todate), created_epoch: $now,
+    expires_epoch: ($now + $w), event: "permission", blocking: true, tool: "Bash", input: {command: $c}, sig: "0123456789ab", desc: "Bash \"\($c)\"",
+    cwd: "", why: "", rule: "commander:outward", reason: "git-push", pattern: $c}' >"$d/$2.json"
+}
+
+@test "card ids: two tasks with one id: an answer reaches the open one, or the task it names, never a guess" {
+  a="$(TITLE="First worker" new_task --backend command --command "$STUB {id}")"
+  b="$(TITLE="Second worker" new_task --backend command --command "$STUB {id}")"
+  [[ -n "$a" && -n "$b" ]]
+  put_card "$a" p-6590 600 "git push origin one"
+  run answer p-6590 once --via xo
+  [ "$status" -eq 0 ]
+  # the same id comes in under another task: the answered one does not stand in its way
+  put_card "$b" p-6590 600 "git push origin two"
+  run as_commander permit show p-6590
+  [ "$(jq -r .task <<<"$output")" = "$b" ]
+  run answer p-6590 deny --note "not now"
+  echo "$output"; [ "$status" -eq 0 ]; [[ "$output" == *"origin two"* ]]
+  [ "$(jq -r .answer "$CHARTROOM_HOME/permits/$a/p-6590.answer.json")" = once ]
+  [ "$(jq -r .answer "$CHARTROOM_HOME/permits/$b/p-6590.answer.json")" = deny ]
+  # none of them open: refused with both, by name; the task's own still says who won
+  run answer p-6590 once
+  [ "$status" -ne 0 ]; [[ "$output" == *"2 tasks have a permission card p-6590"*"$a/p-6590 (answered)"* && "$output" == *"$b/p-6590 (answered)"* ]]
+  run answer "$b/p-6590" once
+  [ "$status" -ne 0 ]; [[ "$output" == *"p-6590 was already answered: deny by commander"* ]]
+  # both open: refused; task/p-id answers that one alone, by the task's id or its short id
+  put_card "$a" p-77aa 600 "git push origin three"; put_card "$b" p-77aa 600 "git push origin four"
+  run answer p-77aa once
+  [ "$status" -ne 0 ]; [[ "$output" == *"$a/p-77aa (open)"* && "$output" == *"$b/p-77aa (open)"* ]]
+  [ ! -e "$CHARTROOM_HOME/permits/$a/p-77aa.answer.json" ]; [ ! -e "$CHARTROOM_HOME/permits/$b/p-77aa.answer.json" ]
+  run answer "$b/p-77aa" once
+  echo "$output"; [ "$status" -eq 0 ]; [[ "$output" == *"origin four"* ]]
+  [ ! -e "$CHARTROOM_HOME/permits/$a/p-77aa.answer.json" ]
+  run as_commander permit escalate "$a/p-77aa"
+  [ "$status" -eq 0 ]; [ -f "$CHARTROOM_HOME/permits/$a/p-77aa.escalated.json" ]
+  run answer "${a##*-}/p-77aa" deny
+  echo "$output"; [ "$status" -eq 0 ]; [[ "$output" == *"origin three"* ]]
+  # a late allow of a missed card never lands on another task's of that id
+  put_card "$a" p-88bb -5 "git push origin five"; put_card "$b" p-88bb -5 "git push origin six"
+  run answer p-88bb once
+  [ "$status" -ne 0 ]; [ ! -d "$CHARTROOM_HOME/permits/$a/pre" ]
+  # no such card, no such task, nothing outside the record
+  run answer "$a/p-ffff" once; [ "$status" -ne 0 ]; [[ "$output" == *"no such permission card: $a/p-ffff"* ]]
+  run answer "nobody/p-77aa" once; [ "$status" -ne 0 ]; [[ "$output" == *"no such task: nobody"* ]]
+  run answer "../permits/$a/p-77aa" once; [ "$status" -ne 0 ]; [[ "$output" == *"no such permission card"* ]]
+  # a worker may not, however it names the card
+  run env CHARTROOM_TASK="$a" "$CHARTROOM" permit answer "$a/p-88bb" once
+  [ "$status" -ne 0 ]; [[ "$output" == *"a worker may not answer"* ]]
+  events "$a" | grep -qF "permit: refused: a worker tried to answer permission card p-88bb (guard:self-answer)"
+}
+
+@test "card ids: 8 hex digits, never one a card of this home had, a closed task's included" {
+  task_with_worktree --backend command --command "$STUB {id}"
+  # openssl gives the taken id first, then a free one
+  mkdir -p "$CHARTROOM_HOME/permits/other" "$CHARTROOM_HOME/tasks/gone/permits"
+  printf '{}' >"$CHARTROOM_HOME/permits/other/p-aaaa0001.json"; printf '{}' >"$CHARTROOM_HOME/tasks/gone/permits/p-aaaa0002.json"
+  cat >"$BIN/openssl" <<'SH'
+#!/usr/bin/env bash
+f="${OPENSSL_COUNT:?}"; n=$(( $(cat "$f" 2>/dev/null || echo 0) + 1 )); echo "$n" >"$f"
+case "$n" in 1|3|5) echo aaaa ;; 2) echo 0001 ;; 4) echo 0002 ;; *) echo 0003 ;; esac
+SH
+  chmod +x "$BIN/openssl"; export OPENSSL_COUNT="$BATS_TEST_TMPDIR/n"
+  hook permission Bash "$(bash_in 'git push origin HEAD')" >/dev/null &
+  wait_card
+  [ "$(card_id)" = p-aaaa0003 ]
+  rm -f "$BIN/openssl"
+  answer "$(card_id)" deny
+  wait
+}
+
 @test "guards: a worker cannot answer its own card, touch the store, or write permit events" {
   task_with_worktree --backend command --command "$STUB {id}"
   hook permission Bash "$(bash_in 'git push origin HEAD')" >"$BATS_TEST_TMPDIR/out" &

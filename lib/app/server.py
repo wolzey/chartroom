@@ -999,6 +999,8 @@ def verb_for(action, body):
         # answer wins, and the verb's refusal says who won
         pid = need("id", PERMIT_ID, "a permission card (p-…)")
         ans = need("answer", re.compile(r"^(once|always|deny)$"), "once, always or deny")
+        if body.get("task") is not None:  # the card of that task (an older page names only the card)
+            pid = need("task", TASK_ID, "a task id") + "/" + pid
         argv = ["permit", "answer", pid, ans, "--by", "app", "--via", "app"]
         note = body.get("note")
         if note is not None:

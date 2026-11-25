@@ -45,6 +45,10 @@ are stable from 0.1.0.
   where it is installed; a machine on an older chartroom still shows how many agents, with no names.
 
 ### Fixed
+- Two permission cards could have one id, when a worker on a device raised one the brain already had: the
+  new card could not be answered, and an answer could reach the other task's card. Ids are now 8 hex
+  digits; `permit answer`, `show` and `escalate` take `<task>/<p-id>`, prefer the one card still open, and
+  refuse rather than guess; the app names the card's task. Update each device to make the new ids.
 - The app says when a newer Chartroom is installed than the open page runs, with a Reload button. A
   page left open across an update read the new data with its old code, so Fleet said "CPU not
   measured there yet" for every machine.

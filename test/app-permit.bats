@@ -91,6 +91,15 @@ write_card() { # <home> <task> <p-id> <blocking true|false> <expires in s>
   [ "$(post a-perm-00002 '{"id":"p-1a2b","answer":"deny"}')" = 202 ]
   settle a-perm-00002
   [[ "$(outcome a-perm-00002)" == *"already answered: once by app via app"*"(the first answer wins)"* ]]
+  # the app names the card's task: another task's card of the same id is not the one it answers
+  t2="$(cr status --json | jq -r --arg t "$t" '[.[] | select(.id != $t and .closed != true)][0].id')"
+  write_card "$CHARTROOM_HOME" "$t2" p-5c5c true 600; write_card "$CHARTROOM_HOME" "$t" p-5c5c true 600
+  [ "$(post a-perm-00003 "{\"id\":\"p-5c5c\",\"task\":\"../$t\",\"answer\":\"once\"}")" = 400 ]
+  [ "$(post a-perm-00004 "{\"id\":\"p-5c5c\",\"task\":\"$t\",\"answer\":\"once\"}")" = 202 ]
+  settle a-perm-00004
+  [[ "$(outcome a-perm-00004)" == done* ]]
+  [ -f "$CHARTROOM_HOME/permits/$t/p-5c5c.answer.json" ]; [ ! -e "$CHARTROOM_HOME/permits/$t2/p-5c5c.answer.json" ]
+  rm "$CHARTROOM_HOME/permits/$t2/p-5c5c.json"
   # answered, it is out of Needs me
   [ "$(cr app snapshot --json | jq '[.needs[] | select(.kind == "permission")] | length')" -eq 0 ]
 }

@@ -42,21 +42,44 @@ permit_sig() { # <tool> <input json>
   jq -cS --arg t "$1" '{t: $t, i: (. | if type == "object" then del(.description, .timeout, .run_in_background, .dangerouslyDisableSandbox) else . end)}' <<<"$2" | text_sig
 }
 
+# 8 hex digits at random: a worker on a device (or in another home) makes its cards' ids where this
+# home's cannot be seen, and they come here under its task. Not an id any card here ever had, a
+# closed task's included: the app keeps what it told the commander of by id.
 permit_new_id() {
   local t
   while :; do
-    t="p-$(rand_hex4)"
-    compgen -G "$(permit_root)/*/$t.json" >/dev/null || { printf '%s' "$t"; return; }
+    t="p-$(rand_hex4)$(rand_hex4)"
+    compgen -G "$(permit_root)/*/$t.json" >/dev/null || compgen -G "$CR_HOME/tasks/*/permits/$t.json" >/dev/null || { printf '%s' "$t"; return; }
   done
 }
-permit_find() { # <p-id> -> the task id, or 1
-  local f
-  [[ "$1" =~ ^p-[0-9a-f]{4,}$ ]] || return 1
-  for f in "$(permit_root)"/*/"$1.json"; do
+# A card by its id, or <task>/<p-id> (the task's id or short id), into PR_TASK and PR_ID. An id two
+# tasks have is the one card of them still open; with none or several open it is refused, never
+# guessed: an answer lets a call run. 1, with the reason in PR_ERR, for no card or no telling.
+permit_ref() { # <p-id | task/p-id>
+  local ref="$1" t f st hits=() open=()
+  PR_TASK=""; PR_ID="${ref##*/}"; PR_ERR="no such permission card: $ref"
+  [[ "$PR_ID" =~ ^p-[0-9a-f]{4,16}$ ]] || return 1
+  if [[ "$ref" == */* ]]; then
+    t="${ref%/*}"
+    [[ "$t" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || return 1
+    [[ -f "$(permit_tdir "$t")/$PR_ID.json" ]] || t="$(cmd_resolve "$t" 2>/dev/null)" || { PR_ERR="no such task: ${ref%/*} (or more than one); chartroom permit ls shows each card's task"; return 1; }
+    [[ -n "$t" && -f "$(permit_tdir "$t")/$PR_ID.json" ]] || return 1
+    PR_TASK="$t"; return 0
+  fi
+  for f in "$(permit_root)"/*/"$PR_ID.json"; do
     [[ -f "$f" ]] || continue
-    f="${f%/*}"; printf '%s' "${f##*/}"; return 0
+    f="${f%/*}"; hits+=("${f##*/}")
   done
-  return 1
+  (( ${#hits[@]} > 0 )) || return 1
+  if (( ${#hits[@]} == 1 )); then PR_TASK="${hits[0]}"; return 0; fi
+  PR_ERR="${#hits[@]} tasks have a permission card $PR_ID; name one:"
+  for t in "${hits[@]}"; do
+    st="$(permit_rows "$t" 1 | jq -r --arg p "$PR_ID" 'select(.id == $p) | .state')"
+    [[ "$st" == open ]] && open+=("$t")
+    PR_ERR+=" $t/$PR_ID ($st)"
+  done
+  (( ${#open[@]} == 1 )) || return 1
+  PR_TASK="${open[0]}"
 }
 
 # The call as one short phrase for events and cards: Bash "<command>", Edit <path>, or the tool.
@@ -328,7 +351,7 @@ cmd_permit() {
     answer) permit_cmd_answer "$@" ;;
     escalate) permit_cmd_escalate "$@" ;;
     grant|revoke|grants) permit_cmd_grant "$sub" "$@" ;;
-    *) die "usage: chartroom permit ls [<task>] [--all] [--json] | show <p-id> | answer <p-id> once|always|deny [--note <text>] [--by commander|app] [--via xo|terminal|app] | escalate <p-id> [--note <text>] | grant <task> <name>... | revoke <task> <name>... | grants <task>" ;;
+    *) die "usage: chartroom permit ls [<task>] [--all] [--json] | show <card> | answer <card> once|always|deny [--note <text>] [--by commander|app] [--via xo|terminal|app] | escalate <card> [--note <text>] (a card: its p-id, or <task>/<p-id>) | grant <task> <name>... | revoke <task> <name>... | grants <task>" ;;
   esac
 }
 
@@ -336,14 +359,16 @@ cmd_permit() {
 # the card says the XO left it to them, with the XO's note. Only the XO does this, never a worker.
 permit_cmd_escalate() {
   local pid="${1:-}" note="" id d rec
-  [[ -n "$pid" ]] || die "usage: chartroom permit escalate <p-id> [--note <text>]"
+  [[ -n "$pid" ]] || die "usage: chartroom permit escalate <p-id or task/p-id> [--note <text>]"
   shift
   while [[ $# -gt 0 ]]; do
     case "$1" in --note) note="${2:-}"; shift 2 ;; *) die "permit escalate: unknown arg $1" ;; esac
   done
-  id="$(permit_find "$pid" || true)"
-  permit_from_worker && permit_refuse_worker "escalate permission card $pid" "$id"
-  [[ -n "$id" ]] || die "no such permission card: $pid"
+  permit_ref "$pid" || true
+  id="$PR_TASK"
+  permit_from_worker && permit_refuse_worker "escalate permission card $PR_ID" "$id"
+  [[ -n "$id" ]] || die "$PR_ERR"
+  pid="$PR_ID"
   [[ "$(permit_rows "$id" 1 | jq -r --arg p "$pid" 'select(.id == $p) | .state')" == open ]] \
     || die "permit escalate: $pid is not open (answered, expired or lapsed): nothing to hand over"
   [[ "$note" != *$'\n'* ]] || note="${note//$'\n'/ }"
@@ -371,14 +396,15 @@ permit_cmd_ls() {
 
 permit_cmd_show() {
   local pid="${1:-}" id
-  [[ -n "$pid" ]] || die "usage: chartroom permit show <p-id>"
-  id="$(permit_find "$pid")" || die "no such permission card: $pid"
+  [[ -n "$pid" ]] || die "usage: chartroom permit show <p-id or task/p-id>"
+  permit_ref "$pid" || die "$PR_ERR"
+  id="$PR_TASK"; pid="$PR_ID"
   permit_rows "$id" 1 | jq -c --arg p "$pid" 'select(.id == $p)'
 }
 
 permit_cmd_answer() {
   local pid="${1:-}" ans="${2:-}" note="" by=commander via="" id d card rec cur desc msg
-  [[ -n "$pid" && -n "$ans" ]] || die "usage: chartroom permit answer <p-id> once|always|deny [--note <text>] [--by commander|app] [--via xo|terminal|app]"
+  [[ -n "$pid" && -n "$ans" ]] || die "usage: chartroom permit answer <p-id or task/p-id> once|always|deny [--note <text>] [--by commander|app] [--via xo|terminal|app]"
   shift 2
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -388,9 +414,11 @@ permit_cmd_answer() {
       *) die "permit answer: unknown arg $1" ;;
     esac
   done
-  id="$(permit_find "$pid" || true)"
-  permit_from_worker && permit_refuse_worker "answer permission card $pid" "$id"
-  [[ -n "$id" ]] || die "no such permission card: $pid"
+  permit_ref "$pid" || true
+  id="$PR_TASK"
+  permit_from_worker && permit_refuse_worker "answer permission card $PR_ID" "$id"
+  [[ -n "$id" ]] || die "$PR_ERR"
+  pid="$PR_ID"
   [[ "$ans" =~ ^($PERMIT_ANSWERS)$ ]] || die "an answer is one of: ${PERMIT_ANSWERS//|/, }"
   [[ "$by" =~ ^(commander|app)$ ]] || die "--by is commander or app"
   [[ -n "$via" ]] || { if [[ "$by" == app ]]; then via=app; elif [[ -n "${CLAUDECODE:-}${CODEX_SANDBOX:-}${CHARTROOM_HARNESS:-}" ]]; then via=xo; else via=terminal; fi; }
