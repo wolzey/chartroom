@@ -347,6 +347,25 @@ dry() { run cr dispatch "$1" --dry-run; echo "$output"; }
   dry "$id"; [[ "$output" == *"run on m3"* ]]
 }
 
+@test "placement: this home's files named from the home (tasks/<id>/report.md) go along too; a prefix of one, or a worktree, keeps the task here" {
+  seed m3 $M3 5 10; answering
+  mkdir -p "$CHARTROOM_HOME/tasks/other-1234" "$CHARTROOM_HOME/tasks/company-lane-a1b2" "$CHARTROOM_HOME/worktrees/proj/lane-a"
+  echo report >"$CHARTROOM_HOME/tasks/other-1234/report.md"; echo plan >"$CHARTROOM_HOME/tasks/company-lane-a1b2/plan.md"
+  says() { perl -0pi -e "s|(Commander's intent\n\n).*?\n|\$1$2\n|" "$CHARTROOM_HOME/tasks/$1/brief.md"; }
+  id="$(new_task --backend command)"
+  says "$id" "Read the report (\`tasks/other-1234/report.md\`) and tasks/company-lane-a1b2/plan.md."
+  run cr dispatch "$id"; echo "$output"; [ "$status" -eq 0 ]
+  [ "$(where "$id")" = "$M3" ]
+  [ "$(jq -c '.payload.carry' "$BATS_TEST_TMPDIR"/taken/$M3.*.json)" = '["tasks/company-lane-a1b2/plan.md","tasks/other-1234/report.md"]' ]
+  id="$(new_task --backend command)"
+  stays() { says "$id" "$1"; dry "$id"; [[ "$output" == "$id would run here"*"stays on this machine: its brief names $2"* ]]; }
+  stays "Read every lane's report: $CHARTROOM_HOME/tasks/company-lane- (a1b2 and the rest)." "$CHARTROOM_HOME/tasks/company-lane-, which is not a whole path of this home"
+  stays "Read every lane's report: tasks/company-lane-*/report.md." "$CHARTROOM_HOME/tasks/company-lane-*/report.md, which is not a whole path of this home"
+  stays "Diff the lanes in $CHARTROOM_HOME/worktrees/proj/lane-a against main." "$CHARTROOM_HOME/worktrees/proj/lane-a, a worktree on this machine"
+  # words that only look like a path of the home are prose
+  says "$id" "Fix the tasks/s and the drafts/: slash words, not files."; dry "$id"; [[ "$output" == "$id would run on m3"* ]]
+}
+
 # a device that may clone (and has mise), without the project's checkout, which is on GitHub
 cloner() { # <name> <id>
   git -C "$PROJECT" remote set-url origin git@github.com:Acme/Proj.git

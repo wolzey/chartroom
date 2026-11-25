@@ -206,6 +206,8 @@ guest_setup() { # <checkout> <canonical remote> <the brain's command or "">
   run_bounded 300 git -C "$d" fetch -q origin >/dev/null 2>&1 </dev/null || true
   if [[ -z "$(git -C "$d" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then git -C "$d" merge -q --ff-only '@{upstream}' >/dev/null 2>&1 || true; fi
   cmd="$(guest_setup_command "$d" "$3")"; key="$(guest_setup_key "$d" "$cmd")"
+  # (a registry login given since a setup that failed: it may now work)
+  [[ ! -s "$(env_npm_file "$d")" ]] || key="$(printf '%s %s' "$key" "$(guest_mtime "$(env_npm_file "$d")")" | sha256_hex)"
   if [[ -n "$cmd" && "$(jq -r 'select(.rc == 0) | .key' "$f.json" 2>/dev/null)" != "$key" ]]; then
     mkdir -p "${f%/*}"; chmod 700 "${f%/*}"
     lp="$(guest_login_path)"
@@ -215,6 +217,8 @@ guest_setup() { # <checkout> <canonical remote> <the brain's command or "">
     ( cd "$d" || exit 1
       for v in "${unset[@]+"${unset[@]}"}"; do unset "$v"; done # (it is the repo's own program: none of chartroom's settings)
       export PATH="$lp" MISE_TRUSTED_CONFIG_PATHS="$d" MISE_YES=1 COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+      # (the repo's registry login from the fleet's store, when there is one: never the node's ~/.npmrc)
+      if [[ -s "$(env_npm_file "$d")" ]]; then export NPM_CONFIG_USERCONFIG; NPM_CONFIG_USERCONFIG="$(env_npm_file "$d")"; fi
       guest_run_group "$(guest_prep_s)" "$BASH" -c "$cmd" >>"$f.log" 2>&1 </dev/null ) || rc=$?
     jq -cn --arg r "$remote" --arg p "$d" --arg k "$key" --arg c "$cmd" --arg at "$(now)" --argjson rc "$rc" \
       '{remote: $r, path: $p, key: $k, command: $c, at: $at, rc: $rc}' >"$f.json.tmp" && mv "$f.json.tmp" "$f.json"
@@ -331,7 +335,7 @@ guest_cancelled() { # <home> <id>
 }
 
 guest_dispatch() { # <payload>
-  local p="$1" home id kind backend base branch project brief bh attempt g st args=() a new=1 rc name
+  local p="$1" home id kind backend base branch project brief bh attempt g st args=() a new=1 rc name top
   home="$(jq -r '.home // ""' <<<"$p")"; id="$(jq -r '.id // ""' <<<"$p")"; kind="$(jq -r '.kind // ""' <<<"$p")"
   backend="$(jq -r '.backend // ""' <<<"$p")"; base="$(jq -r '.base // ""' <<<"$p")"; branch="$(jq -r '.branch // ""' <<<"$p")"
   project="$(jq -r '.project // ""' <<<"$p")"; bh="$(jq -r '.brain_home // ""' <<<"$p")"; attempt="$(jq -r '.attempt // 0' <<<"$p")"
@@ -389,14 +393,18 @@ guest_dispatch() { # <payload>
     brief="$(guest_move_paths "$(jq -r '.brief // ""' <<<"$p")" "${GP_PAIRS[@]+"${GP_PAIRS[@]}"}")"
     brief="$(guest_carry "$p" "$g" "$id" "$brief")"
     brief="${brief//"$bh"/"$g"}"
+    top="${project%/"$(jq -r '.prefix // ""' <<<"$p")"}"
     if (( GP_CLONED )); then
       name="$(device_cfg NAME)"
-      a="$(env_files_of "${project%/"$(jq -r '.prefix // ""' <<<"$p")"}" 2>/dev/null | paste -sd' ' - || true)"
+      a="$(env_files_of "$top" 2>/dev/null | paste -sd' ' - || true)"
       if [[ -n "$a" ]]; then
         brief+=$'\n\n'"## This machine"$'\n\n'"You run on ${name:-another machine} ($(uname -s)), in a clone chartroom made here of the project. Its development env files are in that clone ($a), with production values left out; copy what you need into your worktree. If the work needs a value that is not there, post \`blocked\` naming it; do not look for it elsewhere, and do not ask for its value."
       else
-        brief+=$'\n\n'"## This machine"$'\n\n'"You run on ${name:-another machine} ($(uname -s)), in a clone chartroom made here of the project. It has no \`.env\` file and no other secret. If the work needs one, post \`blocked\` naming the file; do not look for it elsewhere, and do not ask for its value."
+        brief+=$'\n\n'"## This machine"$'\n\n'"You run on ${name:-another machine} ($(uname -s)), in a clone chartroom made here of the project. It has no \`.env\` file. If the work needs one, post \`blocked\` naming the file; do not look for it elsewhere, and do not ask for its value."
       fi
+    fi
+    if (( GP_CLONED )) && [[ -s "$(env_npm_file "$top")" ]]; then
+      brief+=$'\n\n'"Its package registries' login is in $(env_npm_file "$top"): run an install with NPM_CONFIG_USERCONFIG=$(env_npm_file "$top"). Never print that file."
     fi
     printf '%s\n' "$brief" >"$g/tasks/$id/brief.md"
     jq -cn --argjson a "$attempt" --argjson o "$(wc -l <"$(guest_log_file "$g" "$id")" | tr -d ' ')" \
@@ -411,7 +419,11 @@ guest_refuses() { # <payload>
 }
 
 device_cmd_steer() { guest_check "$1" || return; guest_run "$G_HOME" steer "$G_ID" "$(jq -r '.text // ""' <<<"$1")"; }
-device_cmd_stop() { guest_check "$1" || return; guest_run "$G_HOME" stop "$G_ID"; }
+device_cmd_stop() {
+  # (a dispatch still cloning or setting up: cancelled, and nothing is started)
+  if guest_cancel_prep "$1"; then echo "its project was still being prepared here: cancelled, and nothing was started"; return 0; fi
+  guest_check "$1" || return; guest_run "$G_HOME" stop "$G_ID"
+}
 # Read-only git in the worker's worktree (chartroom git on the brain): the XO checks a branch there
 # before it comes home at close. Refused there and here alike.
 device_cmd_git() {
@@ -432,10 +444,16 @@ device_cmd_peek() {
 # close, in two phases the brain runs in order (lib/backends/node.sh): bundle sends the branch to
 # the brain and prints its tip as the brain acked it; close closes the guest task and deletes this
 # machine's copy of the branch when it is at the commit the brain holds.
+# Cancels a dispatch of the task still cloning or setting up here; 1 when there is none.
+guest_cancel_prep() { # <payload {home, id}>
+  local pf; pf="$(guest_dir "$(jq -r '.home // ""' <<<"$1")")/.prep/$(jq -r '.id // ""' <<<"$1")"
+  [[ "$pf" =~ /guests/[a-z][a-z0-9-]*/\.prep/[a-z][a-z0-9_-]*$ && -f "$pf" ]] && pid_alive "$(cat "$pf" 2>/dev/null)" || return 1
+  : >"$pf.cancel"
+}
+
 device_cmd_close() { # <payload {phase, discard, sha}>
   # (a dispatch of it still cloning or setting up stops before it starts a worker)
-  local pf; pf="$(guest_dir "$(jq -r '.home // ""' <<<"$1")")/.prep/$(jq -r '.id // ""' <<<"$1")"
-  if [[ "$pf" =~ /guests/[a-z][a-z0-9-]*/\.prep/[a-z][a-z0-9_-]*$ && -f "$pf" ]] && pid_alive "$(cat "$pf" 2>/dev/null)"; then : >"$pf.cancel"; fi
+  guest_cancel_prep "$1" || true
   guest_check "$1" || return
   local m wt project branch base tip f out sha discard
   m="$(guest_meta_file "$G_DIR" "$G_ID")"

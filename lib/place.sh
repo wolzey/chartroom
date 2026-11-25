@@ -100,11 +100,19 @@ place_setup() { # <id>
 }
 
 # Every path the brief names that exists on this machine, one per line, absolute: the brief says
-# /abs or ~/home paths; what chartroom itself wrote into it (its own record, its helper) is left out.
+# /abs or ~/home paths, or one of this home's own the way the XO writes them (tasks/<id>/report.md,
+# drafts/x.md: relative to the home); what chartroom itself wrote into it (its own record, its helper)
+# is left out. An absolute path into this home that is not there whole (a prefix: .../tasks/lane-), or
+# a pattern (tasks/lane-*/report.md), is printed as it is, and keeps the task here (place_scan).
 place_brief_paths() { # <id>
   local id="$1" d p q
   d="$(tdir "$id")"
-  grep -oE "(^|[[:space:]\`\"'(<=\[])(~|/[A-Za-z0-9._@+-]+)(/[A-Za-z0-9._@+-]+)*/?" "$d/brief.md" 2>/dev/null |
+  { place_brief_words "$id" | grep -oE "(^|[[:space:]\`\"'(<\[])(~|/[A-Za-z0-9._@+-]+)(/[A-Za-z0-9._@+*-]+)*/?" || true
+    # (this home's own, named from it: tasks/, drafts/, records/, ... and its top files)
+    # (one that is not there whole is prose, unless it is a pattern: tasks/lane-*/report.md)
+    place_brief_words "$id" | grep -oE "(^|[[:space:]\`\"'(<\[])($(place_home_dirs))/[A-Za-z0-9._@+*/-]+" | sed -E "s|^[[:space:]\`\"'(<\[]||" |
+      while IFS= read -r p; do q="${p%/}"; while [[ "$q" == *[.,:] ]]; do q="${q%?}"; done; [[ -e "$CR_HOME/$q" || "$q" == *'*'* ]] && printf '%s/%s\n' "$CR_HOME" "$q"; done || true
+  } 2>/dev/null |
     sed -E "s/^[[:space:]\`\"'(<\[]//" | sort -u | while IFS= read -r p; do
       [[ "$p" != =* ]] || continue # (CHARTROOM_HOME=...: the helper's, rewritten on the device)
       p="${p%/}"; while [[ "$p" == *[.,:] ]]; do p="${p%?}"; done
@@ -114,9 +122,17 @@ place_brief_paths() { # <id>
         /usr/*|/bin/*|/sbin/*|/etc/*|/dev/*|/System/*|/Library/*|/opt/homebrew/*|/Applications/*) continue ;;
         "$CR_BIN"|"$d/report.md"|"$d/plan.md"|"$d/inbox.md"|"$d/brief.md"|"$d"/events.*|"$d/final.md") continue ;;
       esac
-      [[ -e "$q" ]] && printf '%s\n' "$q"
+      if [[ -e "$q" ]]; then printf '%s\n' "$q"
+      elif [[ "$q/" == "$CR_HOME"/* || "$q/" == "$(phys_dir "$CR_HOME")"/* ]]; then printf '%s\n' "$q" # (not whole: see above)
+      fi
     done | sort -u
   return 0
+}
+# This home's own directories a brief names relative to it, as an alternation (no worktrees/: a
+# worktree is this machine's, and the absolute path of one keeps a task here anyway).
+place_home_dirs() {
+  local d out=(); for d in "$CR_HOME"/*/; do d="${d%/}"; d="${d##*/}"; [[ "$d" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*$ && "$d" != worktrees ]] && out+=("${d//./\\.}"); done
+  local IFS='|'; printf '%s' "${out[*]:-tasks}"
 }
 
 # May this file of the home go along with a task? (text and pictures a brief points at; never a
@@ -171,6 +187,8 @@ place_scan() { # <id>
       if [[ -d "$p" && -n "$rel" ]]; then
         while IFS= read -r f; do got+=("${f#"$CR_HOME/"}"); done < <(find "$CR_HOME/$rel" -type f ! -name .DS_Store 2>/dev/null | head -n $((CR_CARRY_MAX_FILES + 1)))
       elif [[ -n "$rel" ]]; then got=("$rel"); fi
+      [[ -e "$p" ]] || { here="its brief names $p, which is not a whole path of this home (a prefix or a pattern) and cannot go along"; break; }
+      [[ "$rel" != worktrees && "$rel" != worktrees/* ]] || { here="its brief names $p, a worktree on this machine"; break; }
       (( ${#got[@]} > 0 )) || { here="its brief names $p, which is only on this machine"; break; }
       for f in "${got[@]}"; do
         place_carry_ok "$f" || { here="its brief names $p, and $f does not go to another machine"; break 2; }

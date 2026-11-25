@@ -19,6 +19,13 @@
 # differ are shown, never merged. A file leaves its machine encrypted (CMS) to the store's key, and the
 # brain for a node encrypted to that node's, so no queue, result, log or command line holds a value.
 #
+# And a repo's package-registry login (the commander's ruling: part of the environment the fleet shares), as one more
+# file named `npm-login`: of the owner's npm user config (NPM_CONFIG_USERCONFIG, else ~/.npmrc), only the
+# lines of the registries the repo's own tracked .npmrc files name (`@scope:registry=https://host/`), and
+# only their auth (`//host/:_authToken=...` and the like). On a node it is a 0600 file of chartroom's own
+# inside the clone's .git (`.git/chartroom/npmrc`), given to its setup as NPM_CONFIG_USERCONFIG; the
+# node's own ~/.npmrc is never read or written.
+#
 # What counts as an env file: `.env` and `.env.*` in the main checkout (three levels deep), gitignored,
 # regular, up to 32 KB; never an example, nor one whose name says production, staging or preview.
 # What is left out of it, line by line, on its own machine before it goes: a key or value that says
@@ -62,6 +69,31 @@ cmd_device_share_env() { # on|off, at the machine itself
   tmp="$f.tmp.$$"
   awk -v v="$v" '/^[[:space:]]*CHARTROOM_NODE_SHARE_ENV[[:space:]]*=/ { if (!d) print "CHARTROOM_NODE_SHARE_ENV=" v; d = 1; next } { print } END { if (!d) print "CHARTROOM_NODE_SHARE_ENV=" v }' "$f" >"$tmp" && mv "$tmp" "$f"
   if [[ "$v" == on ]]; then echo "this machine's env files can be listed, and taken for repos it owns (chartroom env, on the brain)"; else echo "this machine's env files are not shared"; fi
+}
+
+CR_ENV_NPM=npm-login
+env_rel_ok() { [[ "$1" == "$CR_ENV_NPM" || ( "$1" =~ $CR_ENV_REL_RE && "$1" != *..* ) ]]; } # <rel>
+env_npm_file() { printf '%s/.git/chartroom/npmrc' "$1"; } # <clone>: where a node keeps a repo's registry login
+env_path_in() { if [[ "$2" == "$CR_ENV_NPM" ]]; then env_npm_file "$1"; else printf '%s/%s' "$1" "$2"; fi; } # <checkout> <rel>
+
+# The registries (hosts) a repo's tracked .npmrc files name, other than npm's own, one a line.
+env_registries_of() { # <checkout>
+  local d="$1" f
+  git -C "$d" ls-files -- '.npmrc' '*/.npmrc' 2>/dev/null | head -50 | while IFS= read -r f; do
+    sed -nE 's#^[[:space:]]*(@[A-Za-z0-9._-]+:)?registry[[:space:]]*=[[:space:]]*https?://([A-Za-z0-9.-]+(:[0-9]+)?)(/.*)?$#\2#p' "$d/$f" 2>/dev/null
+  done | tr '[:upper:]' '[:lower:]' | grep -vE '^registry\.(npmjs\.org|yarnpkg\.com)$' | sort -u || true
+}
+env_npm_userconfig() { local f="${NPM_CONFIG_USERCONFIG:-${npm_config_userconfig:-$HOME/.npmrc}}"; [[ -f "$f" && ! -L "$f" ]] && printf '%s' "$f"; } # this machine's
+# This machine's registry login for a repo: only the lines of its registries' auth; nothing when there is none.
+env_npm_login_of() { # <checkout>
+  local hosts f; hosts="$(env_registries_of "$1")"; [[ -n "$hosts" ]] || return 0
+  f="$(env_npm_userconfig)" || return 0
+  (( $(wc -c <"$f") <= CR_ENV_MAX )) || return 0
+  awk -v hosts="$hosts" 'BEGIN { n = split(hosts, h, "\n") }
+    { line = $0; sub(/\r$/, "", line); l = line; sub(/^[[:space:]]+/, "", l)
+      if (l !~ /^\/\//) next
+      host = substr(l, 3); sub(/[\/:].*/, "", host); host = tolower(host)
+      for (i = 1; i <= n; i++) if (host == h[i] && l ~ /:(_authToken|_auth|_password|username|email|always-auth|certfile|keyfile)[[:space:]]*=/) { print l; break } }' "$f"
 }
 
 # A checkout's env files that count, one relative path a line.
@@ -126,6 +158,14 @@ env_describe() { # <checkout> <salt> <drop> <keep>
       '{rel: $r, mode: $m, mtime: $t, fp: (if $fp == "" then null else $fp end), keys: ($k | split("\n") | map(select(length > 0) | split(" ") | {k: .[0], why: (.[1:] | join(" ") | if . == "-" then null else . end)}))}'
   done < <(env_files_of "$d") | jq -s -c .
 }
+env_describe_npm() { # <checkout> <salt> -> [] or [{rel: npm-login, ...}] (its keys: the npmrc keys, never a value)
+  local login f; login="$(env_npm_login_of "$1")"
+  [[ -n "$login" ]] || { echo '[]'; return; }
+  f="$(env_npm_userconfig)"
+  jq -cn --arg k "$(sed -E 's/[[:space:]]*=.*//' <<<"$login")" --arg m "$(stat -c %a "$f" 2>/dev/null || stat -f %Lp "$f" 2>/dev/null || echo -)" --argjson t "$(guest_mtime "$f")" \
+    --arg fp "$( { printf '%s\n' "$2"; printf '%s\n' "$login"; } | sha256_hex | cut -c1-16)" --arg rel "$CR_ENV_NPM" \
+    '[{rel: $rel, kind: "npm", mode: $m, mtime: $t, fp: $fp, keys: ($k | split("\n") | map(select(length > 0) | {k: ., why: null}))}]'
+}
 
 # The checkouts of this machine that have env files: [{remote, files: [rel]}]; chartroom's own clones are not a source.
 env_list_here() {
@@ -133,7 +173,7 @@ env_list_here() {
   while IFS= read -r r; do
     while IFS= read -r g; do
       d="${g%/.git}"; ! guest_cloned "$d" || continue
-      fs="$(env_files_of "$d")"; [[ -n "$fs" ]] || continue
+      fs="$(env_files_of "$d")"; [[ -z "$(env_npm_login_of "$d")" ]] || fs+="${fs:+$'\n'}$CR_ENV_NPM"; [[ -n "$fs" ]] || continue
       rem="$(guest_remote_of "$d")"; [[ "$rem" =~ $CR_NODE_REMOTE_RE ]] || continue
       jq -cn --arg r "$rem" --arg f "$fs" '{remote: $r, files: ($f | split("\n") | map(select(length > 0)))}'
     done < <(find "$r" -mindepth 2 -maxdepth 3 -name .git -type d -prune 2>/dev/null)
@@ -151,7 +191,7 @@ device_cmd_env_list() { env_share_on || { echo "it does not share its env files 
 device_cmd_env_describe() { # <payload {remote, salt, drop, keep}>
   local d; env_share_on || { echo "it does not share its env files" >&2; return 5; }
   d="$(env_checkout_here "$(jq -r '.remote // ""' <<<"$1")")" || { echo "no checkout of it here" >&2; return 6; }
-  env_describe "$d" "$(jq -r '.salt // ""' <<<"$1")" "$(env_csv "$1" drop)" "$(env_csv "$1" keep)"
+  jq -s -c 'add' <(env_describe "$d" "$(jq -r '.salt // ""' <<<"$1")" "$(env_csv "$1" drop)" "$(env_csv "$1" keep)") <(env_describe_npm "$d" "$(jq -r '.salt // ""' <<<"$1")")
 }
 device_cmd_env_get() { # <payload {remote, rel, cert, drop, keep}>: one file, encrypted to <cert>, as base64
   env_share_on || { echo "it does not share its env files" >&2; return 5; }
@@ -159,6 +199,12 @@ device_cmd_env_get() { # <payload {remote, rel, cert, drop, keep}>: one file, en
 }
 env_get_here() { # <remote> <rel> <cert pem> <drop> <keep>
   local d rel="$2" c rc=0; d="$(env_checkout_here "$1")" || { echo "no checkout of $1 here" >&2; return 6; }
+  if [[ "$rel" == "$CR_ENV_NPM" ]]; then
+    local login; login="$(env_npm_login_of "$d")"; [[ -n "$login" ]] || { echo "no registry login for $1 here" >&2; return 6; }
+    c="$(mktemp)"; printf '%s\n' "$3" >"$c"
+    printf '%s\n' "$login" | env_encrypt "$c" | base64 | tr -d '\n' || rc=7
+    rm -f "$c"; return "$rc"
+  fi
   grep -qxF -- "$rel" <<<"$(env_files_of "$d")" || { echo "$rel is not an env file of $1 here" >&2; return 6; }
   env_parse keys "$4" "$5" <"$d/$rel" >/dev/null || { echo "$rel could not be read as an env file; it is not taken" >&2; return 7; }
   c="$(mktemp)"; printf '%s\n' "$3" >"$c"
@@ -228,20 +274,26 @@ env_put_here() { # <remote> <clone> <files json [{rel, b64}]>
   n="$(jq length <<<"$3")"
   for ((i = 0; i < n; i++)); do
     rel="$(jq -r --argjson i "$i" '.[$i].rel' <<<"$3")"
-    [[ "$rel" =~ $CR_ENV_REL_RE && "$rel" != *..* ]] || { echo "'$rel' is not an env file's name" >&2; return 7; }
-    git -C "$d" check-ignore -q -- "$rel" 2>/dev/null || { echo "$rel is not ignored by git in $remote here; not written" >&2; return 7; }
-    if [[ -e "$d/$rel" || -L "$d/$rel" ]] && ! jq -e --arg r "$rel" 'index($r)' >/dev/null <<<"$old"; then echo "$rel is there already, and is not chartroom's; left as it is" >&2; continue; fi
-    mkdir -p "$(dirname "$d/$rel")"
-    [[ "$(cd "$(dirname "$d/$rel")" && pwd -P)/" == "$(cd "$d" && pwd -P)"/* ]] || { echo "$rel leads out of the clone" >&2; return 7; }
-    t="$d/$rel.chartroom.$$"; ( umask 077; : >"$t" )
+    env_rel_ok "$rel" || { echo "'$rel' is not an env file's name" >&2; return 7; }
+    local to; to="$(env_path_in "$d" "$rel")"
+    if [[ "$rel" == "$CR_ENV_NPM" ]]; then
+      [[ -d "$d/.git" && ! -L "$d/.git" ]] || { echo "the clone of $remote has no .git directory for its registry login" >&2; return 7; }
+      mkdir -p "${to%/*}"; chmod 700 "${to%/*}"
+    else
+      git -C "$d" check-ignore -q -- "$rel" 2>/dev/null || { echo "$rel is not ignored by git in $remote here; not written" >&2; return 7; }
+      if [[ -e "$to" || -L "$to" ]] && ! jq -e --arg r "$rel" 'index($r)' >/dev/null <<<"$old"; then echo "$rel is there already, and is not chartroom's; left as it is" >&2; continue; fi
+      mkdir -p "$(dirname "$to")"
+    fi
+    [[ "$(cd "$(dirname "$to")" && pwd -P)/" == "$(cd "$d" && pwd -P)"/* ]] || { echo "$rel leads out of the clone" >&2; return 7; }
+    t="$to.chartroom.$$"; ( umask 077; : >"$t" )
     if ! jq -r --argjson i "$i" '.[$i].b64' <<<"$3" | base64 -d 2>/dev/null | env_decrypt "$key" "$m/node.pem" >"$t" 2>/dev/null; then rm -f "$t"; echo "$rel could not be decrypted with this node's key" >&2; return 7; fi
-    chmod 600 "$t"; mv -f "$t" "$d/$rel"
+    chmod 600 "$t"; mv -f "$t" "$to"
     old="$(jq -c --arg r "$rel" '. + [$r] | unique' <<<"$old")"
     ( umask 077; jq -cn --arg r "$remote" --arg p "$d" --argjson f "$old" '{remote: $r, path: $p, files: $f}' >"$man.tmp" ) && mv "$man.tmp" "$man"
   done
   while IFS= read -r rel; do
     [[ -n "$rel" ]] || continue
-    [[ ! "$rel" =~ $CR_ENV_REL_RE ]] || rm -f "$d/$rel"
+    ! env_rel_ok "$rel" || rm -f "$(env_path_in "$d" "$rel")"
     old="$(jq -c --arg r "$rel" '. - [$r]' <<<"$old")"
   done < <(jq -r --argjson now "$3" '. - ($now | map(.rel)) | .[]' <<<"$old")
   [[ ! -f "$man" ]] || { ( umask 077; jq -cn --arg r "$remote" --arg p "$d" --argjson f "$old" '{remote: $r, path: $p, files: $f}' >"$man.tmp" ) && mv "$man.tmp" "$man"; }
@@ -257,7 +309,7 @@ env_forget_here() { # [remote]: deletes the copies this node wrote
   for f in "$(env_node_dir)"/*.json; do
     [[ -z "${1:-}" || "$(jq -r .remote "$f")" == "$1" ]] || continue
     p="$(jq -r .path "$f")"
-    while IFS= read -r rel; do [[ ! "$rel" =~ $CR_ENV_REL_RE || "$rel" == *..* ]] || rm -f "$p/$rel"; done < <(jq -r '.files[]' "$f")
+    while IFS= read -r rel; do ! env_rel_ok "$rel" || rm -f "$(env_path_in "$p" "$rel")"; done < <(jq -r '.files[]' "$f")
     device_log "env files of $(jq -r .remote "$f") deleted"
     rm -f "$f"
   done
@@ -361,7 +413,7 @@ env_collect_one() { # <remote>
   n="$(jq length <<<"$doc")"
   for ((i = 0; i < n; i++)); do
     rel="$(jq -r --argjson i "$i" '.[$i].rel' <<<"$doc")"; mode="$(jq -r --argjson i "$i" '.[$i].mode' <<<"$doc")"
-    [[ "$rel" =~ $CR_ENV_REL_RE && "$rel" != *..* ]] || continue
+    env_rel_ok "$rel" || continue
     if ! out="$(env_ask "$o" get "$(jq -cn --arg r "$r" --arg f "$rel" --arg c "$(cat "$(env_store_cert)")" --argjson o "$own" '{remote: $r, rel: $f, cert: $c, drop: $o.drop, keep: $o.keep}')" 2>"$err")" || [[ -z "$out" ]]; then
       echo "$r: $(tail -1 "$err")" >&2; continue
     fi

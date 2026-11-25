@@ -7,6 +7,10 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- `chartroom recall <id>`: a task placed on another machine comes back, its record kept and its branch brought home, to be
+  dispatched again here (`set <id> node=here`). `stop` cancels a device's clone or setup that is still under way.
+- The fleet's env store carries a repo's package-registry login too (`npm-login`), only the lines of the registries its own `.npmrc`
+  names. On a node it is a 0600 file chartroom owns, given to the setup as `NPM_CONFIG_USERCONFIG`.
 - **A node can take work of a project it has no checkout of** (`chartroom node limits <name> --clone on`; off at first): it clones the
   project from GitHub with its own gh login, runs the project's setup once (`setup=` in `projects.md`, else the repo's own, with
   `mise install` for the tools it pins), and the worker starts there. A clone or setup that fails refuses the task with the reason, and
@@ -55,6 +59,8 @@ are stable from 0.1.0.
   where it is installed; a machine on an older chartroom still shows how many agents, with no names.
 
 ### Fixed
+- A brief that names this home's files relative to the home (`tasks/<id>/report.md`), by a prefix or pattern, or names one of its worktrees,
+  no longer sends the task to another machine without them. `set <id> node=<this machine's name>` means here.
 - Two permission cards could have one id, when a worker on a device raised one the brain already had: the
   new card could not be answered, and an answer could reach the other task's card. Ids are now 8 hex
   digits; `permit answer`, `show` and `escalate` take `<task>/<p-id>`, prefer the one card still open, and

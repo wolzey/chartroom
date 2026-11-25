@@ -41,6 +41,8 @@ node_map() { printf '%s/tasks/%s/%s.json' "$(fleet_dir)" "$1" "$2"; } # <home> <
 node_pin() { # <id> <name|id|here|any|none>
   local id="$1" want="$2" b did row name
   [[ -z "$(meta "$id" dispatched)" || -n "$(meta "$id" closed)" ]] || die "set: $id is dispatched already; a pin moves only work not started"
+  # (this machine's own name is here: it is no device)
+  [[ "$want" != "$(radar_machine_name)" ]] || want=here
   if [[ "$want" =~ ^(here|any|none)$ ]]; then
     if [[ -n "$(meta "$id" node)" ]]; then
       meta_set "$id" backend "$(meta "$id" node_backend)"; meta_set "$id" node ""; meta_set "$id" node_name ""; meta_set "$id" node_placed ""
@@ -54,7 +56,7 @@ node_pin() { # <id> <name|id|here|any|none>
     return 0
   fi
   is_joined "$id" && die "set: $id joined from a running session; it cannot move"
-  did="$(fleet_resolve "$want")"; row="$(fleet_device_json "$did")"; name="$(jq -r .name <<<"$row")"
+  did="$(fleet_resolve "$want")" || exit 1; row="$(fleet_device_json "$did")"; name="$(jq -r .name <<<"$row")"
   [[ "$(jq -r .status <<<"$row")" != revoked ]] || die "set: $name is revoked"
   jq -e '.caps | index("dispatch")' <<<"$row" >/dev/null ||
     die "set: $name's agent cannot take work yet (chartroom node update $name brings it to this brain's chartroom)"
@@ -193,7 +195,13 @@ node_dispatch_outcome() { # <id> <result json>
     fi
     return 1
   fi
-  [[ "$rc" != 8 ]] || return 1 # (closed here while the device prepared it: nothing was started)
+  if [[ "$rc" == 8 ]]; then # (stopped, recalled or closed while the device prepared it: nothing was started)
+    if [[ -z "$(meta "$id" closed)" && -n "$(meta "$id" dispatched)" ]]; then
+      local name; name="$(node_name_of "$id")"; place_undo "$id"
+      log_event "$id" note "stopped on $name before its worker started: not dispatched (dispatch it again)"
+    fi
+    return 1
+  fi
   log_event "$1" failed "the dispatch on $(node_name_of "$id") did not start a worker: $(jq -r '(.err // "") + " " + (.out // "")' <<<"$2" | tr '\n' ' ' | cut -c1-300)"
   return 1
 }
@@ -260,6 +268,19 @@ node_steer() { # <id> <msg>
   node_cmd "$1" steer "$(jq -cn --arg t "$2" '{text: $t}')" 60
 }
 node_stop() { node_need_online "$1" "stop"; node_cmd "$1" stop '{}' 30; }
+# Takes a task back from its device and keeps the record: its worker stopped there, its branch home
+# (as close brings it), its copy there closed; then it is not dispatched, and can be pinned and
+# dispatched again (set <id> node=here). A dispatch still cloning or setting up is cancelled.
+node_recall() { # <id>
+  local id="$1" name; name="$(node_name_of "$id")"
+  [[ -n "$(meta "$id" dispatched)" && -z "$(meta "$id" closed)" ]] || die "recall: $id is not dispatched"
+  node_need_online "$id" "recall"
+  node_cmd "$id" stop '{}' 30 >/dev/null 2>&1 || true
+  node_close_task "$id" 0 # (dies, deleting nothing, at a step that does not hold: uncommitted work there, say)
+  place_undo "$id"
+  log_event "$id" note "recalled from $name: not dispatched; pin it (chartroom set $id node=here) and dispatch it again"
+  echo "recalled $id from $name: it is not dispatched now (chartroom set $id node=here, then chartroom dispatch $id)"
+}
 node_close() { node_stop "$1" >/dev/null 2>&1; } # (a session end, for remove: the record and worktree stay)
 node_peek() { # <id> <n>
   local st; st="$(fleet_device_json "$(meta "$1" node)" | jq -r '"\(.status) (last heartbeat \(.seen_age_s // "?")s ago)"')"

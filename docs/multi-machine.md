@@ -193,6 +193,12 @@ checkout or the base is missing; 7 when it could not clone or set up the project
 goes to the next node, also when the refusal comes minutes later. Any other
 failure, or no answer, leaves the task with that device: it is never started twice.
 
+**Taken back.** `chartroom recall <id>` brings a task placed on a device back and keeps its record. Its worker is stopped
+there, or its clone or setup is cancelled. Its branch comes home, as at close, and its copy there is closed. It is then not dispatched:
+`chartroom set <id> node=here` (or this machine's name) and `dispatch` run it here. `stop` on a task whose device is still preparing
+its project cancels that too; nothing starts there, and it can be dispatched again. A setup already running finishes, and its result
+serves the next worker of that repo.
+
 **A pin** (`--node`, `set node=`) is kept, and is refused with the numbers when its node is at a limit.
 `set node=here` keeps a task on this machine; `node=any` lets dispatch place it.
 
@@ -233,6 +239,10 @@ are hard requirements; what keeps a task on this machine whatever the others off
   registered; a runner other than hc; a brief that speaks of this machine (`localhost:3000`, "on this
   Mac"); and one that names files other machines lack and that cannot
   go along.
+- **Paths of the home, however written.** A brief's path into the home may be absolute or relative to the home
+  (`tasks/<id>/report.md`, `drafts/x.md`). Either goes along. A path that is not there whole keeps the task here: a prefix
+  (`.../tasks/company-lane-`) or a pattern (`tasks/lane-*/report.md`). So does one of the home's worktrees. A relative word that is not
+  a file of the home is prose.
 - **Files that go along.** A brief often names files of the brain's home (a draft, another task's
   report). Those are sent with the dispatch, kept in the task's own folder on the device (`brain/`),
   and the brief's paths are moved to them. Only text and pictures, 1 MB each and 4 MB in all; never a
@@ -286,6 +296,11 @@ are hard requirements; what keeps a task on this machine whatever the others off
 - **Collecting.** `chartroom env scan [<repo>]` asks each machine for names only: repos, files, modes, dates, and the names
   of the keys. `chartroom env collect <repo>` takes the owner's files. An env file is `.env` or `.env.*` in the main checkout, up to
   three levels down: gitignored, regular, at most 32 KB, never an example, never named for production, staging or preview.
+- **A repo's package-registry login** (part of the environment the fleet shares, on the commander's ruling). It goes as one more
+  file, `npm-login`. From the owner's npm user config it takes only the auth lines (`//host/:_authToken=...`) of the registries
+  that the repo's own tracked `.npmrc` files name (`@scope:registry=https://host/`). On a node it is `.git/chartroom/npmrc`
+  in the clone, 0600, given to the setup as `NPM_CONFIG_USERCONFIG`; the worker's brief names it too. Nobody's `~/.npmrc` is
+  written, and the node's is not read. `env scan` shows its key names, as for any file.
 - **Production left out.** On the owner, before a file leaves it, each line is read as an assignment. These are replaced by a
   comment: a key or value that says prod, production or live, a database or queue address on another host, and any key the
   owner's line drops (`--drop`). `--keep` keeps a key by name, for a name that only looks like production.
@@ -325,7 +340,7 @@ are hard requirements; what keeps a task on this machine whatever the others off
 
 ## 8. Security
 
-- **Credentials never move.** The only payloads are the brief, the files of the brain's home it names (§6), a
+- **Credentials never move.** The only payloads are the brief, the files of the brain's home it names (§6), the development env files and registry logins of a repo it clones (§6), a
   meta subset and steer messages: no environment, tokens or config. Each node uses **its own** claude, codex and gh logins, which the commander makes once per node.
 - **The node never connects back.** No node holds credentials for the origin. Events come back over the origin's
   outbound stream, and commits by the origin's `git fetch`.

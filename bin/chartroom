@@ -1276,6 +1276,13 @@ cmd_stop() {
   echo "stopped $id"
 }
 
+# chartroom recall <id>: a task dispatched to another machine comes back, its record kept (lib/backends/node.sh).
+cmd_recall() {
+  local id="${1:-}"; [[ -n "$id" && $# -eq 1 ]] || die "usage: chartroom recall <id>"; need_task "$id"
+  [[ "$(backend_runner "$id")" == node ]] || die "recall: $id runs on this machine (chartroom stop $id stops it)"
+  node_recall "$id"
+}
+
 cmd_attach() {
   migrating_guard attach
   local id="${1:-}" prepare=0; [[ -n "$id" ]] || die "usage: chartroom attach <id>"; need_task "$id"
@@ -1917,6 +1924,10 @@ chartroom - run a crew of coding agents from one agent session (the XO)
   chartroom stop <id>                     interrupt a worker
   chartroom set <id> key=value...         a task's settings before dispatch: model, effort,
                                           sandbox, permission (for a file or a store task)
+  chartroom recall <id>                   take a task back from the machine it was placed on, keeping its
+                                          record: its worker stopped there (or its clone or setup
+                                          cancelled), its branch brought home, its copy there closed.
+                                          Then chartroom set <id> node=here, and dispatch it again
   chartroom set <id> node=<device>|here|any
                                           where it runs: pinned to an enrolled device or to this
                                           machine, or (any) wherever dispatch places it
@@ -2252,5 +2263,6 @@ case "$cmd" in
   -h|--help) cmd_help ;;
   -v|--version) cmd_version ;;
   env) cmd_env "$@" ;;
+  recall) cmd_recall "$@" ;;
   *) die "unknown command '$cmd' (try: chartroom help)" ;;
 esac

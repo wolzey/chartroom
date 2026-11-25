@@ -830,6 +830,60 @@ slow_setup() {
   ! grep -q '^## This machine' "$G/tasks/$ID/brief.md"
 }
 
+@test "recall: a task placed on a device comes back with its record and branch, and runs here pinned; stop during a clone cancels it" {
+  export STUB_MODE=decision
+  placed_setup
+  ID="$(new_task --backend command 2>/dev/null)"
+  cr dispatch "$ID" >/dev/null
+  until_true 'ev_has " decision: pick A or B"'
+  # a commit of its own there, which comes home with it
+  wt="$(jq -r .worktree "$DEV/state/chartroom/node/guests/acme/tasks/$ID/meta.json")"
+  echo x >"$wt/recalled.txt"; git -C "$wt" add recalled.txt; git -C "$wt" -c user.name=t -c user.email=t@t commit -qm "feat: made there"
+  run cr recall "$ID"; echo "$output"; [ "$status" -eq 0 ]
+  [[ "$output" == *"recalled $ID from m3: it is not dispatched now"* ]]
+  [[ "$output" == *"is on this machine at"*"(from m3)"* ]]
+  [ -z "$(jq -r '.dispatched // ""' "$CHARTROOM_HOME/tasks/$ID/meta.json")" ]; [ -z "$(jq -r '.node // ""' "$CHARTROOM_HOME/tasks/$ID/meta.json")" ]
+  [ -z "$(jq -r '.closed // ""' "$CHARTROOM_HOME/tasks/$ID/meta.json")" ]
+  [ "$(jq -r .closed "$DEV/state/chartroom/node/guests/acme/tasks/$ID/meta.json")" != null ]
+  [ ! -e "$FLEET/tasks/acme/$ID.json" ]
+  ev_has " note: recalled from m3"
+  # this machine's own name is here; then it runs here, from its own branch
+  run cr set "$ID" node=studio; echo "$output"; [ "$status" -eq 0 ]; [[ "$output" == *"runs on this machine"* ]]
+  run cr dispatch "$ID"; echo "$output"; [ "$status" -eq 0 ]
+  [ -d "$(jq -r .worktree "$CHARTROOM_HOME/tasks/$ID/meta.json")" ]
+  git -C "$(jq -r .worktree "$CHARTROOM_HOME/tasks/$ID/meta.json")" log --oneline | grep -q 'made there'
+  run cr recall "$ID"; [ "$status" -ne 0 ]; [[ "$output" == *"runs on this machine"* ]]
+  ID2="$(new_task --backend command 2>/dev/null)"; run cr set "$ID2" node=nosuch; echo "$output"; [ "$status" -ne 0 ]; [[ "$output" == *"no enrolled device is called 'nosuch'"* ]]
+}
+
+@test "recall: stop or recall while the device still clones or sets up the project cancels it; nothing starts there" {
+  clone_setup 1
+  clones on
+  slow_setup 0
+  ID="$(new_task --backend command 2>/dev/null)"
+  cr dispatch "$ID" >/dev/null
+  until_true '[ -e "$BATS_TEST_TMPDIR/started" ]'
+  run cr stop "$ID"; echo "$output"; [ "$status" -eq 0 ]; [[ "$output" == *"cancelled, and nothing was started"* ]]
+  # (the setup it was running finishes: its result serves the next worker of the repo)
+  touch "$BATS_TEST_TMPDIR/go"
+  until_true '[ ! -e "$G/.prep/$ID" ]'
+  until_true '[ -n "$(ls "$FLEET/results" 2>/dev/null)" ]'
+  cr watch --once --timeout 2 >/dev/null 2>&1 || true
+  until_true 'ev_has "stopped on m3 before its worker started"'
+  [ -z "$(jq -r '.dispatched // ""' "$CHARTROOM_HOME/tasks/$ID/meta.json")" ]; [ ! -e "$G/tasks/$ID" ]
+  # and recall, the same
+  rm -f "$BATS_TEST_TMPDIR/started" "$BATS_TEST_TMPDIR/go"; rm -rf "$FLEET/prep"
+  setup_is "bash $BATS_TEST_TMPDIR/slow.sh # again"
+  ID="$(new_task --backend command 2>/dev/null)"
+  cr dispatch "$ID" >/dev/null
+  until_true '[ -e "$BATS_TEST_TMPDIR/started" ]'
+  run cr recall "$ID"; echo "$output"; [ "$status" -eq 0 ]; [[ "$output" == *"recalled $ID from m3"* ]]
+  touch "$BATS_TEST_TMPDIR/go"; sleep 3
+  [ -z "$(jq -r '.dispatched // ""' "$CHARTROOM_HOME/tasks/$ID/meta.json")" ]; [ ! -e "$G/tasks/$ID" ]
+  # the clone stays, for later work
+  [ -d "$CLONE/.git" ]
+}
+
 @test "env: a file is read line by line; production and remote databases are left out on its own machine" {
   parse() { bash -c 'eval "$(sed -n "/^env_parse() {/,/^}/p" "$1")"; env_parse "$2" "$3" "$4"' _ "$REPO_ROOT/lib/env.sh" "$@"; }
   f=$'# dev\nexport API_KEY="dev-1"\nDATABASE_URL=postgres://localhost:5432/app\nREPLICA_URL=postgres://db.example.com/app\nREDIS_URL=redis://redis:6379\nSTRIPE_KEY=sk_live_abc\nPROD_TOKEN=x\nPRODUCT_ID=7\nNODE_ENV=development\nMULTI="a\nb"\nDB_HOST=10.1.2.3\nEMPTY=\n'
@@ -918,6 +972,33 @@ values_nowhere() { ! grep -rqE 'dev-secret-123|live-secret-456' "$1"; }
   ID="$(new_task --backend command --node m3 2>/dev/null)"; cr dispatch "$ID" >/dev/null; until_true '[ -f "$CLONE/.env" ]'
   run cr node revoke m3; echo "$output"; [[ "$output" == *"its env files are deleted there"* ]]
   [ ! -e "$CLONE/.env" ]
+}
+
+@test "env: a repo's registry login goes too, from the owner's npm config, only its registries' lines; the node's own ~/.npmrc is never touched" {
+  env_setup
+  printf '@acme:registry=https://npm.example.com/\n' >"$PROJECT/.npmrc"; git -C "$PROJECT" add .npmrc; git -C "$PROJECT" commit -qm npmrc
+  git -C "$PROJECT" push -q https://github.com/acme/proj.git HEAD:main
+  # the owner's (this machine's) npm user config: the registry's login, and lines of others that never go
+  printf '//npm.example.com/:_authToken=npm-secret-321\n//registry.npmjs.org/:_authToken=npmjs-secret-654\ncolor=false\n' >"$HOME/.npmrc"
+  # the node's own, which is never read or written
+  printf 'mine=1\n' >"$DEV/home/.npmrc"
+  setup_is "test \"\$(cat \$NPM_CONFIG_USERCONFIG)\" = //npm.example.com/:_authToken=npm-secret-321 && echo ok >$BATS_TEST_TMPDIR/npm-setup"
+  cmdr device share-env on >/dev/null; cmdr env owner acme/proj here >/dev/null
+  run cmdr env scan acme/proj; echo "$output"
+  [[ "$output" == *"npm-login"*"studio: mode "*"1 keys"* ]]; ! grep -qE 'npm-secret|npmjs-secret' <<<"$output"
+  run cmdr env scan --json; [[ "$output" == *'"npm-login"'* ]]
+  run cmdr env collect acme/proj; echo "$output"; [ "$status" -eq 0 ]; [[ "$output" == *".env npm-login from studio"* || "$output" == *"npm-login .env from studio"* ]]
+  ID="$(new_task --backend command 2>/dev/null)"
+  run cr dispatch "$ID"; echo "$output"; [ "$status" -eq 0 ]
+  until_true 'ev_has " done: stub finished"'
+  [ "$(cat "$BATS_TEST_TMPDIR/npm-setup")" = ok ]
+  f="$CLONE/.git/chartroom/npmrc"
+  [ "$(cat "$f")" = "//npm.example.com/:_authToken=npm-secret-321" ]
+  [ "$(stat -c %a "$f" 2>/dev/null || stat -f %Lp "$f")" = 600 ]
+  [ "$(cat "$DEV/home/.npmrc")" = "mine=1" ]; [ -z "$(git -C "$CLONE" status --porcelain)" ]
+  grep -q "NPM_CONFIG_USERCONFIG=$f" "$G/tasks/$ID/brief.md"
+  ! grep -rqE 'npm-secret|npmjs-secret' "$FLEET" "$CHARTROOM_HOME" "$DEV/state/chartroom/device"
+  run cmdr env forget acme/proj; [ "$status" -eq 0 ]; [ ! -e "$f" ]; [ "$(cat "$DEV/home/.npmrc")" = "mine=1" ]
 }
 
 @test "env: a node revoked while it was away deletes what it was given when the brain answers it 401" {
