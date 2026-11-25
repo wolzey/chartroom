@@ -350,7 +350,8 @@ permit_answered_within() { # <task id> <seconds>
   local f now t; [[ "$2" =~ ^[0-9]+$ ]] && (( $2 > 0 )) || return 1
   now="$(date +%s)"; shopt -s nullglob
   for f in "$(permit_tdir "$1")"/p-*.answer.json; do
-    t="$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)"
+    # GNU stat first: on Linux `stat -f` reports the filesystem and succeeds.
+    t="$(stat -c %Y "$f" 2>/dev/null)" || t="$(stat -f %m "$f" 2>/dev/null)" || t=0; [[ "$t" =~ ^[0-9]+$ ]] || t=0
     (( now - t <= $2 )) && { shopt -u nullglob; return 0; }
   done
   shopt -u nullglob; return 1

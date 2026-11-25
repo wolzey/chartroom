@@ -289,11 +289,13 @@ def api_reply_ok($R):
   | ($a | [range(0; length) as $i | select($a[$i] | test("^(-X|--method)$")) | $a[$i + 1] // ""] + [$a[] | select(startswith("--method=") or test("^-X.")) | sub("^(--method=|-X)"; "")]) as $methods
   | ($a | positionals_api) as $pos
   | ($R.repo // "") as $repo | ($R.prs // []) as $prs
+  | (($pos[0] // "") | ltrimstr("/") | ascii_downcase) as $p
+  # every binding above, none inside the `and` chain: jq versions differ on how far `X and Y as $v | Z` reaches
   | ($methods | all(ascii_upcase == "POST")) and ($pos | length) == 1
     and ($a | all(. == $pos[0] or test("^(-X|--method|POST|-f|-F|--field|--raw-field|--jq|-q|--silent)$") or test("^(--method=POST|-XPOST|--field=|--raw-field=|--jq=)") or test("^(body|in_reply_to)=") or test("^[.\\[]")))
-    and ($repo != "") and ($pos[0] | ltrimstr("/") | ascii_downcase) as $p
-    | ((($p | capture("^repos/(?<r>[^/]+/[^/]+)/pulls/(?<n>[0-9]+)/comments/[0-9]+/replies$")) // ($p | capture("^repos/(?<r>[^/]+/[^/]+)/issues/(?<n>[0-9]+)/comments$")) // null) as $m
-       | $m != null and $m.r == $repo and ($prs | index($m.n)) != null);
+    and ($repo != "")
+    and (((($p | capture("^repos/(?<r>[^/]+/[^/]+)/pulls/(?<n>[0-9]+)/comments/[0-9]+/replies$")) // ($p | capture("^repos/(?<r>[^/]+/[^/]+)/issues/(?<n>[0-9]+)/comments$")) // null) as $m
+       | $m != null and $m.r == $repo and ($prs | index($m.n)) != null));
 # resolveReviewThread, on its own: a thread's id cannot be told from here, and resolving says nothing outward.
 def api_resolve_ok:
   (.args[1:]) as $a
