@@ -205,6 +205,75 @@ EOF
   [ "$(ALWAYS="$npm_always" verdict pre-tool [] Bash '{"command":"npm testing"}')" = "none none" ]
 }
 
+# One verdict with the push and reply facts: <grants json> <command> [current branch]
+pv() {
+  jq -n --argjson g "$1" --arg c "$2" --arg cur "${3:-cap/x-ab12}" '{event: "pre-tool", tool: "Bash", input: {command: $c}, sig: "s", cwd: "/w/wt",
+    roots: {worktree: "/w/wt", task_dir: "/h/tasks/x", scratch: "/tmp/scr", permits: "/h/permits", user_home: "/u/me", db: "/u/me/db"},
+    branch: "cap/x-ab12", current_branch: $cur, grants: $g, always: [], pre: null,
+    branch_prefix: "cap/", base_branch: "develop", repo: "acme/proj", prs: ["42"]}' | jq -r -f "$REPO_ROOT/lib/permit.jq" | jq -r '"\(.verdict) \(.rule)"'
+}
+
+@test "grants: push-branch covers each branch the task pushes, never a shared one, its base or another task's; comment-pr covers replies on its own PRs" {
+  P='["push-branch"]'
+  for c in "git push origin cap/x-ab12" "git push -u origin cap/x-ab12-part2" "git push origin HEAD:refs/heads/cap/x-ab12/stack" "git push origin fix/login-copy" \
+           "git push origin HEAD:fix-the-header" "git push origin a:b c:d" "GIT_SSH_COMMAND='ssh -i k' git push origin cap/x-ab12"; do
+    [ "$(pv "$P" "$c")" = "allow grant:push-branch" ] || { echo "not allowed: $c"; false; }
+  done
+  [ "$(pv "$P" "git push" "fix/login-copy")" = "allow grant:push-branch" ]
+  for c in "git push origin main" "git push origin HEAD:master" "git push origin develop" "git push origin release/1.2" "git push origin staging" \
+           "git push origin cap/other-cd34" "git push origin +fix/x" "git push origin :fix/x" "git push --force origin fix/x" "git push origin 'refs/heads/*'" \
+           "git push origin fix/x main" "NODE_OPTIONS=--require=./x.js git push origin cap/x-ab12" "git push --delete origin fix/x"; do
+    [ "$(pv "$P" "$c")" = "card commander:outward" ] || { echo "not a card: $c -> $(pv "$P" "$c")"; false; }
+  done
+  [ "$(pv "$P" "git push" "main")" = "card commander:outward" ]
+  [ "$(pv '[]' "git push origin cap/x-ab12")" = "card commander:outward" ]
+  C='["comment-pr"]'
+  for c in "gh api repos/acme/proj/pulls/42/comments/987/replies -f body='Fixed in the next commit'" \
+           "gh api -X POST repos/Acme/Proj/pulls/42/comments/987/replies -f body=ok" "gh api repos/acme/proj/issues/42/comments -f body=thanks" \
+           "gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: \"PRRT_kw1\"}) { thread { isResolved } } }'"; do
+    [ "$(pv "$C" "$c")" = "allow grant:comment-pr" ] || { echo "not allowed: $c -> $(pv "$C" "$c")"; false; }
+  done
+  for c in "gh api repos/acme/proj/pulls/43/comments/987/replies -f body=x" "gh api repos/other/proj/pulls/42/comments/987/replies -f body=x" \
+           "gh api -X PATCH repos/acme/proj/pulls/42 -f body=x" "gh api -X DELETE repos/acme/proj/pulls/42/comments/987" \
+           "gh api repos/acme/proj/pulls/42/comments/987/replies -f body=x -f commit_id=abc" "gh api repos/acme/proj/pulls/42/merge -X PUT" \
+           "gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: \"x\"}) { clientMutationId } }'" \
+           "gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: \"a\"}) { thread { id } } mergePullRequest(input: {pullRequestId: \"x\"}) { clientMutationId } }'"; do
+    [ "$(pv "$C" "$c")" = "card commander:outward" ] || { echo "not a card: $c -> $(pv "$C" "$c")"; false; }
+  done
+  [ "$(pv '["push-branch"]' "gh api repos/acme/proj/pulls/42/comments/987/replies -f body=x")" = "card commander:outward" ]
+}
+
+@test "grants: a ship task gets push-branch, open-pr and comment-pr by default; --grant names its own; a scout gets none; the hook finds its PRs" {
+  export CHARTROOM_DEFAULT_GRANTS="push-branch open-pr comment-pr"
+  task_with_worktree --backend command --command "$STUB {id}"
+  [ "$(cr permit grants "$id")" = "comment-pr, open-pr, push-branch" ]
+  grep -q 'push the task branch to its remote' "$CHARTROOM_HOME/tasks/$id/brief.md"
+  b="$(new_task --backend command --command "$STUB {id}" --grant prod-read)"; [ "$(cr permit grants "$b")" = "prod-read" ]
+  b="$(new_task --backend command --command "$STUB {id}" --grant none)"; [ "$(cr permit grants "$b")" = "(none)" ]
+  b="$(new_task --backend command --command "$STUB {id}" --kind scout)"; [ "$(cr permit grants "$b")" = "(none)" ]
+  CHARTROOM_DEFAULT_GRANTS=bogus run cr new --project "$PROJECT" --title t; [ "$status" -ne 0 ]
+  # the hook: the task's own PR, named in its events, and its repo
+  git -C "$PROJECT" remote add origin git@github.com:Acme/Proj.git 2>/dev/null || git -C "$PROJECT" remote set-url origin git@github.com:Acme/Proj.git
+  cr event "$id" progress "opened https://github.com/Acme/Proj/pull/42" >/dev/null
+  out="$(hook pre-tool Bash "$(bash_in "gh api repos/acme/proj/pulls/42/comments/9/replies -f body=done")")"; [ "$(decision <<<"$out")" = allow ]
+  out="$(hook pre-tool Bash "$(bash_in "gh api repos/acme/proj/pulls/41/comments/9/replies -f body=done")")"; [ "$(decision <<<"$out")" = ask ]
+  out="$(hook pre-tool Bash "$(bash_in "git push origin HEAD:fix/another-branch")")"; [ "$(decision <<<"$out")" = allow ]
+  out="$(hook pre-tool Bash "$(bash_in "git push origin HEAD:main")")"; [ "$(decision <<<"$out")" = ask ]
+}
+
+@test "watch: an awaiting-input line right after a card was answered wakes no one; later, or with none answered, it does" {
+  task_with_worktree --backend command --command "$STUB {id}"
+  mkdir -p "$CHARTROOM_HOME/permits/$id"; printf '{"answer":"once","by":"commander"}\n' >"$CHARTROOM_HOME/permits/$id/p-11112222.answer.json"
+  cr watch --once --timeout 1 >/dev/null 2>&1 || true
+  printf '%s agent: awaiting-input prompt\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$CHARTROOM_HOME/tasks/$id/events.log"
+  run cr watch --once --timeout 3; echo "$output"
+  [[ "$output" != *"awaiting-input"* ]]
+  touch -t 202601010000 "$CHARTROOM_HOME/permits/$id/p-11112222.answer.json"
+  printf '%s agent: awaiting-input prompt again\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$CHARTROOM_HOME/tasks/$id/events.log"
+  run cr watch --once --timeout 3; echo "$output"
+  [[ "$output" == *"awaiting-input prompt again"* ]]
+}
+
 @test "permission: a prompt inside the worktree is allowed by policy and recorded" {
   task_with_worktree --backend command --command "$STUB {id}"
   out="$(hook permission Edit "$(jq -cn --arg f "$WT/README" '{file_path: $f, old_string: "hi", new_string: "ho"}')")"

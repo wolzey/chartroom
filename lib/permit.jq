@@ -256,18 +256,57 @@ def no_repo_flag: .args | any(test("^(-R|--repo)(=|$)")) | not;
 # gh pr <verb> [<the task's branch>] without -R: no target means the current branch's PR.
 def gh_target_ok($b; $cur): (.args[2:] | positionals | first // "") as $t | no_repo_flag and $b != "" and (($t == "" and $cur == $b) or $t == $b);
 
-def push_ok($b; $cur):
-  .g.sargs as $a
+# A branch the task may push with push-branch: its own, one stacked on it (<branch>-2, <branch>/part), or
+# any other it made, but never a shared one (main, master, develop, staging, production, trunk, release*,
+# gh-pages), the task's base, or one named for another task (chartroom's prefix, not this task's own).
+def branch_ok($R):
+  ($R.branch // "") as $b | ($R.branch_prefix // "") as $p
+  | ltrimstr("refs/heads/") as $d
+  | $b != "" and ($d | test("^[A-Za-z0-9._/-]+$")) and ($d | contains("..") | not) and ($d | startswith("/") | not) and ($d | endswith(".lock") | not)
+    and ($d == $b or ($d | startswith($b + "-")) or ($d | startswith($b + "/"))
+         or (($d | test("^(main|master|develop|development|dev|staging|stage|production|prod|trunk|gh-pages|release)$|^(release|hotfix)[/-]") | not)
+             and ($d != ($R.base_branch // "")) and ($p == "" or ($d | startswith($p) | not))));
+def push_ok($R):
+  .g.sargs as $a | ($R.current_branch // "") as $cur
   | [$a[] | select(startswith("-"))] as $flags | [$a[] | select(startswith("-") | not)] as $pos
-  | $b != "" and ((.seg.args[0] // "") == "push") # nothing before the subcommand: no -C, -c, --git-dir
+  | ((.seg.args[0] // "") == "push") # nothing before the subcommand: no -C, -c, --git-dir
     and ($flags | all(test("^(-u|--set-upstream|-q|--quiet|-v|--verbose|--porcelain|-n|--dry-run|--no-verify|--progress)$")))
-    and (($pos | length) <= 2) and (($pos[0] // "origin") | test("^[A-Za-z0-9._-]+$"))
-    and (if ($pos | length) < 2 then $cur == $b
-         else ($pos[1] | IN($b, "HEAD:" + $b, $b + ":" + $b, "HEAD:refs/heads/" + $b, "refs/heads/" + $b, $b + ":refs/heads/" + $b)) end);
+    and (($pos[0] // "origin") | test("^[A-Za-z0-9._-]+$"))
+    and (if ($pos | length) < 2 then ($cur != "" and ($cur | branch_ok($R)))
+         # each refspec: [<src>:]<dst>, never a force (+), a delete (:dst) or a pattern
+         else ($pos[1:] | all(. as $r | ($r | test("^[+:]|\\*") | not)
+                 and ((if ($r | contains(":")) then ($r | split(":") | .[1]) elif $r == "HEAD" then $cur else $r end) | . != "" and branch_ok($R)))) end);
+
+def positionals_api: reduce .[] as $w ({out: [], skip: false};
+  if .skip then .skip = false
+  elif ($w | test("^(-X|--method|-f|-F|--field|--raw-field|--jq|-q|-H|--header|--input|-t|--template|--cache|-p|--preview|--hostname)$")) then .skip = true
+  elif ($w | startswith("-")) then .
+  else .out += [$w] end) | .out;
+# A reply on a review thread of one of the task's own pull requests, or a comment on its conversation: the
+# GitHub API, the task's repo, a PR its record names (events, report, links), POST, a body and nothing else.
+def api_reply_ok($R):
+  (.args[1:]) as $a
+  | ($a | [range(0; length) as $i | select($a[$i] | test("^(-X|--method)$")) | $a[$i + 1] // ""] + [$a[] | select(startswith("--method=") or test("^-X.")) | sub("^(--method=|-X)"; "")]) as $methods
+  | ($a | positionals_api) as $pos
+  | ($R.repo // "") as $repo | ($R.prs // []) as $prs
+  | ($methods | all(ascii_upcase == "POST")) and ($pos | length) == 1
+    and ($a | all(. == $pos[0] or test("^(-X|--method|POST|-f|-F|--field|--raw-field|--jq|-q|--silent)$") or test("^(--method=POST|-XPOST|--field=|--raw-field=|--jq=)") or test("^(body|in_reply_to)=") or test("^[.\\[]")))
+    and ($repo != "") and ($pos[0] | ltrimstr("/") | ascii_downcase) as $p
+    | ((($p | capture("^repos/(?<r>[^/]+/[^/]+)/pulls/(?<n>[0-9]+)/comments/[0-9]+/replies$")) // ($p | capture("^repos/(?<r>[^/]+/[^/]+)/issues/(?<n>[0-9]+)/comments$")) // null) as $m
+       | $m != null and $m.r == $repo and ($prs | index($m.n)) != null);
+# resolveReviewThread, on its own: a thread's id cannot be told from here, and resolving says nothing outward.
+def api_resolve_ok:
+  (.args[1:]) as $a
+  | ($a | positionals_api) == ["graphql"]
+    and ($a | all(. == "graphql" or test("^(-f|-F|--field|--raw-field|--jq|-q|--silent)$") or test("^[.\\[]") or test("^query=")))
+    and ([$a[] | select(startswith("query="))] | length == 1 and (.[0] | sub("^query="; "") | test("^\\s*mutation\\s*[A-Za-z_]*\\s*\\{\\s*resolveReviewThread\\s*\\(\\s*input\\s*:\\s*\\{\\s*threadId\\s*:\\s*\"?[A-Za-z0-9_=+/-]+\"?\\s*\\}\\s*\\)\\s*\\{[^{}]*(\\{[^{}]*\\}[^{}]*)*\\}\\s*\\}\\s*$")));
+# A command's environment prefix that changes nothing a grant cares about: the ssh command git uses.
+def env_ok: (.env // []) | all(test("^GIT_SSH_COMMAND="));
 
 def grant_for($R; $grants): # one outward match -> the grant that covers it, or null
   . as $m | $R.branch as $b | $R.current_branch as $cur | .seg as $s
-  | if $m.kind == "git-push" and ($grants | index("push-branch")) and ($m | push_ok($b; $cur)) then "push-branch"
+  | if ($s | env_ok | not) then null
+    elif $m.kind == "git-push" and ($grants | index("push-branch")) and ($m | push_ok($R)) then "push-branch"
     elif ($m.kind | IN("gh-pr-edit", "gh-pr-ready")) and ($grants | index("open-pr")) and ($s | gh_target_ok($b; $cur)) then "open-pr"
     elif $m.kind == "gh-pr-create" and ($grants | index("open-pr")) and ($s | no_repo_flag) and $b != ""
          and (($s.args | join(" ")) as $l | if ($l | test("(^|[[:space:]])(-H|--head)([[:space:]=]|$)")) then ($l | test("(^|[[:space:]])(-H|--head)[[:space:]=]+" + ($b | esc) + "([[:space:]]|$)")) else $cur == $b end)
@@ -276,6 +315,7 @@ def grant_for($R; $grants): # one outward match -> the grant that covers it, or 
          and ($s.args | any(test("^(--admin|--merge|-m|--rebase|-r|--delete-branch|-d|--body|-b|--body-file|-F|--subject|-t)(=|$)")) | not) and ($s | gh_target_ok($b; $cur))
       then "merge-auto"
     elif $m.kind == "gh-pr-comment" and ($grants | index("comment-pr")) and ($s | gh_target_ok($b; $cur)) then "comment-pr"
+    elif $m.kind == "gh api write" and ($grants | index("comment-pr")) and (($s | api_reply_ok($R)) or ($s | api_resolve_ok)) then "comment-pr"
     else null end;
 
 # ---------------------------------------------------------------- prod-read: calls that only read
@@ -447,7 +487,8 @@ def bash_local($R): bash_local($R; []);
 
 def decide:
   . as $q
-  | (.roots + {cwd: (.cwd // .roots.worktree), branch: (.branch // ""), current_branch: (.current_branch // "")}) as $R
+  | (.roots + {cwd: (.cwd // .roots.worktree), branch: (.branch // ""), current_branch: (.current_branch // ""),
+               branch_prefix: (.branch_prefix // ""), base_branch: (.base_branch // ""), repo: (.repo // ""), prs: (.prs // [])}) as $R
   | (.tool // "") as $tool | (.input // {}) as $in
   | ($q | tool_paths($R)) as $paths
   | (if $tool == "Bash" then ($in.command // "") else "" end) as $cmd

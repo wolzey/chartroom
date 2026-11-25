@@ -323,7 +323,7 @@ cmd_new() {
       --permission) permission="$2"; shift 2 ;;
       --model) model="$2"; shift 2 ;;
       --plan-gate) plan_gate=1; shift ;;
-      --grant) [[ "${2:-}" =~ ^($PERMIT_GRANTS)$ ]] || die "unknown grant '${2:-}' (names: ${PERMIT_GRANTS//|/, })"; grants+=("$2"); shift 2 ;;
+      --grant) [[ "${2:-}" =~ ^($PERMIT_GRANTS|none)$ ]] || die "unknown grant '${2:-}' (names: ${PERMIT_GRANTS//|/, }, or none)"; grants+=("$2"); shift 2 ;;
       --node) node="${2:-}"; [[ -n "$node" ]] || die "--node needs a device, or here (chartroom nodes lists them)"; shift 2 ;;
       --needs) needs="$(needs_norm "${2:-}")" || exit 1; shift 2 ;;
       *) die "new: unknown arg $1" ;;
@@ -365,6 +365,14 @@ cmd_new() {
      + (if $model != "" then {model:$model} else {} end)')"
   task_record_new "$id" "$doc"
   log_event "$id" note "created ($kind via ${backend:-auto})"
+  # a ship task's default grants (CHARTROOM_DEFAULT_GRANTS: names, or none), unless --grant says which
+  if [[ ${#grants[@]} -eq 0 && "$kind" == ship ]]; then
+    local g; for g in $(cfg DEFAULT_GRANTS '' 'push-branch open-pr comment-pr' | tr ',' ' '); do
+      [[ "$g" == none ]] && { grants=(); break; }
+      [[ "$g" =~ ^($PERMIT_GRANTS)$ ]] || die "CHARTROOM_DEFAULT_GRANTS: unknown grant '$g' (names: ${PERMIT_GRANTS//|/, }, or none)"; grants+=("$g")
+    done
+  fi
+  [[ " ${grants[*]-} " != *" none "* ]] || grants=()
   if [[ ${#grants[@]} -gt 0 ]]; then
     mkdir -p "$(permit_tdir "$id")"
     jq -cn --args '$ARGS.positional | unique' "${grants[@]}" >"$(permit_tdir "$id")/grants.json"
@@ -1485,7 +1493,9 @@ watch_scan_lines() { # <id> <from-offset> <to-offset>
             is_joined "$id" && listener_alive "$id" && continue
             reported_upto "$id" "$pos" || wake "$id" "$line (stopped its turn without reporting)" ;;
           # A permission card already woke the XO for the prompt it shows (lib/permit.sh).
-          *" agent: awaiting-input"*) permit_open "$id" || wake "$id" "$line" ;;
+          # So did one answered in the last CHARTROOM_PERMIT_QUIET_SECONDS (300): the prompt it shows is
+          # that card's, still on the screen as the answer arrives.
+          *" agent: awaiting-input"*) permit_open "$id" || permit_answered_within "$id" "$(cfg PERMIT_QUIET_SECONDS '' 300)" || wake "$id" "$line" ;;
         esac ;;
       permit) if [[ "$line" == *" permit: asks "* || "$line" == *" permit: refused: a worker tried "* ]]; then wake "$id" "$line"; fi ;;
     esac

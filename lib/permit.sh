@@ -102,10 +102,22 @@ permit_query() { # <id> <event> <payload>
   [[ -n "$tool" ]] || return 1
   meta_path "$id"; [[ -n "$META_PATH" ]] || return 1
   store_uid_of # STORE_DB: the database the home's records went into (the policy guards it)
-  { IFS= read -r wt; IFS= read -r branch; } < <(jq -r '(.worktree // ""), (.branch // "")' "$META_PATH") || return 1
-  # The worktree's branch, only when a grant could need it.
+  local base="" project="" bprefix="" repo="" prs=""
+  { IFS= read -r wt; IFS= read -r branch; IFS= read -r base; IFS= read -r project; } < <(jq -r '(.worktree // ""), (.branch // ""), (.base // ""), (.project // "")' "$META_PATH") || return 1
+  # The worktree's branch, only when a grant could need it; and what a push's grant measures against.
   if [[ "$tool" == Bash && -s "$pd/grants.json" && -n "$wt" && -d "$wt" && "$cmd" =~ (^|[^A-Za-z0-9_-])(git|gh)[[:space:]] ]]; then
     cur="$(git -C "$wt" branch --show-current 2>/dev/null || true)"
+    [[ -z "$branch" || "$branch" != *"$id" ]] || bprefix="${branch%"$id"}"
+    base="${base#origin/}"; base="${base#refs/heads/}"; [[ "$base" =~ ^[0-9a-f]{40}$ ]] && base=""
+  fi
+  # The task's repo and the pull requests its record names, only for a GitHub API write a grant could cover.
+  if [[ "$tool" == Bash && -s "$pd/grants.json" && "$cmd" =~ (^|[^A-Za-z0-9_-])gh[[:space:]]+api[[:space:]] ]]; then
+    repo="$(node_canon_remote "$(git -C "$project" config --get remote.origin.url 2>/dev/null || true)")"
+    if [[ "$repo" == github.com/*/* ]]; then
+      repo="${repo#github.com/}"
+      events_path "$id"
+      prs="$(cat "$EVENTS_PATH" "$(tdir "$id")/report.md" "$(tdir "$id")/links.ndjson" 2>/dev/null | grep -oiE "github\.com/$repo/pull/[0-9]+" | grep -oE '[0-9]+$' | sort -u | paste -sd, - || true)"
+    else repo=""; fi
   fi
   if [[ -d "$pd/pre" || -s "$pd/always.ndjson" ]]; then
     sig="$(permit_sig "$tool" "$(jq -c '.tool_input // {}' <<<"$payload")")"
@@ -114,10 +126,12 @@ permit_query() { # <id> <event> <payload>
   jq -c --arg ev "$ev" --arg sig "$sig" \
     --arg wt "$wt" --arg td "$(tdir "$id")" --arg permits "$(permit_root)" --arg uh "$HOME" --arg db "${STORE_DB:-$CR_DB}" \
     --arg branch "$branch" --arg cur "$cur" --argjson grants "$(permit_grants_json "$id")" \
+    --arg bprefix "$bprefix" --arg bbase "$base" --arg repo "${repo,,}" --arg prs "$prs" \
     --argjson always "$(permit_always_json "$id")" --arg pre "$pre" '
     {event: $ev, tool: .tool_name, input: (.tool_input // {}), sig: $sig, cwd: (.cwd // $wt),
      roots: {worktree: $wt, task_dir: $td, scratch: (.scratchpad_dir // ""), permits: $permits, user_home: $uh, db: $db},
-     branch: $branch, current_branch: $cur, grants: $grants, always: $always, pre: (if $pre == "" then null else $pre end)}' <<<"$payload"
+     branch: $branch, current_branch: $cur, grants: $grants, always: $always, pre: (if $pre == "" then null else $pre end),
+     branch_prefix: $bprefix, base_branch: $bbase, repo: $repo, prs: ($prs | split(",") | map(select(length > 0)))}' <<<"$payload"
 }
 
 permit_decide() { jq -c -f "$CR_ROOT/lib/permit.jq" <<<"$1"; } # <query json> -> verdict json
@@ -330,6 +344,16 @@ permit_rows() { # [<task id>] [--all] -> one JSON object per card
       | .state = (if .answer == null then (if $now < .expires_epoch then "open" else "lapsed" end)
                   elif .answer.answer == "expired" then "expired" elif .answer.answer == "lapsed" then "lapsed" else "answered" end)' "$f" 2>/dev/null
   done | if [[ "$all" == 1 ]]; then cat; else jq -c 'select(.state == "open")'; fi
+}
+# A card of the task answered in the last <seconds> (by anyone: the commander, the app, chartroom's expiry).
+permit_answered_within() { # <task id> <seconds>
+  local f now t; [[ "$2" =~ ^[0-9]+$ ]] && (( $2 > 0 )) || return 1
+  now="$(date +%s)"; shopt -s nullglob
+  for f in "$(permit_tdir "$1")"/p-*.answer.json; do
+    t="$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)"
+    (( now - t <= $2 )) && { shopt -u nullglob; return 0; }
+  done
+  shopt -u nullglob; return 1
 }
 # A card the worker's call is waiting on (not a retry card, which holds nothing).
 permit_open() { [[ -n "$(permit_rows "$1" 0 | jq -c 'select(.blocking)' | head -n 1)" ]]; } # <task id>

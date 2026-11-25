@@ -23,6 +23,8 @@ common_setup() {
   # Never the real login shell and its rc files (lib/core.sh login_path, lib/nodeprobe.sh): a test
   # that wants one names a fake.
   export CHARTROOM_LOGIN_SHELL=none
+  # (a ship task's default grants: none in the tests, which grant what they test; test/permit.bats sets them)
+  export CHARTROOM_DEFAULT_GRANTS=none
   # Never the real keychain, launchd or hardware id (lib/device.sh): a device's token goes to a
   # 0600 file and its agent is run by the test itself.
   export CHARTROOM_KEYCHAIN=none CHARTROOM_LAUNCHCTL=none CHARTROOM_HW_UUID=test-hw-0001

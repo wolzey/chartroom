@@ -66,7 +66,8 @@ chartroom permit answer 71b6/p-1a2b once # the card of that task (its id or shor
 
 A brief's Authority is prose in a file the worker can edit, so the policy does not read it.
 Grants that the policy enforces are named. They are set at creation with `--grant`, or later
-with `permit grant`:
+with `permit grant`. A ship task starts with `push-branch`, `open-pr` and `comment-pr` (`CHARTROOM_DEFAULT_GRANTS`,
+or `new --grant none`):
 
 ```
 chartroom new --project ~/src/app --title "..." --grant push-branch --grant merge-auto

@@ -7,6 +7,12 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- A ship task gets `push-branch`, `open-pr` and `comment-pr` by default (`CHARTROOM_DEFAULT_GRANTS`; `new --grant none` for none).
+  `push-branch` covers every branch the task pushes, its own and others it made, but never main, master, develop, staging,
+  production, trunk, release*, its base, or a branch named for another task; never a force or a delete; `GIT_SSH_COMMAND` may
+  prefix it, nothing else. `comment-pr` covers replies on review threads of the task's own pull requests (those its record
+  names) and resolving a thread.
+- No `awaiting-input` wake for a task whose permission card was answered in the last 5 minutes (`CHARTROOM_PERMIT_QUIET_SECONDS`).
 - What a brief names of the home goes along by prefix, pattern or folder too, read-only, and is brought up to date on each steer,
   so such a task can run on any machine; only a worktree of this machine, or a file that cannot go, keeps it here.
 - `chartroom nodes --for <id>`: each machine and why it would take that task now, or not.
