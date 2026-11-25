@@ -408,7 +408,7 @@ probe_is() { sed -i.bak -e "$1" "$BATS_TEST_TMPDIR/m3.probe"; again; }
 @test "clone: a task that needs an env file stays off a node whose clone has none, and no node is sent one" {
   seed m3 $M3 5 10; cloner m3 $M3
   id="$(new_task --backend command --needs env)"
-  dry "$id"; [[ "$output" == "$id would run here"*"m3: "*"(it has no env file of github.com/acme/proj (chartroom copies no secret))"* ]]
+  dry "$id"; [[ "$output" == "$id would run here"*"m3: "*"(it has no env file of github.com/acme/proj, and the fleet store has none (chartroom env))"* ]]
   # chartroom's own clone, without one and with one; a person's checkout is as it always was
   probe_is $'s/^checkouts.*/checkouts\t1\\\ncheckout\tgithub.com\\/acme\\/proj\t\\/there\\/proj\t-\tcloned/'
   dry "$id"; [[ "$output" == "$id would run here"*"it has no env file of"* ]]

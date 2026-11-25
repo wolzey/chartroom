@@ -850,6 +850,7 @@ env_setup() {
   printf '.env\n.env.*\n!.env.example\n' >"$PROJECT/.gitignore"; git -C "$PROJECT" add .gitignore; git -C "$PROJECT" commit -qm ignore
   git -C "$PROJECT" push -q https://github.com/acme/proj.git HEAD:main
   printf 'API_KEY=dev-secret-123\nDATABASE_URL=postgres://localhost/app\nLIVE_KEY=live-secret-456\n' >"$PROJECT/.env"
+  chmod 644 "$PROJECT/.env" # (as a Mac's umask leaves it; the log says the mode it had)
   echo 'API_KEY=' >"$PROJECT/.env.example"; git -C "$PROJECT" add -f .env.example; git -C "$PROJECT" commit -qm ex
   printf 'X=1\n' >"$PROJECT/.env.production"
 }
@@ -879,7 +880,7 @@ values_nowhere() { ! grep -rqE 'dev-secret-123|live-secret-456' "$1"; }
   run cmdr env owner acme/proj here; echo "$output"; [ "$status" -eq 0 ]
   run cmdr env collect acme/proj; echo "$output"; [ "$status" -eq 0 ]; [[ "$output" == "github.com/acme/proj: .env from studio" ]]
   values_nowhere "$FLEET"
-  [ -f "$FLEET/env/.metadata_never_index" ]; [ "$(stat -f %Lp "$FLEET/env" 2>/dev/null || stat -c %a "$FLEET/env")" = 700 ]
+  [ -f "$FLEET/env/.metadata_never_index" ]; [ "$(stat -c %a "$FLEET/env" 2>/dev/null || stat -f %Lp "$FLEET/env")" = 700 ]
   jq -e '.act == "collect" and .files == [{"rel": ".env", "mode": "644"}] and .from == "studio"' "$FLEET/env/log.ndjson"
   run cmdr env ls; echo "$output"; [[ "$output" == "github.com/acme/proj: owner studio, taken "*": .env" ]]
   # a device that does not share is not a source
@@ -894,7 +895,7 @@ values_nowhere() { ! grep -rqE 'dev-secret-123|live-secret-456' "$1"; }
   run cr dispatch "$ID" --dry-run; echo "$output"; [[ "$output" == "$ID would run on m3."* ]]
   run cr dispatch "$ID"; echo "$output"; [ "$status" -eq 0 ]
   until_true 'ev_has " done: stub finished"'
-  [ "$(stat -f %Lp "$CLONE/.env" 2>/dev/null || stat -c %a "$CLONE/.env")" = 600 ]
+  [ "$(stat -c %a "$CLONE/.env" 2>/dev/null || stat -f %Lp "$CLONE/.env")" = 600 ]
   grep -qx 'API_KEY=dev-secret-123' "$CLONE/.env"; grep -qx '# LIVE_KEY is left out by chartroom (production)' "$CLONE/.env"; ! grep -q live-secret "$CLONE/.env"
   [ ! -e "$CLONE/.env.production" ]
   grep -q 'Its development env files are in that clone (.env)' "$G/tasks/$ID/brief.md"
