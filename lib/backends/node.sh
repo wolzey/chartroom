@@ -81,7 +81,32 @@ node_project_on() { # <device id> <brain project path>
   printf '%s' "${got:-$top}${pre:+/$pre}"
 }
 
-node_payload() { # <id> <attempt> <over 0|1>
+# The repos a task needs on its device, its project first, as JSON: [{remote, path (here), tilde, there (that
+# device's checkout, when its last heartbeat has one)}], and the project's subdirectory. Empty when the
+# project has no remote: the path alone then says which it is.
+node_repos_json() { # <id> -> {repos, prefix}
+  local id="$1" project own top pre scan probe
+  project="$(meta "$id" project)"; own="$(place_remote "$project")"
+  [[ "$own" =~ $CR_NODE_REMOTE_RE ]] || { echo '{"repos":[],"prefix":""}'; return; }
+  pre="$(git -C "$project" rev-parse --show-prefix 2>/dev/null || true)"; pre="${pre%/}"
+  top="$project"; [[ -z "$pre" ]] || top="${project%/"$pre"}"
+  scan="$(place_scan "$id")"; probe="$(fleet_device_json "$(meta "$id" node)" | jq -r '.probe // ""')"
+  jq -cn --arg own "$own" --arg top "$top" --arg phys "$(phys_dir "$top")" --arg pre "$pre" --arg probe "$probe" --arg home "$HOME" --argjson scan "$scan" '
+    ([$probe | split("\n")[] | split("\t") | select(.[0] == "checkout") | {remote: .[1], path: .[2]}]) as $there
+    | ([{remote: $own, path: $top}] + (if $phys != $top then [{remote: $own, path: $phys}] else [] end) + ($scan.at // []))
+    | unique_by([.remote, .path]) | sort_by(if .remote == $own then (if .path == $top then 0 else 1 end) else 2 end)
+    | {prefix: $pre, repos: map(. as $r | . + {tilde: (if ($r.path | startswith($home + "/")) then "~" + ($r.path[($home | length):]) else "" end),
+        there: ((([$there[] | select(.remote == $r.remote and .path == $r.path)] + [$there[] | select(.remote == $r.remote)]) | .[0].path) // "")})}'
+}
+# The repos among them that this device must clone first (it has no checkout, and it may), one per line.
+node_to_clone() { # <id> <repos json>
+  local row; row="$(fleet_device_json "$(meta "$1" node)")"
+  jq -e '(.caps // []) | index("clone")' >/dev/null <<<"$row" || return 0
+  grep -q $'^budget\tclone\ton$' <<<"$(jq -r '.probe // ""' <<<"$row")" || return 0
+  jq -r '[.repos[] | select(.there == "") | .remote] | unique | .[]' <<<"$2"
+}
+
+node_payload() { # <id> <attempt> <over 0|1> <repos json>
   local id="$1" carry f
   f="$(mktemp)"; place_carry_json "$id" >"$f"
   carry="$(jq -r '.missing // empty' "$f")"
@@ -91,60 +116,89 @@ node_payload() { # <id> <attempt> <over 0|1>
     --arg backend "$(meta "$id" node_backend)" --arg plan_gate "$(meta "$id" plan_gate)" --arg permission "$(meta "$id" permission)" \
     --arg model "$(meta "$id" model)" --rawfile brief "$(tdir "$id")/brief.md" --arg brain_home "$CR_HOME" --arg tilde "${CR_HOME/#"$HOME"/\~}" \
     --argjson grants "$(permit_grants_json "$id")" --argjson attempt "$2" --arg ws "$CR_WORKSPACE" --arg over "${3:-0}" \
-    --arg tools "$(place_tools "$id")" --slurpfile c "$f" \
+    --arg tools "$(place_tools "$id")" --slurpfile c "$f" --argjson r "$4" --arg setup "$(place_setup "$id")" --arg pins "$(place_pins "$id")" --arg bin "$CR_BIN" \
     '{home: $home, id: $id, title: $title, kind: $kind, project: $project, base: $base, branch: $branch, backend: $backend,
       plan_gate: ($plan_gate == "1"), permission: $permission, model: $model, brief: $brief, brain_home: $brain_home,
       brain_home_tilde: (if $tilde == $brain_home then "" else $tilde end),
       grants: $grants, attempt: $attempt, workspace: $ws, over: ($over == "1"),
-      needs: {agent: ($backend | split(":") | .[1] // ""), tools: ($tools | split("\n") | map(select(length > 0))), repos: []},
+      needs: {agent: ($backend | split(":") | .[1] // ""), tools: ($tools | split("\n") | map(select(length > 0))), repos: [], pins: ($pins | split("\n") | map(select(length > 0)))},
+      repos: $r.repos, prefix: $r.prefix, setup: $setup, brain_bin: $bin,
       carry: $c[0].carry, files: $c[0].files}'
   rm -f "$f"
 }
 
 # Sets NODE_REFUSED (the device's reason) when the device would not take it and made nothing of it
-# (exit 5: its limits or what it lacks; 6: no checkout, or no such base): the caller places it again.
+# (exit 5: its limits or what it lacks; 6: no checkout, or no such base; 7: it could not clone or set up the
+# project): the caller places it again.
 node_launch() { # <id> <wt (none here)> <agent> [over 0|1]
-  local id="$1" did home attempt cid res name st rc
+  local id="$1" did home attempt cid res name st rc repos clone wait=150
   NODE_REFUSED=""
   did="$(meta "$id" node)"; home="$(node_home)"; name="$(node_name_of "$id")"
   attempt="$(meta "$id" node_attempt)"; attempt=$(( ${attempt:-0} + 1 ))
   fleet_write "$(node_map "$home" "$id")" "$(jq -cn --arg d "$did" --argjson a "$attempt" --arg h "$CR_HOME" --arg b "$(meta "$id" branch)" \
     --arg p "$(meta "$id" project)" '{device: $d, attempt: $a, home_path: $h, branch: $b, project: $p}')"
   meta_set "$id" node_attempt "$attempt"; meta_set "$id" node_off 0; meta_set "$id" node_name "$name"
-  cid="$(fleet_enqueue "$did" dispatch "$(node_payload "$id" "$attempt" "${4:-0}")")"
+  repos="$(node_repos_json "$id")"; clone="$(node_to_clone "$id" "$repos" | paste -sd' ' -)"
+  if [[ -n "$clone" ]]; then
+    log_event "$id" note "$name clones ${clone// / and } and sets it up first; the worker starts after that, or it goes to the next machine"
+    place_hold "$id" "$did" 2700; wait="$(cfg NODE_PREP_WAIT '' 20)"; [[ "$wait" =~ ^[0-9]+$ ]] || wait=20
+  fi
+  cid="$(fleet_enqueue "$did" dispatch "$(node_payload "$id" "$attempt" "${4:-0}" "$repos")")"
   meta_set "$id" node_cmd "$cid"
   st="$(fleet_device_json "$did" | jq -r '.status // "unknown"')"
   if [[ "$st" != online ]]; then
     log_event "$id" note "queued for $name: it is $st; the dispatch waits for it"
     echo "queued for $name ($st): it takes the dispatch when it is back"; return 0
   fi
-  if res="$(fleet_wait "$cid" 150)"; then
+  if res="$(fleet_wait "$cid" "$wait")"; then
     meta_set "$id" node_cmd ""
     rc="$(jq -r '.rc // 1' <<<"$res")"
-    if [[ "$rc" == 5 || ( "$rc" == 6 && -n "$(meta "$id" node_placed)" ) ]]; then
-      NODE_REFUSED="$(jq -r '.err // .out // "no reason given"' <<<"$res" | grep -v '^[[:space:]]*$' | tail -1)"; return 0
+    if node_refusal "$id" "$rc"; then
+      NODE_REFUSED="$(jq -r '.err // .out // "no reason given"' <<<"$res" | grep -v '^[[:space:]]*$' | tail -1)"
+      [[ "$rc" != 7 ]] || place_prep_failed "$did" "$(place_remote "$(meta "$id" project)")" "$NODE_REFUSED"
+      return 0
     fi
+    [[ -z "$clone" ]] || place_hold "$id" "$did"
     node_dispatch_outcome "$id" "$res" || die "the dispatch on $name failed: $(jq -r '.err // .out' <<<"$res" | tail -3)"
     jq -r '.out' <<<"$res" | tail -3
     echo "the worker runs on $name (attempt $attempt): steer, peek and close it from here"
+  elif [[ -n "$clone" ]]; then
+    echo "$name clones ${clone// / and } and sets it up first; the worker starts after that (its answer comes as an event)"
   else
     echo "$name took the dispatch but has not answered within 150s; its answer comes as an event"
   fi
 }
+# Is that answer a refusal, with nothing made there? (a pin to a machine without the checkout is a failure: 6)
+node_refusal() { [[ "$2" == 5 || "$2" == 7 || ( "$2" == 6 && -n "$(meta "$1" node_placed)" ) ]]; } # <id> <rc>
 
 # A dispatch's answer, once it comes: a note when it took, a failed when it did not.
 node_dispatch_outcome() { # <id> <result json>
   local id="$1" rc; rc="$(jq -r '.rc // 1' <<<"$2")"
   if [[ "$rc" == 0 ]]; then return 0; fi
-  # (refused before anything was made there, in an answer that came late: it can be dispatched again)
-  if [[ "$rc" == 5 || ( "$rc" == 6 && -n "$(meta "$id" node_placed)" ) ]]; then
+  # (refused before anything was made there, in an answer that came late, say after a clone: the next machine)
+  if node_refusal "$id" "$rc"; then
     local why name; why="$(jq -r '.err // .out // ""' <<<"$2" | tr '\n' ' ' | cut -c1-300)"; name="$(node_name_of "$id")"
-    if [[ -n "$(meta "$id" node_placed)" ]]; then place_undo "$id"; else meta_set "$id" dispatched ""; fi
-    log_event "$id" failed "$name did not take it: $why (dispatch it again)"
+    [[ "$rc" != 7 ]] || place_prep_failed "$(meta "$id" node)" "$(place_remote "$(meta "$id" project)")" "$why"
+    if [[ -n "$(meta "$id" node_placed)" ]]; then
+      place_undo "$id"; log_event "$id" note "$name did not take it: $why; it is placed again"; node_again "$id"
+    else
+      meta_set "$id" dispatched ""; place_unhold "$id"
+      log_event "$id" failed "$name did not take it: $why (dispatch it again)"
+    fi
     return 1
   fi
+  [[ "$rc" != 8 ]] || return 1 # (closed here while the device prepared it: nothing was started)
   log_event "$1" failed "the dispatch on $(node_name_of "$id") did not start a worker: $(jq -r '(.err // "") + " " + (.out // "")' <<<"$2" | tr '\n' ' ' | cut -c1-300)"
   return 1
+}
+
+# Dispatches a task again by itself, beside the watch that calls it; a dispatch no machine takes is a failed event.
+node_again() { # <id>
+  (
+    local out
+    out="$(env -u CHARTROOM_TASK CHARTROOM_HOME="$CR_HOME" "$CR_BIN" dispatch "$1" 2>&1 </dev/null)" ||
+      log_event "$1" failed "not started: $(grep -v '^[[:space:]]*$' <<<"$out" | tail -1 | sed 's/^chartroom: //' | cut -c1-400) (dispatch it again)"
+  ) </dev/null >/dev/null 2>&1 3>&- &
 }
 
 declare -A NODE_LOOKED=()
@@ -169,8 +223,8 @@ node_watch() { # (each round of the brain's watch): a dispatch's answer that cam
   local cid f; cid="$(meta "$1" node_cmd)"; [[ -n "$cid" ]] || return 0
   f="$(fleet_dir)/results/$cid.json"; [[ -f "$f" ]] || return 0
   meta_set "$1" node_cmd ""
-  node_dispatch_outcome "$1" "$(cat "$f")" || true
-  rm -f "$f"
+  local res; res="$(cat "$f")"; rm -f "$f"
+  if node_dispatch_outcome "$1" "$res"; then place_hold "$1" "$(meta "$1" node)"; fi
 }
 
 # Its liveness, as the device said in its last heartbeat; unknown when the device is not heard.
@@ -216,6 +270,12 @@ node_attach() {
 }
 node_park() { return 1; }
 
+# Takes back a dispatch the device has not answered.
+node_withdraw() { # <id> <cmd id or "">
+  [[ -n "$2" ]] || return 0
+  fleet_withdraw "$(meta "$1" node)" "$2"; rm -f "$(fleet_dir)/results/$2.json"; meta_set "$1" node_cmd ""; place_unhold "$1"
+}
+
 # close, for a pinned task (cmd_close calls it first). Prints what happened; dies, deleting
 # nothing, at the first step that does not hold.
 node_close_task() { # <id> <discard 0|1>
@@ -228,11 +288,13 @@ node_close_task() { # <id> <discard 0|1>
     rm -f "$(node_map "$(node_home)" "$id")"; return 0
   fi
   node_need_online "$id" "close"
+  # (a dispatch it has not answered, say one that clones first, is taken back: that answer no longer counts)
+  local cid; cid="$(meta "$id" node_cmd)"
   sha=""
   if [[ "$kind" == ship && -n "$branch" ]]; then
     rc=0; out="$(node_cmd "$id" close "$(jq -cn --argjson d "$discard" '{phase: "bundle", discard: ($d == 1)}')" 300 2>&1)" || rc=$?
     # (3: the device never had it, say a dispatch it refused: nothing there to bring or close)
-    if (( rc == 3 )); then echo "$name has nothing of $id"; rm -f "$(node_map "$(node_home)" "$id")"; return 0; fi
+    if (( rc == 3 )); then echo "$name has nothing of $id"; rm -f "$(node_map "$(node_home)" "$id")"; node_withdraw "$id" "$cid"; return 0; fi
     (( rc == 0 )) || { printf 'chartroom: not closed: on %s: %s\n' "$name" "$out" >&2; exit 2; }
     sha="$(sed -n 's/^sha=\([0-9a-f]\{40\}\)$/\1/p' <<<"$out" | tail -1)"
     if [[ -n "$sha" ]]; then
@@ -244,7 +306,7 @@ node_close_task() { # <id> <discard 0|1>
     fi
   fi
   rc=0; out="$(node_cmd "$id" close "$(jq -cn --argjson d "$discard" --arg s "$sha" '{phase: "close", discard: ($d == 1), sha: $s}')" 120 2>&1)" || rc=$?
-  if (( rc == 3 )); then echo "$name has nothing of $id"; rm -f "$(node_map "$(node_home)" "$id")"; return 0; fi
+  if (( rc == 3 )); then echo "$name has nothing of $id"; rm -f "$(node_map "$(node_home)" "$id")"; node_withdraw "$id" "$cid"; return 0; fi
   (( rc == 0 )) || { printf 'chartroom: not closed: on %s: %s\n' "$name" "$out" >&2; exit 2; }
   printf '%s\n' "$out" | sed "s/^/$name: /"
   log_event "$id" note "closed on $name"

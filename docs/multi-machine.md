@@ -141,6 +141,8 @@ chartroom node limits mini 80/70      # set one's (also: here 80/70, --cpu 80, -
 chartroom node limits mini off        # it takes no new work at all (on: it does again)
 ```
 
+`chartroom node limits mini --clone on` lets a node clone a project it has no checkout of (§6).
+
 They are `CHARTROOM_NODE_CPU_BUDGET` and `CHARTROOM_NODE_MEM_BUDGET` in the node's own file; a device is
 sent them over the connection (the `limits` command) and changes those lines only. Fleet shows
 them beside the use.
@@ -171,6 +173,7 @@ U(n)  = max(u_cpu, u_mem)
 
 1. Leave out every node that lacks something (§6), is away, on battery with `pause` or not accepting,
    is at or over a limit, or would go over one (`U > 1`).
+   A node that must clone the project first counts `CHARTROOM_CLONE_COST` (0.1) fuller than it is.
 2. `spread` (the default): the lowest `U`. `pack`: the highest. `local`: no placement. Equal: this machine
    first, then the name. Each node is measured against its own limits, so the machines fill
    evenly, and a bigger one takes more.
@@ -186,7 +189,8 @@ home on the brain.
 
 **The device decides last.** It checks its own limits again when it takes the work (its use then, and the
 workers it was given in the last 180 s) before making anything of it. A refusal (exit 5; 6 when the
-checkout or the base is missing) undoes the placement and the task goes to the next node. Any other
+checkout or the base is missing; 7 when it could not clone or set up the project) undoes the placement and the task
+goes to the next node, also when the refusal comes minutes later. Any other
 failure, or no answer, leaves the task with that device: it is never started twice.
 
 **A pin** (`--node`, `set node=`) is kept, and is refused with the numbers when its node is at a limit.
@@ -215,12 +219,14 @@ are hard requirements; what keeps a task on this machine whatever the others off
 - **What a task needs:**
   - its agent, present **and logged in**;
   - `git`;
-  - a checkout of its project, matched by canonical remote: `host/owner/repo`, lowercased, scheme, user and `.git`
+  - a checkout of its project (or that the node may clone it, below), matched by canonical remote: `host/owner/repo`, lowercased, scheme, user and `.git`
     stripped, so `git@host:o/r.git` ≡ `https://host/o/r`;
   - its `base_sha` reachable from that remote. The origin checks with `git branch -r --contains`. A base that exists
     only locally keeps the task on the origin;
   - anything in `new --needs docker,ruby,go,node,gh` or `set <id> needs=...`, per project in `projects.md`
-    (`- app: ...; needs=docker`), and Docker when the brief's own words name it (`needs=none` overrides).
+    (`- app: ...; needs=docker`), and Docker when the brief's own words name it (`needs=none` overrides);
+  - `needs=env`, or a brief whose own words name an `.env` file (not an example): an env file in the project's
+    checkout. A checkout a person made is taken to have what it needs; a clone chartroom made has none until one is put there.
     This machine is held to it too.
 - **What stays on this machine:** a task pinned here; one whose worktree or branch is here already, or
   that was moved here; a base on no branch of origin; a project with no remote; a home that is not
@@ -242,8 +248,34 @@ are hard requirements; what keeps a task on this machine whatever the others off
     shell cannot see a Mac's keychain. A probe run locally outside ssh (`chartroom node probe` in a terminal of the
     login session) checks them directly.
 - **Checkouts** are git repos at most 3 levels under the node's `CHARTROOM_NODE_PROJECT_ROOTS`, with their canonical
-  remote, path and `FETCH_HEAD` age. A node never clones on its own (that would be a later, opt-in
-  `CHARTROOM_NODE_CLONE`).
+  remote, path and `FETCH_HEAD` age.
+
+**A project a node has no checkout of** (lib/guest.sh). Off at first. `CHARTROOM_NODE_CLONE=on` in the node's own file
+(`chartroom node limits <name> --clone on` sets it over the connection) lets it clone one:
+
+- **What.** `github.com/<owner>/<repo>` only, with the node's own gh login (that clone's git config names gh as its credential helper; no token is written),
+  to `<first project root>/<owner>/<repo>`. It is made under a temporary name and renamed, and marked
+  `chartroom.cloned`. Something else at that path is a refusal, and a failure leaves nothing. Other repos the brief points into
+  are cloned too, without a setup. A node whose agent is older, or not signed in to gh, is passed over as before.
+- **First-use setup.** Before the first worker of a project starts, its setup runs once in the clone. It is the command the
+  home's `projects.md` names (`- app: ...; setup=make ready`; a `;` ends it, so a longer one is a script), else the repo's own
+  `bin/setup` or `script/setup` (not a symlink to another program; `--skip-server` when it knows it), else its package manager's
+  locked install; with `mise install` first when the project pins tools and the node has mise. It runs
+  without chartroom's settings in its environment, for at most `CHARTROOM_NODE_PREP_SECONDS` (1800). The node records it (its
+  state directory, `node/setup/`, with a log only its user reads) and runs it again only when the command, its script or the pins change.
+- **Tools.** What `mise.toml` and `.tool-versions` pin comes with mise: in the setup, and on first use by its shims, which are put
+  on the worker's PATH. Such a node without mise is passed over for a project that pins tools. Docker, hc and sign-ins are
+  never provisioned: without them the node is passed over, with the reason.
+- **Slow, and beside.** A dispatch that may have to clone or set up runs outside the agent's command loop, one at a time for each
+  repo, so a steer or an answer for another task never waits for it. The brain waits `CHARTROOM_NODE_PREP_WAIT`
+  (20) seconds, then says the worker starts later; the placement counts on that node until it does. A close that comes meanwhile cancels it.
+- **A failure** (exit 7) refuses the task with the reason. The brain places it again by itself on the next machine, and does not
+  try that node for that repo for `CHARTROOM_PREP_RETRY_SECONDS` (1800), except for a task pinned to it.
+- **A checkout a person made** is used as it is: never pulled, set up or marked.
+- **No secret is copied.** The worker's brief says it runs in such a clone, without an `.env`.
+
+**Paths.** The brief's paths into the project, other repos and chartroom itself are moved to where the node has them.
+
 
 ## 7. Failure modes
 
@@ -271,7 +303,8 @@ are hard requirements; what keeps a task on this machine whatever the others off
 - **What a dispatcher can run on a node.** The protocol is a fixed set of verbs with validated arguments. The ssh key
   itself is as strong as a shell login unless the node pins it to `chartroom node gate` (section 3). Workers run as the
   node's user with the authority their brief grants, exactly as locally, so a worker on a laptop can read that laptop's
-  files. That is why being a node is **opt-in**: a machine without `node init` is never placed on, and
+  files. A node that may clone (opt-in again) also runs a project's setup command, which the brain can name
+  (`setup=`), as its user. That is why being a node is **opt-in**: a machine without `node init` is never placed on, and
   `CHARTROOM_NODE_ACCEPT=off` stops new work there at once.
 - **Data at rest.** Briefs and worktrees land on the node's disk, in the commander's own trust domain.
 - **Tailscale is assumed, not required.**

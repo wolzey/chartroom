@@ -7,6 +7,12 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- **A node can take work of a project it has no checkout of** (`chartroom node limits <name> --clone on`; off at first): it clones the
+  project from GitHub with its own gh login, runs the project's setup once (`setup=` in `projects.md`, else the repo's own, with
+  `mise install` for the tools it pins), and the worker starts there. A clone or setup that fails refuses the task with the reason, and
+  the task goes to the next machine. A missing checkout is then a small cost in placement, not a refusal. A brief's
+  paths are moved to where the node has the project. `needs=env` (or a brief that names an `.env`) keeps a task off a clone
+  without one: no secret is copied. See docs/multi-machine.md, section 6.
 - **Placement:** `chartroom dispatch` sends each hc task to the machine with the most room, the brain
   included, when a device is enrolled.
   - **Two limits per node,** the share of its CPU and of its memory in use above which it takes

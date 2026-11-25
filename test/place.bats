@@ -346,3 +346,79 @@ dry() { run cr dispatch "$1" --dry-run; echo "$output"; }
   printf 'checkout\tgit.example/acme/second\t/there/second\t-\n' >>"$BATS_TEST_TMPDIR/m3.probe"; beat m3 $M3
   dry "$id"; [[ "$output" == *"run on m3"* ]]
 }
+
+# a device that may clone (and has mise), without the project's checkout, which is on GitHub
+cloner() { # <name> <id>
+  git -C "$PROJECT" remote set-url origin git@github.com:Acme/Proj.git
+  tweak "$1" "$2" $'s/^checkouts.*/checkouts\t0/; /^checkout\t/d; s/^\\(budget\taccept\ton\\)/\\1\\\nbudget\tclone\ton\\\ntool\tmise\tok\t2026/'
+  beat "$1" "$2" '["commands","update","dispatch","limits","place","clone"]'
+}
+again() { beat m3 $M3 '["commands","update","dispatch","limits","place","clone"]'; }
+probe_is() { sed -i.bak -e "$1" "$BATS_TEST_TMPDIR/m3.probe"; again; }
+
+@test "clone: no checkout yet is a small cost on a node that may clone; what it cannot clone, or could not, is a reason" {
+  seed m3 $M3 5 10; cloner m3 $M3
+  id="$(new_task --backend command)"
+  dry "$id"; [[ "$output" == "$id would run on m3."*"m3: cpu 5% of 90%, memory 10% of 75% (it would clone github.com/acme/proj)"* ]]
+  # a small cost: against a node nearly as empty that has it, that one takes it; against a fuller one, not
+  seed m5 $M5 9 10; tweak m5 $M5 's#git.example/acme/proj#github.com/acme/proj#'; dry "$id"; [[ "$output" == "$id would run on m5."* ]]
+  seed m5 $M5 40 10; tweak m5 $M5 's#git.example/acme/proj#github.com/acme/proj#'; dry "$id"; [[ "$output" == "$id would run on m3."* ]]
+  CHARTROOM_CLONE_COST=0.9 dry "$id"; [[ "$output" == "$id would run here"* ]]
+  run env CHARTROOM_CLONE_COST=x "$CHARTROOM" dispatch "$id" --dry-run; [ "$status" -ne 0 ]; [[ "$output" == *"CHARTROOM_CLONE_COST is a number"* ]]
+  rm "$FLEET/devices/$M5".*
+  # an agent that cannot, or may not, as before
+  beat m3 $M3; dry "$id"; [[ "$output" == "$id would run here"*"(no checkout of github.com/acme/proj)"* ]]
+  probe_is $'s/^budget\tclone\ton/budget\tclone\toff/'; dry "$id"; [[ "$output" == "$id would run here"*"(no checkout of github.com/acme/proj)"* ]]
+  probe_is $'s/^budget\tclone\toff/budget\tclone\ton/'
+  probe_is $'s/^login\tgh\tok/login\tgh\tno/'; dry "$id"; [[ "$output" == "$id would run here"*"no checkout of github.com/acme/proj, and gh is not logged in to clone it"* ]]
+  probe_is $'s/^login\tgh\tno/login\tgh\tok/'
+  git -C "$PROJECT" remote set-url origin git@ssh.example.com:v3/acme/proj; dry "$id"; [[ "$output" == "$id would run here"*"no checkout of ssh.example.com/v3/acme/proj, and it clones from github.com only"* ]]
+  git -C "$PROJECT" remote set-url origin git@github.com:Acme/Proj.git
+  # another repo its brief points into is cloned too
+  git init -q "$BATS_TEST_TMPDIR/lib2"; echo x >"$BATS_TEST_TMPDIR/lib2/a.md"; git -C "$BATS_TEST_TMPDIR/lib2" add -A; git -C "$BATS_TEST_TMPDIR/lib2" -c user.name=t -c user.email=t@t commit -qm x
+  git -C "$BATS_TEST_TMPDIR/lib2" remote add origin https://github.com/acme/lib2
+  perl -0pi -e "s|Please do the thing\\.|See $BATS_TEST_TMPDIR/lib2/a.md.|" "$CHARTROOM_HOME/tasks/$id/brief.md"
+  dry "$id"; [[ "$output" == *"(it would clone github.com/acme/lib2 and github.com/acme/proj)"* || "$output" == *"(it would clone github.com/acme/proj and github.com/acme/lib2)"* ]]
+  # the dispatch says where each is here, and the device's own path when it has one
+  answering; cr dispatch "$id" >/dev/null
+  jq -e --arg p "$PROJECT" '.payload | .repos[0].remote == "github.com/acme/proj" and .repos[0].path == $p and .repos[0].there == ""
+    and ([.repos[].remote] | index("github.com/acme/lib2") != null) and .prefix == "" and (.brain_bin | endswith("/bin/chartroom"))' "$BATS_TEST_TMPDIR"/taken/$M3.*.json
+}
+
+@test "clone: the tools a project pins come with mise there; without it, or Docker, the node is passed over with the reason" {
+  printf 'ruby 4.0.6\nnodejs 24\n' >"$PROJECT/.tool-versions"; printf '[env]\nA = "1"\n[tools]\npnpm = "12"\n"go" = "1.26"\n[tasks.x]\nrun = "y"\n' >"$PROJECT/mise.toml"
+  git -C "$PROJECT" add -A; git -C "$PROJECT" commit -qm pins; git -C "$PROJECT" push -q https://git.example/acme/proj HEAD:main; git -C "$PROJECT" fetch -q origin
+  seed m3 $M3 5 10; cloner m3 $M3
+  id="$(new_task --backend command --needs ruby,go)"
+  # ruby is broken there and go is missing: both are pinned, so mise brings them
+  probe_is $'s/^tool\truby\tok\t3/tool\truby\terror\tdyld/'
+  dry "$id"; [[ "$output" == "$id would run on m3."* ]]
+  # no mise: said, with what is pinned
+  probe_is $'/^tool\tmise\t/d'
+  dry "$id"; [[ "$output" == *"m3: "*"(go is missing)"* && "$output" != *"would run on m3"* ]]
+  id="$(new_task --backend command)"; dry "$id"; [[ "$output" == "$id would run here"*"it has no mise for the tools github.com/acme/proj pins (go, node, pnpm, ruby)"* ]]
+  # a person's checkout there is theirs to keep ready: as before
+  probe_is $'s/^checkouts.*/checkouts\t1\\\ncheckout\tgithub.com\\/acme\\/proj\t\\/there\\/proj\t-\t-/'
+  dry "$id"; [[ "$output" == "$id would run on m3."* ]]
+  # what mise cannot bring is never guessed
+  probe_is $'/^checkout\t/d; s/^\\(budget\tclone\ton\\)/\\1\\\ntool\tmise\tok\t2026/'
+  id="$(new_task --backend command --needs docker)"; dry "$id"; [[ "$output" == *"m3: "*"(docker is down)"* && "$output" != *"would run on m3"* ]]
+}
+
+@test "clone: a task that needs an env file stays off a node whose clone has none, and no node is sent one" {
+  seed m3 $M3 5 10; cloner m3 $M3
+  id="$(new_task --backend command --needs env)"
+  dry "$id"; [[ "$output" == "$id would run here"*"m3: "*"(it has no env file of github.com/acme/proj (chartroom copies no secret))"* ]]
+  # chartroom's own clone, without one and with one; a person's checkout is as it always was
+  probe_is $'s/^checkouts.*/checkouts\t1\\\ncheckout\tgithub.com\\/acme\\/proj\t\\/there\\/proj\t-\tcloned/'
+  dry "$id"; [[ "$output" == "$id would run here"*"it has no env file of"* ]]
+  probe_is $'s/\tcloned$/\tcloned,env/'; dry "$id"; [[ "$output" == "$id would run on m3."* ]]
+  probe_is $'s/\tcloned,env$/\t-/'; dry "$id"; [[ "$output" == "$id would run on m3."* ]]
+  probe_is $'s/\t-$/\tcloned/'
+  # the brief's own words say so; a committed example, or needs=none, does not
+  says() { id="$(new_task --backend command)"; perl -0pi -e "s|Please do the thing\\.|$1|" "$CHARTROOM_HOME/tasks/$id/brief.md"; dry "$id"; }
+  says "It reads .env for the database."; [[ "$output" == "$id would run here"* ]]
+  says "apps/api/.env.local holds it."; [[ "$output" == "$id would run here"* ]]
+  says "Fill in .env.example and .env.test, and process.environment."; [[ "$output" == "$id would run on m3."* ]]
+  says "It reads .env for the database."; cr set "$id" needs=none >/dev/null; dry "$id"; [[ "$output" == "$id would run on m3."* ]]
+}

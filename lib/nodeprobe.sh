@@ -30,7 +30,7 @@
 #   mem_used_pct N        (what Activity Monitor calls Memory Used, over all memory: app memory, wired
 #                          and compressed; not the kernel's pressure level, which is mem_free_pct)
 #   power ac|battery|- | battery_pct N | hid_idle_s N
-#   initialised 0|1 | config PATH | budget KEY VALUE (cpu mem on_battery priority project_roots accept)
+#   initialised 0|1 | config PATH | budget KEY VALUE (cpu mem on_battery priority project_roots accept clone)
 #   runner hc up|down|none VERSION | context core|shell|ssh | agents_live N
 #   crew_live N | other_agents N   (hc terminals here that carry chartroom.task, and the other
 #                                   agents: an XO, a session chartroom did not start; "-" on an hc
@@ -42,8 +42,10 @@
 #   path_source login|inherited
 #   tool NAME ok|old|down|missing|error VERSION-OR-WHY  (error: the binary and its first line)
 #   login NAME ok|no|unknown|missing DETAIL
-#   checkouts N | checkout CANONICAL-REMOTE PATH FETCH-AGE-SECONDS  (the latter only for $CR_PROBE_PROJECT,
-#                          or every one, its age not read, with CR_PROBE_CHECKOUTS=1)
+#   checkouts N | checkout CANONICAL-REMOTE PATH FETCH-AGE-SECONDS FLAGS  (the latter only for
+#                          $CR_PROBE_PROJECT, or every one, its age not read, with CR_PROBE_CHECKOUTS=1;
+#                          FLAGS: "cloned" for one chartroom cloned here itself (lib/guest.sh), and
+#                          "cloned,env" for such a one that has an env file, else "-")
 # Settings it reads: CHARTROOM_NODE_CONFIG (default ${XDG_CONFIG_HOME:-~/.config}/chartroom/node),
 # CR_PROBE_PROJECT (a canonical remote, host/owner/repo, to look for among the checkouts),
 # CR_PROBE_CHECKOUTS=1 (list them all), CR_PROBE_SAMPLE (seconds its own CPU sample takes, 3), and
@@ -77,8 +79,9 @@ checks() {
     local s="$1"; shift
     if command -v perl >/dev/null 2>&1; then perl -e 'alarm shift; exec @ARGV or exit 127' "$s" "$@"; else "$@"; fi
   }
-  for t in git jq bash claude codex gh go docker ruby node herdr tmux chartroom; do
+  for t in git jq bash claude codex gh go docker ruby node herdr tmux chartroom mise; do
     b="$(command -v "$t" 2>/dev/null || true)"
+    if [[ -z "$b" && "$t" == mise ]]; then continue; fi # (optional: what installs the tools a project pins)
     if [[ -z "$b" ]]; then ck_kv tool "$t" missing -; continue; fi
     case "$t" in
       bash)
@@ -251,7 +254,7 @@ probe_main() {
   if [[ -f "$cfgf" ]]; then
     kv initialised 1
     kv config "$cfgf"
-    for k in CPU_BUDGET:cpu MEM_BUDGET:mem ON_BATTERY:on_battery PRIORITY:priority PROJECT_ROOTS:project_roots ACCEPT:accept; do
+    for k in CPU_BUDGET:cpu MEM_BUDGET:mem ON_BATTERY:on_battery PRIORITY:priority PROJECT_ROOTS:project_roots ACCEPT:accept CLONE:clone; do
       v="$(cfgv "CHARTROOM_NODE_${k%%:*}")"
       kv budget "${k#*:}" "${v:--}"
     done
@@ -366,9 +369,17 @@ probe_main() {
     kv checkouts "$n"
     # (every one, from its config files read in one go: too many to ask git of each, every 15 s)
     if (( ${#all[@]} > 0 )); then
-      awk 'FNR == 1 { o = 0; done = 0 } /^[[:space:]]*\[/ { o = ($0 ~ /^[[:space:]]*\[remote "origin"\]/) }
-        o && !done && $1 == "url" { p = FILENAME; sub(/\/\.git\/config$/, "", p); sub(/^[[:space:]]*url[[:space:]]*=[[:space:]]*/, ""); done = 1; print $0 "\t" p }' "${all[@]}" 2>/dev/null |
-        while IFS=$'\t' read -r url repo; do kv checkout "$(canon "$url")" "$repo" -; done
+      awk 'function out() { if (url != "") print url "\t" p "\t" (c ? "cloned" : "-") }
+        FNR == 1 { out(); o = 0; cr = 0; c = 0; url = ""; p = FILENAME; sub(/\/\.git\/config$/, "", p) }
+        /^[[:space:]]*\[/ { o = ($0 ~ /^[[:space:]]*\[remote "origin"\]/); cr = ($0 ~ /^[[:space:]]*\[chartroom\]/) }
+        o && url == "" && $1 == "url" { url = $0; sub(/^[[:space:]]*url[[:space:]]*=[[:space:]]*/, "", url) }
+        cr && /^[[:space:]]*cloned[[:space:]]*=[[:space:]]*true/ { c = 1 }
+        END { out() }' "${all[@]}" 2>/dev/null |
+        while IFS=$'\t' read -r url repo flags; do
+          # (only those chartroom cloned are looked into: the others are a person's, and many)
+          if [[ "$flags" == cloned && -n "$(find "$repo" -maxdepth 3 \( -name node_modules -o -name .git -o -name .worktrees \) -prune -o -type f \( -name .env -o -name .env.local -o -name '.env.*.local' \) -print 2>/dev/null | head -1)" ]]; then flags=cloned,env; fi
+          kv checkout "$(canon "$url")" "$repo" - "$flags"
+        done
     fi
   else
     kv checkouts -

@@ -157,7 +157,7 @@ device_do_join() {
 }
 
 # What this agent can be asked to do over the connection (the brain refuses a pin without it).
-CR_DEVICE_CAPS="commands update dispatch limits place"
+CR_DEVICE_CAPS="commands update dispatch limits place clone"
 device_rev() { git -C "$CR_ROOT" rev-parse HEAD 2>/dev/null || true; }
 
 device_heartbeat_body() { # <file> <started>
@@ -175,7 +175,9 @@ device_heartbeat_body() { # <file> <started>
 
 # The agent's second loop: it holds a long-poll open to the brain and runs each command it gets,
 # one at a time, in a subshell (a command that dies does not end the loop), and posts the answer.
-# A command it has already run (the answer lost on the way) gets the same answer again.
+# A command it has already run (the answer lost on the way) gets the same answer again. One thing runs
+# beside it: a dispatch that may have to clone or set up its project first (lib/guest.sh), for minutes,
+# so that a steer or an answer for another task never waits for it.
 device_poll_loop() {
   local body tok c; body="$(mktemp)"
   mkdir -p "$(device_state_dir)/cmds"
@@ -185,10 +187,29 @@ device_poll_loop() {
     jq -cn --arg id "$(device_cfg ID)" --argjson p "$CR_FLEET_PROTOCOL" '{id: $id, protocol: $p, wait: 25}' >"$body"
     DEV_MAXTIME=40 device_post /api/v1/device/commands "$body" "$tok"
     if [[ "$DEV_HTTP" != 200 ]]; then sleep 5; continue; fi
+    DEV_BESIDE=0
     while IFS= read -r c; do
-      [[ -n "$c" ]] && device_run_command "$c" "$tok"
+      [[ -n "$c" ]] && device_take_command "$c" "$tok"
     done < <(jq -c '.commands[]?' <<<"$DEV_BODY" 2>/dev/null || true)
+    (( DEV_BESIDE == 0 )) || sleep 2 # (the brain hands those out until they are answered)
   done
+}
+
+device_take_command() { # <command json> <token>
+  local cid run p; cid="$(jq -r '.id // ""' <<<"$1")"
+  [[ "$cid" =~ ^c-[0-9]{13}-[0-9a-f]{6}$ ]] || return 0
+  run="$(device_state_dir)/cmds/$cid.running"
+  if [[ -f "$run" ]]; then
+    p="$(cat "$run" 2>/dev/null || true)"
+    if [[ "$p" =~ ^[0-9]+$ ]] && pid_alive "$p" && [[ -n "$(find "$run" -mmin -180 2>/dev/null)" ]]; then DEV_BESIDE=1; return 0; fi
+    rm -f "$run"
+  fi
+  if [[ "$(jq -r '.type // ""' <<<"$1")" == dispatch && ! -f "$(device_state_dir)/cmds/$cid.json" ]] && guest_may_prep "$(jq -c '.payload // {}' <<<"$1")"; then
+    ( device_run_command "$1" "$2"; rm -f "$run" ) </dev/null >/dev/null 2>&1 &
+    echo "$!" >"$run"; DEV_BESIDE=1
+    return 0
+  fi
+  device_run_command "$1" "$2"
 }
 
 device_run_command() { # <command json> <token>
@@ -225,8 +246,9 @@ device_cmd_ping() { echo "pong from $(device_cfg NAME) at $(device_rev | cut -c1
 device_cmd_limits() { # <payload {cpu, mem}>
   local c m a; a="$(jq -r '.accept // ""' <<<"$1")"; [[ "$a" =~ ^(on|off)?$ ]] || { echo "limits: accept is on or off" >&2; return 2; }
   c="$(jq -r '.cpu // ""' <<<"$1")"; m="$(jq -r '.mem // ""' <<<"$1")"
-  node_limits_args ${c:+--cpu "$c"} ${m:+--mem "$m"} ${a:+"$a"}
-  node_limits_set "$NL_CPU" "$NL_MEM" "$NL_ACCEPT"
+  local k; k="$(jq -r '.clone // ""' <<<"$1")"; [[ "$k" =~ ^(on|off)?$ ]] || { echo "limits: clone is on or off" >&2; return 2; }
+  node_limits_args ${c:+--cpu "$c"} ${m:+--mem "$m"} ${k:+--clone "$k"} ${a:+"$a"}
+  node_limits_set "$NL_CPU" "$NL_MEM" "$NL_ACCEPT" "$NL_CLONE"
 }
 
 # Fast-forward this machine's chartroom to the brain's commit, which must be on this checkout's

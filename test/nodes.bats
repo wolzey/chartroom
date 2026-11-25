@@ -586,3 +586,20 @@ EOF
   [ "$status" -ne 0 ]
   [[ "$output" == *"usage: chartroom node probe"* ]]
 }
+
+@test "the probe marks a checkout chartroom cloned, and whether that one has an env file; a person's are not looked into" {
+  mkdir -p "$BATS_TEST_TMPDIR/roots"
+  for r in mine cloned ready; do git init -q "$BATS_TEST_TMPDIR/roots/$r"; git -C "$BATS_TEST_TMPDIR/roots/$r" remote add origin "git@github.com:Acme/$r.git"; done
+  for r in cloned ready; do git -C "$BATS_TEST_TMPDIR/roots/$r" config chartroom.cloned true; done
+  mkdir -p "$BATS_TEST_TMPDIR/roots/ready/apps/api" "$BATS_TEST_TMPDIR/roots/cloned/node_modules/x"
+  : >"$BATS_TEST_TMPDIR/roots/ready/apps/api/.env"; : >"$BATS_TEST_TMPDIR/roots/cloned/node_modules/x/.env"; : >"$BATS_TEST_TMPDIR/roots/cloned/.env.example"; : >"$BATS_TEST_TMPDIR/roots/mine/.env"
+  export CHARTROOM_NODE_CONFIG="$BATS_TEST_TMPDIR/nodecfg2"
+  cr node init --cpu 80 --project-roots "$BATS_TEST_TMPDIR/roots" >/dev/null
+  run env CR_PROBE_CHECKOUTS=1 CR_PROBE_SAMPLE=0 bash "$REPO_ROOT/lib/nodeprobe.sh"
+  [ "$(grep '^checkout' <<<"$output" | grep -v '^checkouts' | cut -f2,5 | sort)" = $'github.com/acme/cloned\tcloned\ngithub.com/acme/mine\t-\ngithub.com/acme/ready\tcloned,env' ]
+  [[ "$output" == *$'budget\tclone\t-'* ]]
+  run cr node limits here --clone on
+  [[ "$output" == *"; clones a project it has no checkout of" ]]
+  grep -qx CHARTROOM_NODE_CLONE=on "$CHARTROOM_NODE_CONFIG"
+  run cr node limits here --clone maybe; [ "$status" -ne 0 ]
+}

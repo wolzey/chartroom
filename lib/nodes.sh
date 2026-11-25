@@ -146,7 +146,7 @@ NODES_ROW_JQ='
        tools: ([$r[] | select(.[0] == "tool") | {key: .[1], value: {status: .[2], version: (.[3] | s)}}] | from_entries),
        logins: ([$r[] | select(.[0] == "login" and .[1] != "-") | {key: .[1], value: {status: .[2], detail: (.[3] | s)}}] | from_entries),
        checkouts: (one("checkouts")[1] | n), checkouts_scanned: (one("checkouts")[1] != "-"),
-       repos: [$r[] | select(.[0] == "checkout") | {remote: .[1], path: .[2], fetch_age_s: (.[3] | n)}]}
+       repos: [$r[] | select(.[0] == "checkout") | {remote: .[1], path: .[2], fetch_age_s: (.[3] | n)} + (if (.[4] // "-") == "-" then {} else {flags: (.[4] | split(","))} end)]}
       | .checkouts_listed = ((.checkouts // 0) == 0 or (.repos | length) > 0)
       | .project = (if $want == "" then null else ([.repos[] | select(.remote == $want)] | .[0]) end)
       | .skew_s = (if .clock then .clock - $now else null end)
@@ -335,16 +335,18 @@ cmd_node_init() {
   [[ "$priority" != background ]] || echo "  note: background priority (taskpolicy -b) keeps workers on the efficiency cores on Apple silicon"
 }
 
-# The two limits, as "80/70", or --cpu 80 and/or --mem 70. Sets NL_CPU and NL_MEM ("" = as it is), and NL_ACCEPT for on|off.
+# The two limits, as "80/70", or --cpu 80 and/or --mem 70. Sets NL_CPU and NL_MEM ("" = as it is), NL_ACCEPT
+# for on|off, and NL_CLONE for --clone on|off (may it clone a project it has no checkout of?).
 node_limits_args() { # <args...>
-  NL_CPU="" NL_MEM="" NL_ACCEPT=""
+  NL_CPU="" NL_MEM="" NL_ACCEPT="" NL_CLONE=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --cpu) NL_CPU="${2:-}"; [[ -n "$NL_CPU" ]] || die "node limits: --cpu needs a percent"; shift 2 ;;
       --mem) NL_MEM="${2:-}"; [[ -n "$NL_MEM" ]] || die "node limits: --mem needs a percent"; shift 2 ;;
       on|off) NL_ACCEPT="$1"; shift ;;
+      --clone) NL_CLONE="${2:-}"; [[ "$NL_CLONE" =~ ^(on|off)$ ]] || die "node limits: --clone is on or off"; shift 2 ;;
       */*) NL_CPU="${1%%/*}"; NL_MEM="${1#*/}"; shift ;;
-      *) die "node limits: '$1' is not CPU/MEMORY (usage: chartroom node limits [<name|here> 80/70 | <name|here> [--cpu 80] [--mem 70]])" ;;
+      *) die "node limits: '$1' is not CPU/MEMORY (usage: chartroom node limits [<name|here> 80/70 | <name|here> [--cpu 80] [--mem 70] [--clone on|off]])" ;;
     esac
   done
   local v
@@ -356,22 +358,25 @@ node_limits_args() { # <args...>
 
 # Sets this machine's own limits, or whether it takes new work at all: those lines of its node file,
 # and nothing else in it.
-node_limits_set() { # <cpu or ""> <mem or ""> [on|off or ""]
+node_limits_set() { # <cpu or ""> <mem or ""> [on|off or ""] [clone: on|off or ""]
   local f k v tmp; f="$(node_config_path)"
   [[ -f "$f" ]] || { echo "this machine is not a node yet (chartroom node init)" >&2; return 1; }
-  for k in CPU_BUDGET MEM_BUDGET ACCEPT; do
-    case "$k" in CPU_BUDGET) v="$1" ;; MEM_BUDGET) v="$2" ;; ACCEPT) v="${3:-}" ;; esac
+  for k in CPU_BUDGET MEM_BUDGET ACCEPT CLONE; do
+    case "$k" in CPU_BUDGET) v="$1" ;; MEM_BUDGET) v="$2" ;; ACCEPT) v="${3:-}" ;; CLONE) v="${4:-}" ;; esac
     [[ -n "$v" ]] || continue
     tmp="$f.tmp.$$"
     awk -v k="CHARTROOM_NODE_$k" -v v="$v" '$0 ~ "^[[:space:]]*" k "[[:space:]]*=" { if (!d) print k "=" v; d = 1; next } { print } END { if (!d) print k "=" v }' "$f" >"$tmp" &&
       mv "$tmp" "$f" || { rm -f "$tmp"; return 1; }
   done
   if [[ "$(cfg_value_in "$f" CHARTROOM_NODE_ACCEPT)" == off ]]; then echo "takes no new work (off)"; return 0; fi
-  echo "takes new work under cpu $(cfg_value_in "$f" CHARTROOM_NODE_CPU_BUDGET)% and memory $(cfg_value_in "$f" CHARTROOM_NODE_MEM_BUDGET)% in use"
+  local c=""; [[ "$(cfg_value_in "$f" CHARTROOM_NODE_CLONE)" != on ]] || c="; clones a project it has no checkout of"
+  echo "takes new work under cpu $(cfg_value_in "$f" CHARTROOM_NODE_CPU_BUDGET)% and memory $(cfg_value_in "$f" CHARTROOM_NODE_MEM_BUDGET)% in use$c"
 }
 
 # chartroom node limits                       every node's use against its two limits
 # chartroom node limits <name|here> off|on    it takes no new work at all; or does again
+# chartroom node limits <name|here> --clone on|off   it may clone a project it has no checkout of, and
+#                                             run that project's setup once (lib/guest.sh); off at first
 # chartroom node limits <name|here> 80/70     sets them: here in this machine's node file, on a device
 #                                             over the connection (one that is away takes it when back)
 cmd_node_limits() {
@@ -383,20 +388,22 @@ cmd_node_limits() {
       (.nodes[] | [.machine + (if .local then " (here)" else "" end), (.cpu_use | pc), (.budgets.cpu | pc), (.mem_used_pct | pc), (.budgets.mem | pc),
         (if .contact != "ok" then "no: \(.contact)" elif .role != "node" then "no: \(.role)"
          elif .util == null then "no: its use is not known"
-         elif .cpu_use >= .budgets.cpu then "no: cpu at its limit" elif .mem_used_pct >= .budgets.mem then "no: memory at its limit" else "yes" end)])
+         elif .cpu_use >= .budgets.cpu then "no: cpu at its limit" elif .mem_used_pct >= .budgets.mem then "no: memory at its limit" else "yes" + (if .budgets.clone == "on" then " (clones)" else "" end) end)])
       | @tsv' <<<"$doc" | table
     return 0
   fi
   who="$1"; shift
   node_limits_args "$@"
-  [[ -n "$NL_CPU$NL_MEM$NL_ACCEPT" ]] || die "usage: chartroom node limits [<name|here> 80/70|off|on | <name|here> [--cpu 80] [--mem 70]]"
+  [[ -n "$NL_CPU$NL_MEM$NL_ACCEPT$NL_CLONE" ]] || die "usage: chartroom node limits [<name|here> 80/70|off|on | <name|here> [--cpu 80] [--mem 70] [--clone on|off]]"
   if [[ "$who" == here || "$who" == "$(radar_machine_name)" ]]; then
-    printf 'here: '; node_limits_set "$NL_CPU" "$NL_MEM" "$NL_ACCEPT" || exit 1
+    printf 'here: '; node_limits_set "$NL_CPU" "$NL_MEM" "$NL_ACCEPT" "$NL_CLONE" || exit 1
     return 0
   fi
   id="$(fleet_resolve "$who")"; st="$(fleet_device_json "$id" | jq -r .status)"
   [[ "$st" != revoked ]] || die "node limits: $who is revoked"
-  local p; p="$(jq -cn --arg c "$NL_CPU" --arg m "$NL_MEM" --arg a "$NL_ACCEPT" '{cpu: $c, mem: $m, accept: $a}')"
+  [[ -z "$NL_CLONE" ]] || fleet_device_json "$id" | jq -e '(.caps // []) | index("clone")' >/dev/null ||
+    die "node limits: $who's chartroom is older and cannot clone (chartroom node update $who)"
+  local p; p="$(jq -cn --arg c "$NL_CPU" --arg m "$NL_MEM" --arg a "$NL_ACCEPT" --arg k "$NL_CLONE" '{cpu: $c, mem: $m, accept: $a, clone: $k}')"
   if [[ "$st" != online ]]; then
     fleet_enqueue "$id" limits "$p" >/dev/null
     echo "$who is $st: its limits are set when it is back"; return 0
@@ -436,7 +443,7 @@ cmd_node() {
     rotate) cmd_node_rotate "$@" ;;
     update) cmd_node_update "$@" ;;
     ping) cmd_node_ping "$@" ;;
-    *) die "usage: chartroom node probe [--json] | node init [--cpu PCT] [--mem PCT] [--battery pause|allow] [--priority normal|nice|background] [--project-roots DIRS] [--force] | node limits [<name|here> CPU/MEM|off|on] | node add [--name N] [--alias A]... [--replace NAME|ID] | node rename <name|id> <new> | node revoke <name|id> | node rotate <name|id> | node update <name|id>...|--all | node ping <name|id>" ;;
+    *) die "usage: chartroom node probe [--json] | node init [--cpu PCT] [--mem PCT] [--battery pause|allow] [--priority normal|nice|background] [--project-roots DIRS] [--force] | node limits [<name|here> CPU/MEM|off|on|--clone on|off] | node add [--name N] [--alias A]... [--replace NAME|ID] | node rename <name|id> <new> | node revoke <name|id> | node rotate <name|id> | node update <name|id>...|--all | node ping <name|id>" ;;
   esac
 }
 
@@ -444,8 +451,8 @@ cmd_node() {
 node_doctor_line() {
   local f k v out=""; f="$(node_config_path)"
   if [[ ! -f "$f" ]]; then echo "node:     not a node (chartroom node init makes this machine one; chartroom nodes lists them)"; return; fi
-  for k in CPU_BUDGET MEM_BUDGET ON_BATTERY PRIORITY ACCEPT; do
-    v="$(cfg_value_in "$f" "CHARTROOM_NODE_$k")"; out+=" ${k,,}=${v:--}"
+  for k in CPU_BUDGET MEM_BUDGET ON_BATTERY PRIORITY ACCEPT CLONE; do
+    v="$(cfg_value_in "$f" "CHARTROOM_NODE_$k")"; [[ "$k" != CLONE || -n "$v" ]] || continue; out+=" ${k,,}=${v:--}"
   done
   echo "node:     $f:$out"
 }

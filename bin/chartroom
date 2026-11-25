@@ -2164,11 +2164,13 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           15 s and takes the brain's commands by long-poll; it
                                           opens no port and the brain never reaches it
   chartroom node probe [--json]           this machine's facts, as `nodes` reads them
-  chartroom node limits [<name|here> 80/70|off|on]
+  chartroom node limits [<name|here> 80/70|off|on|--clone on|off]
                                           every node's CPU and memory use against its limits; or
                                           set one's: at 80% CPU or 70% memory in use it takes
                                           nothing new (also --cpu 80, --mem 70; off: nothing new
-                                          at all; a device takes it over the connection)
+                                          at all; --clone on: it may clone a GitHub project it
+                                          lacks and run its setup once; a device takes it over
+                                          the connection)
   chartroom node init [--cpu PCT] [--mem PCT] [--battery pause|allow]
                       [--priority normal|nice|background] [--project-roots DIRS] [--force]
                                           make this machine a node: writes its limits to

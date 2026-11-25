@@ -633,6 +633,203 @@ placed_setup() { # [agent heartbeat seconds]
   [ "$(grep -c ' done: stub finished' "$CHARTROOM_HOME/tasks/$ID/events.log")" = 1 ]
 }
 
+# A project on GitHub (a local bare stands for it) that the device has no checkout of, and a device
+# that may clone: its roots are its own, and it has a gh that is signed in.
+clone_setup() {
+  export CHARTROOM_NODE_BACKENDS='hc:claude|hc:codex|command' CHARTROOM_COMMAND="$STUB {id}" CHARTROOM_PROJECT_ROOTS="$BATS_TEST_TMPDIR/brain-roots"
+  export CHARTROOM_NODE_STALE_SECONDS=300 CHARTROOM_NODE_PREP_WAIT="${1:-60}"
+  git clone -q --bare "$PROJECT" "$BATS_TEST_TMPDIR/origin.git"
+  export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.$BATS_TEST_TMPDIR/origin.git.insteadOf" GIT_CONFIG_VALUE_0=https://github.com/acme/proj.git
+  git -C "$PROJECT" remote add origin git@github.com:Acme/Proj.git
+  git -C "$PROJECT" config remote.origin.pushurl https://github.com/acme/proj.git
+  git -C "$PROJECT" fetch -q https://github.com/acme/proj.git '+refs/heads/*:refs/remotes/origin/*'; git -C "$PROJECT" remote set-head origin main
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$BIN/gh"; chmod +x "$BIN/gh"
+  cr node init --cpu 80 --mem 75 --battery allow --project-roots "$BATS_TEST_TMPDIR/brain-roots" >/dev/null
+  ROOT="$DEV/roots"; mkdir -p "$ROOT"; ROOT="$(cd "$ROOT" && pwd -P)"
+  dev node init --cpu 80 --mem 75 --battery allow --project-roots "$ROOT" >/dev/null
+  joined; agent
+  until_true 'cr fleet devices --json | jq -e ".[0].caps | index(\"clone\")" >/dev/null'
+  PN="$(basename "$PROJECT")"; CLONE="$ROOT/acme/proj"; G="$DEV/state/chartroom/node/guests/acme"
+}
+clones() { cr node limits m3 --clone "$1" >/dev/null; until_true "[ \"\$(cr nodes --json | jq -r '.nodes[] | select(.machine == \"m3\") | .budgets.clone // \"off\"')\" = $1 ]"; }
+setup_is() { sed -i.bak "/^- $PN:/d" "$CHARTROOM_HOME/projects.md"; printf -- '- %s: base=main; setup=%s; notes=x\n' "$PN" "$1" >>"$CHARTROOM_HOME/projects.md"; }
+
+# a setup that goes on until the test says, then exits <rc> (a script: ; parts the fields of projects.md)
+slow_setup() {
+  printf 'touch %s/started\nwhile [ ! -e %s/go ]; do sleep 0.2; done\nexit %s\n' "$BATS_TEST_TMPDIR" "$BATS_TEST_TMPDIR" "$1" >"$BATS_TEST_TMPDIR/slow.sh"
+  setup_is "bash $BATS_TEST_TMPDIR/slow.sh"
+}
+
+@test "setup: the repo's own way when the brain names none; never a symlink, never a server; none for a person's checkout" {
+  d="$BATS_TEST_TMPDIR/repo"; git init -q "$d"
+  setup_of() { bash -c 'CR_ROOT="$1"; source "$1/lib/core.sh" >/dev/null 2>&1 || true; login_path() { printf %s "$BIN"; }; eval "$(sed -n "/^guest_login_path() {/p;/^guest_setup_command() {/,/^}/p" "$1/lib/guest.sh")"; guest_setup_command "$2" "${3:-}"' _ "$REPO_ROOT" "$d" "${1:-}"; }
+  [ "$(setup_of)" = "" ]
+  [ "$(setup_of "make ready")" = "make ready" ]
+  echo '{}' >"$d/package.json"; : >"$d/pnpm-lock.yaml"; : >"$d/go.mod"
+  [ "$(setup_of)" = "pnpm install --frozen-lockfile && go mod download" ]
+  printf '#!/bin/sh\n' >"$BIN/corepack"; chmod +x "$BIN/corepack"; [ "$(setup_of)" = "corepack pnpm install --frozen-lockfile && go mod download" ]
+  # pinned tools, where there is mise: they first, and everything under them
+  echo 'nodejs 24' >"$d/.tool-versions"; printf '#!/bin/sh\n' >"$BIN/mise"; chmod +x "$BIN/mise"
+  [ "$(setup_of)" = "mise install && mise exec -- pnpm install --frozen-lockfile && mise exec -- go mod download" ]
+  # bin/setup stands for all of it, but not one that is another program by that name
+  mkdir "$d/bin"; printf '#!/bin/sh\n' >"$d/bin/rails-command"; chmod +x "$d/bin/rails-command"; ln -s rails-command "$d/bin/setup"
+  [[ "$(setup_of)" == *"pnpm install"* ]]
+  rm "$d/bin/setup"; printf '#!/bin/sh\n# --skip-server: no server\n' >"$d/bin/setup"; chmod +x "$d/bin/setup"
+  [ "$(setup_of)" = "mise install && mise exec -- bin/setup --skip-server" ]
+}
+
+@test "clone: a device that may clones the project, runs its setup once, and the worker starts there with its paths" {
+  clone_setup
+  ID="$(new_task --backend command 2>/dev/null)"
+  # off at first: no checkout, no work
+  run cr dispatch "$ID" --dry-run
+  echo "$output"; [[ "$output" == "$ID would run here"*"m3: "*"(no checkout of github.com/acme/proj)"* ]]
+  run cr node limits m3 --clone on
+  echo "$output"; [ "$status" -eq 0 ]; [[ "$output" == *"; clones a project it has no checkout of" ]]
+  grep -qx CHARTROOM_NODE_CLONE=on "$DEV/node"
+  clones on; [[ "$(cr node limits | grep '^m3')" == *"yes (clones)" ]]
+  setup_is "echo \$CHARTROOM_HOME:\$PWD >>$BATS_TEST_TMPDIR/setups"
+  run cr dispatch "$ID" --dry-run
+  echo "$output"; [[ "$output" == "$ID would run on m3."*"(it would clone github.com/acme/proj)"* ]]
+  perl -0pi -e "s|Please do the thing\\.|Look in $PROJECT/README.md and $PROJECT-else, then $CHARTROOM is the helper.|" "$CHARTROOM_HOME/tasks/$ID/brief.md"
+  sed -i.bak "s|$CHARTROOM|/elsewhere/bin/chartroom|" "$CHARTROOM_HOME/tasks/$ID/brief.md"
+  run cr dispatch "$ID"
+  echo "$output"; [ "$status" -eq 0 ]
+  [[ "$output" == *"placed on m3"*"the worker runs on m3 (attempt 1)"* ]]
+  ev_has " note: m3 clones github.com/acme/proj and sets it up first"
+  until_true 'ev_has " done: stub finished"'
+  [ "$(git -C "$CLONE" config chartroom.cloned)" = true ]
+  [ "$(git -C "$CLONE" config remote.origin.url)" = https://github.com/acme/proj.git ]
+  [ "$(git -C "$CLONE" config --get-all credential.https://github.com.helper | tail -1)" = "!$BIN/gh auth git-credential" ]
+  [ ! -e "$ROOT/.chartroom-clone" ]
+  # the setup ran there, as the repo's own program: with none of chartroom's settings
+  [ "$(cat "$BATS_TEST_TMPDIR/setups")" = ":$CLONE" ]
+  # the worktree is the clone's, and the brief's paths are this machine's
+  [ "$(git -C "$(jq -r .worktree "$G/tasks/$ID/meta.json")" rev-parse --git-common-dir)" = "$CLONE/.git" ]
+  grep -q "Look in $CLONE/README.md and $PROJECT-else, then" "$G/tasks/$ID/brief.md"
+  grep -q '^## This machine' "$G/tasks/$ID/brief.md"; grep -q 'no `.env` file' "$G/tasks/$ID/brief.md"
+  # the hold counts as any other once the worker is there
+  [ "$(jq -r '.until // "none"' "$FLEET/placed/acme.$ID.json")" = none ]
+  # the next task: the same clone, its setup not again; a changed command, again
+  ID2="$(new_task --backend command --node m3 2>/dev/null)"; run cr dispatch "$ID2"; echo "$output"; [ "$status" -eq 0 ]
+  until_true '[ -n "$(jq -r ".worktree // \"\"" "$G/tasks/$ID2/meta.json" 2>/dev/null)" ]'
+  [ "$(wc -l <"$BATS_TEST_TMPDIR/setups" | tr -d ' ')" = 1 ]
+  setup_is "echo again >>$BATS_TEST_TMPDIR/setups"
+  ID3="$(new_task --backend command --node m3 2>/dev/null)"; run cr dispatch "$ID3"; [ "$status" -eq 0 ]
+  until_true '[ "$(tail -1 "$BATS_TEST_TMPDIR/setups")" = again ]'
+  # the same dispatch again (its answer lost) finds the worker before it looks at a setup, even one that
+  # would fail now: a refusal here would have the brain start a second worker elsewhere
+  setup_is false
+  p="$(jq -c --argjson r "$(jq -cn --arg p "$PROJECT" '[{remote: "github.com/acme/proj", path: $p, tilde: "", there: ""}]')" --arg id "$ID" --arg h "$CHARTROOM_HOME" \
+    '{home: "acme", id: $id, kind: .kind, backend: "command", base: .base_sha, branch: .branch, attempt: 1, brain_home: $h, repos: $r, prefix: "", setup: "false", brief: "x"}' "$CHARTROOM_HOME/tasks/$ID/meta.json")"
+  cid="c-1700000000000-abcdef"; mkdir -p "$FLEET/queue/$(dev_id)"
+  jq -cn --arg c "$cid" --argjson p "$p" '{id: $c, type: "dispatch", payload: $p, at: "x", expires: null}' >"$FLEET/queue/$(dev_id)/$cid.json"
+  until_true '[ -f "$FLEET/results/$cid.json" ]'
+  jq -c . "$FLEET/results/$cid.json"; [ "$(jq -r '"\(.rc) \(.out)"' "$FLEET/results/$cid.json" | tr -d '\n')" = "0 already dispatched here (attempt 1)" ]
+  # its branch comes home from the clone as from any checkout
+  run cr close "$ID"; echo "$output"; [ "$status" -eq 0 ]
+}
+
+@test "clone: a setup that fails refuses the task, which goes to the next machine; not tried there again for a while, but for a pin" {
+  clone_setup
+  clones on
+  setup_is "echo no database here >&2 && exit 3"
+  ID="$(new_task --backend command 2>/dev/null)"
+  run cr dispatch "$ID"
+  echo "$output"; [ "$status" -eq 0 ]
+  [[ "$output" == *"m3 did not take it: the setup of github.com/acme/proj (echo no database here >&2 && exit 3) failed (exit 3): no database here"* ]]
+  [ -z "$(jq -r '.node // ""' "$CHARTROOM_HOME/tasks/$ID/meta.json")" ]
+  [ ! -e "$G/tasks/$ID" ]
+  until_true 'ev_has " done: stub finished"'
+}
+
+@test "clone: a clone or a setup under way holds up no other command, and a late failure places the task again by itself" {
+  clone_setup 1
+  clones on
+  slow_setup 1
+  ID="$(new_task --backend command 2>/dev/null)"
+  run cr dispatch "$ID"
+  echo "$output"; [ "$status" -eq 0 ]
+  [[ "$output" == *"m3 clones github.com/acme/proj and sets it up first; the worker starts after that"* ]]
+  until_true '[ -e "$BATS_TEST_TMPDIR/started" ]'
+  run cr node ping m3
+  echo "$output"; [ "$status" -eq 0 ]; [[ "$output" == *"pong from m3"* ]]
+  # it counts on m3 until it starts, however long that takes
+  [ "$(jq -r '.node + " " + ((.until - .at) | tostring)' "$FLEET/placed/acme.$ID.json")" = "$(dev_id) 2700" ]
+  touch "$BATS_TEST_TMPDIR/go"
+  until_true '[ -n "$(ls "$FLEET/results" 2>/dev/null)" ]'
+  cr watch --once --timeout 2 >/dev/null 2>&1 || true
+  until_true 'ev_has " done: stub finished"'
+  ev_has " note: m3 did not take it: the setup of github.com/acme/proj ("
+  ev_has "it is placed again"
+  [ -z "$(jq -r '.node // ""' "$CHARTROOM_HOME/tasks/$ID/meta.json")" ]
+  ! ev_has " failed: "
+  # not tried there again for a while, and the reason is said; a pin is the commander's word
+  ID="$(new_task --backend command 2>/dev/null)"
+  run cr dispatch "$ID" --dry-run
+  echo "$output"; [[ "$output" == "$ID would run here"*"m3: "*"the setup of github.com/acme/proj ("*"min ago)"* ]]
+  run env CHARTROOM_PREP_RETRY_SECONDS=0 "$CHARTROOM" dispatch "$ID" --dry-run
+  [[ "$output" == "$ID would run on m3."* ]]
+  setup_is true
+  ID="$(new_task --backend command --node m3 2>/dev/null)"
+  cr dispatch "$ID" >/dev/null
+  until_true 'ev_has " done: stub finished"'
+}
+
+@test "clone: a close while the project is being prepared cancels it; nothing is started" {
+  clone_setup 1
+  clones on
+  slow_setup 0
+  ID="$(new_task --backend command 2>/dev/null)"
+  cr dispatch "$ID" >/dev/null
+  until_true '[ -e "$BATS_TEST_TMPDIR/started" ]'
+  run cr close "$ID"
+  echo "$output"; [ "$status" -eq 0 ]; [[ "$output" == *"m3 has nothing of $ID"* ]]
+  touch "$BATS_TEST_TMPDIR/go"
+  until_true '[ ! -e "$G/.prep/$ID" ]'
+  sleep 2
+  [ ! -e "$G/tasks/$ID" ]; [ ! -e "$FLEET/placed/acme.$ID.json" ]
+  [ -z "$(ls "$FLEET/results" "$FLEET/queue/$(dev_id)" 2>/dev/null | grep json || true)" ]
+}
+
+@test "clone: only github.com, only where nothing is in the way, never over a person's checkout; a failure leaves nothing" {
+  clone_setup
+  clones on
+  # something else is where the clone would go
+  mkdir -p "$CLONE"; echo mine >"$CLONE/mine"
+  ID="$(new_task --backend command 2>/dev/null)"
+  run cr dispatch "$ID"
+  echo "$output"; [ "$status" -eq 0 ]; [[ "$output" == *"m3 did not take it: $CLONE is there, and is not a checkout of github.com/acme/proj"* ]]
+  [ "$(ls "$CLONE")" = mine ]
+  rm -r "$CLONE" "$FLEET/prep"
+  # GitHub does not give it
+  mv "$BATS_TEST_TMPDIR/origin.git" "$BATS_TEST_TMPDIR/away.git"
+  ID="$(new_task --backend command 2>/dev/null)"
+  run cr dispatch "$ID"
+  echo "$output"; [ "$status" -eq 0 ]; [[ "$output" == *"m3 did not take it: could not clone github.com/acme/proj: "* ]]
+  [ ! -e "$CLONE" ]; [ ! -e "$ROOT/.chartroom-clone" ]
+  mv "$BATS_TEST_TMPDIR/away.git" "$BATS_TEST_TMPDIR/origin.git"; rm -r "$FLEET/prep"
+  # what is asked of it is checked there too, whatever the brain says
+  for r in gitlab.com/acme/proj github.com/acme/.. github.com/-x/proj github.com/acme/proj/../../x --upload-pack=x/y/z; do
+    run bash -c 'eval "$(sed -n "/^CR_CLONE_RE=/p;/^guest_clone() {/,/^}/p" "$1")"; guest_clone "$2"' _ "$REPO_ROOT/lib/guest.sh" "$r"
+    echo "$r: $output"; [ "$status" -eq 7 ]; [[ "$output" == *"clones from github.com only"* ]]
+  done
+  # a person's own checkout there is used as it is: not marked, not pulled, its setup not run
+  git clone -q https://github.com/acme/proj.git "$ROOT/mine"; head="$(git -C "$ROOT/mine" rev-parse HEAD)"
+  setup_is "touch $BATS_TEST_TMPDIR/setup-ran"
+  git -C "$PROJECT" commit -q --allow-empty -m newer; git -C "$PROJECT" push -q https://github.com/acme/proj.git HEAD:main
+  git -C "$PROJECT" fetch -q https://github.com/acme/proj.git '+refs/heads/*:refs/remotes/origin/*'
+  until_true 'jq -r .probe "$FLEET/devices/$(dev_id).seen.json" | grep -q "/roots/mine"' || { jq -r .probe "$FLEET/devices/$(dev_id).seen.json" | grep -E "checkout|budget"; tail -5 "$DEV/state/chartroom/device/agent.log"; false; }
+  ID="$(new_task --backend command 2>/dev/null)"
+  run cr dispatch "$ID"
+  echo "$output"; [ "$status" -eq 0 ]; [[ "$output" == *"the worker runs on m3"* ]]
+  until_true 'ev_has " done: stub finished"'
+  [ "$(git -C "$(jq -r .worktree "$G/tasks/$ID/meta.json")" rev-parse --git-common-dir)" = "$ROOT/mine/.git" ]
+  [ -z "$(git -C "$ROOT/mine" config chartroom.cloned)" ]; [ "$(git -C "$ROOT/mine" rev-parse HEAD)" = "$head" ]
+  [ ! -e "$BATS_TEST_TMPDIR/setup-ran" ]; [ ! -e "$CLONE" ]
+  ! grep -q '^## This machine' "$G/tasks/$ID/brief.md"
+}
+
 @test "node limits: a device takes its limits from the brain, in its own node file, and reports them; one away takes them when back" {
   joined; agent
   until_true 'cr fleet devices --json | jq -e ".[0].caps | index(\"limits\")" >/dev/null'

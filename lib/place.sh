@@ -8,6 +8,8 @@
 #                                           has room, or off: everything runs here, as before
 #   CHARTROOM_PLACE_HOLD_SECONDS=180        how long a worker just placed counts at its assumed cost
 #                                           (CHARTROOM_WORKER_CPU, _MEM_GB) on top of what is measured
+#   CHARTROOM_CLONE_COST=0.1                how much fuller a node counts that must clone the project
+#                                           first (a share of its limits)
 #
 # With no device enrolled (or none whose agent can report its use), nothing here happens at all.
 #
@@ -25,9 +27,12 @@
 # other machines do not have and that cannot go along.
 # What a node must have: hc answering, the task's agent installed and logged in, every tool the task
 # needs working (--needs, `needs=` in projects.md, and docker when the brief talks of it), and a
-# checkout of the project and of any other repo the brief points into.
+# checkout of the project and of any other repo the brief points into, or that it may clone them
+# (chartroom node limits <name> --clone on: lib/guest.sh), which counts as a small cost. On such a node a
+# tool the project pins comes with mise. `env` (--needs env, or a brief that names an .env file) is an
+# env file in the project's checkout: no secret is ever copied, so never a clone without one.
 
-CR_NEEDS_TOOLS='docker|ruby|go|node|gh|codex|claude|herdr|tmux'
+CR_NEEDS_TOOLS='docker|ruby|go|node|gh|codex|claude|herdr|tmux|env'
 CR_CARRY_MAX_FILE=1048576
 CR_CARRY_MAX_ALL=4194304
 CR_CARRY_MAX_FILES=100
@@ -72,7 +77,26 @@ place_tools() { # <id>
   {
     tr ',' '\n' <<<"$own"; tr ',' '\n' <<<"$p"
     if place_brief_words "$id" | grep -qiE '(^|[^a-z0-9])(docker|docker-compose|testcontainers?)([^a-z0-9]|$)'; then echo docker; fi
+    if place_brief_words "$id" | grep -oE '(^|[^A-Za-z0-9_])\.env(\.[A-Za-z]+)*' | grep -qviE '\.(example|sample|template|dist|defaults|test)$'; then echo env; fi
   } | grep -E "^($CR_NEEDS_TOOLS)$" | sort -u || true
+}
+
+# The tools a project pins for mise (.tool-versions, mise.toml) at the task's base, one per line.
+place_pins() { # <id>
+  local project base f; project="$(meta "$1" project)"; base="$(meta "$1" base_sha)"
+  [[ -n "$base" ]] || return 0
+  {
+    git -C "$project" show "$base:.tool-versions" 2>/dev/null | awk '$1 ~ /^[a-z]/ {print $1}' || true
+    for f in mise.toml .mise.toml; do
+      git -C "$project" show "$base:$f" 2>/dev/null | awk '/^[[:space:]]*\[/ { t = ($0 ~ /^[[:space:]]*\[tools\]/); next } t && /^[[:space:]]*["A-Za-z]/ { k = $0; sub(/[[:space:]]*=.*/, "", k); gsub(/["[:space:]]/, "", k); print k }' || true
+    done
+  } | sed -E 's/^nodejs$/node/; s/^golang$/go/' | grep -E '^[a-z][a-z0-9._-]{0,40}$' | sort -u || true
+}
+
+# The setup a project's line in projects.md names for a clone of it (`- <name>: ...; setup=pnpm install`), or nothing.
+place_setup() { # <id>
+  grep -E "^- $(basename "$(meta "$1" project)"):" "$CR_HOME/projects.md" 2>/dev/null | head -1 | sed -E 's/^- [^:]*://' |
+    awk -F';' '{ for (i = 1; i <= NF; i++) { f = $i; gsub(/^[[:space:]]+|[[:space:]]+$/, "", f); if (f ~ /^setup=/) { print substr(f, 7); exit } } }' || true
 }
 
 # Every path the brief names that exists on this machine, one per line, absolute: the brief says
@@ -135,7 +159,7 @@ place_remote() { node_canon_remote "$(git -C "$1" config --get remote.origin.url
 # them or null, repos: other checkouts it points into, carry: paths of this home it names (relative
 # to it), files: every file under those, which go along}. The scan stops at the first that cannot.
 place_scan() { # <id>
-  local id="$1" project proot hroot here="" repos=() carry=() files=() p rel top f got url all=0
+  local id="$1" project proot hroot here="" repos=() at=() carry=() files=() p rel top f got url all=0
   project="$(meta "$id" project)"
   proot="$(phys_dir "$(git -C "$project" rev-parse --show-toplevel 2>/dev/null || echo "$project")")"; hroot="$(phys_dir "$CR_HOME")"
   while IFS= read -r p; do
@@ -168,23 +192,24 @@ place_scan() { # <id>
     [[ -d "$top/.git" ]] || { here="its brief names $p, a worktree on this machine"; break; }
     url="$(place_remote "$top")"
     [[ "$url" =~ $CR_NODE_REMOTE_RE ]] || { here="its brief names $p, which is only on this machine"; break; }
-    repos+=("$url")
+    # (where the brief has it: git's own path and the one written, when a symlink is on the way)
+    repos+=("$url"); at+=("$url"$'\t'"$top")
   done < <(place_brief_paths "$id")
-  jq -cn --arg here "$here" --arg repos "$(printf '%s\n' "${repos[@]+"${repos[@]}"}")" \
+  jq -cn --arg here "$here" --arg repos "$(printf '%s\n' "${repos[@]+"${repos[@]}"}")" --arg at "$(printf '%s\n' "${at[@]+"${at[@]}"}")" \
     --arg carry "$(printf '%s\n' "${carry[@]+"${carry[@]}"}")" --arg files "$(printf '%s\n' "${files[@]+"${files[@]}"}")" '
     def l: split("\n") | map(select(length > 0)) | unique;
-    {here: (if $here == "" then null else $here end), repos: ($repos | l), carry: ($carry | l), files: ($files | l)}'
+    {here: (if $here == "" then null else $here end), repos: ($repos | l), at: ($at | l | map(split("\t") | {remote: .[0], path: .[1]})), carry: ($carry | l), files: ($files | l)}'
 }
 
-# What a task asks of a node, as JSON: {agent, tools, repos (its project's first among them), here:
-# why it must stay on this machine or null, carry, files}.
+# What a task asks of a node, as JSON: {agent, tools, own (its project's remote), repos (with it), pins
+# (the tools its project pins), here: why it must stay on this machine or null, carry, files}.
 place_needs() { # <id> <backend it would run there, hc:claude ...>
   local stays scan='{"here":null,"repos":[],"carry":[],"files":[]}'
   stays="$(place_stays "$1")"
   [[ -n "$stays" ]] || scan="$(place_scan "$1")"
   local agent=""; [[ "$2" != hc:* ]] || agent="${2#hc:}"
-  jq -c --arg agent "$agent" --arg stays "$stays" --arg tools "$(place_tools "$1")" --arg own "$(place_remote "$(meta "$1" project)")" '
-    . + {agent: $agent, tools: ($tools | split("\n") | map(select(length > 0))),
+  jq -c --arg agent "$agent" --arg stays "$stays" --arg tools "$(place_tools "$1")" --arg own "$(place_remote "$(meta "$1" project)")" --arg pins "$(place_pins "$1")" '
+    . + {agent: $agent, tools: ($tools | split("\n") | map(select(length > 0))), own: $own, pins: ($pins | split("\n") | map(select(length > 0))),
          repos: ((if $own == "" then [] else [$own] end) + .repos | unique),
          here: (if $stays != "" then $stays else .here end)}' <<<"$scan"
 }
@@ -209,31 +234,65 @@ PLACE_JQ='
     if .cpu_use == null or .mem_used_pct == null or (.cores // 0) == 0 or (.mem_bytes // 0) == 0 then null
     else [ (.cpu_use + 100 * $c * ($held + 1) / .cores) / (.budgets.cpu // 80),
            (.mem_used_pct + 100 * $mg * 1073741824 * ($held + 1) / .mem_bytes) / (.budgets.mem // 80) ] | max end;
+  # the repos a task needs that a node has no checkout of
+  def place_missing($n): . as $row | [$n.repos[] | . as $r | select(any($row.repos[]?; .remote == $r) | not)];
   def place_paused: if .budgets.accept == "off" then "it is not accepting work" elif .role == "paused: on battery" then "it is on battery" else null end;
+  # (a node that clones gets the tools a project pins from mise)
+  def place_mise: .budgets.clone == "on" and (.tools.mise.status // "missing") == "ok";
   def place_lacks($n):
     . as $row
-    | ([$n.tools[] | select(($row.tools[.].status // "missing") != "ok") | "\(.) is \($row.tools[.].status // "missing")"] | .[0])
+    | ([$n.tools[] | . as $t | select($t != "env" and ($row.tools[$t].status // "missing") != "ok")
+        | select((($row | place_mise) and ($t | IN("ruby", "go", "node")) and (($n.pins // []) | index($t)) != null) | not)
+        | "\($t) is \($row.tools[$t].status // "missing")"] | .[0])
       // (if ($n.tools | index("gh")) and ($row.logins.gh.status // "missing") != "ok" then "gh is not logged in" else null end);
   def place_remote_lacks($n):
     if $n.agent != "" and .runner.hc != "up" then "hc is not answering"
     elif $n.agent != "" and (.tools[$n.agent].status // "missing") != "ok" then "\($n.agent) is \(.tools[$n.agent].status // "missing")"
     elif $n.agent != "" and (.logins[$n.agent].status // "missing") != "ok" then "\($n.agent) is not logged in"
     elif (.disk_free_pct // 100) < 15 then "its disk is \(.disk_free_pct)% free"
-    else . as $row | ([$n.repos[] | . as $r | select(any($row.repos[]?; .remote == $r) | not) | "no checkout of \($r)"] | .[0]) end;'
+    else . as $row | ($n.own // "") as $own
+      | ([$row.repos[]? | select(.remote == $own)]) as $mine
+      | (([$mine[] | select((.flags // []) | index("cloned") | not)] | length) > 0) as $person
+      | ([place_missing($n)[] | . as $r | (if $row.budgets.clone != "on" or (($row.device.caps // []) | index("clone")) == null then "no checkout of \($r)"
+            elif test("^github\\.com/[a-z0-9][a-z0-9-]{0,38}/[a-z0-9._-]{1,100}$") | not then "no checkout of \($r), and it clones from github.com only"
+            elif ($row.logins.gh.status // "missing") != "ok" then "no checkout of \($r), and gh is not logged in to clone it" else empty end)] | .[0])
+      // (if $row.budgets.clone == "on" and ($person | not) and (($n.pins // []) | length) > 0 and ($row | place_mise | not)
+          then "it has no mise for the tools \($own) pins (\($n.pins | join(", ")))" else null end)
+      // (if ($n.tools | index("env")) and ($person | not) and (any($mine[]; (.flags // []) | index("env")) | not)
+          then "it has no env file of \($own) (chartroom copies no secret)" else null end)
+    end;'
 
 place_holds() { # -> {"<device id|here>": count}, of the holds still counted; old ones are dropped
   local d f now hold; d="$(fleet_dir)/placed"; hold="$(place_hold_s)"; now="$(date +%s)"
   shopt -s nullglob
   for f in "$d"/*.json; do
-    if (( now - $(jq -r '.at // 0' "$f" 2>/dev/null || echo 0) > hold )); then rm -f "$f"; fi
+    if (( now > $(jq -r --argjson h "$hold" '.until // ((.at // 0) + $h)' "$f" 2>/dev/null || echo 0) )); then rm -f "$f"; fi
   done
   local left=("$d"/*.json); shopt -u nullglob
   if (( ${#left[@]} == 0 )); then echo '{}'; return; fi
   jq -s -c 'group_by(.node) | map({key: .[0].node, value: length}) | from_entries' "${left[@]}"
 }
 place_hold_file() { printf '%s/placed/%s.%s.json' "$(fleet_dir)" "$(home_name_of "$CR_HOME")" "$1"; } # <id>
-place_hold() { fleet_write "$(place_hold_file "$1")" "$(jq -cn --arg n "$2" --argjson at "$(date +%s)" '{node: $n, at: $at}')"; } # <id> <device id|here>
+# (with seconds: a worker that starts only once its project is cloned and set up there counts until then)
+place_hold() { # <id> <device id|here> [seconds]
+  fleet_write "$(place_hold_file "$1")" "$(jq -cn --arg n "$2" --argjson at "$(date +%s)" --argjson s "${3:-0}" '{node: $n, at: $at} + (if $s > 0 then {until: ($at + $s)} else {} end)')"
+}
 place_unhold() { rm -f "$(place_hold_file "$1")"; }
+
+# What a node could not prepare (a clone or a setup that failed, exit 7) is not tried there again for
+# CHARTROOM_PREP_RETRY_SECONDS (1800), unless the task is pinned to it: fleet/prep/<device>.<repo>.json.
+place_prep_file() { printf '%s/prep/%s.%s.json' "$(fleet_dir)" "$1" "$(printf '%s' "$2" | sha256_hex | cut -c1-16)"; } # <device id> <remote>
+place_prep_failed() { # <device id> <remote> <why>
+  fleet_write "$(place_prep_file "$1" "$2")" "$(jq -cn --arg d "$1" --arg r "$2" --arg w "$3" --argjson at "$(date +%s)" '{device: $d, remote: $r, why: $w, at: $at}')"
+}
+place_prep_bad() { # <remote> -> {"<device id>": why}
+  local keep f out=(); keep="$(cfg PREP_RETRY_SECONDS '' 1800)"; [[ "$keep" =~ ^[0-9]+$ ]] || keep=1800
+  shopt -s nullglob; out=("$(fleet_dir)/prep"/*.json); shopt -u nullglob
+  (( ${#out[@]} > 0 )) || { echo '{}'; return; }
+  jq -s -c --arg r "$1" --argjson k "$keep" --argjson now "$(date +%s)" '[.[] | select(.remote == $r and ($now - .at) < $k)
+    | {key: .device, value: "\(.why) (\(($now - .at) / 60 | floor) min ago)"}] | from_entries' "${out[@]}"
+}
+place_clone_cost() { local c; c="$(cfg CLONE_COST '' 0.1)"; [[ "$c" =~ ^[0-9]+(\.[0-9]+)?$ ]] || die "CHARTROOM_CLONE_COST is a number, such as 0.1 (got '$c')"; printf '%s' "$c"; }
 
 # Every node's row, this machine's first: what is measured here now, and each device's last word.
 place_rows() { # <fleet devices json>
@@ -246,13 +305,15 @@ place_rows() { # <fleet devices json>
 # The choice for a task, with the hold it leaves (not with dry=1): {pick: {id, name} or null, nodes:
 # [{id, name, why, u, cpu, mem, ...}]}. The rows are read before the lock; the choice is made in it.
 place_choose() { # <id> <needs json> <rows json> <excluded ids json> <dry 0|1> <over 0|1>
-  local out pick
+  local out pick cost bad; cost="$(place_clone_cost)" || return 1
+  bad="$(place_prep_bad "$(jq -r '.own // ""' <<<"$2")")"
   fleet_lock
-  out="$(jq -cn --argjson rows "$3" --argjson n "$2" --argjson held "$(place_holds)" --argjson x "$4" --arg mode "$(place_mode)" \
+  out="$(jq -cn --argjson cost "$cost" --argjson bad "$bad" --argjson rows "$3" --argjson n "$2" --argjson held "$(place_holds)" --argjson x "$4" --arg mode "$(place_mode)" \
     --argjson c "$NODE_C" --argjson mg "$NODE_MG" --arg over "$6" "$PLACE_JQ"'
     [$rows[] | . as $r | (if .local then "here" else .device.id end) as $id | ($held[$id] // 0) as $h
       | select(.local or .device.status != "revoked")
       | {id: $id, name: .machine, local: .local, held: $h, cpu: .cpu_use, cpu_limit: (.budgets.cpu // 80), mem: .mem_used_pct, mem_limit: (.budgets.mem // 80),
+         prep: (if .local or .contact != "ok" then [] else place_missing($n) end),
          u: (place_u($h; $c; $mg)),
          why: ((if ($x | index($id)) then "it refused" else null end)
            // (if .local then null
@@ -263,8 +324,9 @@ place_choose() { # <id> <needs json> <rows json> <excluded ids json> <dry 0|1> <
            // (if .contact != "ok" and (.local | not) then "it could not be read: \(.error // .contact)" else null end)
            // place_paused // place_lacks($n)
            // (if .local then null else place_remote_lacks($n) end)
+           // (if $bad[$id] then "\($bad[$id])" else null end)
            // (if $over == "1" then null else place_limit($h; $c; $mg; .local) end))}]
-    | . as $nodes
+    | map(if .u != null and (.prep | length) > 0 then .u += $cost else . end) as $nodes
     | ([$nodes[] | select(.why == null)] | sort_by([(if $mode == "pack" then -(.u // 0) else (.u // 9) end), (if .local then 0 else 1 end), .name]) | .[0]) as $p
     | {pick: (if $p then {id: $p.id, name: $p.name} else null end), nodes: $nodes, mode: $mode}')" || { fleet_unlock; return 1; }
   pick="$(jq -r '.pick.id // empty' <<<"$out")"
@@ -276,7 +338,7 @@ place_choose() { # <id> <needs json> <rows json> <excluded ids json> <dry 0|1> <
 # A choice in words: "m3: cpu 4% of 90%, memory 22% of 75%; here: ..." (the nodes and why not)
 place_words() { # <choice json>
   jq -r "$PLACE_JQ"'[.nodes[] | "\(.name): cpu \(.cpu | if . == null then "?" else pc end) of \(.cpu_limit)%, memory \(.mem | if . == null then "?" else pc end) of \(.mem_limit)%"
-    + (if .why then " (\(.why))" else "" end)] | join("; ")' <<<"$1"
+    + (if .why then " (\(.why))" elif (.prep // [] | length) > 0 then " (it would clone \(.prep | join(" and ")))" else "" end)] | join("; ")' <<<"$1"
 }
 
 # Is this task placed at all, and where? Called by dispatch once its backend is chosen (SELECTED).

@@ -204,6 +204,7 @@ nothing new; `chartroom node limits` shows them all, and sets one:
 chartroom node limits                 # use against limits, and whether each takes work
 chartroom node limits mini 80/70      # at 80% CPU or 70% memory in use, mini takes no new task
 chartroom node limits mini off        # mini takes no new work at all (on: it does again)
+chartroom node limits mini --clone on # mini may clone a GitHub project it lacks, and set it up once
 chartroom dispatch <id> --dry-run     # where a task would go, and why
 ```
 
