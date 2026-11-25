@@ -485,7 +485,8 @@ device_cmd_close() { # <payload {phase, discard, sha}>
       echo "sha=$tip" ;;
     close)
       sha="$(jq -r '.sha // ""' <<<"$1")"
-      if [[ "$discard" == true ]]; then guest_run "$G_HOME" close "$G_ID" --discard; else guest_run "$G_HOME" close "$G_ID"; fi
+      # (a close refused here, say while its worker is still stopping, is the brain's to hear: never closed there alone)
+      if [[ "$discard" == true ]]; then guest_run "$G_HOME" close "$G_ID" --discard || return; else guest_run "$G_HOME" close "$G_ID" || return; fi
       if [[ "$sha" =~ ^[0-9a-f]{40}$ && "$(git -C "$project" rev-parse --verify --quiet "refs/heads/$branch" || true)" == "$sha" ]]; then
         git -C "$project" update-ref -d "refs/heads/$branch" "$sha" && echo "branch $branch deleted here: the brain holds it at ${sha:0:12}"
       fi

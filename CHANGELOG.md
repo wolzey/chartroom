@@ -59,6 +59,8 @@ are stable from 0.1.0.
   where it is installed; a machine on an older chartroom still shows how many agents, with no names.
 
 ### Fixed
+- Closing a task on another machine while its worker there was still running closed the record here and left the worker
+  running there. That close now fails as the machine refuses it; `recall` stops the worker and waits for it.
 - A brief that names this home's files relative to the home (`tasks/<id>/report.md`), by a prefix or pattern, or names one of its worktrees,
   no longer sends the task to another machine without them. `set <id> node=<this machine's name>` means here.
 - Two permission cards could have one id, when a worker on a device raised one the brain already had: the

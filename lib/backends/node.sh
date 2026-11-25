@@ -276,7 +276,15 @@ node_recall() { # <id>
   [[ -n "$(meta "$id" dispatched)" && -z "$(meta "$id" closed)" ]] || die "recall: $id is not dispatched"
   node_need_online "$id" "recall"
   node_cmd "$id" stop '{}' 30 >/dev/null 2>&1 || true
-  node_close_task "$id" 0 # (dies, deleting nothing, at a step that does not hold: uncommitted work there, say)
+  # (a worker takes a moment to stop: its close is tried again while it says so; any other refusal is final)
+  local i out rc
+  for i in $(seq 1 15); do
+    rc=0; out="$( ( node_close_task "$id" 0 ) 2>&1 )" || rc=$?
+    (( rc != 0 )) && [[ "$out" == *"still running"* ]] && (( i < 15 )) || break
+    sleep 2
+  done
+  printf '%s\n' "$out"
+  (( rc == 0 )) || die "recall: $id is not taken back from $name (above); nothing here changed"
   place_undo "$id"
   log_event "$id" note "recalled from $name: not dispatched; pin it (chartroom set $id node=here) and dispatch it again"
   echo "recalled $id from $name: it is not dispatched now (chartroom set $id node=here, then chartroom dispatch $id)"

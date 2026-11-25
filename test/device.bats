@@ -856,6 +856,20 @@ slow_setup() {
   ID2="$(new_task --backend command 2>/dev/null)"; run cr set "$ID2" node=nosuch; echo "$output"; [ "$status" -ne 0 ]; [[ "$output" == *"no enrolled device is called 'nosuch'"* ]]
 }
 
+@test "close: a close the device refuses (its worker still running) leaves the record open here too" {
+  export STUB_MODE=silent STUB_SLEEP=40
+  placed_setup
+  ID="$(new_task --backend command 2>/dev/null)"
+  cr dispatch "$ID" >/dev/null
+  until_true '[ -n "$(jq -r ".pid // \"\"" "$DEV/state/chartroom/node/guests/acme/tasks/$ID/meta.json" 2>/dev/null)" ]'
+  run cr close "$ID"; echo "$output"
+  [ "$status" -ne 0 ]; [[ "$output" == *"not closed: on m3"*"still running"* ]]
+  [ -z "$(jq -r '.closed // ""' "$CHARTROOM_HOME/tasks/$ID/meta.json")" ]
+  [ "$(jq -r '.closed // ""' "$DEV/state/chartroom/node/guests/acme/tasks/$ID/meta.json")" = "" ]
+  cr stop "$ID" >/dev/null; until_true '( cr close "$ID" >/dev/null 2>&1 )' 60
+  [ -n "$(jq -r '.closed // ""' "$CHARTROOM_HOME/tasks/$ID/meta.json")" ]
+}
+
 @test "recall: stop or recall while the device still clones or sets up the project cancels it; nothing starts there" {
   clone_setup 1
   clones on
