@@ -830,6 +830,108 @@ slow_setup() {
   ! grep -q '^## This machine' "$G/tasks/$ID/brief.md"
 }
 
+@test "env: a file is read line by line; production and remote databases are left out on its own machine" {
+  parse() { bash -c 'eval "$(sed -n "/^env_parse() {/,/^}/p" "$1")"; env_parse "$2" "$3" "$4"' _ "$REPO_ROOT/lib/env.sh" "$@"; }
+  f=$'# dev\nexport API_KEY="dev-1"\nDATABASE_URL=postgres://localhost:5432/app\nREPLICA_URL=postgres://db.example.com/app\nREDIS_URL=redis://redis:6379\nSTRIPE_KEY=sk_live_abc\nPROD_TOKEN=x\nPRODUCT_ID=7\nNODE_ENV=development\nMULTI="a\nb"\nDB_HOST=10.1.2.3\nEMPTY=\n'
+  run parse keys "" "" <<<"$f"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf '%s\n' 'API_KEY -' 'DATABASE_URL -' 'REPLICA_URL remote database' 'REDIS_URL -' 'STRIPE_KEY production' 'PROD_TOKEN production' 'PRODUCT_ID -' 'NODE_ENV -' 'MULTI -' 'DB_HOST remote database' 'EMPTY -')" ]
+  run parse file "API_KEY" "REPLICA_URL" <<<"$f"
+  [[ "$output" == *"# API_KEY is left out by chartroom (dropped)"* && "$output" == *"REPLICA_URL=postgres://db.example.com/app"* ]]
+  [[ "$output" == *"# STRIPE_KEY is left out by chartroom (production)"* && "$output" != *sk_live* && "$output" == *$'MULTI="a\nb"'* ]]
+  run parse keys "" "" <<<$'not an assignment\n'; [ "$status" -eq 3 ]
+}
+
+# The brain owns a repo's env file, and a device clones it: the store, the trip, the copies.
+env_setup() {
+  clone_setup
+  clones on
+  cr node init --force --cpu 80 --mem 75 --battery allow --project-roots "$BATS_TEST_TMPDIR" >/dev/null
+  printf '.env\n.env.*\n!.env.example\n' >"$PROJECT/.gitignore"; git -C "$PROJECT" add .gitignore; git -C "$PROJECT" commit -qm ignore
+  git -C "$PROJECT" push -q https://github.com/acme/proj.git HEAD:main
+  printf 'API_KEY=dev-secret-123\nDATABASE_URL=postgres://localhost/app\nLIVE_KEY=live-secret-456\n' >"$PROJECT/.env"
+  echo 'API_KEY=' >"$PROJECT/.env.example"; git -C "$PROJECT" add -f .env.example; git -C "$PROJECT" commit -qm ex
+  printf 'X=1\n' >"$PROJECT/.env.production"
+}
+# the commander's own process, outside the tree of the worker that may be running this suite
+cmdr() {
+  local o="$BATS_TEST_TMPDIR/cmdr.$RANDOM" i
+  ( ( "$CHARTROOM" "$@" >"$o.out" 2>&1; echo $? >"$o.rc" ) 3>&- & )
+  for i in $(seq 1 600); do [[ -f "$o.rc" ]] && break; sleep 0.1; done
+  cat "$o.out"; return "$(cat "$o.rc" 2>/dev/null || echo 1)"
+}
+values_nowhere() { ! grep -rqE 'dev-secret-123|live-secret-456' "$1"; }
+
+@test "env: listed and taken only where the machine shares; the store holds no value in the clear, the log no value at all" {
+  env_setup
+  run cmdr env scan; echo "$output"
+  [[ "$output" == *"studio: it does not share its env files"* || "$output" == *"studio: "*"does not share"* ]]
+  run cmdr device share-env on; [ "$status" -eq 0 ]
+  # a worker may not: there, or here
+  run env CHARTROOM_TASK=x "$CHARTROOM" env scan; [ "$status" -ne 0 ]; [[ "$output" == *"a worker may not use chartroom env"* ]]
+  run env CHARTROOM_TASK=x "$CHARTROOM" device share-env on; [ "$status" -ne 0 ]
+  run cmdr env scan; echo "$output"
+  [[ "$output" == *"github.com/acme/proj"*"studio: .env"* ]]; [[ "$output" != *".env.example"* && "$output" != *".env.production"* ]]
+  run cmdr env scan acme/proj; echo "$output"
+  [[ "$output" == *"studio: mode 644, changed "*", 3 keys; left out: LIVE_KEY (production)"* ]]
+  values_nowhere <(printf '%s' "$output")
+  run cmdr env collect acme/proj; [ "$status" -ne 0 ]; [[ "$output" == *"no owner yet"* ]]
+  run cmdr env owner acme/proj here; echo "$output"; [ "$status" -eq 0 ]
+  run cmdr env collect acme/proj; echo "$output"; [ "$status" -eq 0 ]; [[ "$output" == "github.com/acme/proj: .env from studio" ]]
+  values_nowhere "$FLEET"
+  [ -f "$FLEET/env/.metadata_never_index" ]; [ "$(stat -f %Lp "$FLEET/env" 2>/dev/null || stat -c %a "$FLEET/env")" = 700 ]
+  jq -e '.act == "collect" and .files == [{"rel": ".env", "mode": "644"}] and .from == "studio"' "$FLEET/env/log.ndjson"
+  run cmdr env ls; echo "$output"; [[ "$output" == "github.com/acme/proj: owner studio, taken "*": .env" ]]
+  # a device that does not share is not a source
+  run cmdr env owner acme/proj m3; [ "$status" -eq 0 ]
+  run cmdr env collect acme/proj; [ "$status" -ne 0 ]; [[ "$output" == *"m3: "*"does not share"* ]]
+}
+
+@test "env: a node that clones gets the files with its next worker, production left out, 0600, only into its clone; refresh, forget, revoke" {
+  env_setup
+  cmdr device share-env on >/dev/null; cmdr env owner acme/proj here >/dev/null; cmdr env collect acme/proj >/dev/null
+  ID="$(new_task --backend command --needs env 2>/dev/null)"
+  run cr dispatch "$ID" --dry-run; echo "$output"; [[ "$output" == "$ID would run on m3."* ]]
+  run cr dispatch "$ID"; echo "$output"; [ "$status" -eq 0 ]
+  until_true 'ev_has " done: stub finished"'
+  [ "$(stat -f %Lp "$CLONE/.env" 2>/dev/null || stat -c %a "$CLONE/.env")" = 600 ]
+  grep -qx 'API_KEY=dev-secret-123' "$CLONE/.env"; grep -qx '# LIVE_KEY is left out by chartroom (production)' "$CLONE/.env"; ! grep -q live-secret "$CLONE/.env"
+  [ ! -e "$CLONE/.env.production" ]
+  grep -q 'Its development env files are in that clone (.env)' "$G/tasks/$ID/brief.md"
+  values_nowhere "$FLEET"; values_nowhere "$CHARTROOM_HOME"; values_nowhere "$DEV/state/chartroom/device"
+  jq -se 'map(select(.act == "give")) | .[0].to == "m3"' "$FLEET/env/log.ndjson"
+  # a changed file at its owner reaches the node on refresh
+  sed -i.bak 's/dev-secret-123/dev-secret-789/' "$PROJECT/.env"; rm "$PROJECT/.env.bak"; touch -t 203001010000 "$PROJECT/.env"
+  run cmdr env refresh acme/proj; echo "$output"; [ "$status" -eq 0 ]; [[ "$output" == *"given to m3"* ]]
+  grep -qx 'API_KEY=dev-secret-789' "$CLONE/.env"
+  # a file there that chartroom did not write is never written over
+  echo 'MINE=1' >"$CLONE/.env.local"
+  printf 'B=2\n' >"$PROJECT/.env.local"; touch -t 203001010001 "$PROJECT/.env.local"
+  run cmdr env refresh acme/proj; echo "$output"
+  grep -qx 'MINE=1' "$CLONE/.env.local"
+  # forget: gone from the node and the store
+  run cmdr env forget acme/proj; echo "$output"; [ "$status" -eq 0 ]; [[ "$output" == *"m3: deleted"* ]]
+  [ ! -e "$CLONE/.env" ]; [ -e "$CLONE/.env.local" ]; [ ! -d "$FLEET/env/github.com+acme+proj" ]
+  # revoke: told first, while its token still works
+  cmdr env collect acme/proj >/dev/null; cmdr env refresh acme/proj >/dev/null || true
+  ID="$(new_task --backend command --node m3 2>/dev/null)"; cr dispatch "$ID" >/dev/null; until_true '[ -f "$CLONE/.env" ]'
+  run cr node revoke m3; echo "$output"; [[ "$output" == *"its env files are deleted there"* ]]
+  [ ! -e "$CLONE/.env" ]
+}
+
+@test "env: a node revoked while it was away deletes what it was given when the brain answers it 401" {
+  env_setup
+  cmdr device share-env on >/dev/null; cmdr env owner acme/proj here >/dev/null; cmdr env collect acme/proj >/dev/null
+  ID="$(new_task --backend command --node m3 2>/dev/null)"; cr dispatch "$ID" >/dev/null; until_true '[ -f "$CLONE/.env" ]'
+  for p in $AGENTS; do kill_tree_of "$p"; done; AGENTS=""
+  echo 'MINE=1' >"$CLONE/.env.local"
+  run cr node revoke m3; echo "$output"; [[ "$output" == *"could not be told to delete its env files"*"rotate what it had (github.com/acme/proj)"* ]]
+  [ -f "$CLONE/.env" ]
+  run dev device run --once; echo "$output"
+  [ ! -e "$CLONE/.env" ]; [ -e "$CLONE/.env.local" ]
+  grep -q 'deletes the env files it was given' "$DEV/state/chartroom/device/agent.log"
+}
+
 @test "node limits: a device takes its limits from the brain, in its own node file, and reports them; one away takes them when back" {
   joined; agent
   until_true 'cr fleet devices --json | jq -e ".[0].caps | index(\"limits\")" >/dev/null'

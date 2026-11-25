@@ -272,7 +272,36 @@ are hard requirements; what keeps a task on this machine whatever the others off
 - **A failure** (exit 7) refuses the task with the reason. The brain places it again by itself on the next machine, and does not
   try that node for that repo for `CHARTROOM_PREP_RETRY_SECONDS` (1800), except for a task pinned to it.
 - **A checkout a person made** is used as it is: never pulled, set up or marked.
-- **No secret is copied.** The worker's brief says it runs in such a clone, without an `.env`.
+- **Env files** come from the fleet's store (below), when it has the project's. Otherwise none are there, and the worker's brief says so.
+
+**Env files** (lib/env.sh). The gitignored `.env` files a project needs to run, for the clones above; development values only.
+
+- **Where they rest.** The brain's store, `fleet/env/<repo>/`: each file encrypted (CMS, AES-256) to the store's own key, which is in
+  the brain's login keychain. The directory is 0700 and marked never to be indexed.
+- **One owner per repo**, named by the commander: `chartroom env owner <repo> <machine>|here|never`. Only the owner's copy is
+  ever taken. Two machines whose copies differ are shown so, by a keyed fingerprint and the key names one lacks; nothing is merged,
+  and the newer one does not win.
+- **A machine shares only once it says so, itself:** `chartroom device share-env on`, in a terminal there or over ssh. The brain
+  cannot turn it on.
+- **Collecting.** `chartroom env scan [<repo>]` asks each machine for names only: repos, files, modes, dates, and the names
+  of the keys. `chartroom env collect <repo>` takes the owner's files. An env file is `.env` or `.env.*` in the main checkout, up to
+  three levels down: gitignored, regular, at most 32 KB, never an example, never named for production, staging or preview.
+- **Production left out.** On the owner, before a file leaves it, each line is read as an assignment. These are replaced by a
+  comment: a key or value that says prod, production or live, a database or queue address on another host, and any key the
+  owner's line drops (`--drop`). `--keep` keeps a key by name, for a name that only looks like production.
+  A file that is not assignments is not taken.
+- **The trip.** A file leaves its machine encrypted to the store's key. For a node, the brain decrypts it in a pipe and encrypts it
+  to that node's own key (made there, 0600, on first use). So no queue file, result, log or command line holds a value.
+- **Copies.** With a node's next worker of the repo, before the setup, and on `chartroom env refresh`, which first takes what changed
+  at the owner (its dates). They go into a clone chartroom made, never a person's checkout. Each is mode 0600, only where git
+  ignores the path, and never over a file chartroom did not write.
+- **Log.** `fleet/env/log.ndjson`: what, from, to, when. Never a value.
+- **Deleting.** `chartroom env forget <repo>` deletes a repo from the nodes and the store; `--node <device>` deletes one node's copies.
+  `chartroom node revoke` tells the node first, while its token works. A node that is away deletes them when the brain answers it 401.
+  One that never comes back cannot be reached: the revoke says what it held, to rotate.
+- **Who.** A worker may run none of this.
+- **What it does not stop.** Every worker on a node runs as the same user and can read that node's copies. A worker that prints a value
+  puts it in its transcript. A Mac's backups copy a clone's `.env`.
 
 **Paths.** The brief's paths into the project, other repos and chartroom itself are moved to where the node has them.
 
@@ -304,7 +333,7 @@ are hard requirements; what keeps a task on this machine whatever the others off
   itself is as strong as a shell login unless the node pins it to `chartroom node gate` (section 3). Workers run as the
   node's user with the authority their brief grants, exactly as locally, so a worker on a laptop can read that laptop's
   files. A node that may clone (opt-in again) also runs a project's setup command, which the brain can name
-  (`setup=`), as its user. That is why being a node is **opt-in**: a machine without `node init` is never placed on, and
+  (`setup=`), as its user, and receives development env files (below) for it. That is why being a node is **opt-in**: a machine without `node init` is never placed on, and
   `CHARTROOM_NODE_ACCEPT=off` stops new work there at once.
 - **Data at rest.** Briefs and worktrees land on the node's disk, in the commander's own trust domain.
 - **Tailscale is assumed, not required.**

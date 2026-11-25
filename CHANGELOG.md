@@ -12,7 +12,11 @@ are stable from 0.1.0.
   `mise install` for the tools it pins), and the worker starts there. A clone or setup that fails refuses the task with the reason, and
   the task goes to the next machine. A missing checkout is then a small cost in placement, not a refusal. A brief's
   paths are moved to where the node has the project. `needs=env` (or a brief that names an `.env`) keeps a task off a clone
-  without one: no secret is copied. See docs/multi-machine.md, section 6.
+  without one, unless the fleet's store has it.
+- **The fleet's env files** (`chartroom env`): each repo's gitignored `.env` files from one owner machine the commander names,
+  production values left out on that machine, kept encrypted on the brain and given encrypted to a node that clones the repo.
+  A machine shares only after `chartroom device share-env on` there. Every copy is logged by name, never by value. Revoking a
+  node deletes its copies. See docs/multi-machine.md, section 6.
 - **Placement:** `chartroom dispatch` sends each hc task to the machine with the most room, the brain
   included, when a device is enrolled.
   - **Two limits per node,** the share of its CPU and of its memory in use above which it takes

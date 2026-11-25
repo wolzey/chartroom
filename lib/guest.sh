@@ -28,7 +28,8 @@ guest_run() { # <home> <chartroom verb...>: in the guest home, with the login PA
 guest_meta_file() { printf '%s/tasks/%s/meta.json' "$1" "$2"; } # <guest dir> <id>
 guest_log_file() { printf '%s/tasks/%s/events.log' "$1" "$2"; } # <guest dir> <id>
 
-guest_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+# (GNU stat first: its -f is the file system's status, which prints no file's time)
+guest_mtime() { local m; m="$(stat -c %Y "$1" 2>/dev/null)" || m="$(stat -f %m "$1" 2>/dev/null)" || m=0; [[ "$m" =~ ^[0-9]+$ ]] || m=0; printf '%s' "$m"; }
 
 guest_check() { # <payload>: sets G_HOME, G_ID, G_DIR for a task the brain dispatched here
   G_HOME="$(jq -r '.home // ""' <<<"$1")"; G_ID="$(jq -r '.id // ""' <<<"$1")"
@@ -262,6 +263,7 @@ guest_prepare() { # <payload>
       GP_PROJECT="$path${prefix:+/$prefix}"
       if guest_cloned "$path"; then
         GP_CLONED=1 GP_WAITED=1
+        if [[ "$(jq -r '.env // [] | length' <<<"$p")" != 0 ]]; then env_put_here "$remote" "$path" "$(jq -c '.env' <<<"$p")" || return 7; fi
         guest_setup "$path" "$remote" "$(jq -r '.setup // ""' <<<"$p")" || return
       fi
       guest_project_ok "$GP_PROJECT" || return 6
@@ -389,7 +391,12 @@ guest_dispatch() { # <payload>
     brief="${brief//"$bh"/"$g"}"
     if (( GP_CLONED )); then
       name="$(device_cfg NAME)"
-      brief+=$'\n\n'"## This machine"$'\n\n'"You run on ${name:-another machine} ($(uname -s)), in a clone chartroom made here of the project. It has no \`.env\` file and no other secret. If the work needs one, post \`blocked\` naming the file; do not look for it elsewhere, and do not ask for its value."
+      a="$(env_files_of "${project%/"$(jq -r '.prefix // ""' <<<"$p")"}" 2>/dev/null | paste -sd' ' - || true)"
+      if [[ -n "$a" ]]; then
+        brief+=$'\n\n'"## This machine"$'\n\n'"You run on ${name:-another machine} ($(uname -s)), in a clone chartroom made here of the project. Its development env files are in that clone ($a), with production values left out; copy what you need into your worktree. If the work needs a value that is not there, post \`blocked\` naming it; do not look for it elsewhere, and do not ask for its value."
+      else
+        brief+=$'\n\n'"## This machine"$'\n\n'"You run on ${name:-another machine} ($(uname -s)), in a clone chartroom made here of the project. It has no \`.env\` file and no other secret. If the work needs one, post \`blocked\` naming the file; do not look for it elsewhere, and do not ask for its value."
+      fi
     fi
     printf '%s\n' "$brief" >"$g/tasks/$id/brief.md"
     jq -cn --argjson a "$attempt" --argjson o "$(wc -l <"$(guest_log_file "$g" "$id")" | tr -d ' ')" \

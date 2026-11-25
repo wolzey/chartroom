@@ -143,7 +143,13 @@ node_launch() { # <id> <wt (none here)> <agent> [over 0|1]
     log_event "$id" note "$name clones ${clone// / and } and sets it up first; the worker starts after that, or it goes to the next machine"
     place_hold "$id" "$did" 2700; wait="$(cfg NODE_PREP_WAIT '' 20)"; [[ "$wait" =~ ^[0-9]+$ ]] || wait=20
   fi
-  cid="$(fleet_enqueue "$did" dispatch "$(node_payload "$id" "$attempt" "${4:-0}" "$repos")")"
+  # the project's env files, for a clone chartroom makes or made there (lib/env.sh), encrypted to that device's key
+  local envf='[]'
+  if [[ -n "$clone" ]] || jq -e --arg r "$(place_remote "$(meta "$id" project)")" '.probe // "" | split("\n") | map(split("\t")) | any(.[0] == "checkout" and .[1] == $r and ((.[4] // "") | startswith("cloned")))' >/dev/null <<<"$(fleet_device_json "$did")"; then
+    envf="$(env_for_dispatch "$(place_remote "$(meta "$id" project)")" "$did" 2>/dev/null)" || { envf='[]'; log_event "$id" note "its env files could not be given to $name now"; }
+  fi
+  cid="$(fleet_enqueue "$did" dispatch "$(node_payload "$id" "$attempt" "${4:-0}" "$repos" | jq -c --argjson e "${envf:-[]}" '.env = $e')")"
+  [[ "$envf" == '[]' || -z "$envf" ]] || env_gave "$(place_remote "$(meta "$id" project)")" "$did"
   meta_set "$id" node_cmd "$cid"
   st="$(fleet_device_json "$did" | jq -r '.status // "unknown"')"
   if [[ "$st" != online ]]; then

@@ -157,7 +157,7 @@ device_do_join() {
 }
 
 # What this agent can be asked to do over the connection (the brain refuses a pin without it).
-CR_DEVICE_CAPS="commands update dispatch limits place clone"
+CR_DEVICE_CAPS="commands update dispatch limits place clone env"
 device_rev() { git -C "$CR_ROOT" rev-parse HEAD 2>/dev/null || true; }
 
 device_heartbeat_body() { # <file> <started>
@@ -220,7 +220,7 @@ device_run_command() { # <command json> <token>
   if [[ ! -f "$cache" ]]; then
     out="$(mktemp)"; err="$(mktemp)"
     case "$type" in
-      ping|update|limits|dispatch|steer|stop|peek|git|close|close-done|permit-sync)
+      ping|update|limits|dispatch|steer|stop|peek|git|close|close-done|permit-sync|env-list|env-describe|env-get|env-cert|env-put|env-forget)
         ( "device_cmd_${type//-/_}" "$(jq -c '.payload // {}' <<<"$c")" ) >"$out" 2>"$err" </dev/null || rc=$? ;;
       *) echo "this agent does not know the command '$type' (chartroom node update)" >"$err"; rc=2 ;;
     esac
@@ -343,7 +343,8 @@ cmd_device_run() {
           device_status_write ok
           [[ "$(jq -r '.rotate // false' <<<"$DEV_BODY")" != true ]] || device_rotate "$tok" ;;
         401)
-          device_log "the brain revoked this device (401: $(device_err)); the agent stops and leaves everything here as it is"
+          device_log "the brain revoked this device (401: $(device_err)); the agent deletes the env files it was given, stops, and leaves everything else here as it is"
+          env_forget_here
           device_status_write revoked "$(device_err)"; return $(( once ? 1 : 0 )) ;; # exit 0: launchd leaves it stopped
         *)
           st="$( [[ "$DEV_HTTP" == 000 ]] && echo "the brain did not answer" || echo "the brain answered $DEV_HTTP: $(device_err)")"
@@ -492,7 +493,8 @@ cmd_device() {
     status) cmd_device_status "$@" ;;
     leave) cmd_device_leave "$@" ;;
     update) cmd_device_update "$@" ;;
-    *) die "usage: chartroom device join <brain-url> <code> | run [--once] | status [--json] | leave | update" ;;
+    share-env) cmd_device_share_env "$@" ;;
+    *) die "usage: chartroom device join <brain-url> <code> | run [--once] | status [--json] | leave | update | share-env on|off" ;;
   esac
 }
 

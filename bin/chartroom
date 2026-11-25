@@ -105,6 +105,8 @@ source "$CR_ROOT/lib/device.sh"
 source "$CR_ROOT/lib/place.sh"
 # shellcheck source=../lib/guest.sh
 source "$CR_ROOT/lib/guest.sh"
+# shellcheck source=../lib/env.sh
+source "$CR_ROOT/lib/env.sh"
 # shellcheck source=../lib/stuck.sh
 source "$CR_ROOT/lib/stuck.sh"
 # shellcheck source=../lib/brain.sh
@@ -2068,6 +2070,14 @@ chartroom - run a crew of coding agents from one agent session (the XO)
   chartroom rule import <map> [--apply]   import a map as rulings: dry run by default; --apply
                                           backs the file up to records/, appends the rulings,
                                           removes the imported bullets and renders the block
+  chartroom env scan [<repo>] [--json]    the fleet's env files (docs/multi-machine.md, Env files): which
+                                          machine has which repo's, with modes, dates and key names (never
+                                          a value); env owner <repo> <device>|here|never [--drop K,..]
+                                          [--keep K,..] names whose copy is the one; env collect <repo>|--all
+                                          takes it into the brain's encrypted store, production left out;
+                                          env ls; env refresh [<repo>]; env forget <repo>|--node <device>.
+                                          A node that clones gets them with its next worker of the repo.
+                                          Each machine shares only after chartroom device share-env on, there
   chartroom permit ls [<id>] [--all] [--json]
                                           permission cards a Claude worker's hooks raised (open
                                           ones; --all: answered, expired and lapsed too)
@@ -2241,5 +2251,6 @@ case "$cmd" in
   todo) cmd_todo "$@" ;;
   -h|--help) cmd_help ;;
   -v|--version) cmd_version ;;
+  env) cmd_env "$@" ;;
   *) die "unknown command '$cmd' (try: chartroom help)" ;;
 esac

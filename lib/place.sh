@@ -208,8 +208,8 @@ place_needs() { # <id> <backend it would run there, hc:claude ...>
   stays="$(place_stays "$1")"
   [[ -n "$stays" ]] || scan="$(place_scan "$1")"
   local agent=""; [[ "$2" != hc:* ]] || agent="${2#hc:}"
-  jq -c --arg agent "$agent" --arg stays "$stays" --arg tools "$(place_tools "$1")" --arg own "$(place_remote "$(meta "$1" project)")" --arg pins "$(place_pins "$1")" '
-    . + {agent: $agent, tools: ($tools | split("\n") | map(select(length > 0))), own: $own, pins: ($pins | split("\n") | map(select(length > 0))),
+  jq -c --arg agent "$agent" --arg stays "$stays" --arg tools "$(place_tools "$1")" --arg own "$(place_remote "$(meta "$1" project)")" --arg pins "$(place_pins "$1")" --arg stored "$(env_stored "$(place_remote "$(meta "$1" project)")" && echo 1)" '
+    . + {agent: $agent, stored: ($stored == "1"), tools: ($tools | split("\n") | map(select(length > 0))), own: $own, pins: ($pins | split("\n") | map(select(length > 0))),
          repos: ((if $own == "" then [] else [$own] end) + .repos | unique),
          here: (if $stays != "" then $stays else .here end)}' <<<"$scan"
 }
@@ -258,8 +258,8 @@ PLACE_JQ='
             elif ($row.logins.gh.status // "missing") != "ok" then "no checkout of \($r), and gh is not logged in to clone it" else empty end)] | .[0])
       // (if $row.budgets.clone == "on" and ($person | not) and (($n.pins // []) | length) > 0 and ($row | place_mise | not)
           then "it has no mise for the tools \($own) pins (\($n.pins | join(", ")))" else null end)
-      // (if ($n.tools | index("env")) and ($person | not) and (any($mine[]; (.flags // []) | index("env")) | not)
-          then "it has no env file of \($own) (chartroom copies no secret)" else null end)
+      // (if ($n.tools | index("env")) and ($person | not) and ($n.stored | not) and (any($mine[]; (.flags // []) | index("env")) | not)
+          then "it has no env file of \($own), and the fleet store has none (chartroom env)" else null end)
     end;'
 
 place_holds() { # -> {"<device id|here>": count}, of the holds still counted; old ones are dropped

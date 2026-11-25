@@ -291,6 +291,7 @@ cmd_node_revoke() {
   [[ $# -eq 1 ]] || die "usage: chartroom node revoke <name|id>"
   fleet_lock; trap fleet_unlock EXIT
   local id; id="$(fleet_resolve "$1")"
+  fleet_unlock; env_drop_node "$id"; fleet_lock # (told while its token still works: the env files it was given go first)
   fleet_update "$id" '.token_sha256 = null | .prev_sha256 = null | .prev_until = null | .rotate = false | .revoked = $at' --arg at "$(now)"
   echo "revoked $1 ($id): its next request gets 401 and its agent stops; nothing on it is touched"
   echo "to enrol it again: chartroom node add --replace $id"
