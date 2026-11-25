@@ -169,7 +169,12 @@ headless_peek() { # <id> <n>
   esac
   return 0
 }
-headless_close() { pid_alive "$(meta "$1" pid)" && die "worker still running; 'chartroom stop $1' first"; return 0; }
+# (a zombie is a worker that ended and was not reaped yet, say where its parent is gone: not running)
+headless_close() {
+  local p; p="$(meta "$1" pid)"
+  if pid_alive "$p" && [[ "$(ps -o stat= -p "$p" 2>/dev/null | tr -d ' ')" != Z* ]]; then die "worker still running; 'chartroom stop $1' first"; fi
+  return 0
+}
 headless_attach() { die "headless workers have no terminal; use 'chartroom peek $1'"; }
 headless_watch() { pid_watch "$1"; }
 

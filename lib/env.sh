@@ -85,11 +85,43 @@ env_registries_of() { # <checkout>
 }
 env_npm_userconfig() { local f="${NPM_CONFIG_USERCONFIG:-${npm_config_userconfig:-$HOME/.npmrc}}"; [[ -f "$f" && ! -L "$f" ]] && printf '%s' "$f"; } # this machine's
 # This machine's registry login for a repo: only the lines of its registries' auth; nothing when there is none.
-env_npm_login_of() { # <checkout>
+# A line that names a variable (`_authToken=${TOKEN}`, as npm reads it from the environment) gets its value from
+# this user's login shell, where npm would find it; a variable not set there leaves the line out (ENV_NPM_UNSET says which).
+env_npm_login_of() { env_npm_login_get "$1"; printf '%s' "$ENV_NPM_LOGIN"; } # <checkout>
+# The same, into ENV_NPM_LOGIN and ENV_NPM_UNSET (the variables not set), in this shell.
+env_npm_login_get() { # <checkout>
+  local raw names line out="" v
+  ENV_NPM_UNSET="" ENV_NPM_LOGIN=""
+  raw="$(env_npm_lines_of "$1")"; [[ -n "$raw" ]] || return 0
+  names="$(grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]{0,100}\}' <<<"$raw" | sort -u | tr -d '${}' || true)"
+  local -A val=()
+  if [[ -n "$names" ]]; then
+    local sh got i=0 n; sh="$(login_shell)"; mapfile -t n <<<"$names"
+    if [[ "$sh" != none && -x "$sh" ]]; then
+      # (the values, \036 apart, read in one login shell; never on a command line or in a file)
+      got="$(perl -e 'alarm 10; exec @ARGV' "$sh" -lic "$(printf 'printf "\\036%%s" "${%s-}"; ' "${n[@]}")printf '\\036'" </dev/null 2>/dev/null || true)"
+      got="${got#*$'\036'}"
+      for v in "${n[@]}"; do val[$v]="${got%%$'\036'*}"; got="${got#*$'\036'}"; i=$((i + 1)); done
+    fi
+  fi
+  while IFS= read -r line; do
+    local bad=""
+    for v in $(grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]{0,100}\}' <<<"$line" | tr -d '${}' || true); do
+      if [[ -z "${val[$v]:-}" || "${val[$v]}" == *$'\n'* ]]; then bad="$v"; break; fi
+      line="${line//"\${$v}"/"${val[$v]}"}"
+    done
+    if [[ -n "$bad" ]]; then ENV_NPM_UNSET+="${ENV_NPM_UNSET:+ }$bad"; continue; fi
+    out+="$line"$'\n'
+  done <<<"$raw"
+  ENV_NPM_LOGIN="$out"
+}
+# The lines themselves, as the npm config has them.
+env_npm_lines_of() { # <checkout>
   local hosts f; hosts="$(env_registries_of "$1")"; [[ -n "$hosts" ]] || return 0
   f="$(env_npm_userconfig)" || return 0
   (( $(wc -c <"$f") <= CR_ENV_MAX )) || return 0
-  awk -v hosts="$hosts" 'BEGIN { n = split(hosts, h, "\n") }
+  # (space apart: a BSD awk refuses a -v value with a newline in it)
+  awk -v hosts="$(tr '\n' ' ' <<<"$hosts")" 'BEGIN { n = split(hosts, h, " ") }
     { line = $0; sub(/\r$/, "", line); l = line; sub(/^[[:space:]]+/, "", l)
       if (l !~ /^\/\//) next
       host = substr(l, 3); sub(/[\/:].*/, "", host); host = tolower(host)
@@ -159,12 +191,18 @@ env_describe() { # <checkout> <salt> <drop> <keep>
   done < <(env_files_of "$d") | jq -s -c .
 }
 env_describe_npm() { # <checkout> <salt> -> [] or [{rel: npm-login, ...}] (its keys: the npmrc keys, never a value)
-  local login f; login="$(env_npm_login_of "$1")"
-  [[ -n "$login" ]] || { echo '[]'; return; }
+  local login f raw; env_npm_login_get "$1"; login="$ENV_NPM_LOGIN"; raw="$(env_npm_lines_of "$1")"
+  [[ -n "$raw" ]] || { echo '[]'; return; }
   f="$(env_npm_userconfig)"
-  jq -cn --arg k "$(sed -E 's/[[:space:]]*=.*//' <<<"$login")" --arg m "$(stat -c %a "$f" 2>/dev/null || stat -f %Lp "$f" 2>/dev/null || echo -)" --argjson t "$(guest_mtime "$f")" \
-    --arg fp "$( { printf '%s\n' "$2"; printf '%s\n' "$login"; } | sha256_hex | cut -c1-16)" --arg rel "$CR_ENV_NPM" \
-    '[{rel: $rel, kind: "npm", mode: $m, mtime: $t, fp: $fp, keys: ($k | split("\n") | map(select(length > 0) | {k: ., why: null}))}]'
+  # (each key, and where its value comes from: a variable of the login shell, or one that is not set there)
+  jq -cn --arg k "$(awk -v unset=" $ENV_NPM_UNSET " '{ i = index($0, "="); if (!i) next; k = substr($0, 1, i - 1); val = substr($0, i + 1); sub(/[[:space:]]+$/, "", k)
+      v = ""; if (match(val, /\$\{[A-Za-z_][A-Za-z0-9_]*\}/)) { n = substr(val, RSTART + 2, RLENGTH - 3); v = (index(unset, " " n " ") ? "\tunset:" n : "\tfrom:" n) }
+      print k v }' <<<"$raw")" --arg m "$(stat -c %a "$f" 2>/dev/null || stat -f %Lp "$f" 2>/dev/null || echo -)" --argjson t "$(guest_mtime "$f")" \
+    --arg fp "$([[ -z "$login" ]] || { printf '%s\n' "$2"; printf '%s\n' "$login"; } | sha256_hex | cut -c1-16)" --arg rel "$CR_ENV_NPM" \
+    '[{rel: $rel, kind: "npm", mode: $m, mtime: $t, fp: (if $fp == "" then null else $fp end),
+       keys: ($k | split("\n") | map(select(length > 0) | split("\t") | {k: .[0],
+         why: (if (.[1] // "") | startswith("unset:") then "its variable \(.[1][6:]) is not set in the login shell" else null end),
+         from: (if (.[1] // "") | startswith("from:") then .[1][5:] else null end)}))}]'
 }
 
 # The checkouts of this machine that have env files: [{remote, files: [rel]}]; chartroom's own clones are not a source.
@@ -375,6 +413,7 @@ cmd_env_scan() {
       ([.[] | .machine as $m | .repos[].files[] | . + {m: $m}] | group_by(.rel) | .[]
         | "\(.[0].rel)" + (if ([.[].fp] | unique | length) > 1 then "  (the machines differ)" else "" end),
           (.[] | "  \(.m): mode \(.mode), changed \(.mtime | todate[0:10]), " + (if .fp == null then "cannot be read as an env file: it would not be taken" else "\(.keys | length) keys"
+              + ([.keys[] | select(.from != null) | "\(.k) from $\(.from)"] | if length > 0 then "; " + join(", ") else "" end)
               + ([.keys[] | select(.why != null) | "\(.k) (\(.why))"] | if length > 0 then "; left out: " + join(", ") else "" end) end)),
           ([.[].keys[].k] | unique) as $all
           | (.[] | ([.keys[].k]) as $have | ($all - $have) | select(length > 0) | . as $miss | "  missing on one of them: \($miss | join(", "))"))

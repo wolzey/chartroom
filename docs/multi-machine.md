@@ -300,7 +300,9 @@ are hard requirements; what keeps a task on this machine whatever the others off
   file, `npm-login`. From the owner's npm user config it takes only the auth lines (`//host/:_authToken=...`) of the registries
   that the repo's own tracked `.npmrc` files name (`@scope:registry=https://host/`). On a node it is `.git/chartroom/npmrc`
   in the clone, 0600, given to the setup as `NPM_CONFIG_USERCONFIG`; the worker's brief names it too. Nobody's `~/.npmrc` is
-  written, and the node's is not read. `env scan` shows its key names, as for any file.
+  written, and the node's is not read. A line that names a variable (`_authToken=${TOKEN}`, as npm reads it from the
+  environment) takes its value from the owner's login shell, where npm would find it. If the variable is not set there, the line is
+  left out and the scan says so. `env scan` shows each key name and the variable it comes from, never a value.
 - **Production left out.** On the owner, before a file leaves it, each line is read as an assignment. These are replaced by a
   comment: a key or value that says prod, production or live, a database or queue address on another host, and any key the
   owner's line drops (`--drop`). `--keep` keeps a key by name, for a name that only looks like production.

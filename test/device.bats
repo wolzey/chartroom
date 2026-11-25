@@ -996,7 +996,7 @@ values_nowhere() { ! grep -rqE 'dev-secret-123|live-secret-456' "$1"; }
   printf '//npm.example.com/:_authToken=npm-secret-321\n//registry.npmjs.org/:_authToken=npmjs-secret-654\ncolor=false\n' >"$HOME/.npmrc"
   # the node's own, which is never read or written
   printf 'mine=1\n' >"$DEV/home/.npmrc"
-  setup_is "test \"\$(cat \$NPM_CONFIG_USERCONFIG)\" = //npm.example.com/:_authToken=npm-secret-321 && echo ok >$BATS_TEST_TMPDIR/npm-setup"
+  setup_is "cp \$NPM_CONFIG_USERCONFIG $BATS_TEST_TMPDIR/npm-setup"
   cmdr device share-env on >/dev/null; cmdr env owner acme/proj here >/dev/null
   run cmdr env scan acme/proj; echo "$output"
   [[ "$output" == *"npm-login"*"studio: mode "*"1 keys"* ]]; ! grep -qE 'npm-secret|npmjs-secret' <<<"$output"
@@ -1005,7 +1005,7 @@ values_nowhere() { ! grep -rqE 'dev-secret-123|live-secret-456' "$1"; }
   ID="$(new_task --backend command 2>/dev/null)"
   run cr dispatch "$ID"; echo "$output"; [ "$status" -eq 0 ]
   until_true 'ev_has " done: stub finished"'
-  [ "$(cat "$BATS_TEST_TMPDIR/npm-setup")" = ok ]
+  [ "$(cat "$BATS_TEST_TMPDIR/npm-setup")" = "//npm.example.com/:_authToken=npm-secret-321" ]
   f="$CLONE/.git/chartroom/npmrc"
   [ "$(cat "$f")" = "//npm.example.com/:_authToken=npm-secret-321" ]
   [ "$(stat -c %a "$f" 2>/dev/null || stat -f %Lp "$f")" = 600 ]
@@ -1013,6 +1013,28 @@ values_nowhere() { ! grep -rqE 'dev-secret-123|live-secret-456' "$1"; }
   grep -q "NPM_CONFIG_USERCONFIG=$f" "$G/tasks/$ID/brief.md"
   ! grep -rqE 'npm-secret|npmjs-secret' "$FLEET" "$CHARTROOM_HOME" "$DEV/state/chartroom/device"
   run cmdr env forget acme/proj; [ "$status" -eq 0 ]; [ ! -e "$f" ]; [ "$(cat "$DEV/home/.npmrc")" = "mine=1" ]
+}
+
+@test "env: a registry login that names a variable gets its value from the owner's login shell; one not set there is left out and said so" {
+  env_setup
+  printf '@acme:registry=https://npm.example.com/\n@other:registry=https://npm.other.example/\n' >"$PROJECT/.npmrc"; git -C "$PROJECT" add .npmrc; git -C "$PROJECT" commit -qm npmrc
+  git -C "$PROJECT" push -q https://github.com/acme/proj.git HEAD:main
+  printf '//npm.example.com/:_authToken=${NPM_TEST_TOKEN}\n//npm.other.example/:_authToken=${NOT_SET_TOKEN}\n' >"$HOME/.npmrc"
+  # this user's login shell, where npm finds the value
+  printf '#!/usr/bin/env bash\nexport NPM_TEST_TOKEN=npm-secret-999\nexec bash -c "${@: -1}"\n' >"$BATS_TEST_TMPDIR/loginsh"; chmod +x "$BATS_TEST_TMPDIR/loginsh"
+  export CHARTROOM_LOGIN_SHELL="$BATS_TEST_TMPDIR/loginsh"
+  setup_is "cp \$NPM_CONFIG_USERCONFIG $BATS_TEST_TMPDIR/npm-setup"
+  cmdr device share-env on >/dev/null; cmdr env owner acme/proj here >/dev/null
+  run cmdr env scan acme/proj; echo "$output"
+  [[ "$output" == *"//npm.example.com/:_authToken from \$NPM_TEST_TOKEN"* ]]
+  [[ "$output" == *"left out: //npm.other.example/:_authToken (its variable NOT_SET_TOKEN is not set in the login shell)"* ]]
+  ! grep -q npm-secret <<<"$output"
+  cmdr env collect acme/proj >/dev/null
+  ID="$(new_task --backend command 2>/dev/null)"; cr dispatch "$ID" >/dev/null
+  until_true 'ev_has " done: stub finished"'
+  [ "$(cat "$BATS_TEST_TMPDIR/npm-setup")" = "//npm.example.com/:_authToken=npm-secret-999" ]
+  [ "$(cat "$CLONE/.git/chartroom/npmrc")" = "//npm.example.com/:_authToken=npm-secret-999" ]
+  ! grep -rq npm-secret "$FLEET" "$CHARTROOM_HOME" "$DEV/state/chartroom/device"
 }
 
 @test "env: a node revoked while it was away deletes what it was given when the brain answers it 401" {

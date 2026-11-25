@@ -10,7 +10,8 @@ are stable from 0.1.0.
 - `chartroom recall <id>`: a task placed on another machine comes back, its record kept and its branch brought home, to be
   dispatched again here (`set <id> node=here`). `stop` cancels a device's clone or setup that is still under way.
 - The fleet's env store carries a repo's package-registry login too (`npm-login`), only the lines of the registries its own `.npmrc`
-  names. On a node it is a 0600 file chartroom owns, given to the setup as `NPM_CONFIG_USERCONFIG`.
+  names. On a node it is a 0600 file chartroom owns, given to the setup as `NPM_CONFIG_USERCONFIG`. A `${VAR}` in such a
+  line takes its value from the owner's login shell.
 - **A node can take work of a project it has no checkout of** (`chartroom node limits <name> --clone on`; off at first): it clones the
   project from GitHub with its own gh login, runs the project's setup once (`setup=` in `projects.md`, else the repo's own, with
   `mise install` for the tools it pins), and the worker starts there. A clone or setup that fails refuses the task with the reason, and
@@ -59,6 +60,7 @@ are stable from 0.1.0.
   where it is installed; a machine on an older chartroom still shows how many agents, with no names.
 
 ### Fixed
+- A finished worker that its parent never reaped (a zombie) no longer counts as still running at close.
 - Closing a task on another machine while its worker there was still running closed the record here and left the worker
   running there. That close now fails as the machine refuses it; `recall` stops the worker and waits for it.
 - A brief that names this home's files relative to the home (`tasks/<id>/report.md`), by a prefix or pattern, or names one of its worktrees,
