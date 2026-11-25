@@ -102,7 +102,18 @@ All the rules live in one file. **First match wins:**
      task store (`CHARTROOM_DB`); a Bash line that names the store is a `commander:controls` card.
 2. **Questions** (`AskUserQuestion`, `ExitPlanMode`) get no opinion. They are not permissions.
 3. **`preapproved:<p-id>` → allow**, once.
-4. **`always:<p-id>` → allow.**
+4. **`always:<p-id>` → allow.** For Bash, an always answer stores each command of the line by its
+   program and fixed leading words: up to four, stopping at the first flag, path, id, number,
+   quote or `=` (`gh run view 123 --log | tail -5` stores `gh run view:*` and `tail:*`). A lone
+   program stays exact unless it is a read-only filter (`grep`, `head`, `tail`, `jq`, ...); so do
+   script runners and hosts (`python3`, `node`, `ssh`, `awk`, `sed`, ...) and any command whose
+   words name `push`, `api`, `delete`, `merge`, `deploy` or a like verb, where the open part would
+   be the branch, the method or the target. A later line is allowed only when every one of its
+   commands is covered by a record, it is plain (no `$(...)`, backticks, `<`, `VAR=value`, `sudo`,
+   `xargs`, a shell or `eval`, and redirects only to `/dev/null` and the like), and the policy
+   without "always" would allow it or card it under the same rule and reason as the answered card:
+   `gh pr:*` answered for `gh pr view` never covers `gh pr comment`. A line it cannot read this
+   way keeps the whole line as its pattern, matched exactly.
 5. **`commander:*` → card**, unless a grant covers every match (then `grant:<name>` → allow):
    - **production:** `prod`/`production` in an infra command; `kubectl`/`helm`/`terraform`/
      `pulumi` changes; `gcloud`/`az`/`aws`/`gsutil` mutations; a database client on a remote host.

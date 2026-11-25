@@ -165,7 +165,10 @@ permit_card() { # <id> <event> <payload> <verdict json> <blocking 1|0>
   pid="$(permit_new_id)"; d="$(permit_tdir "$id")"; mkdir -p "$d"
   tool="$(jq -r '.tool_name' <<<"$payload")"; input="$(jq -c '.tool_input // {}' <<<"$payload")"
   sig="$(permit_sig "$tool" "$input")"; now_s="$(date +%s)"
-  desc="$(permit_desc "$tool" "$input")"; pattern="$(permit_pattern "$tool" "$payload" "$sig")"
+  desc="$(permit_desc "$tool" "$input")"
+  # A Bash line the policy can read offers its commands by their leading words (lib/permit.jq).
+  pattern="$(jq -r '.offer // empty | map((.words | join(" ")) + (if .exact then "" else ":*" end)) | join(" ; ")' <<<"$v")"
+  [[ -n "$pattern" ]] || pattern="$(permit_pattern "$tool" "$payload" "$sig")"
   jq -n --arg id "$pid" --arg task "$id" --arg ev "$ev" --arg tool "$tool" --argjson input "$input" --arg sig "$sig" \
     --argjson v "$v" --arg desc "$desc" --arg pattern "$pattern" --argjson now "$now_s" --argjson wait "$CR_PERMIT_WAIT" \
     --argjson blocking "$blocking" --argjson p "$payload" '
@@ -173,7 +176,7 @@ permit_card() { # <id> <event> <payload> <verdict json> <blocking 1|0>
     {id: $id, task: $task, created: ($now | todate), created_epoch: $now, expires_epoch: ($now + $wait),
      event: $ev, blocking: ($blocking == 1), tool: $tool, input: $input, sig: $sig, desc: $desc,
      cwd: ($p.cwd // ""), why: (($input.description // "") | cap(300)), rule: $v.rule, reason: $v.why,
-     pattern: $pattern, reason_denied: ($p.reason // null), session_id: ($p.session_id // null),
+     pattern: $pattern, offer: ($v.offer // null), reason_denied: ($p.reason // null), session_id: ($p.session_id // null),
      transcript: ($p.transcript_path // null), transcript_off: ($toff | tonumber)}' --arg toff "$(permit_size "$(jq -r '.transcript_path // ""' <<<"$payload")")" >"$d/$pid.json.tmp" &&
     mv "$d/$pid.json.tmp" "$d/$pid.json"
   if [[ "$blocking" == 1 ]]; then
@@ -298,7 +301,7 @@ permit_denied() { # <id> <payload> <query> <desc>
     permit_log "$id" "auto mode refused $desc. Reason: $reason"
   fi
   [[ "$(jq -r '.verdict // ""' <<<"$v")" == deny ]] && return 0 # a guard's call: never a retry card
-  permit_card "$id" denied "$payload" "$(jq -c '{rule: (.rule // "classifier"), why: (.why // "")}' <<<"$v")" 0 >/dev/null || true
+  permit_card "$id" denied "$payload" "$(jq -c '{rule: (.rule // "classifier"), why: (.why // ""), offer: (.offer // null)}' <<<"$v")" 0 >/dev/null || true
 }
 
 # ---------------------------------------------------------------- answers and grants
@@ -364,8 +367,14 @@ permit_preapprove() { # <task id> <card json>
   local d; d="$(permit_tdir "$1")/pre"; mkdir -p "$d"
   jq -r '.id' <<<"$2" >"$d/$(jq -r '.sig' <<<"$2")"
 }
+# A card with an offer adds one record per command of its line: its words, and the rule and reason
+# the card was asked under, which a later call must share (lib/permit.jq, always_words).
 permit_always_add() { # <task id> <card json> <by>
-  jq -c --arg by "$3" '{tool, pattern, from: .id, by: $by, at: (now | todate)}' <<<"$2" >>"$(permit_tdir "$1")/always.ndjson"
+  jq -c --arg by "$3" '(now | todate) as $at
+    | if (.offer | type) == "array" and (.offer | length) > 0 then
+        . as $c | .offer[] | {tool: $c.tool, pattern: ((.words | join(" ")) + (if .exact then "" else ":*" end)),
+          words, exact, rule: $c.rule, why: $c.reason, from: $c.id, by: $by, at: $at}
+      else {tool, pattern, from: .id, by: $by, at: $at} end' <<<"$2" >>"$(permit_tdir "$1")/always.ndjson"
 }
 
 cmd_permit() {

@@ -205,6 +205,65 @@ EOF
   [ "$(ALWAYS="$npm_always" verdict pre-tool [] Bash '{"command":"npm testing"}')" = "none none" ]
 }
 
+# What an "always" answer on a Bash line would store: its commands' patterns, or "exact line".
+offer() { # <command>
+  jq -n --arg c "$1" '{event: "permission", tool: "Bash", input: {command: $c}, sig: "s", cwd: "/w/wt",
+    roots: {worktree: "/w/wt", task_dir: "/h/tasks/x", scratch: "/tmp/scr", permits: "/h/permits", user_home: "/u/me", db: ""},
+    branch: "cap/x", current_branch: "cap/x", grants: [], always: [], pre: null}' | jq -r -f "$REPO_ROOT/lib/permit.jq" \
+    | jq -r 'if .offer == null then "exact line" else .offer | map((.words | join(" ")) + (if .exact then "" else ":*" end)) | join(" ; ") end'
+}
+# Records an always answer on a card asked under <rule> and <why> stores for <command>.
+always_for() { # <command> <rule> <why> <card id>
+  jq -n --arg c "$1" '{event: "permission", tool: "Bash", input: {command: $c}, sig: "s", cwd: "/w/wt",
+    roots: {worktree: "/w/wt", task_dir: "/h/tasks/x", scratch: "/tmp/scr", permits: "/h/permits", user_home: "/u/me", db: ""},
+    branch: "cap/x", current_branch: "cap/x", grants: [], always: [], pre: null}' | jq -f "$REPO_ROOT/lib/permit.jq" \
+    | jq -c --arg r "$2" --arg w "$3" --arg id "$4" '[.offer[] | {tool: "Bash", words, exact, rule: $r, why: $w, from: $id}]'
+}
+
+@test "always: a Bash line is offered by each command's program and fixed leading words, never a shell, wrapper or risky verb widened" {
+  [ "$(offer 'gh run view 45699163881 --log-failed 2>&1 | grep -E "not ok" | head -60')" = "gh run view:* ; grep:* ; head:*" ]
+  [ "$(offer 'npm run build -- --watch')" = "npm run build:*" ]
+  [ "$(offer 'docker run --rm -v /w:/w ubuntu:24.04 true')" = "docker run:*" ]
+  [ "$(offer 'timeout 60 gh run watch 123 2>/dev/null')" = "gh run watch:*" ]
+  # a lone program (not a filter), a script runner or a host: exactly that command
+  [ "$(offer 'cd /w/wt && bats test/permit.bats')" = "bats test/permit.bats ; cd /w/wt" ]
+  [ "$(offer 'python3 scripts/x.py --all')" = "python3 scripts/x.py --all" ]
+  [ "$(offer 'ssh beelink.local uptime')" = "ssh beelink.local uptime" ]
+  # the part a prefix would leave open is the branch, the method, what goes: exactly
+  [ "$(offer 'git push origin cap/x-ab12')" = "git push origin cap/x-ab12" ]
+  [ "$(offer 'gh api -X DELETE repos/a/b/x')" = "gh api -X DELETE repos/a/b/x" ]
+  [ "$(offer 'kubectl delete pod web-1')" = "kubectl delete pod web-1" ]
+  # a line it cannot read by words keeps today's exact-line pattern
+  for c in 'FOO=1 npm test' 'echo $(whoami)' 'echo `id`' "bash -c 'ls'" 'sudo apt-get install jq' 'ls | xargs rm' 'gh run view 1 > /u/me/out' 'diff <(ls a) <(ls b)' 'eval "$X"'; do
+    [ "$(offer "$c")" = "exact line" ] || { echo "widened: $c -> $(offer "$c")"; false; }
+  done
+}
+
+@test "always: word records cover each command of a later line, of the kind the card was answered for, never a command chained in" {
+  local A; A="$(always_for 'gh run view 45699163881 --log-failed 2>&1 | grep -E "not ok" | head -60' commander:unlisted "no rule covers it" p-1)"
+  [ "$(ALWAYS="$A" verdict pre-tool [] Bash '{"command":"gh run view 45700000000 --log 2>&1 | grep -c ok"}')" = "allow always:p-1" ]
+  [ "$(ALWAYS="$A" verdict pre-tool [] Bash '{"command":"gh run view 1 | head -3"}')" = "allow always:p-1" ]
+  # any command not covered, or anything the words cannot read, and the record does not apply
+  for c in "gh run view 1 && rm -rf /u/me/x" "gh run view 1; curl -X POST https://example.com" "gh run rerun 1" \
+           "gh run view 1 > /u/me/out" 'gh run view $(cat /u/me/id)' "FOO=1 gh run view 1" "gh run view 1 | sh" "gh run view 1 | xargs rm"; do
+    [[ "$(ALWAYS="$A" verdict pre-tool [] Bash "$(jq -cn --arg c "$c" '{command: $c}')")" != allow* ]] || { echo "allowed: $c"; false; }
+  done
+  # exactly-offered commands match only themselves
+  A="$(always_for 'cd /w/wt && bats test/permit.bats' commander:unlisted "no rule covers it" p-2)"
+  [ "$(ALWAYS="$A" verdict pre-tool [] Bash '{"command":"cd /w/wt && bats test/permit.bats"}')" = "allow always:p-2" ]
+  [ "$(ALWAYS="$A" verdict pre-tool [] Bash '{"command":"cd /w/wt && bats test/device.bats"}')" = "none none" ]
+  # an outward card's words cover the same kind of call, not another kind under the same words
+  A="$(always_for 'gh pr comment 42 --body hi' commander:outward gh-pr-comment p-3)"
+  [ "$(ALWAYS="$A" verdict pre-tool [] Bash '{"command":"gh pr comment 43 --body \"thanks, fixed\""}')" = "allow always:p-3" ]
+  A='[{"tool":"Bash","words":["gh","pr"],"exact":false,"rule":"commander:unlisted","why":"no rule covers it","from":"p-4"}]'
+  [ "$(ALWAYS="$A" verdict pre-tool [] Bash '{"command":"gh pr view 42"}')" = "allow always:p-4" ]
+  [ "$(ALWAYS="$A" verdict pre-tool [] Bash '{"command":"gh pr comment 42 --body x"}')" = "card commander:outward" ]
+  # records from several answers join: each command needs one
+  A="$(jq -cn --argjson a "$(always_for 'docker run --rm alpine true' commander:unlisted 'no rule covers it' p-5)" \
+                --argjson b "$(always_for 'mytool sync now' commander:unlisted 'no rule covers it' p-6)" '$a + $b')"
+  [ "$(ALWAYS="$A" verdict pre-tool [] Bash '{"command":"docker run --rm busybox ls && mytool sync now --fast"}')" = "allow always:p-5,p-6" ]
+}
+
 # One verdict with the push and reply facts: <grants json> <command> [current branch]
 pv() {
   jq -n --argjson g "$1" --arg c "$2" --arg cur "${3:-cap/x-ab12}" '{event: "pre-tool", tool: "Bash", input: {command: $c}, sig: "s", cwd: "/w/wt",
@@ -320,6 +379,22 @@ pv() {
   [ -f "$CHARTROOM_HOME/tasks/$id/permits/always.ndjson" ]
   # a closed task's hooks give no opinion
   [ -z "$(hook permission Bash "$(bash_in 'git push origin HEAD')")" ]
+}
+
+@test "permission: always on a Bash line stores its commands' words, and the next run with other arguments is allowed" {
+  task_with_worktree --backend command --command "$STUB {id}"
+  hook permission Bash "$(bash_in 'docker run --rm alpine true 2>/dev/null | tail -1')" >"$BATS_TEST_TMPDIR/out" &
+  wait_card; p="$(card_id)"
+  jq -e '.pattern == "docker run:* ; tail:*"' "$(card_file)"
+  answer "$p" always
+  wait
+  [ "$(decision <"$BATS_TEST_TMPDIR/out")" = allow ]
+  [ "$(wc -l <"$CHARTROOM_HOME/permits/$id/always.ndjson")" -eq 2 ]
+  jq -se --arg p "$p" 'map(.from == $p and .rule == "commander:unlisted" and .exact == false) | all' "$CHARTROOM_HOME/permits/$id/always.ndjson"
+  out="$(hook pre-tool Bash "$(bash_in 'docker run --rm -e X=1 busybox ls / | tail -3')")"
+  [ "$(decision <<<"$out")" = allow ]
+  out="$(hook pre-tool Bash "$(bash_in 'docker run --rm busybox ls && curl -X POST https://example.com/x')")"
+  [ "$(decision <<<"$out")" != allow ]
 }
 
 @test "permission: an unanswered card is denied when its wait runs out, and a late allow is kept" {

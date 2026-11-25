@@ -7,6 +7,9 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- An "always" answer on a Bash line covers each of its commands by the program and its fixed leading words (`gh run view:*`),
+  so the next run with other ids or flags matches; never a command chained in, a substitution, a redirect off `/dev/null`,
+  or another kind of call than the one answered. Script runners, hosts and verbs like push, api, delete or merge stay exact.
 - The XO's watch wakes it once when its own session's context passes `CHARTROOM_XO_HANDOFF_TOKENS` (200k), to write a
   handoff note and start fresh (the chartroom skill's Context handoff).
 - A ship task gets `push-branch`, `open-pr` and `comment-pr` by default (`CHARTROOM_DEFAULT_GRANTS`; `new --grant none` for none).
@@ -72,6 +75,7 @@ are stable from 0.1.0.
   where it is installed; a machine on an older chartroom still shows how many agents, with no names.
 
 ### Fixed
+- `comment-pr` allows review replies under jq 1.8, and the quiet wake after an answered card works on Linux.
 - Claude workers on a machine whose own Claude settings leave commit attribution on (a new device) added
   the AI attribution trailer to commits. Every worker's settings now turn commit and PR attribution off.
 - A finished worker that its parent never reaped (a zombie) no longer counts as still running at close.

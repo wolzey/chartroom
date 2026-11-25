@@ -485,6 +485,48 @@ def bash_local($R; $covered):
         end) | .ok);
 def bash_local($R): bash_local($R; []);
 
+# ---------------------------------------------------------------- "always" by words
+
+# The commander's "always" for a Bash line covers each of its commands by the program and its fixed
+# leading words (`gh run view:*`), not the whole line, so the next run with another id or flag
+# matches. It reads only plain lines: no $(...), backticks, < or >(...), redirects only to
+# /dev/null and the like, no VAR=value, sudo or xargs, and no shell or eval running a script.
+def plain_line($cmd; $segs):
+  ($cmd | test("`|\\$\\(|<|>\\(") | not) and ($segs | length) > 0
+  and ($segs | all((.env | length) == 0 and (.sudo | not) and (.xargs | not)
+                   and (.head | IN(shells[], "eval", "source", ".") | not)
+                   and (.redirs | all(IN(dev_roots[]) or startswith("/dev/fd/")))));
+# Read-only filters a pipe ends in: their name alone is the pattern (`grep:*`).
+def filters: ["grep", "egrep", "fgrep", "rg", "head", "tail", "wc", "cut", "sort", "uniq", "tr", "jq", "column", "cat", "ls", "echo", "printf", "nl", "diff", "true"];
+# Programs whose next word is a script, a host or a package to run: never widened, only exact.
+def no_widen: ["python", "python3", "node", "ruby", "perl", "php", "deno", "bun", "bunx", "npx", "pnpx", "osascript", "ssh", "scp", "sftp", "mosh", "awk", "gawk", "sed", "find", "exec", "command"];
+# Verbs whose target is the part a prefix would leave open (the branch, the API method, what is
+# deleted or merged): a command naming one is offered exactly.
+def no_widen_verbs: ["push", "api", "delete", "destroy", "drop", "rm", "remove", "merge", "publish", "deploy", "apply", "release", "secret", "auth", "reset", "purge", "terminate", "revoke", "rotate", "force"];
+# One command's offer: up to four leading words, the program then plain words (no flag, path, id,
+# number, quote or `=`); two or more, or a filter alone; else the command exactly.
+def word_offer:
+  ([.path] + .args) as $w
+  | ([$w[0]] + ($w[1:4] | until(all(test("^[A-Za-z][A-Za-z0-9_-]*$")); .[:-1]))) as $p
+  | if ($w[0] | test("[$*?\\[]|^-")) or (.head | IN(no_widen[])) or ($p[1:] | any(IN(no_widen_verbs[]))) then {words: $w, exact: true}
+    elif ($p | length) >= 2 or (.head | IN(filters[])) then {words: $p, exact: false}
+    else {words: $w, exact: true} end;
+def always_offer($cmd; $segs):
+  if plain_line($cmd; $segs) then [$segs[] | word_offer] | unique else null end;
+def offer_text: (.words | join(" ")) + (if .exact then "" else ":*" end);
+def covers($w): if .exact then .words == $w else (.words | length) as $n | ($w | length) >= $n and $w[0:$n] == .words end;
+# The always records that cover every command of the line, or null. A record covers a call of the
+# kind the commander answered: the policy's verdict without "always" must allow it, or card it
+# under the same rule and reason as the answered card (`gh api` answered for a read never carries
+# a `gh api -X DELETE`).
+def always_words($rs; $cmd; $segs; $rest):
+  if ($rs | length) == 0 or (plain_line($cmd; $segs) | not) then null
+  else [$segs[] | ([.path] + .args) as $w | [$rs[] | select(covers($w))]] as $cov
+    | if ($cov | all(length > 0))
+         and ($rest.verdict != "card" or any($cov[][]; .rule == $rest.rule and .why == $rest.why))
+      then [$cov[][] | .from] | unique | join(",") else null end
+  end;
+
 # ---------------------------------------------------------------- the decision
 
 def decide:
@@ -530,19 +572,7 @@ def decide:
     # 2. a one-time pre-approval
     elif $q.pre != null then {verdict: "allow", rule: "preapproved:\($q.pre)", why: "the commander allowed exactly this call"}
     else
-      ([$q.always[]? | select(.tool == $tool) | select(
-          # A prefix or glob pattern covers one plain command only: never a line that chains,
-          # substitutes or redirects another command onto it (`npm test && git push ...`).
-          if $tool == "Bash" then (.pattern as $p
-            | ($cmd | test("[;&|`\n<>]|\\$\\(") | not) as $plain
-            | if ($p | endswith(":*")) then $plain and ($segs | length) == 1 and ($cmd == $p[:-2] or ($cmd | startswith($p[:-2] + " ")))
-              elif ($p | contains("*")) then $plain and ($segs | length) == 1 and ($cmd | test("^" + ($p | split("*") | map(esc) | join(".*")) + "$"))
-              else $cmd == $p end)
-          elif (file_tools | index($tool)) then ($paths | index(.pattern)) != null
-          else .pattern == "sig:\($q.sig)" end)] | first) as $a
-      # 3. always for this task
-      | if $a != null then {verdict: "allow", rule: "always:\($a.from)", why: "the commander said always for this task"}
-        else
+      (
           # 4. commander classes
           ( [$segs[] | seg_classes[]]
             + text_classes($text; $utext)
@@ -583,7 +613,24 @@ def decide:
             elif $tool == "WebSearch" then {verdict: "allow", rule: "local:search", why: "a web search reads only"}
             else {verdict: "card", rule: "commander:unlisted", why: "no rule covers it"}
             end
-        end
+      ) as $rest
+      | ([$q.always[]? | select(.tool == $tool and .words == null) | select(
+          # A prefix or glob pattern covers one plain command only: never a line that chains,
+          # substitutes or redirects another command onto it (`npm test && git push ...`).
+          if $tool == "Bash" then (.pattern as $p
+            | ($cmd | test("[;&|`\n<>]|\\$\\(") | not) as $plain
+            | if ($p | endswith(":*")) then $plain and ($segs | length) == 1 and ($cmd == $p[:-2] or ($cmd | startswith($p[:-2] + " ")))
+              elif ($p | contains("*")) then $plain and ($segs | length) == 1 and ($cmd | test("^" + ($p | split("*") | map(esc) | join(".*")) + "$"))
+              else $cmd == $p end)
+          elif (file_tools | index($tool)) then ($paths | index(.pattern)) != null
+          else .pattern == "sig:\($q.sig)" end)] | first) as $a
+      | (if $a == null and $tool == "Bash" then always_words([$q.always[]? | select(.tool == "Bash" and (.words | type) == "array")]; $cmd; $segs; $rest) else null end) as $aw
+      # 3. always for this task
+      | if $a != null then {verdict: "allow", rule: "always:\($a.from)", why: "the commander said always for this task"}
+        elif $aw != null then {verdict: "allow", rule: "always:\($aw)", why: "the commander said always for this task"}
+        else $rest end
     end;
 
-decide
+# The verdict, and for Bash what an "always" answer would cover.
+. as $q | decide
+| if $q.tool == "Bash" then . + {offer: (($q.input.command // "") as $c | always_offer($c; $c | segments))} else . end
