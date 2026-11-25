@@ -231,6 +231,22 @@ guest_setup() { # <checkout> <canonical remote> <the brain's command or "">
   return 7
 }
 
+# chartroom node prepare: a repo cloned here when it is not (the node must clone) and set up, ahead of any
+# task, so the first one does not wait for it. Prints where it is and that it is ready; 7 when it is not.
+device_cmd_prepare() { # <payload {remote, setup}>
+  local remote path rc=0; remote="$(jq -r '.remote // ""' <<<"$1")"
+  [[ "$remote" =~ $CR_NODE_REMOTE_RE ]] || { echo "'$remote' is not a repository" >&2; return 2; }
+  if ! path="$(guest_find_checkout "$remote")"; then
+    guest_clones_on || { echo "no checkout of $remote here, and this node does not clone (chartroom node limits <name> --clone on)" >&2; return 6; }
+    path="$(guest_clone "$remote")" || return
+  fi
+  if ! guest_cloned "$path"; then echo "$remote: ready at $path (a checkout of a person's own: never set up by chartroom)"; return 0; fi
+  [[ "$(jq -r '.env // [] | length' <<<"$1")" == 0 ]] || env_put_here "$remote" "$path" "$(jq -c '.env' <<<"$1")" || return 7
+  guest_setup "$path" "$remote" "$(jq -r '.setup // ""' <<<"$1")" || rc=$?
+  (( rc == 0 )) || return "$rc"
+  echo "$remote: ready at $path, set up ($(jq -r '.command // "nothing to run"' "$(guest_setup_file "$remote").json" 2>/dev/null || echo "nothing to run"))"
+}
+
 # Is a dispatch one that may have to wait for a clone or a setup here?
 guest_may_prep() { # <payload>
   guest_clones_on || return 1
@@ -299,23 +315,34 @@ guest_recent_count() { # <seconds>
 # The files of the brain's home that the brief names, kept in the task's own folder here (brain/),
 # and the brief's paths moved to them. Only plain relative names; never over anything else.
 guest_carry() { # <payload> <guest dir> <id> <brief>  -> the brief
-  local p="$1" d="$2/tasks/$3/brain" brief="$4" bh bt rel i n
+  local p="$1" d="$2/tasks/$3/brain" brief="$4" bh bt rel
   bh="$(jq -r '.brain_home // ""' <<<"$p")"; bt="$(jq -r '.brain_home_tilde // ""' <<<"$p")"
+  guest_carry_files "$p" "$d"
+  # (the longest names first: one may be a folder another is in; a prefix or a pattern of the brain's
+  # home stands for what it named there, which is here under the same names)
+  while IFS= read -r rel; do
+    [[ -n "$rel" ]] || continue
+    [[ -e "$d/$rel" ]] || compgen -G "$d/${rel%%\**}*" >/dev/null || continue
+    brief="${brief//"$bh/$rel"/"$d/$rel"}"
+    [[ -z "$bt" ]] || brief="${brief//"$bt/$rel"/"$d/$rel"}"
+  done < <(jq -r '.carry // [] | sort_by(-length) | .[]' <<<"$p")
+  if [[ "$(jq -r '.files // [] | length' <<<"$p")" != 0 ]]; then
+    brief+=$'\n\n'"## Files of the brain's home"$'\n\n'"The files of the brain's home that this brief names are copies, read-only, under $d, at the same paths as in that home (tasks/<id>/report.md is $d/tasks/<id>/report.md). Write nothing there: what you make goes in your worktree and your report. They are brought up to date when the XO steers you."
+  fi
+  printf '%s' "$brief"
+}
+# The brain's files for a task, written read-only into its brain/ folder (dispatch, and each steer: brought up to date).
+guest_carry_files() { # <payload> <brain dir>
+  local p="$1" d="$2" rel i n
   n="$(jq -r '.files // [] | length' <<<"$p")"
   [[ "$n" =~ ^[0-9]+$ ]] && (( n <= CR_CARRY_MAX_FILES )) || n=0
   for ((i = 0; i < n; i++)); do
     rel="$(jq -r --argjson i "$i" '.files[$i].rel // ""' <<<"$p")"
     [[ "$rel" =~ ^[A-Za-z0-9_@+][A-Za-z0-9._@+-]*(/[A-Za-z0-9_@+][A-Za-z0-9._@+-]*)*$ && "$rel" != *..* ]] || continue
     mkdir -p "$d/$(dirname "$rel")"
-    jq -r --argjson i "$i" '.files[$i].b64 // ""' <<<"$p" | base64 -d >"$d/$rel" 2>/dev/null || rm -f "$d/$rel"
+    rm -f "$d/$rel.new"
+    if jq -r --argjson i "$i" '.files[$i].b64 // ""' <<<"$p" | base64 -d >"$d/$rel.new" 2>/dev/null; then chmod a-w "$d/$rel.new"; mv -f "$d/$rel.new" "$d/$rel"; else rm -f "$d/$rel.new"; fi
   done
-  # (the longest names first: one may be a folder another is in)
-  while IFS= read -r rel; do
-    [[ -n "$rel" && -e "$d/$rel" ]] || continue
-    brief="${brief//"$bh/$rel"/"$d/$rel"}"
-    [[ -z "$bt" ]] || brief="${brief//"$bt/$rel"/"$d/$rel"}"
-  done < <(jq -r '.carry // [] | sort_by(-length) | .[]' <<<"$p")
-  printf '%s' "$brief"
 }
 
 # A dispatch, with what says one is under way here (<guest home>/.prep/<id>: a clone or a setup can take
@@ -418,7 +445,12 @@ guest_refuses() { # <payload>
   place_refuse_here "$(jq -c '.needs // {agent: "", tools: [], repos: []}' <<<"$1")" "$(jq -r 'if .over then 1 else 0 end' <<<"$1")"
 }
 
-device_cmd_steer() { guest_check "$1" || return; guest_run "$G_HOME" steer "$G_ID" "$(jq -r '.text // ""' <<<"$1")"; }
+device_cmd_steer() {
+  guest_check "$1" || return
+  # (the brain's files it reads, as they are now, before it reads the steer)
+  [[ "$(jq -r '.files // [] | length' <<<"$1")" == 0 ]] || guest_carry_files "$1" "$G_DIR/tasks/$G_ID/brain"
+  guest_run "$G_HOME" steer "$G_ID" "$(jq -r '.text // ""' <<<"$1")"
+}
 device_cmd_stop() {
   # (a dispatch still cloning or setting up: cancelled, and nothing is started)
   if guest_cancel_prep "$1"; then echo "its project was still being prepared here: cancelled, and nothing was started"; return 0; fi

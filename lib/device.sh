@@ -157,7 +157,7 @@ device_do_join() {
 }
 
 # What this agent can be asked to do over the connection (the brain refuses a pin without it).
-CR_DEVICE_CAPS="commands update dispatch limits place clone env"
+CR_DEVICE_CAPS="commands update dispatch limits place clone env prepare"
 device_rev() { git -C "$CR_ROOT" rev-parse HEAD 2>/dev/null || true; }
 
 device_heartbeat_body() { # <file> <started>
@@ -204,7 +204,8 @@ device_take_command() { # <command json> <token>
     if [[ "$p" =~ ^[0-9]+$ ]] && pid_alive "$p" && [[ -n "$(find "$run" -mmin -180 2>/dev/null)" ]]; then DEV_BESIDE=1; return 0; fi
     rm -f "$run"
   fi
-  if [[ "$(jq -r '.type // ""' <<<"$1")" == dispatch && ! -f "$(device_state_dir)/cmds/$cid.json" ]] && guest_may_prep "$(jq -c '.payload // {}' <<<"$1")"; then
+  local ty; ty="$(jq -r '.type // ""' <<<"$1")"
+  if [[ ! -f "$(device_state_dir)/cmds/$cid.json" ]] && { [[ "$ty" == prepare ]] || { [[ "$ty" == dispatch ]] && guest_may_prep "$(jq -c '.payload // {}' <<<"$1")"; }; }; then
     ( device_run_command "$1" "$2"; rm -f "$run" ) </dev/null >/dev/null 2>&1 &
     echo "$!" >"$run"; DEV_BESIDE=1
     return 0
@@ -220,7 +221,7 @@ device_run_command() { # <command json> <token>
   if [[ ! -f "$cache" ]]; then
     out="$(mktemp)"; err="$(mktemp)"
     case "$type" in
-      ping|update|limits|dispatch|steer|stop|peek|git|close|close-done|permit-sync|env-list|env-describe|env-get|env-cert|env-put|env-forget)
+      ping|update|limits|dispatch|prepare|steer|stop|peek|git|close|close-done|permit-sync|env-list|env-describe|env-get|env-cert|env-put|env-forget)
         ( "device_cmd_${type//-/_}" "$(jq -c '.payload // {}' <<<"$c")" ) >"$out" 2>"$err" </dev/null || rc=$? ;;
       *) echo "this agent does not know the command '$type' (chartroom node update)" >"$err"; rc=2 ;;
     esac

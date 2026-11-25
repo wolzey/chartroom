@@ -34,8 +34,8 @@
 
 CR_NEEDS_TOOLS='docker|ruby|go|node|gh|codex|claude|herdr|tmux|env'
 CR_CARRY_MAX_FILE=1048576
-CR_CARRY_MAX_ALL=4194304
-CR_CARRY_MAX_FILES=100
+CR_CARRY_MAX_ALL=8388608
+CR_CARRY_MAX_FILES=200
 
 place_mode() {
   local m; m="$(cfg PLACEMENT '' spread)"
@@ -103,7 +103,7 @@ place_setup() { # <id>
 # /abs or ~/home paths, or one of this home's own the way the XO writes them (tasks/<id>/report.md,
 # drafts/x.md: relative to the home); what chartroom itself wrote into it (its own record, its helper)
 # is left out. An absolute path into this home that is not there whole (a prefix: .../tasks/lane-), or
-# a pattern (tasks/lane-*/report.md), is printed as it is, and keeps the task here (place_scan).
+# a pattern (tasks/lane-*/report.md), is printed as it is: place_scan sends what it stands for.
 place_brief_paths() { # <id>
   local id="$1" d p q
   d="$(tdir "$id")"
@@ -115,7 +115,7 @@ place_brief_paths() { # <id>
   } 2>/dev/null |
     sed -E "s/^[[:space:]\`\"'(<\[]//" | sort -u | while IFS= read -r p; do
       [[ "$p" != =* ]] || continue # (CHARTROOM_HOME=...: the helper's, rewritten on the device)
-      p="${p%/}"; while [[ "$p" == *[.,:] ]]; do p="${p%?}"; done
+      while [[ "$p" == *[.,:/] ]]; do p="${p%?}"; done
       q="${p/#\~/$HOME}"
       case "$q" in
         ""|/|/tmp|/private/tmp|/dev|/etc|/usr|/bin|/opt|/var|"$HOME") continue ;;
@@ -184,16 +184,28 @@ place_scan() { # <id>
     if [[ ( "$p/" == "$CR_HOME"/* || "$p/" == "$hroot"/* ) && "$p/" != "$proot"/* ]]; then
       case "$p/" in "$CR_HOME"/*) rel="${p#"$CR_HOME"}" ;; *) rel="${p#"$hroot"}" ;; esac
       rel="${rel#/}"
-      if [[ -d "$p" && -n "$rel" ]]; then
-        while IFS= read -r f; do got+=("${f#"$CR_HOME/"}"); done < <(find "$CR_HOME/$rel" -type f ! -name .DS_Store 2>/dev/null | head -n $((CR_CARRY_MAX_FILES + 1)))
-      elif [[ -n "$rel" ]]; then got=("$rel"); fi
-      [[ -e "$p" ]] || { here="its brief names $p, which is not a whole path of this home (a prefix or a pattern) and cannot go along"; break; }
+      [[ -n "$rel" ]] || { here="its brief names this home itself ($p)"; break; }
       [[ "$rel" != worktrees && "$rel" != worktrees/* ]] || { here="its brief names $p, a worktree on this machine"; break; }
-      (( ${#got[@]} > 0 )) || { here="its brief names $p, which is only on this machine"; break; }
-      for f in "${got[@]}"; do
-        place_carry_ok "$f" || { here="its brief names $p, and $f does not go to another machine"; break 2; }
-        all=$((all + $(wc -c <"$CR_HOME/$f"))); files+=("$f")
+      # what it names: a file or a folder, or every one a prefix (.../tasks/lane-) or a pattern (tasks/lane-*/report.md)
+      # stands for; one that names nothing there is prose (a file the task is to write, say)
+      local m=() x named=0
+      if [[ -e "$CR_HOME/$rel" ]]; then m=("$rel"); named=1
+      else
+        while IFS= read -r x; do m+=("${x#"$CR_HOME/"}"); done < <(cd "$CR_HOME" && compgen -G "${rel//\*/*}$([[ "$rel" == *'*'* ]] || printf '*')" | head -n 50 | sed "s|^|$CR_HOME/|")
+        (( ${#m[@]} > 0 )) || continue
+      fi
+      for x in "${m[@]}"; do
+        [[ "$x" != worktrees && "$x" != worktrees/* ]] || { here="its brief names $p, a worktree on this machine"; break 2; }
+        if [[ -d "$CR_HOME/$x" ]]; then
+          # (a folder: what of it may go, goes; chartroom's own state in it, and anything secret, stays)
+          while IFS= read -r f; do f="${f#"$CR_HOME/"}"; place_carry_ok "$f" && got+=("$f"); done < <(find "$CR_HOME/$x" -type f ! -name .DS_Store 2>/dev/null | head -n $((CR_CARRY_MAX_FILES * 4)))
+        elif (( named )); then
+          place_carry_ok "$x" || { here="its brief names $p, and $x does not go to another machine"; break 2; }
+          got+=("$x")
+        else place_carry_ok "$x" && got+=("$x"); fi
       done
+      (( ${#got[@]} > 0 )) || { here="its brief names $p, and nothing there goes to another machine"; break; }
+      for f in "${got[@]}"; do all=$((all + $(wc -c <"$CR_HOME/$f"))); files+=("$f"); done
       carry+=("$rel")
       (( ${#files[@]} <= CR_CARRY_MAX_FILES && all <= CR_CARRY_MAX_ALL )) || { here="its brief names more of this home's files than go along (at $p)"; break; }
       continue

@@ -7,6 +7,10 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- What a brief names of the home goes along by prefix, pattern or folder too, read-only, and is brought up to date on each steer,
+  so such a task can run on any machine; only a worktree of this machine, or a file that cannot go, keeps it here.
+- `chartroom nodes --for <id>`: each machine and why it would take that task now, or not.
+- `chartroom node prepare <name> <repo>...`: clone and set up a repo on a node now, ahead of the task that needs it.
 - `chartroom recall <id>`: a task placed on another machine comes back, its record kept and its branch brought home, to be
   dispatched again here (`set <id> node=here`). `stop` cancels a device's clone or setup that is still under way.
 - The fleet's env store carries a repo's package-registry login too (`npm-login`), only the lines of the registries its own `.npmrc`

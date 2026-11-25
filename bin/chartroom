@@ -1928,6 +1928,9 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           record: its worker stopped there (or its clone or setup
                                           cancelled), its branch brought home, its copy there closed.
                                           Then chartroom set <id> node=here, and dispatch it again
+  chartroom nodes --for <id>              each machine and why it would take that task now, or not
+  chartroom node prepare <name> <repo>... clone each repo there (a node that clones) and run its setup now,
+                                          ahead of the task that needs it; says ready, or why not
   chartroom set <id> node=<device>|here|any
                                           where it runs: pinned to an enrolled device or to this
                                           machine, or (any) wherever dispatch places it

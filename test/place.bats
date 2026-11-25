@@ -322,14 +322,14 @@ dry() { run cr dispatch "$1" --dry-run; echo "$output"; }
   # the device's own checkout of the project, where its list has it
   [ "$(jq -r .project <<<"$p")" = /there/proj ]
   id="$(new_task --backend command)"
-  stays() { says "$id" "Look at $1 first."; dry "$id"; [[ "$output" == "$id would run here"*"stays on this machine: its brief names $2"* ]]; }
+  stays() { says "$id" "Look at $1 first."; dry "$id"; [[ "$output" == "$id would run here"*"stays on this machine: its brief names"*"$2"* ]]; }
   goes() { says "$id" "Look at $1 first."; dry "$id"; [[ "$output" == "$id would run on m3"* ]]; }
   mkdir -p "$BATS_TEST_TMPDIR/elsewhere"; stays "$BATS_TEST_TMPDIR/elsewhere" "$BATS_TEST_TMPDIR/elsewhere"
   echo x >"$CHARTROOM_HOME/tasks/other-1234/api-token.txt"; stays "$CHARTROOM_HOME/tasks/other-1234/api-token.txt" "$CHARTROOM_HOME/tasks/other-1234/api-token.txt, and tasks/other-1234/api-token.txt does not go"
   printf -- '-----BEGIN %s KEY-----\n' "PRIVATE" >"$CHARTROOM_HOME/drafts/k.md"; stays "$CHARTROOM_HOME/drafts/k.md" "$CHARTROOM_HOME/drafts/k.md"
   ln -s /etc/hosts "$CHARTROOM_HOME/drafts/l.md"; stays "$CHARTROOM_HOME/drafts/l.md" "$CHARTROOM_HOME/drafts/l.md"
   head -c 1100000 /dev/zero | tr '\0' x >"$CHARTROOM_HOME/drafts/big.md"; stays "$CHARTROOM_HOME/drafts/big.md" "$CHARTROOM_HOME/drafts/big.md"
-  stays "$CHARTROOM_HOME" "$CHARTROOM_HOME"
+  stays "$CHARTROOM_HOME" "this home itself"
   # a service of this machine's own
   stays_for() { says "$id" "$1"; dry "$id"; [[ "$output" == "$id would run here"*"which is this machine"* ]]; }
   stays_for "Try it against http://localhost:6002 first."
@@ -347,23 +347,35 @@ dry() { run cr dispatch "$1" --dry-run; echo "$output"; }
   dry "$id"; [[ "$output" == *"run on m3"* ]]
 }
 
-@test "placement: this home's files named from the home (tasks/<id>/report.md) go along too; a prefix of one, or a worktree, keeps the task here" {
+@test "placement: this home's files named from the home (tasks/<id>/report.md), by a prefix or a pattern, or a folder of them, go along; a worktree keeps the task here" {
   seed m3 $M3 5 10; answering
-  mkdir -p "$CHARTROOM_HOME/tasks/other-1234" "$CHARTROOM_HOME/tasks/company-lane-a1b2" "$CHARTROOM_HOME/worktrees/proj/lane-a"
+  mkdir -p "$CHARTROOM_HOME/tasks/other-1234" "$CHARTROOM_HOME/tasks/company-lane-a1b2" "$CHARTROOM_HOME/tasks/company-lane-c3d4" "$CHARTROOM_HOME/worktrees/proj/lane-a"
   echo report >"$CHARTROOM_HOME/tasks/other-1234/report.md"; echo plan >"$CHARTROOM_HOME/tasks/company-lane-a1b2/plan.md"
+  echo r2 >"$CHARTROOM_HOME/tasks/company-lane-c3d4/report.md"; echo '{}' >"$CHARTROOM_HOME/tasks/company-lane-c3d4/meta.json"
   says() { perl -0pi -e "s|(Commander's intent\n\n).*?\n|\$1$2\n|" "$CHARTROOM_HOME/tasks/$1/brief.md"; }
+  carried() { jq -c '.payload.carry, [.payload.files[].rel]' "$(ls -t "$BATS_TEST_TMPDIR"/taken/$M3.*.json | head -1)" | paste -sd' ' -; }
   id="$(new_task --backend command)"
   says "$id" "Read the report (\`tasks/other-1234/report.md\`) and tasks/company-lane-a1b2/plan.md."
-  run cr dispatch "$id"; echo "$output"; [ "$status" -eq 0 ]
-  [ "$(where "$id")" = "$M3" ]
-  [ "$(jq -c '.payload.carry' "$BATS_TEST_TMPDIR"/taken/$M3.*.json)" = '["tasks/company-lane-a1b2/plan.md","tasks/other-1234/report.md"]' ]
+  rm -f "$FLEET"/placed/*.json; run cr dispatch "$id"; echo "$output"; [ "$status" -eq 0 ]; [ "$(where "$id")" = "$M3" ]
+  [ "$(carried)" = '["tasks/company-lane-a1b2/plan.md","tasks/other-1234/report.md"] ["tasks/company-lane-a1b2/plan.md","tasks/other-1234/report.md"]' ]
+  # a prefix, a pattern, a folder: what they stand for goes, chartroom's own state in it stays behind
+  id="$(new_task --backend command)"; says "$id" "Read every lane: $CHARTROOM_HOME/tasks/company-lane- (a1b2 and the rest)."
+  rm -f "$FLEET"/placed/*.json; run cr dispatch "$id"; echo "$output"; [ "$status" -eq 0 ]; [ "$(where "$id")" = "$M3" ]
+  [ "$(carried)" = '["tasks/company-lane-"] ["tasks/company-lane-a1b2/plan.md","tasks/company-lane-c3d4/report.md"]' ]
+  id="$(new_task --backend command)"; says "$id" "Read tasks/company-lane-*/report.md."
+  rm -f "$FLEET"/placed/*.json; run cr dispatch "$id"; echo "$output"; [ "$status" -eq 0 ]; [ "$(where "$id")" = "$M3" ]
+  [ "$(carried)" = '["tasks/company-lane-*/report.md"] ["tasks/company-lane-c3d4/report.md"]' ]
+  id="$(new_task --backend command)"; says "$id" "Look through $CHARTROOM_HOME/tasks/company-lane-c3d4/."
+  rm -f "$FLEET"/placed/*.json; run cr dispatch "$id"; [ "$status" -eq 0 ]; [ "$(where "$id")" = "$M3" ]
+  [ "$(carried)" = '["tasks/company-lane-c3d4"] ["tasks/company-lane-c3d4/report.md"]' ]
+  # what names nothing there is prose (a file the task is to write); a worktree keeps it here
   id="$(new_task --backend command)"
-  stays() { says "$id" "$1"; dry "$id"; [[ "$output" == "$id would run here"*"stays on this machine: its brief names $2"* ]]; }
-  stays "Read every lane's report: $CHARTROOM_HOME/tasks/company-lane- (a1b2 and the rest)." "$CHARTROOM_HOME/tasks/company-lane-, which is not a whole path of this home"
-  stays "Read every lane's report: tasks/company-lane-*/report.md." "$CHARTROOM_HOME/tasks/company-lane-*/report.md, which is not a whole path of this home"
-  stays "Diff the lanes in $CHARTROOM_HOME/worktrees/proj/lane-a against main." "$CHARTROOM_HOME/worktrees/proj/lane-a, a worktree on this machine"
-  # words that only look like a path of the home are prose
-  says "$id" "Fix the tasks/s and the drafts/: slash words, not files."; dry "$id"; [[ "$output" == "$id would run on m3"* ]]
+  says "$id" "Write your notes to $CHARTROOM_HOME/drafts/new-notes.md; fix the tasks/s and drafts/ words."; dry "$id"; [[ "$output" == "$id would run on m3"* ]]
+  says "$id" "Diff the lanes in $CHARTROOM_HOME/worktrees/proj/lane-a against main."; dry "$id"
+  [[ "$output" == "$id would run here"*"stays on this machine: its brief names $CHARTROOM_HOME/worktrees/proj/lane-a, a worktree on this machine"* ]]
+  # a file named outright that cannot go still keeps it here
+  says "$id" "Read $CHARTROOM_HOME/tasks/company-lane-c3d4/meta.json."; dry "$id"
+  [[ "$output" == "$id would run here"*"tasks/company-lane-c3d4/meta.json does not go to another machine"* ]]
 }
 
 # a device that may clone (and has mise), without the project's checkout, which is on GitHub
@@ -440,4 +452,16 @@ probe_is() { sed -i.bak -e "$1" "$BATS_TEST_TMPDIR/m3.probe"; again; }
   says "apps/api/.env.local holds it."; [[ "$output" == "$id would run here"* ]]
   says "Fill in .env.example and .env.test, and process.environment."; [[ "$output" == "$id would run on m3."* ]]
   says "It reads .env for the database."; cr set "$id" needs=none >/dev/null; dry "$id"; [[ "$output" == "$id would run on m3."* ]]
+}
+
+@test "nodes --for: each machine and why it would take a task now or not, without holding or sending anything" {
+  seed m3 $M3 5 10; seed m5 $M5 95 10
+  id="$(new_task --backend command)"
+  run cr nodes --for "$id"; echo "$output"; [ "$status" -eq 0 ]
+  [[ "${lines[0]}" == "m3 takes $id now" ]]
+  [[ "$output" == *"  m3: yes, "*"% full with it"* && "$output" == *"  m5: no: cpu 95% in use, its limit is 90%"* && "$output" == *"  studio: yes, "* ]]
+  [ ! -e "$FLEET/placed/acme.$id.json" ]; [ -z "$(ls "$FLEET/queue" 2>/dev/null)" ]
+  cr set "$id" node=here >/dev/null
+  run cr nodes --for "$id"; [[ "$output" == *"  m3: no: the task stays on this machine: pinned here"* ]]
+  run cr nodes --for "$id" --json; jq -e '.pick.id == "here" and (.nodes | length) == 3' <<<"$output"
 }

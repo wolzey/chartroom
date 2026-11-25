@@ -277,6 +277,38 @@ fleet_update() { # <id> <jq filter> [jq args...]: under the lock
   fleet_write "$f" "$(jq -c "$@" "$flt" "$f")"
 }
 
+# chartroom node prepare <name> <repo>...: each repo cloned there and set up now (lib/guest.sh), ahead of the
+# task that needs it, with this home's setup= and the env store's files for it; the answer says ready or why not.
+cmd_node_prepare() {
+  local who="${1:-}" id r remote rc=0 res cid st wait
+  [[ -n "$who" && $# -ge 2 ]] || die "usage: chartroom node prepare <name> <repo>... (owner/repo, or a checkout's path)"
+  shift; id="$(fleet_resolve "$who")" || exit 1
+  fleet_device_json "$id" | jq -e '(.caps // []) | index("prepare")' >/dev/null || die "node prepare: $who's chartroom is older (chartroom node update $who)"
+  st="$(fleet_device_json "$id" | jq -r .status)"; [[ "$st" == online ]] || die "node prepare: $who is $st"
+  wait="$(cfg NODE_PREP_SECONDS '' 1800)"; [[ "$wait" =~ ^[0-9]+$ ]] || wait=1800
+  for r in "$@"; do
+    if [[ -d "$r" ]]; then remote="$(place_remote "$r")"; else remote="$(env_remote "$r")" || exit 1; fi
+    [[ "$remote" =~ $CR_NODE_REMOTE_RE ]] || { echo "$r: not a repository with a remote" >&2; rc=1; continue; }
+    local setup="" envf='[]' p
+    setup="$(grep -E "^- ${remote##*/}:" "$CR_HOME/projects.md" 2>/dev/null | head -1 | sed -E 's/^- [^:]*://' | awk -F';' '{ for (i = 1; i <= NF; i++) { f = $i; gsub(/^[[:space:]]+|[[:space:]]+$/, "", f); if (f ~ /^setup=/) { print substr(f, 7); exit } } }' || true)"
+    if env_stored "$remote"; then envf="$(env_for_dispatch "$remote" "$id" 2>/dev/null)" || envf='[]'; fi
+    p="$(jq -cn --arg r "$remote" --arg s "$setup" --argjson e "${envf:-[]}" '{remote: $r, setup: $s, env: $e}')"
+    echo "$who: preparing $remote (a clone and its setup can take minutes)"
+    cid="$(fleet_enqueue "$id" prepare "$p")"
+    if ! res="$(fleet_wait "$cid" "$wait")"; then echo "$who: $remote: no answer within $((wait / 60)) min; it goes on there, and its answer is dropped" >&2; rc=1; continue; fi
+    if [[ "$(jq -r '.rc' <<<"$res")" == 0 ]]; then
+      echo "$who: $(jq -r '.out' <<<"$res" | grep -v '^[[:space:]]*$' | tail -1)"
+      rm -f "$(place_prep_file "$id" "$remote")"
+      [[ "$envf" == '[]' ]] || env_gave "$remote" "$id"
+    else
+      local why; why="$(jq -r '(.err // "") + (.out // "")' <<<"$res" | grep -v '^[[:space:]]*$' | tail -1)"
+      echo "$who: $remote is not ready: $why" >&2; rc=1
+      [[ "$(jq -r '.rc' <<<"$res")" != 7 ]] || place_prep_failed "$id" "$remote" "$why"
+    fi
+  done
+  return "$rc"
+}
+
 cmd_node_rename() {
   [[ $# -eq 2 ]] || die "usage: chartroom node rename <name|id> <new name>"
   [[ "$2" =~ $CR_DEVICE_NAME_RE ]] || die "node rename: '$2' is not a name (letters, digits, . _ -; up to 64)"

@@ -199,6 +199,13 @@ there, or its clone or setup is cancelled. Its branch comes home, as at close, a
 its project cancels that too; nothing starts there, and it can be dispatched again. A setup already running finishes, and its result
 serves the next worker of that repo.
 
+**Why not there.** `chartroom nodes --for <id>` lists each machine and why it would take that task now or not, as dispatch would
+decide, holding and sending nothing.
+
+**Ahead of a task.** `chartroom node prepare <name> <repo>...` clones each repo on that node, if it may clone and has none, and runs
+its setup now, with the home's `setup=` and the env store's files for it. It says ready, or why not. A success clears that node's
+pause for the repo.
+
 **A pin** (`--node`, `set node=`) is kept, and is refused with the numbers when its node is at a limit.
 `set node=here` keeps a task on this machine; `node=any` lets dispatch place it.
 
@@ -240,12 +247,15 @@ are hard requirements; what keeps a task on this machine whatever the others off
   Mac"); and one that names files other machines lack and that cannot
   go along.
 - **Paths of the home, however written.** A brief's path into the home may be absolute or relative to the home
-  (`tasks/<id>/report.md`, `drafts/x.md`). Either goes along. A path that is not there whole keeps the task here: a prefix
-  (`.../tasks/company-lane-`) or a pattern (`tasks/lane-*/report.md`). So does one of the home's worktrees. A relative word that is not
-  a file of the home is prose.
+  (`tasks/<id>/report.md`, `drafts/x.md`). Either goes along, and so does what a prefix (`.../tasks/company-lane-`), a
+  pattern (`tasks/lane-*/report.md`) or a folder stands for. From a folder, what may go goes; chartroom's own state in it
+  (meta files, launchers, pane logs) and anything secret stays behind. A file named outright that cannot go keeps the task here,
+  and so does one of the home's worktrees. A path that names nothing there is prose (a file the task is to write).
+- **On the device** the copies are read-only, under the task's `brain/` folder at the same paths as in the home. The brief's
+  absolute paths are moved to them, and a note says where they are. Each `steer` brings them up to date first.
 - **Files that go along.** A brief often names files of the brain's home (a draft, another task's
   report). Those are sent with the dispatch, kept in the task's own folder on the device (`brain/`),
-  and the brief's paths are moved to them. Only text and pictures, 1 MB each and 4 MB in all; never a
+  and the brief's paths are moved to them. Only text and pictures, 1 MB each and 8 MB and 200 files in all; never a
   dotfile, a symlink, chartroom's own state, or a file whose name or first lines look like a
   secret: such a file keeps the task here. A path in a git checkout must be tracked, and the node
   must have that checkout.

@@ -592,6 +592,7 @@ placed_setup() { # [agent heartbeat seconds]
   G="$DEV/state/chartroom/node/guests/acme/tasks/$ID"
   grep -q "Read $G/brain/drafts/plan.md first." "$G/brief.md"
   [ "$(cat "$G/brain/drafts/plan.md")" = "the plan" ]
+  [ ! -w "$G/brain/drafts/plan.md" ]; grep -q "## Files of the brain's home" "$G/brief.md"
   until_true 'ev_has " done: stub finished"'
   cr status --json | jq -e --arg i "$ID" '.[] | select(.id == $i) | .machine == "m3"'
   # its branch is read there before it comes home, read-only
@@ -606,6 +607,21 @@ placed_setup() { # [agent heartbeat seconds]
   [ "$status" -eq 0 ]
   [[ "$output" == *"is on this machine at"*"(from m3)"* ]]
   git -C "$PROJECT" show "refs/heads/$(jq -r .branch "$CHARTROOM_HOME/tasks/$ID/meta.json"):stub.txt"
+}
+
+@test "placed: the home's files a brief names are brought up to date on the device with each steer" {
+  export STUB_MODE=decision
+  placed_setup
+  mkdir -p "$CHARTROOM_HOME/tasks/lane-1234"; echo "first" >"$CHARTROOM_HOME/tasks/lane-1234/report.md"
+  ID="$(new_task --backend command 2>/dev/null)"
+  perl -0pi -e "s|Please do the thing\\.|Read tasks/lane-1234/report.md.|" "$CHARTROOM_HOME/tasks/$ID/brief.md"
+  cr dispatch "$ID" >/dev/null
+  G="$DEV/state/chartroom/node/guests/acme/tasks/$ID"
+  until_true 'ev_has " decision: pick A or B"'
+  [ "$(cat "$G/brain/tasks/lane-1234/report.md")" = first ]
+  echo "second" >"$CHARTROOM_HOME/tasks/lane-1234/report.md"
+  run cr steer "$ID" "A, please"; echo "$output"; [ "$status" -eq 0 ]
+  [ "$(cat "$G/brain/tasks/lane-1234/report.md")" = second ]
 }
 
 @test "placed: the device checks its own limits when it takes the work, with what it uses then, and the next node takes it" {
@@ -828,6 +844,28 @@ slow_setup() {
   [ -z "$(git -C "$ROOT/mine" config chartroom.cloned)" ]; [ "$(git -C "$ROOT/mine" rev-parse HEAD)" = "$head" ]
   [ ! -e "$BATS_TEST_TMPDIR/setup-ran" ]; [ ! -e "$CLONE" ]
   ! grep -q '^## This machine' "$G/tasks/$ID/brief.md"
+}
+
+@test "node prepare: a repo is cloned there and set up now, ahead of any task; a failure says why, and a success clears the pause" {
+  clone_setup
+  run cr node prepare m3 acme/proj; [ "$status" -ne 0 ]; [[ "$output" == *"does not clone"* ]]
+  clones on
+  setup_is "echo no database here >&2 && exit 3"
+  run cr node prepare m3 acme/proj; echo "$output"; [ "$status" -ne 0 ]
+  [[ "$output" == *"m3: github.com/acme/proj is not ready: the setup of github.com/acme/proj (echo no database here >&2 && exit 3) failed (exit 3): no database here"* ]]
+  [ -n "$(ls "$FLEET/prep" 2>/dev/null)" ]
+  setup_is "touch $BATS_TEST_TMPDIR/prepared"
+  run cr node prepare m3 acme/proj; echo "$output"; [ "$status" -eq 0 ]
+  [[ "$output" == *"m3: github.com/acme/proj: ready at $CLONE, set up (touch $BATS_TEST_TMPDIR/prepared)"* ]]
+  [ -e "$BATS_TEST_TMPDIR/prepared" ]; [ -z "$(ls "$FLEET/prep" 2>/dev/null)" ]
+  # the next task goes straight to it, and its setup is not run again
+  rm "$BATS_TEST_TMPDIR/prepared"
+  ID="$(new_task --backend command 2>/dev/null)"; run cr dispatch "$ID"; echo "$output"; [ "$status" -eq 0 ]
+  [[ "$output" == *"the worker runs on m3"* ]]; until_true 'ev_has " done: stub finished"'
+  [ ! -e "$BATS_TEST_TMPDIR/prepared" ]
+  # a person's own checkout is reported, never set up
+  git clone -q https://github.com/acme/proj.git "$ROOT/acme2" && git -C "$ROOT/acme2" remote set-url origin https://github.com/acme/other.git
+  run cr node prepare m3 acme/other; echo "$output"; [ "$status" -eq 0 ]; [[ "$output" == *"ready at $ROOT/acme2 (a checkout of a person's own"* ]]
 }
 
 @test "recall: a task placed on a device comes back with its record and branch, and runs here pinned; stop during a clone cancels it" {

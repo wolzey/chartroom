@@ -250,13 +250,14 @@ NODES_TABLE_JQ='
   | @tsv'
 
 cmd_nodes() {
-  local json=0 project="" want="" url doc ssh=0
+  local json=0 project="" want="" url doc ssh=0 for=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --json) json=1; shift ;;
+      --for) [[ $# -ge 2 ]] || die "--for needs a task id"; for="$(cmd_resolve "$2")" || exit 1; shift 2 ;;
       --ssh) ssh=1; shift ;;
       --project) [[ $# -ge 2 ]] || die "--project needs a path"; project="$2"; shift 2 ;;
-      *) die "nodes: unknown arg $1 (usage: chartroom nodes [--json] [--project PATH] [--ssh])" ;;
+      *) die "nodes: unknown arg $1 (usage: chartroom nodes [--json] [--project PATH] [--ssh] [--for <task>])" ;;
     esac
   done
   if [[ -n "$project" ]]; then
@@ -265,6 +266,7 @@ cmd_nodes() {
     [[ "$want" =~ $CR_NODE_REMOTE_RE ]] || die "nodes: cannot read '$url' as host/owner/repo"
   fi
   nodes_settings # (its refusal, here: nodes_json runs in a subshell)
+  if [[ -n "$for" ]]; then nodes_for "$for" "$json"; return; fi
   doc="$(nodes_json "$want" "$ssh")" || exit 1
   if [[ $json -eq 1 ]]; then printf '%s\n' "$doc"; return; fi
   [[ -z "$want" ]] || echo "project: $want"
@@ -414,6 +416,23 @@ cmd_node_limits() {
   return "$rc"
 }
 
+# chartroom nodes --for <task>: each machine and why it would take that task now or not, as dispatch
+# would decide (nothing is held or sent).
+nodes_for() { # <id> <json 0|1>
+  local id="$1" devs b out
+  need_task "$id"
+  [[ -z "$(meta "$id" dispatched)" || -n "$(meta "$id" closed)" ]] || { echo "$id is dispatched already, on $(if [[ "$(backend_runner "$id")" == node ]]; then node_name_of "$id"; else echo "this machine"; fi)"; return 0; }
+  devs="$(fleet_devices_json)"
+  place_on "$devs" || { echo "$id would run here: no machine is placed on (no device, or CHARTROOM_PLACEMENT=local)"; return 0; }
+  select_backend "$id" >/dev/null 2>&1 || true; b="$SELECTED"
+  [[ "$b" =~ ^($(node_backends))$ ]] || { echo "$id would run here: only $(node_backends | tr '|' ' ') workers are placed (it is ${b:-unknown})"; return 0; }
+  out="$(place_choose "$id" "$(place_needs "$id" "$b")" "$(place_rows "$devs")" '[]' 1 0)" || die "placement failed"
+  if [[ "$2" == 1 ]]; then printf '%s\n' "$out"; return 0; fi
+  jq -r "$PLACE_JQ"'"\(.pick.name // "none: it would not be dispatched") takes \($id) now" ,
+    (.nodes[] | "  \(.name): " + (if .why then "no: \(.why)" else "yes, \(if .u then "\(.u * 100 | floor)% full with it" else "use not known" end)"
+      + (if (.prep // [] | length) > 0 then ", after cloning \(.prep | join(" and "))" else "" end) end))' --arg id "$id" <<<"$out"
+}
+
 # This machine's row, every checkout listed (what placement goes by, lib/place.sh).
 node_row_local() {
   local dir; dir="$(mktemp -d)"; nodes_settings
@@ -443,7 +462,8 @@ cmd_node() {
     rotate) cmd_node_rotate "$@" ;;
     update) cmd_node_update "$@" ;;
     ping) cmd_node_ping "$@" ;;
-    *) die "usage: chartroom node probe [--json] | node init [--cpu PCT] [--mem PCT] [--battery pause|allow] [--priority normal|nice|background] [--project-roots DIRS] [--force] | node limits [<name|here> CPU/MEM|off|on|--clone on|off] | node add [--name N] [--alias A]... [--replace NAME|ID] | node rename <name|id> <new> | node revoke <name|id> | node rotate <name|id> | node update <name|id>...|--all | node ping <name|id>" ;;
+    prepare) cmd_node_prepare "$@" ;;
+    *) die "usage: chartroom node probe [--json] | node init [--cpu PCT] [--mem PCT] [--battery pause|allow] [--priority normal|nice|background] [--project-roots DIRS] [--force] | node limits [<name|here> CPU/MEM|off|on|--clone on|off] | node add [--name N] [--alias A]... [--replace NAME|ID] | node rename <name|id> <new> | node revoke <name|id> | node rotate <name|id> | node update <name|id>...|--all | node ping <name|id> | node prepare <name> <repo>..." ;;
   esac
 }
 

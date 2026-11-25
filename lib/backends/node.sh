@@ -263,9 +263,10 @@ node_cmd() { # <id> <type> <payload extras json> <seconds> -> the device's answe
   return "$rc"
 }
 
-node_steer() { # <id> <msg>
+node_steer() { # <id> <msg>: with the files of this home its brief names, as they are now
   node_need_online "$1" "steer"
-  node_cmd "$1" steer "$(jq -cn --arg t "$2" '{text: $t}')" 60
+  local c; c="$(place_carry_json "$1" 2>/dev/null | jq -c '.files // []' 2>/dev/null)" || c='[]'
+  node_cmd "$1" steer "$(jq -cn --arg t "$2" --argjson f "${c:-[]}" '{text: $t, files: $f}')" 60
 }
 node_stop() { node_need_online "$1" "stop"; node_cmd "$1" stop '{}' 30; }
 # Takes a task back from its device and keeps the record: its worker stopped there, its branch home
