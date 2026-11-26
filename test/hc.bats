@@ -324,6 +324,32 @@ agy_trust() {
   [ "$(jq -r '.agents.agy.path' <<<"$output")" = null ]
 }
 
+@test "hc:agy from an ssh session (a client home's command): its sign-in is asked in the hc core; with none, a Mac says it cannot tell" {
+  use_fake agy
+  core_up
+  export FAKE_AGY_KEYCHAIN_CLOSED=1 # signed in, but this session cannot read the keychain
+  SSH_CONNECTION="192.0.2.1 50000 192.0.2.2 22" run cr doctor --json
+  [ "$(jq -r '.agents.agy.signed_in' <<<"$output")" = true ]
+  [ "$(jq -r '.backends[]|select(.backend=="hc:agy").available' <<<"$output")" = true ]
+  grep -q "^exec .*agy models" "$FAKE_HC_DIR/calls.log"
+  CHARTROOM_GATE=1 run cr doctor --json
+  [ "$(jq -r '.agents.agy.signed_in' <<<"$output")" = true ]
+  # signed out for real: the core says so too
+  FAKE_AGY_SIGNED_OUT=1 SSH_CONNECTION="192.0.2.1 50000 192.0.2.2 22" run cr doctor --json
+  [[ "$(jq -r '.agents.agy.why' <<<"$output")" == "agy is not signed in here"* ]]
+  # no core answering: a Mac cannot tell from an ssh session, and says so instead of "not signed in"
+  kill "$(cat "$BATS_TEST_TMPDIR/core.pid")"; rm -f "$BATS_TEST_TMPDIR/core.pid" "$SOCK"
+  printf '#!/bin/sh\necho Darwin\n' >"$BIN/uname"; chmod +x "$BIN/uname"
+  SSH_CONNECTION="192.0.2.1 50000 192.0.2.2 22" run cr doctor --json
+  [ "$(jq -r '.agents.agy.signed_in' <<<"$output")" = false ]
+  [[ "$(jq -r '.agents.agy.why' <<<"$output")" == "agy's sign-in cannot be read from an ssh session (macOS keeps the login keychain closed there)"* ]]
+  # elsewhere (no keychain), it is asked in the session itself
+  printf '#!/bin/sh\necho Linux\n' >"$BIN/uname"
+  unset FAKE_AGY_KEYCHAIN_CLOSED
+  SSH_CONNECTION="192.0.2.1 50000 192.0.2.2 22" run cr doctor --json
+  [ "$(jq -r '.agents.agy.signed_in' <<<"$output")" = true ]
+}
+
 @test "default order: every agent's full sessions before any headless run, so codex without claude runs in hc" {
   use_fake codex
   rm -f "$BIN/claude"

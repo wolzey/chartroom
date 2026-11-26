@@ -279,7 +279,12 @@ Verified on agy 1.5.17 and 1.5.18 in hc 0.1.21 on a Mac (November 2026), against
   signed out, and a dispatch here stops before it starts a terminal (`agy is not signed in here`).
   An explicit `hc:agy` is still placed: a node reports agy's version and sign-in in its probe, and
   placement sends the task only to a machine where agy is signed in. Sign-in is not a fleet health
-  check (a machine without agy is not the worse for it).
+  check (a machine without agy is not the worse for it). agy keeps its sign-in in a Mac's login
+  keychain, which an ssh session cannot open (there `agy models` says `Please sign in` though agy
+  is signed in): from an ssh session, as a client home's command runs, the check is asked inside
+  the hc core (`hc exec`, in the login session, where its workers run too). With no core answering,
+  a Mac says it cannot tell (`agy's sign-in cannot be read from an ssh session ...`) rather than
+  "not signed in". A core itself started from an ssh session has the same closed keychain.
 - **Trust dialog.** "Do you trust the contents of this project?", the cursor (an ASCII `>`) on
   `Yes, I trust this folder`. Answered with Enter only in a worktree chartroom created; otherwise it
   is `awaiting-input` and the brief waits behind it. agy records trust by path in
