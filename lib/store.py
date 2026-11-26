@@ -666,6 +666,8 @@ def status_rows(conn, home, which, only, since, pool, grace, wmax, with_removed=
         lines = list(event_lines(conn, hid, row["id"]))
         if closed:
             st = "closed"
+        elif json.loads(row["extra"] or "{}").get("review_error"):
+            st = "blocked"
         elif not row.get("dispatched"):
             st = "drafting"
         else:

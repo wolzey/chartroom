@@ -63,7 +63,11 @@ export function BoardPage({ all, list, filters, setFilters, selKey, setSelKey, p
 }
 
 // With nothing selected: the board summed up, in the slim column.
-export function BoardSummary({ list, prs }) {
+export function BoardSummary({ list, prs, snapshots = [], home }) {
+  const agents = ["codex", "agy", "claude"].map(agent => {
+    const rows = snapshots.flatMap(s => s.agents || []).filter(a => a.agent === agent);
+    return { agent, live: rows.reduce((n, a) => n + a.live, 0), clean: rows.reduce((n, a) => n + a.clean, 0), rework: rows.reduce((n, a) => n + a.rework, 0) };
+  });
   const counts = M.BOARD.map((s) => [s, list.filter((t) => t.column === s).length]).filter(([, n]) => n);
   const homes = {};
   for (const t of list) homes[t.home] = homes[t.home] || { n: 0, hue: t.hue }, homes[t.home].n++;
@@ -72,6 +76,7 @@ export function BoardSummary({ list, prs }) {
     <dl class="sp">
       <dt>Status</dt><dd><div class="sp-ms">${counts.map(([s, n]) => html`<div key=${s} class="sp-m"><${Status} status=${s} only=${true} /><span class="grow">${M.STATUS[s]}</span><span class="faint">${n}</span></div>`)}</div></dd>
       <dt>Homes</dt><dd><div class="sp-ms">${Object.keys(homes).map((h) => html`<div key=${h} class="sp-m"><${HomeTag} name=${h} hue=${homes[h].hue} /><span class="grow"></span><span class="faint">${homes[h].n}</span></div>`)}</div></dd>
+      <dt>Agents · ${home || "all homes"}</dt><dd><div class="sp-ms">${agents.map(a => html`<div key=${a.agent}><strong>${a.agent}</strong>: ${a.live} live<br /><span class="faint">Reviews: ${a.clean} clean / ${a.rework} rework</span></div>`)}</div></dd>
       <dt>Open PRs</dt><dd>${open.length ? html`<${PrBadges} urls=${open} prs=${prs} />` : html`<span class="faint">None</span>`}</dd>
     </dl>
     <p class="faint q-keys">Click a card for its quick view.</p>

@@ -66,12 +66,12 @@ node_pin() { # <id> <name|id|here|any|none>
     die "set: $name's agent cannot take work yet (chartroom node update $name brings it to this brain's chartroom)"
   node_home >/dev/null
   b="$(meta "$id" node_backend)"; [[ -n "$b" ]] || b="$(canon_backend "$(meta "$id" backend)")"
-  [[ -z "$b" || "$b" == auto || "${b%%:*}" == node ]] && b=hc:claude
+  case "$b" in ""|auto) b=hc:claude ;; node:*) b="hc:${b#*:}" ;; esac
   local nb; nb="$(node_backends)"
   [[ "$b" =~ ^($nb)$ ]] || die "set: only ${nb//|/ and } run on another machine for now (this task is $b)"
   meta_set "$id" node "$did"; meta_set "$id" node_name "$name"; meta_set "$id" node_backend "$b"; meta_set "$id" node_here ""
   meta_set "$id" backend "node:${b#*:}"
-  meta_set "$id" backend_source explicit
+  # A machine pin does not override automatic agent selection.
   log_event "$id" note "pinned to $name ($did): it runs there, as $b"
   echo "$id is pinned to $name: it runs there as $b ($(jq -r .status <<<"$row") now)"
 }

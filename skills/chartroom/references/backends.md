@@ -1,5 +1,15 @@
 # Backends
 
+Automatic dispatch balances the home's live tasks among signed-in Codex, agy and Claude
+agents available on the selected machine, ties in that order. It uses hc or herdr only.
+`--backend` wins; `--needs mcp|browser` or a brief line `Needs: mcp|browser|claude` selects
+Claude for its tools and keeps the task on this machine. Agent selection waits until dispatch, after the brief has been filled.
+`CHARTROOM_CODEX_MODEL` is unset by default; configure a model per home. A task's `--model` wins.
+`CHARTROOM_REVIEW_NON_CLAUDE=opus` (default; `off` disables) gates new non-Claude ship completion
+on a linked hc:claude Opus 5.5 cold review of the brief and diff, launched by the watch.
+Scouts and pre-gate tasks are exempt; unchanged diffs reuse their review. See README's Backends
+section for review verdicts, queued reviews and the spread counters.
+
 A backend is `<runner>:<agent>`: **where** the worker runs × **which** agent runs. Runners are
 `hc`, `herdr`, `cmux`, `tmux` (session runners: a terminal you can watch), `headless` (no terminal),
 `command` (any CLI) and `subagent` (the host harness), plus `joined`, which is never
@@ -19,14 +29,12 @@ cmux is implemented against its documented CLI but **unverified on a real cmux i
 
 ## Selection and fallback
 
-- `chartroom new` without `--backend` (or `--backend auto`) picks at dispatch time: the first
-  available entry in `CHARTROOM_BACKEND_ORDER` (default
-  `hc:claude hc:codex hc:agy herdr:claude herdr:codex herdr:agy cmux:claude cmux:codex tmux:claude tmux:codex headless:codex headless:claude command`:
-  every agent's full sessions before any headless run, so a machine without claude starts Codex in hc).
-  An agy backend is skipped there while agy is not signed in here. grok is in no default order:
-  it runs only when a task's `--backend` names it (the commander decides when). Skipping
-  the first entry writes a `note: backend fallback: ...` event and prints it, because falling
-  from a session runner to headless changes what the commander can watch and steer.
+- `chartroom new` without `--backend` (or `--backend auto`) picks at dispatch time,
+  after placement, by the home's live-task count. Candidates must be signed in and usable
+  on that machine; ties go to codex, agy, claude. Only hc and herdr are selected.
+  `CHARTROOM_BACKEND_ORDER` remains a diagnostic order for explicit-backend alternatives;
+  it cannot turn automatic selection into a headless fallback. grok is never a candidate:
+  it runs only when a task's `--backend` names it (the commander decides when).
 - An explicit `--backend` never downgrades. If it is unavailable, dispatch exits non-zero with
   the reason and the next viable backend.
 - `CI=true` disables session runners. hc needs a running herdr-core (a live socket, checked

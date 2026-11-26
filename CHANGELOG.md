@@ -9,7 +9,7 @@ are stable from 0.1.0.
 ### Added
 - grok (xAI's Grok Build) as a crew agent, for full sessions only and only when a task names it:
   `--backend hc:grok`, `herdr:grok`, or `node:grok` on a device where grok is signed in. It is in no
-  default order and no automatic pick chooses it. It starts as `grok <brief>` with `-m`,
+  default order and the automatic spread never picks it. It starts as `grok <brief>` with `-m`,
   `--reasoning-effort` and `--permission-mode` from the task, `--no-auto-update`, `--trust` for a worktree chartroom
   made, and the task folder as `--add-dir`. hc reads grok's state over OSC 7501: its prompts wake the XO
   with grok's words, an unreported turn wakes, and it is never typed into while blocked. Doctor and
@@ -19,6 +19,12 @@ are stable from 0.1.0.
   folder. The guard acts only when `CHARTROOM_TASK` is set, so the commander's own grok sessions are
   untouched. grok is never parked. Built against grok 1.0.92 and hc 0.1.21; the live run waits on a
   sign-in.
+- Automatic new work balances signed-in Codex, agy and Claude full sessions by live task count,
+  with fixed ties and a local Claude opt-out for MCP/browser needs. Status and dashboards show
+  the spread and task-level review outcomes; doctor reports agent usability locally and on nodes.
+- New non-Claude ship tasks queue cold Opus 5.5 reviews through the watch before acceptance.
+  Reviews retry unavailable Git or runners, reuse unchanged diffs, and accept case-insensitive
+  verdicts. Scouts and pre-gate tasks are exempt; `accept --skip-review` records a per-task bypass.
 - Codex and agy workers get the pattern kill guard too. agy: chartroom writes the task folder's
   `.agents/hooks.json` (a `PreToolUse` hook on `run_command`, `chartroom hook <id> guard`); agy loads
   it because the task folder is a workspace folder, so nothing goes into the worktree, and it needs no

@@ -34,15 +34,13 @@ setup() { common_setup; }
   [[ "$(jq -r '.backends[]|select(.backend=="herdr:claude").reason' <<<"$output")" == "herdr server not reachable"* ]]
 }
 
-@test "auto selection falls back down the order and records a note" {
+@test "auto selection never falls back to headless or commands" {
   export CHARTROOM_BACKEND_ORDER="herdr:claude tmux:claude command"
   id="$(new_task --command "$STUB {id}")"
   run cr dispatch "$id"
-  [ "$status" -eq 0 ]
-  # (tmux may exist on a CI image; then tmux:claude is skipped because claude is missing)
-  [[ "$output" == *"backend fallback: herdr:claude unavailable (herdr not on PATH) tmux:claude unavailable ("*"); using command (steering: between-runs)"* ]]
-  [ "$(meta_of "$id" backend)" = command ]
-  events "$id" | grep -q "note: backend fallback"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"automatic work needs a signed-in agent in hc or herdr"* ]]
+  [ -z "$(meta_of "$id" dispatched)" ]
 }
 
 @test "an explicit backend that is unavailable fails loudly with the next viable option" {

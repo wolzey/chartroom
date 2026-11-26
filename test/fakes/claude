@@ -3,6 +3,10 @@
 # answers it with a result after FAKE_TURN seconds; exits when stdin closes, unless
 # FAKE_NO_EXIT=1 (real claude 2.1.289 stays alive after a late EOF).
 printf '%s\n' "$*" >>"${FAKE_LOG:-/dev/null}"
+if [[ "${1:-}" == auth && "${2:-}" == status ]]; then
+  if [[ "${FAKE_CLAUDE_SIGNED_OUT:-}" == 1 ]]; then echo '{"loggedIn":false}'; else echo '{"loggedIn":true}'; fi
+  exit 0
+fi
 [[ " $* " == *" -p "* ]] || { echo "fake claude: interactive mode not simulated" >&2; exit 2; }
 printf '{"type":"system","subtype":"init"}\n'
 while IFS= read -r line; do

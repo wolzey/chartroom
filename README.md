@@ -116,11 +116,8 @@ change in a minor release. The full list is in [CHANGELOG.md](CHANGELOG.md).
 - **It installs into your existing setup instead of being one.** chartroom is a CLI on your PATH
   plus a few skills linked into the agents you already use. Your home directory, config and other
   skills stay as they are.
-- **No multiplexer required.** Headless workers (`claude -p` with live steering over a stream,
-  `codex exec` with resume) are first-class backends. So are plain commands: any CLI can be a
-  worker through a template. It degrades from the Herdr app (hc) to herdr to cmux to tmux to
-  headless to a command,
-  writes down every fallback, and never fails just because herdr isn't there.
+- **Full sessions for automatic work.** New work spreads across signed-in Codex, agy and
+  Claude agents in hc or herdr. Other runners remain available through an explicit backend.
 - **Agent-native signals instead of screen scraping.** Turn ends, approval prompts and prompt
   receipt come from Claude Code hooks and Codex `notify`, not from pattern-matching the TUI.
 - **Small surface.** Bash with `jq` and `git` (about 13,000 lines across `bin/` and `lib/`), plus
@@ -677,11 +674,47 @@ sessions only, and only when a task's `--backend` names it: `hc:grok`, `herdr:gr
 | `subagent` | the host harness's subagent | no | host | Claude Code only | carried over, not re-verified |
 | `joined:<agent>` | a session you started yourself, that ran `chartroom join` | `peek`; `attach` if it is in tmux/herdr/cmux | mailbox | the `join` skill in that session | verified (Claude Code 2.1.293 in tmux) |
 
-Default automatic order, every agent's full sessions before any headless run: `hc:claude hc:codex hc:agy herdr:claude herdr:codex herdr:agy cmux:claude cmux:codex tmux:claude tmux:codex headless:codex headless:claude command`
-(`CHARTROOM_BACKEND_ORDER`). grok is not in it: a task runs on grok only when its `--backend` says so. When a backend is chosen automatically and the first choice isn't
-available, chartroom uses the next one and records `note: backend fallback: herdr:claude
-unavailable (herdr not on PATH); using tmux:claude (steering: live)`. When you name a backend
-explicitly, it never silently downgrades. Dispatch fails and names the next viable option.
+Without `--backend`, dispatch first chooses a machine, then the agent with the fewest live tasks
+in this home among those signed in and usable there. Ties go to **Codex, agy, Claude**, in that
+order. Automatic work uses **hc or herdr full sessions only**; it never falls back to headless,
+tmux, cmux, or command. An explicit `--backend` wins and never silently downgrades.
+grok is never picked automatically: a task runs on grok only when its `--backend` says so.
+Drafts with an assigned backend and unfinished workers count toward the spread; review, done,
+failed and closed tasks do not. Existing workers keep their assignment.
+
+Use `--needs mcp` or `--needs browser`, or a brief line `Needs: mcp`, `Needs: browser`, or
+`Needs: claude`, when the work needs browser or MCP tools available only to Claude.
+These requirements keep the task on this machine and select Claude unless an explicit backend
+overrides the agent. A remote pin must be changed to `node=here` before dispatch. Name the requirement
+explicitly: merely mentioning a tool in prose does not force an agent. A machine pin still allows
+automatic agent selection on that machine. The agent choice occurs at dispatch so edits to the
+brief and current node availability are included.
+
+`chartroom status` prints live counts and review outcomes per agent; `status --spread --json`
+returns just those counters. Both support `--all-homes`. The dashboard displays the same counters
+and `dashboard --json --all-homes` (also `board`) includes them for each home.
+`dashboard --all-homes` without JSON prints a board for each home. `doctor` reports local agent sign-ins
+and full-session usability, plus each enrolled node's last reported agent availability.
+
+During the trial, `CHARTROOM_REVIEW_NON_CLAUDE=opus` (default) gates new Codex and agy ship
+tasks. Scouts and tasks created before the gate are exempt. A `done` event marks review pending;
+the watch creates and dispatches a linked **hc:claude, claude-opus-5-5** cold review in the
+background. Keep the watch running for reviews and retries. The reviewer receives a copy of the
+brief and `chartroom git <id> diff <base-sha>...`, never the worker's report. It writes findings
+ranked P0–P3 and posts a clear Clean or Rework verdict; case and ordinary punctuation do not matter.
+A leading `Clean`, `Rework`, or `Not clean` (optionally after `Verdict:`) takes precedence over
+explanatory prose. A completion with no verdict is consumed once and keeps acceptance blocked
+until the reviewer posts a verdict. If no review task exists, accept names the review-sync command
+and the watch as ways to start it.
+The original stays in review; accept and ordinary close wait for that verdict. A finished review
+does not automatically accept the work: the commander still decides. `accept <id> --skip-review`
+explicitly bypasses the gate for that task and records the decision.
+If hc:claude or the worker's Git is unavailable, the review shows blocked and the watch retries.
+A repeated completion reuses its review when the captured diff is unchanged; a changed diff gets
+a new review. The tally counts reviewed original tasks, including closed tasks, by their latest
+review result, rather than counting review rounds. Set `CHARTROOM_REVIEW_NON_CLAUDE=off` in the
+home's config to end the trial gate.
+
 `CI=true` disables session runners. Details, including how each one confirms delivery:
 [skills/chartroom/references/backends.md](skills/chartroom/references/backends.md).
 
@@ -827,12 +860,13 @@ machine), then `~/.config/chartroom/config` (`KEY=VALUE`, no shell evaluation;
 | `CHARTROOM_HOME` | `~/.chartroom` | read in this order: the environment, legacy `CAP_HOME`, the registered home the current directory is (or lies in), the config file, then an existing `~/.captain` |
 | `CHARTROOM_PROJECT_ROOTS` | *(empty)* | colon-separated dirs searched by `chartroom project <name>` |
 | `CHARTROOM_WORKSPACE` | `chartroom-crew` | Herdr app space / herdr workspace / cmux workspace / tmux session name |
-| `CHARTROOM_BACKEND_ORDER` | see above | space- or comma-separated |
+| `CHARTROOM_BACKEND_ORDER` | diagnostic backend order | space- or comma-separated; does not override automatic full-session balancing |
 | `CHARTROOM_HARNESS` | `generic` | `claude` enables the `subagent` backend |
 | `CHARTROOM_BRANCH_PREFIX` | `chartroom/` | |
 | `CHARTROOM_TMUX_SOCKET` | *(default server)* | run the crew on `tmux -L <name>` |
 | `CHARTROOM_COMMAND` | *(empty)* | default template for the `command` backend |
 | `CHARTROOM_CODEX_SHIP_SANDBOX` / `_SCOUT_SANDBOX` | `danger-full-access` / `workspace-write` | |
+| `CHARTROOM_REVIEW_NON_CLAUDE` | `opus` | cold review gate; `off` disables it |
 | `CHARTROOM_CODEX_MODEL` / `CHARTROOM_AGY_MODEL` | (the agent's own) | the model a Codex or agy worker gets when its task names none (`new --model` wins); usually in a home's `config`. A task on a device carries it there |
 | `CHARTROOM_CLAUDE_PERMISSION` | *(agent default)* | interactive Claude `--permission-mode` |
 | `CHARTROOM_CLAUDE_HEADLESS_PERMISSION` | `acceptEdits` | |

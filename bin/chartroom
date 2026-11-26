@@ -103,6 +103,8 @@ source "$CR_ROOT/lib/fleet.sh"
 source "$CR_ROOT/lib/device.sh"
 # shellcheck source=../lib/place.sh
 source "$CR_ROOT/lib/place.sh"
+# shellcheck source=../lib/spread.sh
+source "$CR_ROOT/lib/spread.sh"
 # shellcheck source=../lib/guest.sh
 source "$CR_ROOT/lib/guest.sh"
 # shellcheck source=../lib/env.sh
@@ -206,7 +208,8 @@ steer_mode_of() { local b; b="$(canon_backend "$1")"; "${b%%:*}_steer_mode" "${b
 
 # Picks the backend to dispatch on. Explicit choices never silently downgrade.
 select_backend() { # <id> -> sets SELECTED
-  local id="$1" want src b why first="" reasons=()
+  local id="$1" want src b why
+  SELECTED_NODE_BACKEND=""
   want="$(meta "$id" backend)"; src="$(meta "$id" backend_source)"; src="${src:-explicit}"
   CR_TASK_COMMAND="$(meta "$id" command)"
   if [[ -n "$want" && "$src" == explicit ]]; then
@@ -215,19 +218,21 @@ select_backend() { # <id> -> sets SELECTED
     for b in $CR_BACKEND_ORDER; do probe_backend "$b" >/dev/null && { next="$b"; break; }; done
     die "backend $want was chosen explicitly but is unavailable: $why${next:+ (next viable: $next; re-create the task with --backend $next, or omit --backend for automatic fallback)}"
   fi
-  for b in $CR_BACKEND_ORDER; do
-    [[ -z "$first" ]] && first="$b"
-    if why="$(auto_ok "$b")"; then
-      SELECTED="$(canon_backend "$b")"
-      if [[ "$SELECTED" != "$(canon_backend "$first")" ]]; then
-        local msg; msg="backend fallback: ${reasons[*]}; using $SELECTED (steering: $(steer_mode_of "$SELECTED"))"
-        log_event "$id" note "$msg"; echo "chartroom: $msg" >&2
-      fi
-      return 0
-    fi
-    reasons+=("$b unavailable ($why)")
-  done
-  die "no backend available: ${reasons[*]}. Run 'chartroom doctor'."
+  if spread_auto "$id"; then
+    if [[ -n "$(meta "$id" node)" ]]; then
+      local row
+      nodes_settings
+      row="$(nodes_device_row "$(fleet_device_json "$(meta "$id" node)")" "$(date +%s)")"
+      row="$(spread_node_agents "[$row]" | jq -c '.[0]')"
+      spread_select_row "$id" "$row"
+      SELECTED_NODE_BACKEND="$SELECTED"
+      SELECTED="node:${SELECTED#*:}"
+    else spread_select_local "$id"; fi
+    return 0
+  fi
+  [[ -n "$want" ]] || die 'no backend available; run chartroom doctor'
+  SELECTED="$want"
+
 }
 
 # ---------------------------------------------------------------- init / project
@@ -386,6 +391,7 @@ cmd_new() {
      + (if $permission != "" then {permission:$permission} else {} end)
      + (if $model != "" then {model:$model} else {} end)')"
   task_record_new "$id" "$doc"
+  if [[ "$kind" == ship && "$(cfg REVIEW_NON_CLAUDE '' opus)" != off ]]; then meta_set "$id" review_gate 1; fi
   log_event "$id" note "created ($kind via ${backend:-auto})"
   # a ship task's default grants (CHARTROOM_DEFAULT_GRANTS: names, or none), unless --grant says which
   if [[ ${#grants[@]} -eq 0 && "$kind" == ship ]]; then
@@ -719,6 +725,9 @@ cmd_dispatch() {
   if ! grep -A3 -E "^## (Commander|Captain)'s intent" "$(tdir "$id")/brief.md" | grep -qvE "^(## |<!--|\s*$)"; then
     die "brief has no commander's intent yet; fill it before dispatch"
   fi
+  if [[ -n "$(meta "$id" node)" ]] && spread_claude "$id"; then
+    die "Claude-only tools are configured on this machine; set $id node=here before dispatch"
+  fi
   select_backend "$id"
   # where it runs: the node with the most room (lib/place.sh), unless nothing can be placed
   if [[ $dry -eq 1 ]]; then
@@ -732,6 +741,7 @@ cmd_dispatch() {
   fi
   while true; do
     place_task "$id" "$over" 0 "$refused"
+    if [[ "$SELECTED" == node:* && -n "$SELECTED_NODE_BACKEND" ]]; then meta_set "$id" node_backend "$SELECTED_NODE_BACKEND"; fi
     meta_set "$id" backend "$SELECTED"
     runner="${SELECTED%%:*}"; agent=""; [[ "$SELECTED" == *:* ]] && agent="${SELECTED#*:}"
     # (a worktree of a task on another machine is made there)
@@ -923,6 +933,7 @@ CR_STATE_AWK='
 state_of() { # derived from the last wake-worthy event; a restart re-derives the same answer
   local id="$1"
   [[ -n "$(meta "$id" closed)" ]] && { echo closed; return; }
+  [[ -z "$(meta "$id" review_error)" ]] || { echo blocked; return; }
   [[ -n "$(meta "$id" dispatched)" ]] || { echo drafting; return; }
   awk "$CR_STATE_AWK" "$(events_path "$id"; printf '%s' "$EVENTS_PATH")"
 }
@@ -1061,8 +1072,9 @@ status_store_rows() {
 }
 
 cmd_status() {
-  local json=0 all=0 a rows=() row focus
-  for a in "$@"; do case "$a" in --json) json=1 ;; --all) all=1 ;; esac; done
+  local json=0 all=0 spread=0 a rows=() row focus
+  for a in "$@"; do case "$a" in --json) json=1 ;; --all) all=1 ;; --spread) spread=1 ;; esac; done
+  if [[ $spread -eq 1 ]]; then if [[ $json -eq 1 ]]; then spread_summary; else spread_line "$(spread_summary)"; fi; return; fi
   # (read whole first: a store that cannot be read fails the command, never shows an empty crew)
   local out; out="$(if [[ $all -eq 1 ]]; then status_rows --all; else status_rows; fi)" || exit 1
   while IFS= read -r row; do [[ -n "$row" ]] && rows+=("$row"); done <<<"$out"
@@ -1078,6 +1090,7 @@ cmd_status() {
     printf '%s\n' "${rows[@]}" | jq -r '[.id,(if .project == "" then "-" else .project end),.state,.live,.backend,.kind,(.last|.[0:70])] | @tsv' |
       { printf 'ID\tPROJECT\tSTATE\tLIVE\tBACKEND\tKIND\tLAST\n'; cat; } | table
   fi
+  spread_line "$(spread_summary)"
   inbox_line
   relay_line
   tell_line
@@ -1369,6 +1382,9 @@ cmd_close() {
   fi
   local id="${1:-}" discard=0; [[ -n "$id" ]] || die "usage: chartroom close <id>... [--discard]"; need_task "$id"
   [[ "${2:-}" == --discard ]] && discard=1
+  if [[ $discard -eq 0 && "$(state_of "$id")" == review ]]; then
+    review_ready "$id" || die "cold review for $id has not finished; cannot close it yet"
+  fi
   local wt project branch base_sha r
   wt="$(meta "$id" worktree)"; project="$(meta "$id" project)"; branch="$(meta "$id" branch)"; base_sha="$(meta "$id" base_sha)"
   r="$(backend_runner "$id")"
@@ -1405,11 +1421,20 @@ cmd_close() {
 # The commander's word that finished work is done, without closing it: the worktree, branch
 # and session stay as they are (close, or sweep --apply once it is landed, removes them).
 cmd_accept() {
+  local skip=0 arg ids=()
+  for arg in "$@"; do if [[ "$arg" == --skip-review ]]; then skip=1; else ids+=("$arg"); fi; done
+  set -- "${ids[@]}"
+  [[ $skip -eq 0 || $# -eq 1 ]] || die "accept --skip-review takes exactly one task"
   [[ $# -gt 1 ]] && { accept_many "$@"; return; }
-  local id st; [[ $# -eq 1 ]] || die "usage: chartroom accept <id>..."
+  local id st; [[ $# -eq 1 ]] || die "usage: chartroom accept <id>... [--skip-review]"
   id="$(cmd_resolve "$1")" || exit 1; need_task "$id"
   st="$(state_of "$id")"
   [[ "$st" == review ]] || die "$id is $st, not awaiting review: accept marks a worker's finished work done"
+  if [[ $skip -eq 1 ]]; then
+    meta_set "$id" review_skipped 1
+    log_event "$id" note "cold review skipped by explicit accept --skip-review"
+  fi
+  review_ready "$id" || die "$(review_wait_reason "$id")"
   log_event "$id" note "accepted"
   echo "accepted $id: done (chartroom close $id removes its worktree)"
   # Follow-ups after an accept are rare: its worker parks now, not after the grace (lib/park.sh).
@@ -1428,6 +1453,7 @@ accept_many() {
     if ! id="$(cmd_resolve "$a" 2>/dev/null)" || ! task_exists "$id"; then echo "chartroom: $a: no such task" >&2; rc=1; continue; fi
     st="$(state_of "$id")"
     [[ "$st" == review ]] || { echo "chartroom: $a: $id is $st, not awaiting review" >&2; rc=1; continue; }
+    if ! review_ready "$id"; then echo "chartroom: $(review_wait_reason "$id")" >&2; rc=1; continue; fi
     accepted+=("$id")
     if is_store_task "$id"; then lines+="$id"$'\t'note$'\t'accepted$'\n'; else log_event "$id" note "accepted"; fi
   done
@@ -1532,7 +1558,8 @@ watch_scan_lines() { # <id> <from-offset> <to-offset>
     n="$(LC_ALL=C; printf '%s' "${#line}")"; pos=$((pos + n + 1))
     kind="$(line_kind "$line")"
     case "$kind" in
-      decision|blocked|done|failed) wake "$id" "$line" ;;
+      done) review_kick "$id"; wake "$id" "$line" ;;
+      decision|blocked|failed) wake "$id" "$line" ;;
       # A parked worker that could not be resumed (lib/park.sh): its one wake.
       note) if [[ "$line" == *" note: revive failed: "* ]]; then wake "$id" "$line"; fi ;;
       # A run ending, or a turn stopping, right after the worker reported (or said it is
@@ -1729,6 +1756,7 @@ cmd_watch() {
       for m in "${TASK_METAS[@]+"${TASK_METAS[@]}"}"; do
         id="${m%/meta.json}"; id="${id##*/}"
         is_closed "$id" && continue
+        review_kick "$id"
         events_path "$id"; f="$EVENTS_PATH"
         [[ -f "$f" ]] || continue
         size=$(($(wc -c <"$f")))
@@ -1843,6 +1871,10 @@ cmd_doctor() {
     [[ -z "$first_ok" && "$avail" == yes && " $CR_BACKEND_ORDER " == *" $b "* ]] && first_ok="$b"
     rows+=("$(jq -cn --arg b "$b" --arg a "$avail" --arg w "$why" --arg s "$(steer_mode_of "$b")" '{backend:$b,available:($a=="yes"),steering:$s,reason:$w}')")
   done
+  local available pick
+  available="$(spread_local_backends)"
+  pick="$(spread_pick "$(spread_summary)" "$(printf '%s\n' "$available" | jq -Rsc 'split("\n") | map(select(length>0) | split(":")[1])')" 0)" || true
+  first_ok="$(grep ":${pick:-none}$" <<<"$available" | head -1 || true)"
   local jwhy="not dispatched: a running session joins with chartroom join"
   for b in joined:claude joined:codex; do
     rows+=("$(jq -cn --arg b "$b" --arg s "$(steer_mode_of "$b")" --arg w "$jwhy" '{backend:$b,available:false,steering:$s,reason:$w}')")
@@ -1855,12 +1887,12 @@ cmd_doctor() {
     printf '%s\n' "${rows[@]}" | jq -s --arg v "$CR_VERSION" --arg h "$CR_HOME" --arg hs "$CR_HOME_SOURCE" --arg o "$CR_BACKEND_ORDER" --arg auto "$first_ok" --arg harness "$CR_HARNESS" \
       --arg bv "$BASH_VERSION" --arg bp "$BASH" --arg bf "$CR_BASH_FROM" --arg added "$added" \
       --argjson dash "$(dashboard_doctor_json)" --argjson pdf "$(page_doctor_json)" --arg hname "$hname" --arg hcfg "$hcfg" --arg ws "$CR_WORKSPACE" \
-      --argjson agy "$(agy_doctor_json)" --argjson grok "$(grok_doctor_json)" \
+      --argjson agy "$(agy_doctor_json)" --argjson agents "$(spread_doctor_json)" --argjson agent_nodes "$(spread_doctor_nodes)" --argjson grok "$(grok_doctor_json)" \
       '{version:$v,home:$h,home_source:$hs,home_name:(if $hname=="" then null else $hname end),
         home_config:(if $hcfg=="" then null else $hcfg end),workspace:$ws,harness:$harness,
         bash:{version:$bv,path:$bp,rerun_from:(if $bf=="" then null else $bf end)},
         path:{thin:($added!=""),added:($added|split(" ")|map(select(.!="")))},
-        order:($o|split(" ")),auto:(if $auto=="" then null else $auto end),dashboard:$dash,pdf:$pdf,agents:{agy:$agy,grok:$grok},backends:.}'
+        order:($o|split(" ")),auto:(if $auto=="" then null else $auto end),dashboard:$dash,pdf:$pdf,agents:($agents + {agy:($agents.agy + $agy), grok:$grok}),agent_nodes:$agent_nodes,backends:.}'
   else
     echo "chartroom $CR_VERSION"
     [[ "$CR_HOME_SOURCE" == "registered home"* ]] && hname=""
@@ -1882,6 +1914,8 @@ cmd_doctor() {
     page_doctor_json | jq -r 'if .chrome then "pdf:      \(.chrome) (chartroom artifact pdf)" else "pdf:      - \(.why)" end'
     agy_doctor_json | jq -r '"agy:      " + (if .path == null then "- not on PATH" else "\(.version // "?") at \(.path), \(if .signed_in then "signed in" else (.why // "not signed in") end)" end) + "; runs as \(.runners | join(", ")) only; \(.limits)"'
     grok_doctor_json | jq -r '"grok:     " + (if .path == null then "- not on PATH" else "\(.version // "?") at \(.path), \(if .signed_in then "signed in" else (.why // "not signed in") end)" end) + "; runs as \(.runners | join(", ")) only, and only when a task names it (never picked automatically); \(.limits)"'
+    spread_doctor_json | jq -r 'to_entries[] | "agent:    \(.key): signed in=\(.value.signed_in), usable full session=\(.value.usable) \(.value.reason)"'
+    spread_doctor_nodes | jq -r '.[] | .node as $n | .agents | to_entries[] | "agent:    \($n) / \(.key): signed in=\(.value.signed_in), usable=\(.value.usable)"'
     node_doctor_line
     fleet_doctor_line
     device_doctor_line
@@ -1984,7 +2018,7 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           port. homes add <name> [<path>] registers one (nothing
                                           in it is written), homes rm <name> unregisters it,
                                           homes path <name> prints its path (for launchers)
-  chartroom doctor [--json]               what can run here: backends, why not, steering mode
+  chartroom doctor [--json]               backends, agent sign-ins and usability here and on nodes
   chartroom project <name|path>           resolve a repo: path, forge, default base, overrides
   chartroom new --project P --title T [--backend B] [--kind ship|scout] [--base REF] [--plan-gate]
                 [--command TEMPLATE] [--permission MODE] [--model M] [--grant NAME]...
@@ -1994,13 +2028,14 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           agents: claude codex agy grok; agy and grok run in
                                           hc and herdr only, and grok only when named here),
                                           command, subagent, or auto
-                                          (omit --backend: pick per CHARTROOM_BACKEND_ORDER).
+                                          (omit --backend: balance codex, agy, claude in hc/herdr).
                                           --grant (repeatable): push-branch, open-pr, merge-auto,
                                           comment-pr, prod-read, enforced by the permission hooks
                                           --node: pin it to an enrolled device (hc:claude,
                                           hc:codex, hc:agy or hc:grok there), or here; unpinned, dispatch
                                           places it.
                                           --needs docker,ruby,...: only a node where those work
+                                          --needs mcp or browser: use Claude (unless B is explicit)
   chartroom join [--title T] [--kind ship|scout] [--agent A]
                                           run INSIDE a running agent session (not launched by
                                           chartroom) from its directory: records it as a joined
@@ -2057,7 +2092,8 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           active security exposure, data loss) is never held by
                                           focus mode. --detail keeps <text> a headline and adds the
                                           rest as its "Details:" part, on the same line
-  chartroom status [--json] [--all]       fleet view, derived from disk + live backends
+  chartroom status [--json] [--all] [--spread]
+                                          fleet view; --spread shows agent counts and review tally
   chartroom store doctor|check|legacy|events <id>
                                           the store (CHARTROOM_STORE=sqlite in a home's config:
                                           new tasks live in one SQLite database, lib/store.sh):
@@ -2317,9 +2353,10 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           verify | finish --brain <target> | rollback | status |
                                           reap --apply; and materialize|restore <id> here
                                           (chartroom migrate-home --help)
-  chartroom accept <id>                   the commander's word that a task in review (a worker
+  chartroom accept <id> [--skip-review]   the commander's word that a task in review (a worker
                                           reported done) is done; keeps its worktree (close
-                                          removes it) and parks its worker
+                                          removes it) and parks its worker; --skip-review
+                                          records an explicit bypass of its cold review
   chartroom close <id> [--discard]        remove a clean worktree, close its tab, mark closed;
                                           its branch goes only once its work has landed
                                           (a joined task's directory is never touched)
@@ -2346,9 +2383,10 @@ cmd="${1:-help}"; shift || true
 # commands, and every command in a home that is not a client, carry on below.
 brain_route "$cmd" "$@"
 # The read-only view across every home (lib/homes.sh): status, board, todo, inbox list, relay list.
-if [[ "$cmd" =~ ^(status|ls|board|todo|inbox|relay)$ ]]; then
+if [[ "$cmd" =~ ^(status|ls|board|dashboard|todo|inbox|relay)$ ]]; then
   for _a in "$@"; do
     [[ "$_a" == --all-homes ]] || continue
+    if [[ "$cmd" == dashboard && " $* " != *" --json "* ]]; then cmd=board; fi
     [[ "$cmd" == ls ]] && cmd=status
     [[ "$cmd" == todo && "${1:-}" =~ ^(done|add)$ ]] && die "todo $1 acts on one home; run it there"
     [[ "$cmd" == inbox && "${1:-}" != list ]] && die "--all-homes goes with inbox list only (the rest acts on one home)"
@@ -2358,6 +2396,7 @@ if [[ "$cmd" =~ ^(status|ls|board|todo|inbox|relay)$ ]]; then
 fi
 case "$cmd" in
   init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|git|steer|stop|attach|park|accept|close|sweep|watch|dashboard|radar|node|nodes|fleet|device|doctor|homes|brain|tell|ask|snooze|app|attachment|link|brief|set|request|initiative|permit|version|help|store|remove|restore|done|removed) "cmd_$cmd" "$@" ;;
+  review-sync) need_task "${1:-}"; review_sync "$1" ;;
   migrate-home) cmd_migrate_home "$@" ;;
   install-skills) cmd_install_skills "$@" ;;
   ls) cmd_status "$@" ;;

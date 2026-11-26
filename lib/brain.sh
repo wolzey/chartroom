@@ -673,7 +673,11 @@ git_readonly_refuses() { # <args...>: why they are not read-only git, or nothing
 git_readonly() { # <worktree> <args...>
   local wt="$1" why; shift
   why="$(git_readonly_refuses "$@")"; [[ -z "$why" ]] || die "$why"
-  git -C "$wt" --no-pager -c core.pager=cat -c diff.external= -c core.fsmonitor= "$@"
+  # An empty diff.external still asks git to execute an empty program for a nonempty
+  # diff. Disable diff helpers explicitly for the commands that can invoke them.
+  local sub="$1"; shift
+  case "$sub" in diff|show|log) set -- --no-ext-diff --no-textconv "$@" ;; esac
+  git -C "$wt" --no-pager -c core.pager=cat -c core.fsmonitor= "$sub" "$@"
 }
 
 # rsync's server side, read-only, for a pull of a registered home's path.
