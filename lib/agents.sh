@@ -161,16 +161,22 @@ grok_login_why() {
 # permission, in grok's own words: default, acceptEdits, auto, dontAsk, bypassPermissions, plan;
 # empty is grok's own default, which asks), --trust for a worktree chartroom created itself (the
 # folder trust its dialog would ask for, which chartroom answers only for its own worktrees: any
-# other folder's dialog is the commander's), and the task's folder by its real path.
+# other folder's dialog is the commander's), the task's folder by its real path, and no update check:
+# grok checks for one at each launch ([cli] auto_update), and a worker must not stop for it, as
+# Codex's would (--no-auto-update is the per-session switch; grok's own sessions still update).
+# A launch asks this first, in its own shell: a die inside grok_args (read through `mapfile < <(...)`)
+# would not stop it.
+grok_mode_check() { # <id>
+  local p; p="$(meta "$1" permission)"
+  [[ -z "$p" || "$p" =~ ^(default|acceptEdits|auto|dontAsk|bypassPermissions|plan)$ ]] || die "grok has no permission mode '$p' (its modes: default, acceptEdits, auto, dontAsk, bypassPermissions, plan)"
+}
 grok_args() { # <id>
   local m e p
+  printf '%s\n' --no-auto-update
   m="$(task_model "$1" grok)"; e="$(meta "$1" effort)"; p="$(meta "$1" permission)"
   [[ -n "$m" ]] && printf '%s\n' -m "$m"
   [[ -n "$e" ]] && printf '%s\n' --reasoning-effort "$e"
-  if [[ -n "$p" ]]; then
-    [[ "$p" =~ ^(default|acceptEdits|auto|dontAsk|bypassPermissions|plan)$ ]] || die "grok has no permission mode '$p' (its modes: default, acceptEdits, auto, dontAsk, bypassPermissions, plan)"
-    printf '%s\n' --permission-mode "$p"
-  fi
+  if [[ -n "$p" ]]; then grok_mode_check "$1"; printf '%s\n' --permission-mode "$p"; fi
   [[ "$(meta "$1" worktree_created)" == 1 ]] && printf '%s\n' --trust
   grok_guard_hooks
   printf '%s\n' --add-dir "$(phys_dir "$(tdir "$1")")"

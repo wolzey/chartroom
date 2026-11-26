@@ -202,8 +202,9 @@ hc_confirm_brief() { # <id> <text> <events.log offset before launch>
     [[ "$HC_STATE" == live ]] || return 1
     [[ -z "$want" ]] && hc_took_prompt "$id" "$before" 0 && return 2
     # grok tells hc it waits (an approval, a question, a folder it does not trust) before any turn
-    # shows: the brief waits behind it, and the watch raises it with grok's own words.
-    [[ "$agent" == grok && "$HC_STATUS" == blocked ]] && return 3
+    # shows: the brief waits behind it, and the prompt is raised now with grok's own words (a watch
+    # that starts later would only ever see it blocked, never the change).
+    if [[ "$agent" == grok && "$HC_STATUS" == blocked ]]; then prompt_sync "$id" "hc: $(hc_agy_what "$id")"; return 3; fi
     # A dialog can come up later than handle_trust looked, or right after the one it answered.
     scr="$(hc_screen "$id" 2>/dev/null || true)"
     if [[ -n "$(screen_prompt "$id" "$agent" "$scr")" ]]; then
@@ -220,7 +221,7 @@ hc_launch() { # <id> <wt> <agent>
   # (A worker that is not signed in would sit at agy's sign-in screen with its brief unread.)
   if [[ "$agent" == agy ]]; then local why; why="$(agy_login_why)" || die "$why"; fi
   # (grok signed out would open a browser sign-in on this machine, its brief unread)
-  if [[ "$agent" == grok ]]; then local why; why="$(grok_login_why)" || die "$why"; fi
+  if [[ "$agent" == grok ]]; then local why; grok_mode_check "$id"; why="$(grok_login_why)" || die "$why"; fi
   hc_clear_stale "$id"; meta_set "$id" hc_launched ""
   # Claude starts under a session id of chartroom's choosing, fresh each dispatch, so a parked
   # worker can be resumed (lib/park.sh).
@@ -426,8 +427,11 @@ hc_watch() { # <id>
         if [[ -n "$HC_TITLE_BLOCKED" ]]; then
           what="$(screen_prompt "$id" "$(backend_agent "$id")" "$(hc_screen "$id" 2>/dev/null || true)")"
           prompt_sync "$id" "${what:-$CODEX_TITLE_WHAT}"
-        elif [[ "$(backend_agent "$id")" =~ ^(agy|grok)$ ]]; then
-          # hc carries agy's and grok's own words for it: the kind (permission, question) and the dialog's line.
+        elif [[ "$(backend_agent "$id")" == grok ]]; then
+          # (through prompt_sync: a launch may have raised this very prompt already)
+          prompt_sync "$id" "hc: $(hc_agy_what "$id")"
+        elif [[ "$(backend_agent "$id")" == agy ]]; then
+          # hc carries agy's own words for it: the kind (permission, question) and the dialog's line.
           log_event "$id" agent "awaiting-input: hc: $(hc_agy_what "$id")"
         else log_event "$id" agent "awaiting-input: hc: agent is waiting on an approval or question prompt"; fi ;;
       error) wake "$id" "hc: agent reported an error; read its screen (chartroom peek $id)" ;;

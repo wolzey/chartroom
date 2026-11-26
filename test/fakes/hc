@@ -22,6 +22,8 @@
 #                          on its screen, and the launcher's `exited` line in the task's log
 #   FAKE_HC_EXITED=1       `kill` writes the launcher's `exited` line too, as a real one would
 #   screen.<address>       what that terminal shows, over `screen`
+#   FAKE_HC_HOLD=<status json>  a run's agent reports that status at once and holds its first prompt
+#                          unread, as grok does when it waits on a dialog before any turn
 S="${FAKE_HC_DIR:?}"; mkdir -p "$S/terms"
 printf '%s\n' "$*" >>"$S/calls.log"
 err() { jq -cn --arg k "$1" --arg m "$2" '{error: {kind: $k, message: $m}}' >&2; exit "$3"; }
@@ -101,6 +103,7 @@ case "$cmd" in
       printf 'No conversation found with session ID: %s\n' "$(sid_of "$t")" >"$S/screen.$t"
       upd "$t" '.state = "finished" | .reason = "exited" | .exit_code = 1'; exited_line "$t" 1
     elif [[ "${*: -1}" == */launch.sh ]]; then :
+    elif [[ -n "${FAKE_HC_HOLD:-}" ]]; then printf '%s' "${*: -1}" >"$S/queued.$t"; upd "$t" --argjson s "$FAKE_HC_HOLD" '.status = $s'
     elif trust_up; then printf '%s' "${*: -1}" >"$S/queued.$t"; else take "$t" "${*: -1}"; fi
     jq -c '{address, agent: "bash", cwd, name, state, turn: 0}' "$(tf "$t")" ;;
   get)

@@ -10,7 +10,7 @@ are stable from 0.1.0.
 - grok (xAI's Grok Build) as a crew agent, for full sessions only and only when a task names it:
   `--backend hc:grok`, `herdr:grok`, or `node:grok` on a device where grok is signed in. It is in no
   default order and no automatic pick chooses it. It starts as `grok <brief>` with `-m`,
-  `--reasoning-effort` and `--permission-mode` from the task, `--trust` for a worktree chartroom
+  `--reasoning-effort` and `--permission-mode` from the task, `--no-auto-update`, `--trust` for a worktree chartroom
   made, and the task folder as `--add-dir`. hc reads grok's state over OSC 7501: its prompts wake the XO
   with grok's words, an unreported turn wakes, and it is never typed into while blocked. Doctor and
   the node probe show its version and sign-in (`grok models`: "You are not authenticated."), and a

@@ -124,7 +124,7 @@ herdr_launch() { # <id> <wt> <agent>
   local id="$1" wt="$2" agent="$3" ws pane tab
   # (A worker that is not signed in would sit at agy's sign-in screen with its brief unread.)
   if [[ "$agent" == agy ]]; then local why; why="$(agy_login_why)" || die "$why"; fi
-  if [[ "$agent" == grok ]]; then local why; why="$(grok_login_why)" || die "$why"; fi
+  if [[ "$agent" == grok ]]; then local why; grok_mode_check "$id"; why="$(grok_login_why)" || die "$why"; fi
   herdr_clear_stale "$id"; meta_set "$id" herdr_launched ""
   crew_workspace "$wt"; ws="$CREW_WS"
   if [[ -n "$CREW_FRESH_PANE" ]]; then

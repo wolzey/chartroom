@@ -409,7 +409,7 @@ agy_trust() {
   [[ "$output" == *"hc grok worker running"* ]]
   # grok's own argv: model, effort, mode, --trust (its own worktree), the task folder by its real path, then the brief
   l="$CHARTROOM_HOME/tasks/$id/launch.sh"
-  grep -qF -- "-m grok-fake --reasoning-effort high --permission-mode acceptEdits --trust --add-dir $(cd "$CHARTROOM_HOME/tasks/$id" && pwd -P) \"\$@\"" "$l"
+  grep -qF -- "--no-auto-update -m grok-fake --reasoning-effort high --permission-mode acceptEdits --trust --add-dir $(cd "$CHARTROOM_HOME/tasks/$id" && pwd -P) \"\$@\"" "$l"
   refute grep -q -- "--settings\|notify=\|--no-daemon\| -i " "$l"
   [ "$(term t1 '.argv[2]')" = "Read the brief at $CHARTROOM_HOME/tasks/$id/brief.md and follow it exactly. Your task id is $id." ]
   events "$id" | grep -q "note: the agent took a prompt, but its text could not be checked (grok has no prompt hook)"
@@ -461,6 +461,15 @@ agy_trust() {
   set_term t1 '.status = {app: "grok", state: "working"}'
   watch_after set_term t1 '.status = {app: "grok", state: "done"} | .turn += 1'
   grep -q "^\[$id\] .*hc: agent stopped its turn without reporting" "$BATS_TEST_TMPDIR/wake"
+  # blocked before any turn (a dialog grok raises at its start): the launch raises it with grok's
+  # words, the brief waits behind it, and a watch that starts later does not raise it twice
+  id3="$(new_task --backend hc:grok)"
+  FAKE_HC_HOLD='{"app":"grok","state":"blocked","kind":"question","msg":"Trust this folder?"}' run cr dispatch "$id3"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"hc grok worker waiting at a startup dialog"* ]]
+  watch_after true
+  [ "$(events "$id3" | grep -c "agent: awaiting-input: hc: grok is waiting on a question: Trust this folder?$")" = 1 ]
+  grep -q "^\[$id3\] .*awaiting-input: hc: grok is waiting on a question: Trust this folder?" "$BATS_TEST_TMPDIR/wake"
   # signed out: doctor says what to run, and a dispatch refuses before any terminal (grok would open a browser sign-in)
   FAKE_GROK_SIGNED_OUT=1 run cr doctor --json
   [ "$(jq -r '.backends[]|select(.backend=="hc:grok").available' <<<"$output")" = false ]
@@ -477,6 +486,13 @@ agy_trust() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"grok runs only as a full session"* ]]
   done
+  # a mode grok does not have stops the dispatch before any terminal starts
+  id4="$(new_task --backend hc:grok --permission acceptEdit)"
+  : >"$FAKE_HC_DIR/calls.log"
+  run cr dispatch "$id4"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"grok has no permission mode 'acceptEdit'"* ]]
+  refute grep -q "^run" "$FAKE_HC_DIR/calls.log"
   rm -f "$BIN/grok"
   run cr doctor --json
   [ "$(jq -r '.backends[]|select(.backend=="hc:grok").reason' <<<"$output")" = "grok not on PATH" ]
