@@ -80,8 +80,11 @@ usage_account_label() { # <agent> <base_label> [raw_id_in_memory]
 
 # Write one reading atomically (0600) under a per-record mkdir lock, preserving any active
 # hit_limit unless explicitly replaced so concurrent refresh + hit_limit writes never race.
-usage_write_record() { # <agent> <machine> <json> [replace_hit 0|1]
-  local agent="$1" machine="$2" doc="$3" rep="${4:-0}" f tmp prev='null' lock i locked=0
+# With [keep_hit_after EPOCH] (a node's heartbeat, usage_sync_nodes) the reading replaces the kept
+# one whole, except that a kept limit stop recorded after EPOCH stays: the choice is made under the
+# lock, so a stop recorded meanwhile is never lost.
+usage_write_record() { # <agent> <machine> <json> [replace_hit 0|1] [keep_hit_after EPOCH]
+  local agent="$1" machine="$2" doc="$3" rep="${4:-0}" after="${5:-}" f tmp prev='null' lock i locked=0
   f="$(usage_file "$agent" "$machine")"
   mkdir -p "$(usage_dir)"
   lock="$f.lock"
@@ -96,9 +99,15 @@ usage_write_record() { # <agent> <machine> <json> [replace_hit 0|1]
     fi
     sleep 0.05
   done
-  if [[ "$rep" != 1 && -s "$f" ]]; then prev="$(cat "$f" 2>/dev/null || echo null)"; fi
-  doc="$(jq -c --argjson prev "$prev" --argjson rep "$rep" '
-    if $rep == 1 or ($prev | type) != "object" then .
+  if [[ ( "$rep" != 1 || -n "$after" ) && -s "$f" ]]; then prev="$(cat "$f" 2>/dev/null || echo null)"; fi
+  jq -e . >/dev/null 2>&1 <<<"$prev" || prev=null
+  doc="$(jq -c --argjson prev "$prev" --argjson rep "$rep" --arg after "$after" '
+    def epoch: if . == null then null else (tostring | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | try fromdateiso8601 catch null) end;
+    if $after != "" then
+      (if .hit_limit == null and ($prev | type) == "object" and $prev.hit_limit != null
+          and (($prev.hit_limit.at | epoch) // 0) > ($after | tonumber)
+       then .hit_limit = $prev.hit_limit else . end)
+    elif $rep == 1 or ($prev | type) != "object" then .
     else
       # Preserve an existing hit_limit across routine refreshes until its resets_at passes,
       # its cooldown expires, or the user runs `chartroom usage clear`. A worker can be blocked
@@ -823,7 +832,7 @@ USAGE_PROBE_JQ='
 # kept over it. (A probe takes seconds before its heartbeat is heard, hence the minute's margin.)
 usage_sync_nodes() {
   declare -F fleet_devices_json >/dev/null 2>&1 || return 0
-  local devs n i dev name probe seen line doc prev f
+  local devs n i dev name probe seen line doc
   devs="$(fleet_devices_json 2>/dev/null || echo '[]')"
   n="$(jq length <<<"$devs" 2>/dev/null || echo 0)"
   for ((i = 0; i < n; i++)); do
@@ -835,15 +844,7 @@ usage_sync_nodes() {
     while IFS= read -r line; do
       doc="$(usage_from_probe_line "$name" "$line")" || continue
       [[ -n "$doc" ]] || continue
-      f="$(usage_file "$(jq -r .agent <<<"$doc")" "$name")"
-      prev="$(cat "$f" 2>/dev/null || true)"
-      jq -e 'type == "object"' <<<"$prev" >/dev/null 2>&1 || prev=null
-      doc="$(jq -c --argjson prev "$prev" --argjson seen "$seen" '
-        def epoch: if . == null then null else (tostring | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | try fromdateiso8601 catch null) end;
-        if .hit_limit == null and ($prev | type) == "object" and $prev.hit_limit != null
-           and (($prev.hit_limit.at | epoch) // 0) > ($seen - 60)
-        then .hit_limit = $prev.hit_limit else . end' <<<"$doc")" || continue
-      usage_write_record "$(jq -r .agent <<<"$doc")" "$name" "$doc" 1
+      usage_write_record "$(jq -r .agent <<<"$doc")" "$name" "$doc" 1 "$((seen - 60))"
     done < <(awk -F'\t' '$1 == "usage" && $2 != "" && $2 != "-" { print }' <<<"$probe")
   done
 }
