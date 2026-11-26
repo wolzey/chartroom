@@ -211,7 +211,8 @@ load_config() {
   cfg_set CR_WATCH_INTERVAL WATCH_INTERVAL CAP_WATCH_INTERVAL 3
   cfg_set CR_WATCH_HC_INTERVAL WATCH_HC_INTERVAL '' 60
   # Every agent's full sessions before any headless run (the commander's rule r-851d: workers run as
-  # full sessions): a machine without claude starts Codex in hc, not `codex exec`.
+  # full sessions): a machine without claude starts Codex in hc, not `codex exec`. grok is in no
+  # default order: it runs only when a task's --backend names it (the commander picks when).
   cfg_set CR_BACKEND_ORDER BACKEND_ORDER '' 'hc:claude hc:codex hc:agy herdr:claude herdr:codex herdr:agy cmux:claude cmux:codex tmux:claude tmux:codex headless:codex headless:claude command'
   CR_BACKEND_ORDER="${CR_BACKEND_ORDER//,/ }"
   cfg_set CR_HARNESS HARNESS '' generic

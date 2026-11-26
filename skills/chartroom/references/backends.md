@@ -3,14 +3,18 @@
 A backend is `<runner>:<agent>`: **where** the worker runs × **which** agent runs. Runners are
 `hc`, `herdr`, `cmux`, `tmux` (session runners: a terminal you can watch), `headless` (no terminal),
 `command` (any CLI) and `subagent` (the host harness), plus `joined`, which is never
-dispatched: a running session joins itself (see the last section). Agents are `claude`, `codex` and
-`agy` (Antigravity CLI; full sessions only: `hc:agy`, `herdr:agy`, `node:agy`). Old names still work: `codex` = `headless:codex`, `herdr-claude` = `herdr:claude`,
+dispatched: a running session joins itself (see the last section). Agents are `claude`, `codex`,
+`agy` (Antigravity CLI; full sessions only: `hc:agy`, `herdr:agy`, `node:agy`) and `grok` (xAI's Grok
+Build; full sessions only, and only when a task's `--backend` names it: `hc:grok`, `herdr:grok`,
+`node:grok`). Old names still work: `codex` = `headless:codex`, `herdr-claude` = `herdr:claude`,
 `herdr-codex` = `herdr:codex`.
 
 `chartroom doctor` shows every backend, whether it can run here, why not, and how it steers.
 Last verified against: claude 2.1.289 (joined: 2.1.293; hc: 2.1.314), codex-cli 0.158.0, herdr 0.9.1,
 hc (herdr-core) 0.1.14 with herdr-app 0.1.9 (hc:codex: hc 0.1.16), tmux 3.x (October 2026); agy 1.5.17 and 1.5.18
-in hc 0.1.21 (November 2026; herdr:agy built to the same rules, not run against a signed-in agy).
+in hc 0.1.21 (November 2026; herdr:agy built to the same rules, not run against a signed-in agy);
+grok 1.0.92 with hc 0.1.21 (November 2026: built from grok's docs and a signed-out grok in hc; the
+live proof waits on a sign-in, see the grok section).
 cmux is implemented against its documented CLI but **unverified on a real cmux install**.
 
 ## Selection and fallback
@@ -19,7 +23,8 @@ cmux is implemented against its documented CLI but **unverified on a real cmux i
   available entry in `CHARTROOM_BACKEND_ORDER` (default
   `hc:claude hc:codex hc:agy herdr:claude herdr:codex herdr:agy cmux:claude cmux:codex tmux:claude tmux:codex headless:codex headless:claude command`:
   every agent's full sessions before any headless run, so a machine without claude starts Codex in hc).
-  An agy backend is skipped there while agy is not signed in here. Skipping
+  An agy backend is skipped there while agy is not signed in here. grok is in no default order:
+  it runs only when a task's `--backend` names it (the commander decides when). Skipping
   the first entry writes a `note: backend fallback: ...` event and prints it, because falling
   from a session runner to headless changes what the commander can watch and steer.
 - An explicit `--backend` never downgrades. If it is unavailable, dispatch exits non-zero with
@@ -107,6 +112,19 @@ the task's folder is one (`--add-dir`), so nothing goes into the worktree. agy s
 answer, because agy's `allow` would skip its own approval and an empty object denies. Verified on agy
 1.5.18, interactive and `-p`: no trust prompt for the hook, the deny blocks `killall -l` ("tool
 call denied by pre-tool hook: ..."), the task logs the note, and `echo` still runs.
+
+Every grok worker (hc, herdr, node) gets it through grok's own hooks. grok loads hooks only from
+user-wide places (`~/.grok/hooks/*.json`, `~/.grok/hooks-paths`, `config.toml`, the Claude and Cursor
+settings files) and from the project, never from an `--add-dir` folder, and a `GROK_CONFIG` overlay may
+not add hooks (grok's docs, 10-hooks.md and 05-configuration.md). So chartroom keeps one file of its
+own, `~/.grok/hooks/chartroom-guard.json` (`$GROK_HOME/hooks` when that is set), rewritten at each grok
+launch: a `PreToolUse` hook on `run_terminal_command` whose command does nothing unless
+`CHARTROOM_TASK` is set (the launcher exports it), then runs `chartroom hook - guard`. The
+commander's own grok sessions are untouched, and nothing goes into the worktree. grok sends
+`toolName: "run_terminal_command"` and `toolInput.command`, and takes Claude's
+`hookSpecificOutput.permissionDecision: "deny"`. grok runs a user hook only in a folder it trusts,
+which a chartroom worktree is (`--trust`). Tested against grok's documented payload; the live
+proof waits on a signed-in grok.
 
 Not guarded: headless runs, subagents and joined sessions.
 
@@ -344,6 +362,57 @@ Verified on agy 1.5.17 and 1.5.18 in hc 0.1.21 on a Mac (November 2026), against
   pick the id of agy's conversation to resume it (`agy -r <id>` resumes one agy chose).
 - `stop` is `hc interrupt` (Esc; verified: `stopped`), `close` ends the terminal, `attach` shows it.
 - Never `headless:agy` (`agy -p` is not a worker), `tmux:agy` or `cmux:agy`: `new` refuses them.
+
+## grok (xAI's Grok Build): hc:grok, herdr:grok, node:grok
+
+Built against grok 1.0.92 (`curl -fsSL https://x.ai/cli/install.sh | bash`, binary `grok`; docs at
+https://docs.x.ai/build/overview and, after a first run, in `~/.grok/docs/user-guide`) and hc 0.1.21,
+November 2026. What was seen live: hc names a grok terminal agent `grok` and reads a signed-out grok
+as `blocked`, kind `auth`, "Sign in to Grok". The rest follows grok's docs and waits on a live run
+with a signed-in grok (a throwaway scout).
+
+- **Only when named.** grok is not in `CHARTROOM_BACKEND_ORDER`'s default and no automatic pick
+  chooses it: a task runs on grok only when its `--backend` is `hc:grok` or `herdr:grok` (or it is
+  pinned or placed as `hc:grok` on a node). Doctor says so (`agents.grok.automatic: false`).
+- **Install.** The installer puts the binary in `~/.grok/downloads`, links `grok` (and a generic
+  `agent`) in `~/.grok/bin`, links those from `~/.local/bin` when that is on PATH, and adds
+  `~/.grok/bin` to the shell's rc file. chartroom looks on PATH, then `~/.local/bin/grok`, then
+  `~/.grok/bin/grok`, as a GUI launcher's or an ssh session's PATH may have neither.
+- **Start.** hc runs the launcher with the brief's line as grok's first positional argument (its
+  initial prompt). Its flags: `-m <model>`, `--reasoning-effort <effort>`, `--permission-mode <mode>`
+  (meta `permission`, in grok's words: `default`, `acceptEdits`, `auto`, `dontAsk`,
+  `bypassPermissions`, `plan`; anything else refuses at dispatch; none gives grok's own default, which
+  asks), `--trust` for a worktree chartroom created itself (grok's folder trust, which also gates the
+  hooks; any other folder's dialog is the commander's), and `--add-dir <task folder>` by its real
+  path. herdr starts it with `herdr agent start --kind grok` (herdr 0.9.5 knows grok) and the same
+  flags; chartroom then types the brief.
+- **Sign-in.** `grok models` lists the models, headed `You are not authenticated.` when there is no
+  sign-in, exit 0 either way (grok 1.0.92). Doctor shows it (`grok: <version> at <path>, signed in`,
+  or what to run: `grok login` in a terminal there and the browser sign-in, or
+  `grok login --device-auth` over ssh), and a dispatch stops before it starts a terminal (`grok is
+  not signed in here`): a grok session started signed out opens a browser sign-in on the machine. A
+  node reports grok's version and sign-in in its probe, so placement sends `hc:grok` only to a
+  machine where grok is signed in; sign-in is not a fleet health check. grok keeps its sign-in in
+  `~/.grok/auth.json`, a file, not the macOS keychain, so an ssh session reads it as the login session
+  does (its docs; to be confirmed on a signed-in Mac).
+- **State.** grok reports over OSC 7501 to Herdr 2, which hc is: working, waiting on an approval, a
+  question or a sign-in (blocked, with its kind and words), done, failed; hc counts its turns. So a
+  prompt wakes the XO as `agent: awaiting-input: hc: grok is waiting on a permission: <words>`, a turn
+  that ends unreported wakes as `hc: agent stopped its turn without reporting`, and the stall
+  watchdog covers a quiet one. A launch that finds grok blocked before any turn leaves the brief
+  queued behind it, and the watch raises the prompt.
+- **On a node** (`node:grok`): as for agy, the device agent asks hc about each guest `hc:grok` worker
+  every 5 s (`chartroom node agy-look`) and logs the same lines, which the relay carries to the brain.
+- **Steer.** `hc send` pastes and presses Enter; a grok that says it is blocked is never typed into
+  (chartroom refuses on hc and herdr alike: `the agent is blocked at a dialog`). A steer is
+  `submitted, not verified`: no prompt hook checks its text.
+- **What chartroom does not do for grok** (doctor says so): only the pattern kill guard (see "The
+  Bash guard"); no permission cards, grants or holds (its approvals reach the XO as
+  `awaiting-input`); steers are not checked against their text; never parked (grok can resume a
+  session by id, `-s`/`-r`, but chartroom's park and revive are Claude's only). grok also loads your
+  own Claude hooks and plugins (`~/.claude/settings.json`; `[compat.claude] hooks = false` in
+  `~/.grok/config.toml` turns that off), so a grok worker runs those too.
+- Never `headless:grok` (`grok -p` is not a worker), `tmux:grok` or `cmux:grok`: `new` refuses them.
 
 ## herdr:<agent> (first class)
 

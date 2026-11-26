@@ -590,6 +590,7 @@ guest_push_task() { # <home> <id>
 GUEST_PARKED_AT=0
 # agy has no hook (only the guard) to report a prompt or a turn that ends unreported, and no watch runs here: every
 # 5 s a home with an hc:agy task asks hc (chartroom node agy-look), whose lines go up with its log.
+# grok is the same (no reporting hook, state over OSC 7501), so an hc:grok task counts too.
 GUEST_AGY_AT=0
 guest_agy_look_all() {
   local g sf now_s; now_s="$(date +%s)"
@@ -599,7 +600,7 @@ guest_agy_look_all() {
     [[ -d "$g/.push" ]] || continue
     for sf in "$g/.push"/*.json; do
       [[ -f "$sf" ]] || continue
-      if grep -qE '"backend": *"hc:agy"' "$(guest_meta_file "${g%/}" "$(basename "$sf" .json)")" 2>/dev/null; then
+      if grep -qE '"backend": *"hc:(agy|grok)"' "$(guest_meta_file "${g%/}" "$(basename "$sf" .json)")" 2>/dev/null; then
         guest_run "$(basename "$g")" node agy-look >/dev/null 2>&1 || true; break
       fi
     done

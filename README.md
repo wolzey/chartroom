@@ -659,14 +659,16 @@ that is recognised from Claude Code's own session record when its transcript is 
 
 ## Backends
 
-A backend is `<runner>:<agent>`, where the agent is `claude`, `codex` or `agy` (Antigravity CLI; full sessions
-only: `hc:agy`, `herdr:agy`, or `node:agy` on a device where agy is signed in).
+A backend is `<runner>:<agent>`, where the agent is `claude`, `codex`, `agy` (Antigravity CLI; full sessions
+only: `hc:agy`, `herdr:agy`, or `node:agy` on a device where agy is signed in) or `grok` (xAI's Grok Build; full
+sessions only, and only when a task's `--backend` names it: `hc:grok`, `herdr:grok`, `node:grok`).
 
 | Backend | Runs in | Watch | Steering | Needs | Status |
 |---|---|---|---|---|---|
 | `hc:<agent>` | an herdr-core terminal, in its own tab of the Herdr app's `$CHARTROOM_WORKSPACE` space | yes (`chartroom attach`, or the app) | live | herdr-core running (the Herdr app, or `hc server start`); the window may be closed | `hc:claude` verified (hc 0.1.14, herdr-app 0.1.9, Claude Code 2.1.314); `hc:codex` implemented, not yet run against a real codex |
 | `hc:agy` | an herdr-core terminal running `agy -i <brief>` | yes | live (taken, not checked against its text) | agy signed in (`chartroom doctor` says) | verified (agy 1.5.17 and 1.5.18, hc 0.1.21). Only the pattern-kill guard hook: no permission cards or grants, never parked |
-| `herdr:<agent>` | a herdr tab (first class) | yes | live | herdr running | verified (herdr 0.9.1); `herdr:agy` built to the same rules, not run against a signed-in agy |
+| `hc:grok` | an herdr-core terminal running `grok <brief>` | yes | live (taken, not checked against its text) | grok signed in (`chartroom doctor` says) | built against grok 1.0.92 and hc 0.1.21 (hc reads its state; not yet run against a signed-in grok). Never picked automatically. Only the pattern-kill guard hook (`~/.grok/hooks/chartroom-guard.json`): no permission cards or grants, never parked |
+| `herdr:<agent>` | a herdr tab (first class) | yes | live | herdr running | verified (herdr 0.9.1); `herdr:agy` and `herdr:grok` built to the same rules, not run against a signed-in agy or grok |
 | `cmux:<agent>` | a cmux tab (macOS) | yes | live | cmux app, automation socket mode if the XO runs outside cmux | **implemented, unverified on real cmux** |
 | `tmux:<agent>` | a tmux window | yes (`chartroom attach`) | live | tmux ≥ 3.0 | verified (tmux 3.x) |
 | `headless:claude` | `claude -p`, stream-json in/out | `peek` | live (stdin stream), resume after | claude CLI | verified (2.1.289) |
@@ -676,7 +678,7 @@ only: `hc:agy`, `herdr:agy`, or `node:agy` on a device where agy is signed in).
 | `joined:<agent>` | a session you started yourself, that ran `chartroom join` | `peek`; `attach` if it is in tmux/herdr/cmux | mailbox | the `join` skill in that session | verified (Claude Code 2.1.293 in tmux) |
 
 Default automatic order, every agent's full sessions before any headless run: `hc:claude hc:codex hc:agy herdr:claude herdr:codex herdr:agy cmux:claude cmux:codex tmux:claude tmux:codex headless:codex headless:claude command`
-(`CHARTROOM_BACKEND_ORDER`). When a backend is chosen automatically and the first choice isn't
+(`CHARTROOM_BACKEND_ORDER`). grok is not in it: a task runs on grok only when its `--backend` says so. When a backend is chosen automatically and the first choice isn't
 available, chartroom uses the next one and records `note: backend fallback: herdr:claude
 unavailable (herdr not on PATH); using tmux:claude (steering: live)`. When you name a backend
 explicitly, it never silently downgrades. Dispatch fails and names the next viable option.

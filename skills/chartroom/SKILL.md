@@ -120,8 +120,9 @@ or choose by this rubric, checking `chartroom doctor` for what is available:
 | `command` | Any other agent CLI, from a template (`--command 'aider --message-file {brief}'`) | Via `peek` | between runs | Yes |
 | `subagent` | Read-only scouts and quick questions, only where your harness has subagents | No | host | No |
 
-`<agent>` is `claude`, `codex` or `agy` (agy runs only as `hc:agy`, `herdr:agy`, or on a node; it has no
-permission cards or grants, and `chartroom doctor` says whether it is signed in). Prefer full sessions:
+`<agent>` is `claude`, `codex`, `agy` or `grok` (agy and grok run only as `hc:`, `herdr:`, or on a node;
+they have no permission cards or grants, and `chartroom doctor` says whether each is signed in). grok
+runs only when the commander asks for it: name it with `--backend hc:grok`, never by default. Prefer full sessions:
 the agents do better in their own harness, so Codex work goes to `hc:codex` unless the commander asks for
 headless. Spread work across vendors when tasks are independent. A
 degraded tool should never stall the fleet. If you named a backend and it is unavailable,

@@ -287,7 +287,7 @@ chartroom node update --all                         # each device moves to this 
   any task, with its machine. Steer, stop and peek go to it as commands, and a permission card
   its worker raises is answered here and reaches it there. `close` brings the branch to the brain
   first (a git bundle, fast-forward only into the task's own branch); only once the brain holds
-  that very commit does the device close its copy. Only hc:claude, hc:codex and hc:agy run on a device,
+  that very commit does the device close its copy. Only hc:claude, hc:codex, hc:agy and hc:grok run on a device,
   and a pinned task never moves by itself; one whose device is away waits for it.
 - **Commands** reach a device by long-poll: its agent holds one request open to the brain's app
   server and runs what comes, one at a time; the brain still opens nothing to it. `node update`

@@ -209,8 +209,8 @@ chartroom dispatch <id> --dry-run     # where a task would go, and why
 ```
 
 A device needs the project checked out inside its node's project roots, and hc with Claude Code,
-Codex or agy signed in: only hc:claude, hc:codex and hc:agy run on a device (hc:agy only where the
-device's own chartroom knows agy, and agy is signed in there). A task that needs more of a machine
+Codex, agy or grok signed in: only hc:claude, hc:codex, hc:agy and hc:grok run on a device (hc:agy and
+hc:grok only where the device's own chartroom knows that agent and it is signed in there). A task that needs more of a machine
 says so (`new --needs docker`, or `needs=docker` on the project's line in `projects.md`), and never lands on
 one without it. On the device, once:
 

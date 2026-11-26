@@ -7,6 +7,18 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- grok (xAI's Grok Build) as a crew agent, for full sessions only and only when a task names it:
+  `--backend hc:grok`, `herdr:grok`, or `node:grok` on a device where grok is signed in. It is in no
+  default order and no automatic pick chooses it. It starts as `grok <brief>` with `-m`,
+  `--reasoning-effort` and `--permission-mode` from the task, `--trust` for a worktree chartroom
+  made, and the task folder as `--add-dir`. hc reads grok's state over OSC 7501: its prompts wake the XO
+  with grok's words, an unreported turn wakes, and it is never typed into while blocked. Doctor and
+  the node probe show its version and sign-in (`grok models`: "You are not authenticated."), and a
+  signed-out grok never starts, because it would open a browser sign-in. Its one hook is the pattern
+  kill guard, in `~/.grok/hooks/chartroom-guard.json`, because grok loads no hooks from an added
+  folder. The guard acts only when `CHARTROOM_TASK` is set, so the commander's own grok sessions are
+  untouched. grok is never parked. Built against grok 1.0.92 and hc 0.1.21; the live run waits on a
+  sign-in.
 - Codex and agy workers get the pattern kill guard too. agy: chartroom writes the task folder's
   `.agents/hooks.json` (a `PreToolUse` hook on `run_command`, `chartroom hook <id> guard`); agy loads
   it because the task folder is a workspace folder, so nothing goes into the worktree, and it needs no

@@ -75,9 +75,9 @@ def pname:
   | (if $k and ($g | startswith($k) | not) then "\($k) (\($g))" else $g end) | if length > 70 then .[0:69] + "…" else . end;
 
 def agent: (.args | words | .[0] // "" | base) as $b
-  | IN($b; "claude", "codex", "agy") or (IN($b; "node", "bun") and (.args | test("/(claude|codex)(\\.js)?( |$)")));
+  | IN($b; "claude", "codex", "agy", "grok") or (IN($b; "node", "bun") and (.args | test("/(claude|codex)(\\.js)?( |$)")));
 # Is this process the session chartroom started for the task in <dir>? An agent naming the
-# directory (claude --add-dir/--settings, codex -o/--add-dir, agy --add-dir), the session launcher, or a wrapper
+# directory (claude --add-dir/--settings, codex -o/--add-dir, agy and grok --add-dir), the session launcher, or a wrapper
 # passing the agent its --add-dir. Anything else that merely names it (a pager or editor on its
 # report, a tail -f of its events) is not.
 def session_for($d): mentions($d) and (agent or ((.args + " ") | contains($d + "/launch.sh ") or contains("--add-dir " + $d + " ")));
