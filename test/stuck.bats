@@ -151,6 +151,11 @@ EOF
   [ "$(n $'• Ran ls')" != "$(n $'• Ran ls -la')" ]
   [ "$(n $'+12 tool uses')" != "$(n $'+13 tool uses')" ]
   [ "$(n $'wrote 3m.txt')" != "$(n $'wrote 4m.txt')" ]
+  # agy (1.5.17): its braille spinner and a task's clock; its phase line ("Generating...",
+  # "Editing files...") says what it does, so it counts
+  [ "$(n $'⣷ Generating...\n ● [21:12:18] sleep 25 running')" = "$(n $'⡿ Generating...\n ● [21:12:19] sleep 25 running')" ]
+  [ "$(n $'⣷ Generating...')" != "$(n $'⣷ Editing files...')" ]
+  [ "$(n $'● Ran (ls docs)')" != "$(n $'● Ran (ls tests)')" ]
 }
 
 # ---------------------------------------------------------------- Codex's notify

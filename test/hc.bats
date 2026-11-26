@@ -222,6 +222,125 @@ watch_after() { # <change...>
   [ "$(cr status --json | jq -r --arg i "$id2" '.[]|select(.id==$i).live')" = working ]
 }
 
+# agy's folder trust dialog, as agy 1.5.17 draws it (verified in hc 0.1.21).
+agy_trust() {
+  printf 'Accessing workspace:\n\n%s\n\nDo you trust the contents of this project?\n\nAntigravity CLI requires permission to read, edit, and execute files here.\n\n> Yes, I trust this folder\n  No, exit\n\n  ↑/↓ Navigate · enter Confirm\n                                        auto · Gemini 4 Neon · high\n' "$1" >"$FAKE_HC_DIR/screen"
+}
+
+@test "hc:agy: the brief as agy -i past its trust dialog; live steer, peek, stop and close" {
+  use_fake agy
+  core_up
+  export FAKE_HC_NO_HOOK=1 # (agy gets no hooks: hc reads its state itself)
+  id="$(new_task --backend hc:agy --model gemini-fake-high)"
+  agy_trust "/some/worktree"
+  run cr dispatch "$id"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"hc agy worker running"* ]]
+  # agy's own argv: its model, the task folder by its real path, and -i before the brief's line
+  l="$CHARTROOM_HOME/tasks/$id/launch.sh"
+  grep -qF -- "--model gemini-fake-high --add-dir $(cd "$CHARTROOM_HOME/tasks/$id" && pwd -P) -i \"\$@\"" "$l"
+  refute grep -q -- "--settings\|notify=\|--no-daemon" "$l"
+  [ "$(term t1 '.argv[2]')" = "Read the brief at $CHARTROOM_HOME/tasks/$id/brief.md and follow it exactly. Your task id is $id." ]
+  # the trust dialog of its own worktree: Enter on "> Yes, I trust this folder", never Down
+  hc_calls | grep -qx "keys t1 enter"
+  refute grep -qx "keys t1 down" "$FAKE_HC_DIR/calls.log"
+  events "$id" | grep -q "note: accepted workspace trust for its own worktree"
+  events "$id" | grep -q "note: the agent took a prompt, but its text could not be checked (agy has no prompt hook)"
+  [ "$(cr status --json | jq -r '.[0].live')" = done ]
+  # steer types into it live: taken, not checked against its text
+  run cr steer "$id" "also list the tests folder"
+  [ "$status" -eq 0 ]
+  [[ "$output" == "submitted, not verified"*"agy: no prompt hook"* ]]
+  hc_calls | grep -qxF "send t1 --json also list the tests folder"
+  run cr peek "$id"
+  [[ "$output" == *"== terminal (recent)"* ]]
+  cr stop "$id" >/dev/null
+  hc_calls | grep -qx "interrupt t1 --json"
+  run cr close "$id"
+  [ "$status" -eq 0 ]
+  hc_calls | grep -qx "kill t1"
+  hc_calls | grep -qx "rm t1"
+  [ ! -f "$FAKE_HC_DIR/terms/t1.json" ]
+}
+
+@test "hc:agy watch: a prompt wakes with agy's own words and is never typed into; a turn ended unreported wakes; never parked" {
+  use_fake agy
+  core_up
+  export FAKE_HC_NO_HOOK=1
+  id="$(new_task --backend hc:agy)"
+  FAKE_HC_STATUS=working cr dispatch "$id" >/dev/null
+  [ "$(cr status --json | jq -r '.[0].live')" = working ]
+  # blocked at an approval: hc carries agy's kind and words, and the XO is woken with them
+  watch_after set_term t1 '.status = {app: "antigravity", state: "blocked", kind: "permission", msg: "Approve Edit: Write: /w/report.md"}'
+  grep -q "^\[$id\] .*awaiting-input: hc: agy is waiting on a permission: Approve Edit: Write: /w/report.md" "$BATS_TEST_TMPDIR/wake"
+  [ "$(cr status --json | jq -r '.[0].state')" = awaiting-input ]
+  # a steer then is refused, and hc is never asked to type through the dialog
+  : >"$FAKE_HC_DIR/calls.log"
+  run cr steer "$id" "carry on"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"blocked at a dialog"*"chartroom attach $id"* ]]
+  refute grep -q -- "--force" "$FAKE_HC_DIR/calls.log"
+  # answered (working again), then the turn ends with no report from the worker
+  set_term t1 '.status = {app: "antigravity", state: "working"}'
+  watch_after set_term t1 '.status = {app: "antigravity", state: "done"} | .turn += 1'
+  grep -q "^\[$id\] .*hc: agent stopped its turn without reporting" "$BATS_TEST_TMPDIR/wake"
+  # at rest, it is still never parked: chartroom cannot resume an agy session
+  run cr park "$id"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"only hc:claude workers can be parked"* ]]
+}
+
+@test "hc:agy: not signed in, or not a session runner, it never starts; doctor says why and what agy lacks" {
+  use_fake agy
+  core_up
+  run cr doctor --json
+  [ "$(jq -r '.backends[]|select(.backend=="hc:agy").available' <<<"$output")" = true ]
+  [ "$(jq -r '.backends[]|select(.backend=="herdr:agy").reason' <<<"$output")" = "herdr not on PATH" ]
+  [ "$(jq -r '.agents.agy.version' <<<"$output")" = "1.5.17-fake" ]
+  [ "$(jq -r '.agents.agy.signed_in' <<<"$output")" = true ]
+  [[ "$(jq -r '.agents.agy.limits' <<<"$output")" == *"no permission cards"*"never parked"* ]]
+  run cr doctor
+  [[ "$output" == *"agy:      1.5.17-fake at $BIN/agy, signed in; runs as hc:agy, herdr:agy, node"* ]]
+  # signed out: doctor says so, and a dispatch refuses before it starts a terminal
+  FAKE_AGY_SIGNED_OUT=1 run cr doctor --json
+  [ "$(jq -r '.backends[]|select(.backend=="hc:agy").available' <<<"$output")" = false ]
+  [[ "$(jq -r '.backends[]|select(.backend=="hc:agy").reason' <<<"$output")" == "agy is not signed in here"* ]]
+  id="$(new_task --backend hc:agy)"
+  : >"$FAKE_HC_DIR/calls.log"
+  FAKE_AGY_SIGNED_OUT=1 run cr dispatch "$id"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"agy is not signed in here (run agy once in a terminal and finish its Google sign-in)"* ]]
+  refute grep -q "^run" "$FAKE_HC_DIR/calls.log"
+  # never headless, tmux or cmux
+  for b in headless:agy tmux:agy cmux:agy; do
+    run cr new --project "$PROJECT" --title x --backend "$b"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"agy runs only as a full session"* ]]
+  done
+  # gone from PATH: said so
+  rm -f "$BIN/agy"
+  run cr doctor --json
+  [ "$(jq -r '.backends[]|select(.backend=="hc:agy").reason' <<<"$output")" = "agy not on PATH" ]
+  [ "$(jq -r '.agents.agy.path' <<<"$output")" = null ]
+}
+
+@test "default order: every agent's full sessions before any headless run, so codex without claude runs in hc" {
+  use_fake codex
+  rm -f "$BIN/claude"
+  core_up
+  run cr doctor --json
+  [ "$(jq -r '.order|join(" ")' <<<"$output")" = "hc:claude hc:codex hc:agy herdr:claude herdr:codex herdr:agy cmux:claude cmux:codex tmux:claude tmux:codex headless:codex headless:claude command" ]
+  [ "$(jq -r .auto <<<"$output")" = hc:codex ]
+  id="$(new_task)"
+  FAKE_HC_NO_HOOK=1 run cr dispatch "$id"
+  [ "$status" -eq 0 ]
+  [ "$(meta_of "$id" backend)" = hc:codex ]
+  [[ "$output" == *"hc codex worker running"* ]]
+  # (the legacy `codex` name on an old record still reads as it always did)
+  id2="$(new_task --backend codex)"
+  [ "$(meta_of "$id2" backend)" = headless:codex ]
+}
+
 @test "hc: a trust dialog is answered only for chartroom's own worktree" {
   core_up
   trust() { printf ' Quick safety check: Is this a project you created or one you trust?\n ❯ No, exit\n   Yes, I trust this folder\n' >"$FAKE_HC_DIR/screen"; }

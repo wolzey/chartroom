@@ -208,8 +208,9 @@ chartroom node limits mini --clone on # mini may clone a GitHub project it lacks
 chartroom dispatch <id> --dry-run     # where a task would go, and why
 ```
 
-A device needs the project checked out inside its node's project roots, and hc with Claude Code or
-Codex signed in: only hc:claude and hc:codex run on a device. A task that needs more of a machine
+A device needs the project checked out inside its node's project roots, and hc with Claude Code,
+Codex or agy signed in: only hc:claude, hc:codex and hc:agy run on a device (hc:agy only where the
+device's own chartroom knows agy, and agy is signed in there). A task that needs more of a machine
 says so (`new --needs docker`, or `needs=docker` on the project's line in `projects.md`), and never lands on
 one without it. On the device, once:
 

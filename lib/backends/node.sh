@@ -9,7 +9,7 @@
 # meta.node_placed is 1 and node_source is the backend_source it had).
 #   chartroom new ... --node <name|id|here>   pins at birth; chartroom set <id> node=<name|id>|here|any
 #   meta.node          the device's id (names are display only); meta.node_name its name then
-#   meta.node_backend  what it runs there: hc:claude or hc:codex (meta.backend reads node:<agent>)
+#   meta.node_backend  what it runs there: hc:claude, hc:codex or hc:agy (meta.backend reads node:<agent>)
 #   meta.node_attempt  which attempt the device is on; meta.node_off the lines of its log taken
 #   fleet/tasks/<home>/<id>.json   the pin the server checks each push against (device, attempt)
 #
@@ -20,7 +20,9 @@
 # landed rule, as for any task).
 
 # What may run on a device (CHARTROOM_NODE_BACKENDS; the tests add command).
-node_backends() { cfg NODE_BACKENDS '' 'hc:claude|hc:codex'; }
+# (hc:agy needs the device's chartroom to know agy: an older one reports no agy in its probe, so
+# placement never picks it, and a task pinned to it fails there; chartroom node update brings it.)
+node_backends() { cfg NODE_BACKENDS '' 'hc:claude|hc:codex|hc:agy'; }
 
 node_probe() { return 0; } # (whether the device can take it is decided at launch: away, it waits)
 node_steer_mode() { echo live; }
@@ -116,7 +118,7 @@ node_payload() { # <id> <attempt> <over 0|1> <repos json>
   jq -cn --arg home "$(node_home)" --arg id "$id" --arg title "$(meta "$id" title)" --arg kind "$(meta "$id" kind)" \
     --arg project "$(node_project_on "$(meta "$id" node)" "$(meta "$id" project)")" --arg base "$(meta "$id" base_sha)" --arg branch "$(meta "$id" branch)" \
     --arg backend "$(meta "$id" node_backend)" --arg plan_gate "$(meta "$id" plan_gate)" --arg permission "$(meta "$id" permission)" \
-    --arg model "$(meta "$id" model)" --rawfile brief "$(tdir "$id")/brief.md" --arg brain_home "$CR_HOME" --arg tilde "${CR_HOME/#"$HOME"/\~}" \
+    --arg model "$(task_model "$id" "$(meta "$id" node_backend | cut -d: -f2)")" --rawfile brief "$(tdir "$id")/brief.md" --arg brain_home "$CR_HOME" --arg tilde "${CR_HOME/#"$HOME"/\~}" \
     --argjson grants "$(permit_grants_json "$id")" --argjson attempt "$2" --arg ws "$CR_WORKSPACE" --arg over "${3:-0}" \
     --arg tools "$(place_tools "$id")" --slurpfile c "$f" --argjson r "$4" --arg setup "$(place_setup "$id")" --arg pins "$(place_pins "$id")" --arg bin "$CR_BIN" \
     '{home: $home, id: $id, title: $title, kind: $kind, project: $project, base: $base, branch: $branch, backend: $backend,

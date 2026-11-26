@@ -1,12 +1,73 @@
 # shellcheck shell=bash
 # agents.sh - how to start each agent CLI, independent of where it runs.
 #
-# Agents: claude (Claude Code), codex (Codex CLI). Every function here prints
-# arguments one per line so callers can `mapfile` them without word-splitting.
+# Agents: claude (Claude Code), codex (Codex CLI), agy (Antigravity CLI). Every function here
+# prints arguments one per line so callers can `mapfile` them without word-splitting.
 
-KNOWN_AGENTS='claude|codex'
+KNOWN_AGENTS='claude|codex|agy'
 
-agent_bin() { bin_of "$1"; }
+# agy runs only as a full session: in hc, in herdr, or on a node's hc. Its headless mode (-p) is
+# not a worker (the commander's rule: workers run as full sessions), and the generic tmux/cmux
+# path reads Claude's and Codex's screens, not agy's.
+AGY_RUNNERS='hc|herdr|node'
+agent_runs_on() { # <agent> <runner>: 0 when chartroom runs that agent on that runner
+  [[ "$1" != agy || "$2" =~ ^($AGY_RUNNERS)$ ]]
+}
+
+# (agy installs itself in ~/.local/bin, which a GUI launcher's PATH may lack)
+agent_bin() {
+  local b; b="$(bin_of "$1")"
+  [[ -z "$b" && "$1" == agy && -x "$HOME/.local/bin/agy" ]] && b="$HOME/.local/bin/agy"
+  printf '%s' "$b"
+}
+
+# ---------------------------------------------------------------- agy (Antigravity CLI)
+#
+# Verified on agy 1.5.17 with hc 0.1.21 (skills/chartroom/references/backends.md). agy reports its
+# state over OSC 7501, which hc reads as Claude's: working, idle, done, and blocked (kind
+# permission or question) at a trust dialog, an approval or a question; hc counts its turns and
+# refuses to type into a blocked agy (exit 9). So an agy worker needs no hooks for chartroom to see
+# it. What chartroom does not give it: agy has its own hooks.json, but chartroom installs none, so
+# no permission cards, grants, holds or pattern-kill guard apply to an agy worker (its own
+# approvals come up as `agent: awaiting-input`), its prompts are not checked against their text
+# (no prompt hook), and it is never parked (no session id chartroom picks to resume).
+AGY_LIMITS="no chartroom hooks: its own approvals wake the XO as awaiting-input, but no permission cards, grants or pattern-kill guard; steers are taken but not checked against their text; never parked (no resume)"
+
+# Signed in? `agy models` lists the account's models, or says "Please sign in" and exits 1 at once
+# (it never opens a browser or waits). Asked once per process. Empty: signed in.
+AGY_LOGIN_WHY="" AGY_LOGIN_ASKED=""
+agy_login_why() {
+  if [[ -z "$AGY_LOGIN_ASKED" ]]; then
+    local b out rc=0
+    AGY_LOGIN_ASKED=1; b="$(agent_bin agy)"
+    if [[ -z "$b" ]]; then AGY_LOGIN_WHY="agy not on PATH"
+    else
+      if command -v perl >/dev/null 2>&1; then out="$(cd / && perl -e 'alarm shift; exec @ARGV or exit 127' 20 "$b" models </dev/null 2>&1)" || rc=$?
+      else out="$(cd / && "$b" models </dev/null 2>&1)" || rc=$?; fi
+      if [[ $rc -ne 0 ]]; then
+        if grep -qi 'sign in' <<<"$out"; then AGY_LOGIN_WHY="agy is not signed in here (run agy once in a terminal and finish its Google sign-in)"
+        else AGY_LOGIN_WHY="agy models failed (exit $rc): $(grep -v '^Fetching' <<<"$out" | head -1 | cut -c1-120)"; fi
+      fi
+    fi
+  fi
+  [[ -z "$AGY_LOGIN_WHY" ]] || { printf '%s' "$AGY_LOGIN_WHY"; return 1; }
+}
+
+# agy's flags for a task: its model (task_model) and effort, its mode (meta permission: auto, accept-edits or
+# plan; empty is agy's own default, auto), and the task's folder as a workspace directory, by its
+# real path (agy compares resolved paths: a folder given through a symlink, as macOS's /tmp is,
+# reads as outside the workspace, and each write there asks).
+agy_args() { # <id>
+  local m e p
+  m="$(task_model "$1" agy)"; e="$(meta "$1" effort)"; p="$(meta "$1" permission)"
+  [[ -n "$m" ]] && printf '%s\n' --model "$m"
+  [[ -n "$e" ]] && printf '%s\n' --effort "$e"
+  if [[ -n "$p" ]]; then
+    [[ "$p" =~ ^(auto|accept-edits|plan)$ ]] || die "agy has no permission mode '$p' (its modes: auto, accept-edits, plan)"
+    printf '%s\n' --mode "$p"
+  fi
+  printf '%s\n' --add-dir "$(phys_dir "$(tdir "$1")")"
+}
 
 # Codex sandbox per task: meta "sandbox" wins; else scouts get workspace-write (network on,
 # writes limited to the worktree + task record) and ship tasks get CHARTROOM_CODEX_SHIP_SANDBOX
@@ -27,9 +88,20 @@ codex_sandbox_args() { # <id>
   esac
 }
 
+# The model a task's worker runs: its own (new --model), else the home's default for its agent
+# (CHARTROOM_CODEX_MODEL, CHARTROOM_AGY_MODEL), else nothing (the agent's own default). Claude's
+# default stays Claude's.
+task_model() { # <id> <agent>
+  local m; m="$(meta "$1" model)"
+  if [[ -z "$m" ]]; then
+    case "$2" in codex) m="$CR_CODEX_MODEL" ;; agy) m="$CR_AGY_MODEL" ;; esac
+  fi
+  printf '%s' "$m"
+}
+
 codex_model_args() { # <id>
   local m e
-  m="$(meta "$1" model)"; e="$(meta "$1" effort)"
+  m="$(task_model "$1" codex)"; e="$(meta "$1" effort)"
   [[ -n "$m" ]] && printf '%s\n' -m "$m"
   [[ -n "$e" ]] && printf '%s\n' -c "model_reasoning_effort=$e"
   return 0
@@ -149,6 +221,7 @@ interactive_argv() { # <id> <agent> <hooks> [session|resume]
       codex_sandbox_args "$id"; codex_model_args "$id"; codex_guard_args
       [[ "$hooks" == 1 ]] && codex_notify_args "$id"
       ;;
+    agy) agy_args "$id" ;; # (no hooks: hc and herdr read its state themselves)
     *) die "unknown agent '$agent'" ;;
   esac
   return 0
@@ -203,6 +276,11 @@ trust_answer_keys() { # <agent> <screen>
       elif grep -qE '❯ *Yes, I trust' <<<"$screen"; then echo "enter"; fi ;;
     codex)
       grep -qE '› *1\. *Trust and continue' <<<"$screen" && echo "enter" ;;
+    # agy (1.5.17): "Do you trust the contents of this project?", the cursor an ASCII ">" on
+    # "Yes, I trust this folder" (the first of two), "↑/↓ Navigate · enter Confirm" below.
+    agy)
+      if grep -qE '^ *> *Yes, I trust this folder' <<<"$screen"; then echo "enter"
+      elif grep -qE '^ *> *No, exit' <<<"$screen"; then echo "up enter"; fi ;;
   esac
   return 0
 }

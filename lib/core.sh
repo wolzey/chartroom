@@ -210,12 +210,18 @@ load_config() {
   cfg_set CR_WORKSPACE WORKSPACE CAP_CREW_WORKSPACE chartroom-crew
   cfg_set CR_WATCH_INTERVAL WATCH_INTERVAL CAP_WATCH_INTERVAL 3
   cfg_set CR_WATCH_HC_INTERVAL WATCH_HC_INTERVAL '' 60
-  cfg_set CR_BACKEND_ORDER BACKEND_ORDER '' 'hc:claude herdr:claude cmux:claude tmux:claude headless:codex headless:claude command'
+  # Every agent's full sessions before any headless run (the commander's rule r-851d: workers run as
+  # full sessions): a machine without claude starts Codex in hc, not `codex exec`.
+  cfg_set CR_BACKEND_ORDER BACKEND_ORDER '' 'hc:claude hc:codex hc:agy herdr:claude herdr:codex herdr:agy cmux:claude cmux:codex tmux:claude tmux:codex headless:codex headless:claude command'
   CR_BACKEND_ORDER="${CR_BACKEND_ORDER//,/ }"
   cfg_set CR_HARNESS HARNESS '' generic
   cfg_set CR_BRANCH_PREFIX BRANCH_PREFIX '' chartroom/
   cfg_set CR_CODEX_SHIP_SANDBOX CODEX_SHIP_SANDBOX '' danger-full-access
   cfg_set CR_CODEX_SCOUT_SANDBOX CODEX_SCOUT_SANDBOX '' workspace-write
+  # The model a Codex or agy worker gets when its task names none (new --model wins); empty: the
+  # agent's own default. Usually set in a home's config, for that home's crew.
+  cfg_set CR_CODEX_MODEL CODEX_MODEL '' ''
+  cfg_set CR_AGY_MODEL AGY_MODEL '' ''
   cfg_set CR_CLAUDE_PERMISSION CLAUDE_PERMISSION '' ''
   cfg_set CR_CLAUDE_HEADLESS_PERMISSION CLAUDE_HEADLESS_PERMISSION '' acceptEdits
   cfg_set CR_CLAUDE_ALLOWED_TOOLS CLAUDE_ALLOWED_TOOLS '' 'Bash Read Edit Write Glob Grep WebFetch WebSearch'

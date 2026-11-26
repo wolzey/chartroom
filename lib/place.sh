@@ -32,7 +32,7 @@
 # tool the project pins comes with mise. `env` (--needs env, or a brief that names an .env file) is an
 # env file in the project's checkout: no secret is ever copied, so never a clone without one.
 
-CR_NEEDS_TOOLS='docker|ruby|go|node|gh|codex|claude|herdr|tmux|env'
+CR_NEEDS_TOOLS='docker|ruby|go|node|gh|codex|claude|agy|herdr|tmux|env'
 CR_CARRY_MAX_FILE=1048576
 CR_CARRY_MAX_ALL=8388608
 CR_CARRY_MAX_FILES=200

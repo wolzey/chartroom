@@ -49,6 +49,18 @@ screen_prompt() { # <id> <agent> <screen>
         elif own_task_folder "$id" "$line"; then printf 'a dialog to add its own folder %s came up after the dispatch; a human must answer it' "$line"
         else printf 'a dialog to add %s, a folder chartroom did not make; a human must answer it' "$line"; fi
       elif grep -qE '(❯|›) *(No, exit|Yes, I trust)' <<<"$(screen_tail 6 <<<"$scr")"; then trust_prompt_text "$id"; fi ;;
+    # agy (1.5.17): every dialog ends in a "↑/↓ Navigate · ..." line above its status line. hc
+    # reports these itself (blocked, with the dialog's words); this reads them for herdr and steer.
+    agy)
+      case "$foot" in
+        *'↑/↓ Navigate'*)
+          if grep -qE 'Do you trust the contents of this project' <<<"$scr"; then trust_prompt_text "$id"
+          elif line="$(grep -oE 'Question [0-9]+/[0-9]+: .*' <<<"$scr" | tail -n 1 | cut -c1-160)" && [[ -n "$line" ]]; then printf 'agy question: %s' "$line"
+          else
+            line="$(grep -E '^[[:space:]]*[A-Z][^>]*\?[[:space:]]*$' <<<"$scr" | tail -n 1 | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | cut -c1-160 || true)"
+            printf 'agy approval prompt: %s' "${line:-(see its screen)}"
+          fi ;;
+      esac ;;
   esac
   return 0
 }
@@ -92,7 +104,7 @@ prompt_look() { # <id> <runner> <agent> <live> <screen>
         return 0
       fi
       [[ -z "$HC_STATUS" ]] || return 0 ;;
-    herdr:codex) [[ "$live" != blocked ]] || return 0 ;;
+    herdr:codex|herdr:agy) [[ "$live" != blocked ]] || return 0 ;;
     tmux:codex|cmux:codex) ;;
     *) return 0 ;;
   esac
@@ -104,10 +116,13 @@ prompt_look() { # <id> <runner> <agent> <live> <screen>
 # Typed text and Enter at Codex's approval overlay approve the command: the overlay drops the text
 # and Enter takes its highlighted "Yes, proceed" (verified on codex-cli 0.158.0, through `hc send`).
 # hc does not refuse it, because hc does not know that Codex is blocked. So chartroom never types there.
+# agy's dialogs likewise take Enter as their highlighted answer ("Yes, allow creation"): hc refuses a
+# blocked agy itself (exit 9, verified on agy 1.5.17), and this guards the runners that do not.
 steer_guard() { # <runner> <id>
-  local r="$1" id="$2" what
-  [[ "$(backend_agent "$id")" == codex ]] || return 0
-  what="$(screen_prompt "$id" codex "$("${r}_screen" "$id" 2>/dev/null || true)")"
+  local r="$1" id="$2" what agent
+  agent="$(backend_agent "$id")"
+  [[ "$agent" =~ ^(codex|agy)$ ]] || return 0
+  what="$(screen_prompt "$id" "$agent" "$("${r}_screen" "$id" 2>/dev/null || true)")"
   if [[ -z "$what" && "$r" == tmux ]] && codex_title_prompt "$(tmux_title "$id")"; then what="$CODEX_TITLE_WHAT"; fi
   [[ -z "$what" ]] || die "the agent is blocked at a dialog (${what%%. *}); answer it first (chartroom attach $id), then steer again"
 }
@@ -146,6 +161,7 @@ screen_norm() {
   LC_ALL=C sed -E \
     -e '/esc to interrupt/d; /Tip: /d; /^\[hc\] /d' \
     -e 's/(⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|✻|✽|✶|✢|✳|✺|·)//g' \
+    -e 's/(⣾|⣽|⣻|⢿|⡿|⣟|⣯|⣷)//g' \
     -e 's/^[[:space:]]*[A-Za-z]+…/…/' \
     -e 's/[0-9]{1,2}:[0-9]{2}(:[0-9]{2})?( ?[AP]M)?//g' \
     -e "s/$t/\\1\\4/g" -e "s/$t/\\1\\4/g" \
@@ -213,7 +229,7 @@ stall_last_lines() { # <id> <runner> <screen>
     line="${line#"${line%%[![:space:]]*}"}"
     (( ${#line} <= 100 )) || line="${line:0:99}…"
     s+="${s:+ | }$line"; n=$((n + 1))
-  done < <(grep -vE '^[[:space:]]*$|^\[hc\] |^== |Tip: |for shortcuts|shift\+tab to cycle|Ask Codex to do anything| default · |^[[:space:]]*(❯|›|>)[[:space:]]*$|^[[:space:]]*[─━-]+[[:space:]]*$' <<<"$out" | tail -n 3 || true)
+  done < <(grep -vE '^[[:space:]]*$|^\[hc\] |^== |Tip: |for shortcuts|shift\+tab to cycle|Ask Codex to do anything| default · |^esc to cancel |^[[:space:]]*(❯|›|>)[[:space:]]*$|^[[:space:]]*[─━-]+[[:space:]]*$' <<<"$out" | tail -n 3 || true)
   printf '%s' "$s"
 }
 # A task that is in flight (not reporting, not waiting by its own word, not at a prompt the XO has

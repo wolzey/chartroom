@@ -3,20 +3,23 @@
 A backend is `<runner>:<agent>`: **where** the worker runs × **which** agent runs. Runners are
 `hc`, `herdr`, `cmux`, `tmux` (session runners: a terminal you can watch), `headless` (no terminal),
 `command` (any CLI) and `subagent` (the host harness), plus `joined`, which is never
-dispatched: a running session joins itself (see the last section). Agents are `claude` and `codex`. Old
-names still work: `codex` = `headless:codex`, `herdr-claude` = `herdr:claude`,
+dispatched: a running session joins itself (see the last section). Agents are `claude`, `codex` and
+`agy` (Antigravity CLI; full sessions only: `hc:agy`, `herdr:agy`, `node:agy`). Old names still work: `codex` = `headless:codex`, `herdr-claude` = `herdr:claude`,
 `herdr-codex` = `herdr:codex`.
 
 `chartroom doctor` shows every backend, whether it can run here, why not, and how it steers.
 Last verified against: claude 2.1.289 (joined: 2.1.293; hc: 2.1.314), codex-cli 0.158.0, herdr 0.9.1,
-hc (herdr-core) 0.1.14 with herdr-app 0.1.9 (hc:codex: hc 0.1.16), tmux 3.x (October 2026).
+hc (herdr-core) 0.1.14 with herdr-app 0.1.9 (hc:codex: hc 0.1.16), tmux 3.x (October 2026); agy 1.5.17 and 1.5.18
+in hc 0.1.21 (November 2026; herdr:agy built to the same rules, not run against a signed-in agy).
 cmux is implemented against its documented CLI but **unverified on a real cmux install**.
 
 ## Selection and fallback
 
 - `chartroom new` without `--backend` (or `--backend auto`) picks at dispatch time: the first
   available entry in `CHARTROOM_BACKEND_ORDER` (default
-  `hc:claude herdr:claude cmux:claude tmux:claude headless:codex headless:claude command`). Skipping
+  `hc:claude hc:codex hc:agy herdr:claude herdr:codex herdr:agy cmux:claude cmux:codex tmux:claude tmux:codex headless:codex headless:claude command`:
+  every agent's full sessions before any headless run, so a machine without claude starts Codex in hc).
+  An agy backend is skipped there while agy is not signed in here. Skipping
   the first entry writes a `note: backend fallback: ...` event and prints it, because falling
   from a session runner to headless changes what the commander can watch and steer.
 - An explicit `--backend` never downgrades. If it is unavailable, dispatch exits non-zero with
@@ -274,6 +277,52 @@ program from the `herdr` CLI/server below; workers on `herdr:*` never appear in 
 - Untested here: other machines (`hc run --on`).
   `sweep` and the radar still read herdr only (sweep's parking excepted).
 
+## agy (Antigravity CLI): hc:agy, herdr:agy, node:agy
+
+Verified on agy 1.5.17 and 1.5.18 in hc 0.1.21 on a Mac (November 2026), against a signed-in agy.
+
+- **Start.** hc runs the launcher with the brief's line, which goes to agy as `agy -i "<brief>"` (agy
+  takes a first prompt only so). Its flags: `--add-dir <task folder>` by its real path (agy compares
+  resolved paths: a folder given through a symlink, as macOS's `/tmp` is, reads as outside its
+  workspace, and each write there asks),
+  `--model` from the task or the home's `CHARTROOM_AGY_MODEL`, `--effort` from the task, and `--mode` from `--permission` (`auto`, the default,
+  `accept-edits` or `plan`; anything else refuses at dispatch). In auto mode agy runs edits and
+  safe commands itself and asks for the rest. herdr starts it with `herdr agent start --kind agy`
+  (herdr 0.9.5 knows agy) and the same flags; chartroom then types the brief, as for Codex.
+- **Sign-in.** `agy models` lists the account's models, or says `Please sign in` and exits 1 at once.
+  Doctor shows it (`agy: <version> at <path>, signed in`), an automatic pick skips agy while it is
+  signed out, and a dispatch here stops before it starts a terminal (`agy is not signed in here`).
+  An explicit `hc:agy` is still placed: a node reports agy's version and sign-in in its probe, and
+  placement sends the task only to a machine where agy is signed in. Sign-in is not a fleet health
+  check (a machine without agy is not the worse for it).
+- **Trust dialog.** "Do you trust the contents of this project?", the cursor (an ASCII `>`) on
+  `Yes, I trust this folder`. Answered with Enter only in a worktree chartroom created; otherwise it
+  is `awaiting-input` and the brief waits behind it. agy records trust by path in
+  `~/.gemini/antigravity-cli/settings.json` (`trustedWorkspaces`); chartroom never writes it.
+- **State.** agy reports its state over OSC 7501, and hc reads it as it reads Claude's: `working`,
+  `idle`, `done`, and `blocked` with the dialog's kind (`permission`, `question`) and its words
+  (`Approve Edit: Write: <path>`, `Trust this folder?`, the question itself). hc counts its turns,
+  the first one after the trust dialog included (verified with chartroom's launcher in front).
+  So: a prompt wakes the XO as `agent: awaiting-input: hc: agy is waiting on a permission: <words>`;
+  a turn that ends with no report from the worker wakes as `hc: agent stopped its turn without
+  reporting`; the stall watchdog covers a quiet one (agy's braille spinner and its tasks' clocks
+  do not count as output; its phase line, `Generating...` or `Editing files...`, does). The trust dialog's own `blocked`, while the
+  dispatch answers it, wakes nothing.
+- **Steer.** `hc send` pastes and presses Enter, and refuses a blocked agy (exit 9, verified), as it
+  does Claude; chartroom also reads agy's dialogs on its screen (each ends in a `↑/↓ Navigate · ...`
+  line) and refuses before typing on herdr too, since Enter at `> 1. Yes, allow creation` would
+  approve it. A steer is `submitted, not verified`: agy takes it (hc's `working`, or a turn), but
+  with no prompt hook its text is not checked.
+- **What chartroom does not do for agy** (doctor says so). agy has hooks of its own (`hooks.json`:
+  `PreInvocation`, `PreToolUse`, `Stop`, ...), but chartroom installs none: they load only from the
+  user's `~/.gemini/config/hooks.json`, a plugin, or a `.agents/hooks.json` in the worktree, all of
+  which outlive the task or touch the repo. So no permission cards, grants, holds or pattern-kill
+  guard apply to an agy worker (its own approvals come to the XO as `awaiting-input`, answered in
+  its terminal: `chartroom attach`), and no prompt signature. It is never parked: chartroom cannot
+  pick the id of agy's conversation to resume it (`agy -r <id>` resumes one agy chose).
+- `stop` is `hc interrupt` (Esc; verified: `stopped`), `close` ends the terminal, `attach` shows it.
+- Never `headless:agy` (`agy -p` is not a worker), `tmux:agy` or `cmux:agy`: `new` refuses them.
+
 ## herdr:<agent> (first class)
 
 - All workers share one herdr workspace labelled `$CHARTROOM_WORKSPACE` (default
@@ -346,7 +395,8 @@ program from the `herdr` CLI/server below; workers on `herdr:*` never appear in 
   setting (`chartroom set <id> sandbox=<mode>`) wins.
 - Thread id from the first `thread.started` event; `steer` after the run runs
   `codex exec … resume <thread> "<message>"` with the full conversation (verified).
-- `model` / `effort` in meta map to `-m` and `model_reasoning_effort`.
+- `model` / `effort` in meta map to `-m` and `model_reasoning_effort`; a task with no model gets the
+  home's `CHARTROOM_CODEX_MODEL` (every Codex runner: hc, herdr, tmux, cmux, headless, a device).
 - The wrapper appends `exited: … (exit N)`; a process that dies without one is reported `lost`. A
   run whose `codex.jsonl` stops growing wakes as `stalled` (`claude.jsonl` for headless:claude).
 

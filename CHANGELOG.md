@@ -15,6 +15,16 @@ are stable from 0.1.0.
   without the dialog. chartroom never trusts it for them, and Esc starts that worker unguarded.
   Verified on codex-cli 0.160.0: the deny blocks `killall -l`, the agent sees the advice, the
   task logs `note: blocked a pattern kill: ...`, a relaunch shows no dialog, and `echo` still runs.
+- **agy (Antigravity CLI) as a crew agent, in full sessions only**: `hc:agy`, `herdr:agy`, and `node:agy` on a device where agy is
+  signed in. Its brief goes in as `agy -i`, with the task's folder as `--add-dir` (by its real path) and `--model`, `--effort`,
+  `--mode` from the task. hc reads agy's own state (OSC 7501: working, done, blocked with the dialog's kind and words), so a
+  prompt wakes the XO as `awaiting-input: hc: agy is waiting on a permission: <its words>`, a turn that ends unreported wakes,
+  and the stall watchdog knows its spinner. Its folder trust dialog is answered only for chartroom's own worktree. Doctor shows
+  agy's version and whether it is signed in (`agy models`), and what it lacks: chartroom installs no hooks for it, so no
+  permission cards, grants or pattern-kill guard; its steers are taken but not checked against their text; it is never parked.
+  A dispatch where agy is not signed in stops before it starts a terminal. Never `headless:agy`, `tmux:agy` or `cmux:agy`.
+- `CHARTROOM_CODEX_MODEL` and `CHARTROOM_AGY_MODEL` (usually in a home's `config`): the model a Codex or agy worker gets when
+  its task names none; `new --model` still wins, and a task on a device carries it there.
 - An "always" answer on a Bash line covers each of its commands by the program and its fixed leading words (`gh run view:*`),
   so the next run with other ids or flags matches; never a command chained in, a substitution, a redirect off `/dev/null`,
   or another kind of call than the one answered. Script runners, hosts and verbs like push, api, delete or merge stay exact.
@@ -81,6 +91,12 @@ are stable from 0.1.0.
 - `chartroom node probe` names each agent (a worker by its task, an XO by its home, any other by its
   directory and tab). Fleet shows them, its CPU and memory in use against its limits, and docker
   where it is installed; a machine on an older chartroom still shows how many agents, with no names.
+
+### Changed
+- The default `CHARTROOM_BACKEND_ORDER` puts every agent's full sessions before any headless run:
+  `hc:claude hc:codex hc:agy herdr:claude herdr:codex herdr:agy cmux:claude cmux:codex tmux:claude tmux:codex headless:codex headless:claude command`.
+  With hc up and claude missing, a task with no `--backend` now runs as `hc:codex`, not `headless:codex`. The legacy name
+  `--backend codex` still means `headless:codex`.
 
 ### Fixed
 - `comment-pr` allows review replies under jq 1.8, and the quiet wake after an answered card works on Linux.
