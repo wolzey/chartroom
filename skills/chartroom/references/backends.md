@@ -9,7 +9,7 @@ dispatched: a running session joins itself (see the last section). Agents are `c
 
 `chartroom doctor` shows every backend, whether it can run here, why not, and how it steers.
 Last verified against: claude 2.1.289 (joined: 2.1.293; hc: 2.1.314), codex-cli 0.158.0, herdr 0.9.1,
-hc (herdr-core) 0.1.14 with herdr-app 0.1.9 (hc:codex: hc 0.1.16), tmux 3.x (October 2026); agy 1.5.17
+hc (herdr-core) 0.1.14 with herdr-app 0.1.9 (hc:codex: hc 0.1.16), tmux 3.x (October 2026); agy 1.5.17 and 1.5.18
 in hc 0.1.21 (November 2026; herdr:agy built to the same rules, not run against a signed-in agy).
 cmux is implemented against its documented CLI but **unverified on a real cmux install**.
 
@@ -264,7 +264,7 @@ program from the `herdr` CLI/server below; workers on `herdr:*` never appear in 
 
 ## agy (Antigravity CLI): hc:agy, herdr:agy, node:agy
 
-Verified on agy 1.5.17 in hc 0.1.21 on a Mac (November 2026), against a signed-in agy.
+Verified on agy 1.5.17 and 1.5.18 in hc 0.1.21 on a Mac (November 2026), against a signed-in agy.
 
 - **Start.** hc runs the launcher with the brief's line, which goes to agy as `agy -i "<brief>"` (agy
   takes a first prompt only so). Its flags: `--add-dir <task folder>` by its real path (agy compares
