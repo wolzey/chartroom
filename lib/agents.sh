@@ -126,7 +126,10 @@ GROK_LIMITS="only the pattern-kill guard hook: its own approvals wake the XO as 
 # launcher's CHARTROOM_TASK is set: the commander's own grok sessions are untouched, and nothing
 # goes in the worktree. grok sends PreToolUse {toolName: run_terminal_command, toolInput.command}
 # and takes {hookSpecificOutput.permissionDecision: deny} (its docs, 10-hooks.md); it runs a user
-# hook only in a folder it trusts, which a chartroom worktree is (--trust, grok_args).
+# hook only in a folder it trusts, which a chartroom worktree is (--trust, grok_args). One side effect
+# on a machine that had no user hook for grok before (no ~/.grok/hooks, no hooks in ~/.claude/settings.json):
+# grok's docs say that while any user hook exists, its folder trust asks in every new folder, the
+# commander's own sessions there included.
 grok_guard_file() { printf '%s/hooks/chartroom-guard.json' "${GROK_HOME:-$HOME/.grok}"; }
 grok_guard_hooks() {
   local f c
@@ -140,7 +143,7 @@ grok_guard_hooks() {
 # out does (its sign-in screen), which is why a launch asks first. grok keeps its sign-in in
 # ~/.grok/auth.json, a file (its docs, 02-authentication.md), not the macOS keychain, so unlike agy
 # an ssh session reads it as the login session does. Asked once per process. Empty: signed in.
-GROK_SIGN_IN="grok login in a terminal on this machine and finish the browser sign-in (over ssh: grok login --device-auth)"
+GROK_SIGN_IN="grok login in a terminal on this machine and finish the browser sign-in, or grok login --device-auth over ssh"
 GROK_LOGIN_WHY="" GROK_LOGIN_ASKED=""
 grok_login_why() {
   if [[ -z "$GROK_LOGIN_ASKED" ]]; then

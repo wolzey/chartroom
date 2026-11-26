@@ -473,7 +473,7 @@ agy_trust() {
   # signed out: doctor says what to run, and a dispatch refuses before any terminal (grok would open a browser sign-in)
   FAKE_GROK_SIGNED_OUT=1 run cr doctor --json
   [ "$(jq -r '.backends[]|select(.backend=="hc:grok").available' <<<"$output")" = false ]
-  [ "$(jq -r '.agents.grok.why' <<<"$output")" = "grok is not signed in here (run grok login in a terminal on this machine and finish the browser sign-in (over ssh: grok login --device-auth))" ]
+  [ "$(jq -r '.agents.grok.why' <<<"$output")" = "grok is not signed in here (run grok login in a terminal on this machine and finish the browser sign-in, or grok login --device-auth over ssh)" ]
   id2="$(new_task --backend hc:grok)"
   : >"$FAKE_HC_DIR/calls.log"
   FAKE_GROK_SIGNED_OUT=1 run cr dispatch "$id2"

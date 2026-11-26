@@ -123,8 +123,12 @@ launch: a `PreToolUse` hook on `run_terminal_command` whose command does nothing
 commander's own grok sessions are untouched, and nothing goes into the worktree. grok sends
 `toolName: "run_terminal_command"` and `toolInput.command`, and takes Claude's
 `hookSpecificOutput.permissionDecision: "deny"`. grok runs a user hook only in a folder it trusts,
-which a chartroom worktree is (`--trust`). Tested against grok's documented payload; the live
-proof waits on a signed-in grok.
+which a chartroom worktree is (`--trust`). One side effect: grok's docs say that while any user hook
+exists, folder trust asks in every new folder. Where the commander already has one for grok (a
+`~/.grok/hooks` file, or hooks in `~/.claude/settings.json`, which grok reads), nothing changes; on a
+machine with none (the Beelink, November 2026), the first grok worker there makes the commander's own
+grok sessions ask once per new folder. Tested against grok's documented payload; the live proof
+waits on a signed-in grok.
 
 Not guarded: headless runs, subagents and joined sessions.
 
