@@ -665,7 +665,7 @@ only: `hc:agy`, `herdr:agy`, or `node:agy` on a device where agy is signed in).
 | Backend | Runs in | Watch | Steering | Needs | Status |
 |---|---|---|---|---|---|
 | `hc:<agent>` | an herdr-core terminal, in its own tab of the Herdr app's `$CHARTROOM_WORKSPACE` space | yes (`chartroom attach`, or the app) | live | herdr-core running (the Herdr app, or `hc server start`); the window may be closed | `hc:claude` verified (hc 0.1.14, herdr-app 0.1.9, Claude Code 2.1.314); `hc:codex` implemented, not yet run against a real codex |
-| `hc:agy` | an herdr-core terminal running `agy -i <brief>` | yes | live (taken, not checked against its text) | agy signed in (`chartroom doctor` says) | verified (agy 1.5.17 and 1.5.18, hc 0.1.21). No chartroom hooks: no permission cards or grants, never parked |
+| `hc:agy` | an herdr-core terminal running `agy -i <brief>` | yes | live (taken, not checked against its text) | agy signed in (`chartroom doctor` says) | verified (agy 1.5.17 and 1.5.18, hc 0.1.21). Only the pattern-kill guard hook: no permission cards or grants, never parked |
 | `herdr:<agent>` | a herdr tab (first class) | yes | live | herdr running | verified (herdr 0.9.1); `herdr:agy` built to the same rules, not run against a signed-in agy |
 | `cmux:<agent>` | a cmux tab (macOS) | yes | live | cmux app, automation socket mode if the XO runs outside cmux | **implemented, unverified on real cmux** |
 | `tmux:<agent>` | a tmux window | yes (`chartroom attach`) | live | tmux ≥ 3.0 | verified (tmux 3.x) |

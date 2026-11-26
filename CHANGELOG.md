@@ -7,7 +7,10 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
-- Codex workers get the pattern kill guard too. Every interactive Codex worker (hc, herdr, tmux,
+- Codex and agy workers get the pattern kill guard too. agy: chartroom writes the task folder's
+  `.agents/hooks.json` (a `PreToolUse` hook on `run_command`, `chartroom hook <id> guard`); agy loads
+  it because the task folder is a workspace folder, so nothing goes into the worktree, and it needs no
+  trust. Verified on agy 1.5.18, interactive and `-p`. Codex: every interactive Codex worker (hc, herdr, tmux,
   cmux) starts with a per-run `PreToolUse` hook on `Bash`, `chartroom hook - guard`. It runs the
   guard alone, never the permission broker, and takes the task from `CHARTROOM_TASK`, so the hook's
   text names no task. Codex trusts a per-run hook by its text, so the first Codex worker on each
@@ -20,8 +23,8 @@ are stable from 0.1.0.
   `--mode` from the task. hc reads agy's own state (OSC 7501: working, done, blocked with the dialog's kind and words), so a
   prompt wakes the XO as `awaiting-input: hc: agy is waiting on a permission: <its words>`, a turn that ends unreported wakes,
   and the stall watchdog knows its spinner. Its folder trust dialog is answered only for chartroom's own worktree. Doctor shows
-  agy's version and whether it is signed in (`agy models`), and what it lacks: chartroom installs no hooks for it, so no
-  permission cards, grants or pattern-kill guard; its steers are taken but not checked against their text; it is never parked.
+  agy's version and whether it is signed in (`agy models`), and what it lacks: chartroom installs only the pattern-kill guard
+  hook for it, so no permission cards or grants; its steers are taken but not checked against their text; it is never parked.
   A dispatch where agy is not signed in stops before it starts a terminal. Never `headless:agy`, `tmux:agy` or `cmux:agy`.
 - `CHARTROOM_CODEX_MODEL` and `CHARTROOM_AGY_MODEL` (usually in a home's `config`): the model a Codex or agy worker gets when
   its task names none; `new --model` still wins, and a task on a device carries it there.

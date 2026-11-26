@@ -27,11 +27,23 @@ agent_bin() {
 # state over OSC 7501, which hc reads as Claude's: working, idle, done, and blocked (kind
 # permission or question) at a trust dialog, an approval or a question; hc counts its turns and
 # refuses to type into a blocked agy (exit 9). So an agy worker needs no hooks for chartroom to see
-# it. What chartroom does not give it: agy has its own hooks.json, but chartroom installs none, so
-# no permission cards, grants, holds or pattern-kill guard apply to an agy worker (its own
-# approvals come up as `agent: awaiting-input`), its prompts are not checked against their text
-# (no prompt hook), and it is never parked (no session id chartroom picks to resume).
-AGY_LIMITS="no chartroom hooks: its own approvals wake the XO as awaiting-input, but no permission cards, grants or pattern-kill guard; steers are taken but not checked against their text; never parked (no resume)"
+# it. Its one chartroom hook is the pattern kill guard (agy_guard_hooks). What chartroom does not
+# give it: no permission cards, grants or holds (its own approvals come up as
+# `agent: awaiting-input`), its prompts are not checked against their text (no prompt hook), and
+# it is never parked (no session id chartroom picks to resume).
+AGY_LIMITS="only the pattern-kill guard hook: its own approvals wake the XO as awaiting-input, but no permission cards or grants; steers are taken but not checked against their text; never parked (no resume)"
+
+# The pattern kill guard for agy: agy loads hooks.json from the .agents folder of each workspace
+# folder, and the task's folder is one (agy_args --add-dir), so chartroom writes it there, never in
+# the worktree. Rewritten at every launch. Verified on agy 1.5.18: a hook there runs with no trust
+# prompt, gets toolCall {name: run_command, args.CommandLine}, and {decision: deny, reason} blocks
+# the command ("tool call denied by pre-tool hook: <reason>"); no output lets it run as before.
+agy_guard_hooks() { # <id>
+  local d; d="$(tdir "$1")/.agents"
+  mkdir -p "$d"
+  jq -n --arg c "CHARTROOM_HOME=$(printf '%q' "$CR_HOME") $(printf '%q' "$CR_BIN") hook $1 guard" \
+    '{"chartroom-guard": {PreToolUse: [{matcher: "run_command", hooks: [{type: "command", command: $c, timeout: 30}]}]}}' >"$d/hooks.json"
+}
 
 # Signed in? `agy models` lists the account's models, or says "Please sign in" and exits 1 at once
 # (it never opens a browser or waits). Asked once per process. Empty: signed in.
@@ -66,6 +78,7 @@ agy_args() { # <id>
     [[ "$p" =~ ^(auto|accept-edits|plan)$ ]] || die "agy has no permission mode '$p' (its modes: auto, accept-edits, plan)"
     printf '%s\n' --mode "$p"
   fi
+  agy_guard_hooks "$1"
   printf '%s\n' --add-dir "$(phys_dir "$(tdir "$1")")"
 }
 
@@ -221,7 +234,7 @@ interactive_argv() { # <id> <agent> <hooks> [session|resume]
       codex_sandbox_args "$id"; codex_model_args "$id"; codex_guard_args
       [[ "$hooks" == 1 ]] && codex_notify_args "$id"
       ;;
-    agy) agy_args "$id" ;; # (no hooks: hc and herdr read its state themselves)
+    agy) agy_args "$id" ;; # (only the guard hook: hc and herdr read its state themselves)
     *) die "unknown agent '$agent'" ;;
   esac
   return 0

@@ -99,6 +99,15 @@ and later workers start without it. chartroom never trusts it for them. Esc, or
 Codex sends `tool_name: "Bash"` and `tool_input.command`, the deny blocks the command and the
 agent sees the advice, a relaunch with the same hook shows no dialog, and an allowed command runs.
 
+Every agy worker (hc, herdr, node) gets it too, through agy's own hooks: chartroom writes
+`tasks/<id>/.agents/hooks.json` at each launch, a `PreToolUse` hook on `run_command` that runs
+`chartroom hook <id> guard`. agy loads hooks from the `.agents` folder of each workspace folder, and
+the task's folder is one (`--add-dir`), so nothing goes into the worktree. agy sends
+`toolCall.args.CommandLine` and takes `{"decision": "deny", "reason": ...}`. An allowed call gets no
+answer, because agy's `allow` would skip its own approval and an empty object denies. Verified on agy
+1.5.18, interactive and `-p`: no trust prompt for the hook, the deny blocks `killall -l` ("tool
+call denied by pre-tool hook: ..."), the task logs the note, and `echo` still runs.
+
 Not guarded: headless runs, subagents and joined sessions.
 
 **The brief is never typed at a dialog.** The text is dropped and Enter answers the dialog
@@ -314,10 +323,9 @@ Verified on agy 1.5.17 and 1.5.18 in hc 0.1.21 on a Mac (November 2026), against
   approve it. A steer is `submitted, not verified`: agy takes it (hc's `working`, or a turn), but
   with no prompt hook its text is not checked.
 - **What chartroom does not do for agy** (doctor says so). agy has hooks of its own (`hooks.json`:
-  `PreInvocation`, `PreToolUse`, `Stop`, ...), but chartroom installs none: they load only from the
-  user's `~/.gemini/config/hooks.json`, a plugin, or a `.agents/hooks.json` in the worktree, all of
-  which outlive the task or touch the repo. So no permission cards, grants, holds or pattern-kill
-  guard apply to an agy worker (its own approvals come to the XO as `awaiting-input`, answered in
+  `PreInvocation`, `PreToolUse`, `Stop`, ...). chartroom installs one, the pattern-kill guard, in the
+  task folder's `.agents/hooks.json`; agy loads hooks from each workspace folder's `.agents`, and the
+  task folder is one (see "The Bash guard"). So no permission cards, grants or holds apply to an agy worker (its own approvals come to the XO as `awaiting-input`, answered in
   its terminal: `chartroom attach`), and no prompt signature. It is never parked: chartroom cannot
   pick the id of agy's conversation to resume it (`agy -r <id>` resumes one agy chose).
 - `stop` is `hc interrupt` (Esc; verified: `stopped`), `close` ends the terminal, `attach` shows it.

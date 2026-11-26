@@ -230,7 +230,7 @@ agy_trust() {
 @test "hc:agy: the brief as agy -i past its trust dialog; live steer, peek, stop and close" {
   use_fake agy
   core_up
-  export FAKE_HC_NO_HOOK=1 # (agy gets no hooks: hc reads its state itself)
+  export FAKE_HC_NO_HOOK=1 # (agy gets no prompt hook: hc reads its state itself)
   id="$(new_task --backend hc:agy --model gemini-fake-high)"
   agy_trust "/some/worktree"
   run cr dispatch "$id"
@@ -240,6 +240,9 @@ agy_trust() {
   l="$CHARTROOM_HOME/tasks/$id/launch.sh"
   grep -qF -- "--model gemini-fake-high --add-dir $(cd "$CHARTROOM_HOME/tasks/$id" && pwd -P) -i \"\$@\"" "$l"
   refute grep -q -- "--settings\|notify=\|--no-daemon" "$l"
+  # its one chartroom hook, the pattern kill guard, in the task folder's .agents (never the worktree)
+  jq -e --arg c "hook $id guard" '."chartroom-guard".PreToolUse[0] | .matcher == "run_command" and (.hooks[0].command | endswith($c))' \
+    "$CHARTROOM_HOME/tasks/$id/.agents/hooks.json"
   [ "$(term t1 '.argv[2]')" = "Read the brief at $CHARTROOM_HOME/tasks/$id/brief.md and follow it exactly. Your task id is $id." ]
   # the trust dialog of its own worktree: Enter on "> Yes, I trust this folder", never Down
   hc_calls | grep -qx "keys t1 enter"

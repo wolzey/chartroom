@@ -337,6 +337,10 @@ EOF
   jq -n '{tool_name:"Bash",tool_input:{command:"killall node"}}' | CHARTROOM_TASK="$id" cr hook - guard | jq -e '.hookSpecificOutput.permissionDecision == "deny"'
   events "$id" | grep -qF "note: blocked a pattern kill: killall node"
   [ -z "$(jq -n '{tool_name:"Bash",tool_input:{command:"kill 1234"}}' | CHARTROOM_TASK="$id" cr hook - guard)" ]
+  # agy's shape: toolCall {name: run_command, args.CommandLine} in, {decision, reason} out, nothing when allowed
+  jq -n '{hookEventName:"PreToolUse",toolCall:{name:"run_command",args:{CommandLine:"pkill -f vite"}}}' | cr hook "$id" guard \
+    | jq -e '.decision == "deny" and (.reason | test("lsof -ti tcp:<port>"))'
+  [ -z "$(jq -n '{hookEventName:"PreToolUse",toolCall:{name:"run_command",args:{CommandLine:"kill 1234"}}}' | cr hook "$id" guard)" ]
 }
 
 @test "close refuses a dirty worktree (exit 2) and --discard removes it" {
