@@ -358,7 +358,7 @@ probe_main() {
       [[ -n "$ud" && -d "$ud" ]] || continue
       for uf in "$ud"/*.json; do
         [[ -r "$uf" ]] || continue
-        ua="$(jq -r 'select(.local != false) | .agent // empty' "$uf" 2>/dev/null || true)"
+        ua="$(jq -r 'select(.local == true) | .agent // empty' "$uf" 2>/dev/null || true)"
         [[ -n "$ua" && "$useen" != *" $ua "* ]] || continue
         useen+="$ua "
         jq -r '
@@ -366,7 +366,8 @@ probe_main() {
           def ep: if . == null or . == "" then "-" else (tostring | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | (try fromdateiso8601 catch "-") | tostring) end;
           ["usage", (.agent | s), (.status | s), (.plan | s), (.account | s), (.sampled_at | s),
            ((.windows // []) | map("\(.label):\(.used_pct // ""):\(.resets_at | ep)") | join(",") | s),
-           (.reason | s)] | @tsv' "$uf" 2>/dev/null || true
+           (.reason | s),
+           ((.hit_limit.resets_at // null) | ep)] | @tsv' "$uf" 2>/dev/null || true
       done
     done
   fi

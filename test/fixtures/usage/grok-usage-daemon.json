@@ -1,8 +1,0 @@
-{
-  "plan": "supergrok",
-  "account_type": "xai",
-  "windows": [
-    { "id": "five_hour", "label": "5h", "used_percent": 30.0, "resets_at": "2099-11-26T20:00:00Z" },
-    { "id": "seven_day", "label": "7d", "used_percent": 62.5, "resets_at": "2099-12-01T00:00:00Z" }
-  ]
-}

@@ -68,11 +68,11 @@ echo "Gemini 3 Pro"
 EOF
   chmod +x "$BIN/agy"
 
-  # 4. grok fake returning shell-route error first, then daemon-route JSON.
+  # 4. grok fake returning real captured shell-route error and team-managed message.
   cat >"$BIN/grok" <<'EOF'
 #!/usr/bin/env bash
-if [[ "${GROK_MODE:-shell}" == daemon ]]; then
-  cat "$GROK_FIXTURE"
+if [[ "${GROK_MODE:-shell}" == team ]]; then
+  echo 'Usage limits are managed by your team.'
   exit 0
 fi
 echo 'Error: `grok usage` can'\''t show your plan'\''s usage here yet. Run /usage inside grok instead.' >&2
@@ -104,16 +104,11 @@ EOF
   [ "$(jq -r '.[] | select(.agent=="grok") | .state' <<<"$output")" = unknown ]
   [[ "$(jq -r '.[] | select(.agent=="grok") | .reason' <<<"$output")" == *"daemon route"* ]]
 
-  # grok (daemon route): real JSON parsed cleanly.
-  jq --arg r5 "$fut5" --arg r7 "$fut7" \
-    '.windows |= map(if .label == "5h" then .resets_at = $r5 elif .label == "7d" then .resets_at = $r7 else . end)' \
-    "$REPO_ROOT/test/fixtures/usage/grok-usage-daemon.json" >"$BATS_TEST_TMPDIR/grok-daemon.json"
-  GROK_MODE=daemon GROK_FIXTURE="$BATS_TEST_TMPDIR/grok-daemon.json" run cr usage --agent grok --json --refresh
+  # grok (team-managed): unknown with clear reason, never guessed.
+  GROK_MODE=team run cr usage --agent grok --json --refresh
   [ "$status" -eq 0 ]
-  [ "$(jq -r '.[0].state' <<<"$output")" = ok ]
-  [ "$(jq -r '.[0].plan' <<<"$output")" = supergrok ]
-  [ "$(jq -r '.[0].windows[] | select(.label=="5h") | .used_pct' <<<"$output")" = 30 ]
-  [ "$(jq -r '.[0].windows[] | select(.label=="7d") | .used_pct' <<<"$output")" = 62.5 ]
+  [ "$(jq -r '.[0].state' <<<"$output")" = unknown ]
+  [[ "$(jq -r '.[0].reason' <<<"$output")" == *"managed by your team"* ]]
 
   # Claude statusLine secondary input via `chartroom usage record claude`.
   jq --argjson e5 "$ep5" --argjson e7 "$ep7" \
@@ -145,22 +140,27 @@ EOF
   local ep5; ep5="$(jq -rn --argjson off 7200 '(now | floor) + $off')"
   local now_iso; now_iso="$(iso_offset 0)"
 
-  # Record identical claude usage on desk and mini -> should collapse into 1 row.
+  # Record identical claude usage on desk and mini -> mini must automatically be local=false,
+  # and both machines should collapse into 1 row.
   jq --argjson e5 "$ep5" '.rate_limits.five_hour.resets_at = $e5 | .rate_limits.seven_day.resets_at = ($e5 + 86400)' \
     "$REPO_ROOT/test/fixtures/usage/claude-statusline.json" >"$BATS_TEST_TMPDIR/sl.json"
   cr usage record claude --machine desk --plan max <"$BATS_TEST_TMPDIR/sl.json"
   cr usage record claude --machine mini --plan max <"$BATS_TEST_TMPDIR/sl.json"
-  # Mark mini as non-local like a synced node record.
-  jq '.local = false' "$CHARTROOM_HOME/usage/mini--claude.json" >"$BATS_TEST_TMPDIR/m.tmp" && mv "$BATS_TEST_TMPDIR/m.tmp" "$CHARTROOM_HOME/usage/mini--claude.json"
+  [ "$(jq -r '.local' "$CHARTROOM_HOME/usage/desk--claude.json")" = true ]
+  [ "$(jq -r '.local' "$CHARTROOM_HOME/usage/mini--claude.json")" = false ]
 
-  # Record differing codex usage on desk (11%) vs mini (98%) -> should split into 2 rows.
+  # Record differing codex usage on desk (35%) vs mini (98%) -> should split into 2 rows,
+  # and desk's node probe must NEVER emit mini's non-local reading as desk's.
   jq -c --arg ts "$now_iso" --argjson e5 "$ep5" \
     'select(.payload.rate_limits? != null) | .timestamp = $ts | .payload.rate_limits.primary.resets_at = $e5 | .payload.rate_limits.secondary.resets_at = ($e5 + 86400)' \
     "$REPO_ROOT/test/fixtures/usage/codex-session.jsonl" | head -n 1 >"$BATS_TEST_TMPDIR/cx-desk.json"
   jq -c '.payload.rate_limits.primary.used_percent = 98.0' "$BATS_TEST_TMPDIR/cx-desk.json" >"$BATS_TEST_TMPDIR/cx-mini.json"
-  cr usage record codex --machine desk <"$BATS_TEST_TMPDIR/cx-desk.json"
   cr usage record codex --machine mini <"$BATS_TEST_TMPDIR/cx-mini.json"
-  jq '.local = false' "$CHARTROOM_HOME/usage/mini--codex.json" >"$BATS_TEST_TMPDIR/m.tmp" && mv "$BATS_TEST_TMPDIR/m.tmp" "$CHARTROOM_HOME/usage/mini--codex.json"
+  [ "$(jq -r '.local' "$CHARTROOM_HOME/usage/mini--codex.json")" = false ]
+  run cr node probe
+  [ "$status" -eq 0 ]
+  [[ "$output" != *$'usage\tcodex\tok'* ]]
+  cr usage record codex --machine desk <"$BATS_TEST_TMPDIR/cx-desk.json"
 
   run cr dashboard --json
   [ "$status" -eq 0 ]
@@ -201,6 +201,14 @@ EOF
   run cr dispatch "$id" --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"hc:agy"* ]]
+
+  # An explicit --backend for an exhausted agent proceeds with a clear warning naming its reset time.
+  exp_id="$(new_task --backend hc:codex --kind scout)"
+  run cr dispatch "$exp_id" --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"explicit backend hc:codex"* ]]
+  [[ "$output" == *"$fut"* ]]
+  cr close "$exp_id" >/dev/null
 
   # Mark agy hit-limit as well -> automatic dispatch must pick claude.
   cr usage record agy --hit-limit --resets-at "$fut" --message "Individual quota reached"
@@ -286,7 +294,7 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"2026-11-27T03:00:00Z"* ]]
 
-  # Diff / comment / code lines mentioning the exact same phrase must NOT trigger a false positive.
+  # Diff / comment / code / agent prose / tool output lines must NEVER trigger a false positive.
   run bash -c '
     source "'"$REPO_ROOT/lib/core.sh"'"
     source "'"$REPO_ROOT/lib/usage.sh"'"
@@ -295,6 +303,70 @@ EOF
 • Ran grep -i \"usage limit reached\" lib/usage.sh"
   '
   [ "$status" -ne 0 ]
+
+  # Exact cold-review false-positive screens: Claude tool output (⎿), Claude prose (●), Codex prose (•).
+  run bash -c '
+    source "'"$REPO_ROOT/lib/core.sh"'"
+    source "'"$REPO_ROOT/lib/usage.sh"'"
+    usage_screen_limit claude "  ⎿  1180:      rx=\"you'\''ve hit your usage limit|usage_limit_reached|usage limit reached\" ;;"
+  '
+  [ "$status" -ne 0 ]
+
+  run bash -c '
+    source "'"$REPO_ROOT/lib/core.sh"'"
+    source "'"$REPO_ROOT/lib/usage.sh"'"
+    usage_screen_limit claude "● The watch now wakes the XO when a worker prints \"Claude usage limit reached\", then marks it out."
+  '
+  [ "$status" -ne 0 ]
+
+  run bash -c '
+    source "'"$REPO_ROOT/lib/core.sh"'"
+    source "'"$REPO_ROOT/lib/usage.sh"'"
+    usage_screen_limit codex "• I added detection for \"You'\''ve hit your usage limit\" in lib/usage.sh."
+  '
+  [ "$status" -ne 0 ]
+
+  # Reset-time extraction and parsing preserve full words ("minutes", not "mi") and UTC clock dates.
+  run bash -c '
+    source "'"$REPO_ROOT/lib/core.sh"'"
+    source "'"$REPO_ROOT/lib/usage.sh"'"
+    r1="$(usage_extract_reset_text "Resets in 1 hour 20 minutes.")"
+    i1="$(usage_parse_reset_iso "$r1" 1795700000)"
+    r2="$(usage_extract_reset_text "Try again in 2 days 3 hours 10 minutes.")"
+    i2="$(usage_parse_reset_iso "$r2" 1795700000)"
+    r3="$(usage_extract_reset_text "You'\''ve hit your limit · resets Nov 30, 10am (UTC)")"
+    i3="$(usage_parse_reset_iso "$r3" 1795700000)"
+    printf "%s|%s|%s|%s|%s|%s\n" "$r1" "$i1" "$r2" "$i2" "$r3" "$i3"
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "in 1 hour 20 minutes|2026-11-26T14:53:20Z|in 2 days 3 hours 10 minutes|2026-11-28T16:43:20Z|Nov 30, 10am (UTC)|2026-11-30T10:00:00Z" ]
+
+  # A weekly limit hit without explicit reset text inherits the 7d window reset (NOT the 5h window).
+  local ep5_w ep7_w iso7_w
+  ep5_w="$(jq -rn '(now | floor) + 3600')"
+  ep7_w="$(jq -rn '(now | floor) + 300000')"
+  iso7_w="$(jq -rn --argjson e "$ep7_w" '$e | todate')"
+  jq --argjson e5 "$ep5_w" --argjson e7 "$ep7_w" \
+    '.rate_limits.five_hour.resets_at = $e5 | .rate_limits.seven_day.resets_at = $e7' \
+    "$REPO_ROOT/test/fixtures/usage/claude-statusline.json" | cr usage record claude --machine desk --plan max
+  cr usage record claude --hit-limit --message "You've hit your weekly limit"
+  run cr usage --agent claude --json
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.[0].out_resets_at' <<<"$output")" = "$iso7_w" ]
+  cr usage clear claude >/dev/null
+
+  # Interactive worker mid-turn (live=working) must NOT trigger limit detection even if banner text appears.
+  mid_id="$(new_task --backend hc:claude)"
+  set_meta "$mid_id" '.dispatched="2026-11-26T00:00:00Z"'
+  run bash -c '
+    export CHARTROOM_HOME="'"$CHARTROOM_HOME"'"
+    source "'"$REPO_ROOT/lib/core.sh"'"
+    source "'"$REPO_ROOT/lib/usage.sh"'"
+    load_config
+    usage_limit_look "'"$mid_id"'" hc claude "You'\''ve hit your limit · resets 2026-11-27T00:00:00Z" working desk
+  '
+  [ "$status" -eq 0 ]
+  ! events "$mid_id" | grep -q 'out-of-usage'
 
   # End-to-end watch detection on a headless:claude worker that stopped on a usage limit.
   use_fake hc agy
@@ -366,6 +438,17 @@ EOF
   run cr move "$id" --agent claude --no-dispatch
   [ "$status" -ne 0 ]
   [[ "$output" == *"out of usage"* ]]
+
+  # A task that needs Claude (--needs mcp) must NOT automatically move to codex or agy.
+  mcp_id="$(new_task --backend hc:claude --needs mcp)"
+  run cr move "$mcp_id" --dry-run
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"needs Claude"* ]]
+  # Explicit --agent overrides with a warning.
+  run cr move "$mcp_id" --agent codex --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Claude-only needs"* ]]
+  [[ "$output" == *"would move $mcp_id from hc:claude to hc:codex"* ]]
 
   # Move automatically onto codex (--no-dispatch so we verify state before launch, then verify prompt).
   run cr move "$id" --no-dispatch
@@ -514,4 +597,62 @@ EOF
   [ "$(jq -r '.[0].windows[0] | [.label,.used_pct,.left_pct] | @csv' <<<"$output")" = '"7d",26,74' ]
   # Verify accountId and credit balance are never stored on disk.
   ! grep -qiE 'accountId|00000000-0000-0000-0000-000000000000|balance' "$CHARTROOM_HOME/usage/desk--codex.json"
+}
+
+@test "nodes refresh and report live usage and guest limit stops, and watch auto-tracks fresh homes" {
+  local fut5 ep5 now_iso
+  fut5="$(iso_offset 7200)"
+  ep5="$(jq -rn '(now | floor) + 7200')"
+  now_iso="$(iso_offset 0)"
+
+  # 1. Node usage-refresh writes to $XDG_STATE_HOME/chartroom/usage (no CHARTROOM_HOME needed)
+  #    and `node probe` emits it read-only.
+  jq -c --arg ts "$now_iso" --argjson e5 "$ep5" \
+    'select(.payload.rate_limits? != null) | .timestamp = $ts | .payload.rate_limits.primary.used_percent = 97.0 | .payload.rate_limits.primary.resets_at = $e5 | .payload.rate_limits.secondary = null' \
+    "$REPO_ROOT/test/fixtures/usage/codex-session.jsonl" | head -n 1 >"$CODEX_HOME/sessions/2026/11/26/rollout-node.jsonl"
+
+  CHARTROOM_MACHINE_NAME=mini CHARTROOM_HOME="" run cr node usage-refresh
+  [ "$status" -eq 0 ]
+  [ -f "$XDG_STATE_HOME/chartroom/usage/mini--codex.json" ]
+  CHARTROOM_MACHINE_NAME=mini CHARTROOM_HOME="" run cr node probe
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'usage\tcodex\tok\tpro\tchatgpt'* ]]
+  CHARTROOM_MACHINE_NAME=mini CHARTROOM_HOME="" run cr node probe --json
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.usage.codex.out' <<<"$output")" = true ]
+
+  # 2. Guest-side `node usage-look` detects an idle guest worker's limit stop, logs out-of-usage
+  #    with the node name, and mirrors hit_limit into $XDG_STATE_HOME/chartroom/usage so the
+  #    node's next probe reports claude as out.
+  use_fake hc
+  export FAKE_HC_DIR="$BATS_TEST_TMPDIR/hc"
+  mkdir -p "$FAKE_HC_DIR"
+  core_up
+  local gid; gid="$(new_task --backend hc:claude)"
+  set_meta "$gid" '.dispatched="2026-11-26T00:00:00Z" | .hc_terminal="t-guest" | .hc_launched="1"'
+  mkdir -p "$FAKE_HC_DIR/terms"
+  jq -cn --arg id "$gid" --arg l "$CHARTROOM_HOME/tasks/$gid/launch.sh" \
+    '{address:"t-guest",name:$id,state:"live",argv:["bash",$l],status:{app:"claude-code",state:"idle"}}' \
+    >"$FAKE_HC_DIR/terms/t-guest.json"
+  printf "You've hit your weekly limit · resets %s\n❯ \n" "$fut5" >"$FAKE_HC_DIR/screen.t-guest"
+
+  CHARTROOM_GUEST=1 CHARTROOM_MACHINE_NAME=mini run cr node usage-look
+  [ "$status" -eq 0 ]
+  events "$gid" | grep -q "agent: out-of-usage: claude on mini resets $fut5"
+  [ -f "$XDG_STATE_HOME/chartroom/usage/mini--claude.json" ]
+  CHARTROOM_MACHINE_NAME=mini CHARTROOM_HOME="" run cr node probe --json
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.usage.claude.out' <<<"$output")" = true ]
+  [ "$(jq -r '.usage.claude.out_resets_at' <<<"$output")" = "$fut5" ]
+
+  # 3. Automatic watch refresh on a fresh home (with no usage/ directory yet) creates and populates usage/.
+  local fresh_home="$BATS_TEST_TMPDIR/fresh-home"
+  mkdir -p "$fresh_home/tasks"
+  [ ! -d "$fresh_home/usage" ]
+  CHARTROOM_HOME="$fresh_home" CHARTROOM_USAGE_REFRESH_MINUTES=5 run cr watch --once --timeout 1
+  for _ in $(seq 1 40); do
+    [[ -f "$fresh_home/usage/desk--codex.json" ]] && break
+    sleep 0.1
+  done
+  [ -f "$fresh_home/usage/desk--codex.json" ]
 }

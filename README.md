@@ -707,22 +707,28 @@ chartroom move <id> --agent codex    # move to a specific agent (--dry-run previ
   credential verified against `claude auth status`, plus optional `statusLine` input via
   `chartroom usage record claude`; `codex` live `codex app-server` `account/rateLimits/read` with
   fallback to `token_count` `rate_limits` events under `~/.codex/sessions/`; `agy`
-  `agy --output-format json -p=/usage`; `grok` `grok usage --json` when its daemon route is
-  active) and never guesses or estimates numbers. Only active account-wide limiting windows mark
-  an agent out (never model-scoped side buckets or disabled extra-usage spend). Where no number
+  `agy --output-format json -p=/usage`; `grok` reports `unknown` with the CLI's reason until a
+  real daemon-route capture verifies its JSON shape) and never guesses or estimates numbers. Only
+  active account-wide limiting windows mark an agent out (never model-scoped side buckets or
+  disabled extra-usage spend). Readings refresh automatically during `watch` (and on enrolled
+  nodes during device heartbeats) every `CHARTROOM_USAGE_REFRESH_MINUTES` (5). Where no number
   exists, it reports `unknown` and why. Readings are stored under `$CHARTROOM_HOME/usage/` with
   sample time, machine, and plan/account only — never tokens, cookies, emails, or org IDs. Readings
   older than `CHARTROOM_USAGE_STALE_MINUTES` (30) are flagged stale with their age.
 - **Exhausted agents are skipped.** Once any active window reaches `CHARTROOM_USAGE_LIMIT_PCT`
   (default 95%; warning at `CHARTROOM_USAGE_WARN_PCT`, 80%) or a worker hits a usage-limit error,
   automatic dispatch (`spread_pick`), node placement, and fallback skip that agent until its
-  `resets_at` passes. `chartroom doctor`, `chartroom nodes`, and the dashboard's **Subscription
-  usage** panel all show exhausted and near-limit agents with their reset times.
-- **Detecting stops and moving work.** During `watch`, chartroom detects real usage-limit stops
-  on a worker's screen or output (`claude`, `codex`, `agy`, `grok`), marks the agent out, and
-  wakes the XO once with `agent: out-of-usage: <agent> resets <time>; available: ...`. Run
-  `chartroom move <id>` to stop the old worker and re-dispatch onto an available agent while
-  keeping the exact brief, branch, worktree, commits, and uncommitted changes.
+  `resets_at` passes; an explicit `--backend` for an exhausted agent prints a warning with its
+  reset time. `chartroom doctor`, `chartroom nodes`, and the dashboard's **Subscription usage**
+  panel all show exhausted and near-limit agents with their reset times.
+- **Detecting stops and moving work.** During `watch` (and on enrolled nodes via guest checks),
+  chartroom detects anchored usage-limit stop banners on idle/stopped workers (`claude`, `codex`,
+  `agy`, `grok`) — ignoring mid-turn output, prose, and tool output — marks only that machine's
+  agent out, and wakes the XO once with `agent: out-of-usage: <agent> resets <time>; available: ...`.
+  Run `chartroom move <id>` to stop the old worker and re-dispatch onto an available agent while
+  keeping the exact brief, branch, worktree, commits, and uncommitted changes; tasks with
+  Claude-only needs (`mcp`/`browser`/`claude`) refuse automatic moves off Claude unless `--agent`
+  or `--force` is given.
 
 During the trial, `CHARTROOM_REVIEW_NON_CLAUDE=opus` (default) gates new Codex and agy ship
 tasks. Scouts and tasks created before the gate are exempt. A `done` event marks review pending;

@@ -152,11 +152,17 @@ NODES_ROW_JQ='
              | {label: .[0], used_pct: $u, left_pct: ([100 - $u, 0] | max),
                 resets_at: (if $re != null and $re > 0 then ($re | floor | todate) else null end),
                 out: ($u >= $ulim and ($re == null or $re <= 0 or $now < $re))}) end) as $ws
+         | (.[8] // "-" | if . == "-" or . == "" then null else (tonumber? // null) end) as $hre
+         | ($hre != null and $hre > $now) as $hit_out
          | ([$ws[] | select(.out)] | sort_by(-.used_pct) | .[0] // null) as $ow
+         | ($hit_out or $ow != null) as $is_out
+         | (if $hit_out then ($hre | floor | todate) elif $ow then $ow.resets_at else null end) as $ores
          | {key: .[1], value: {status: (.[2] | s), plan: (.[3] | s), account: (.[4] | s), sampled_at: (.[5] | s),
-              windows: $ws, reason: (.[7] | s), out: ($ow != null),
-              out_resets_at: (if $ow then $ow.resets_at else null end),
-              out_reason: (if $ow then "\(.[1]) is out of usage (\($ow.label) \($ow.used_pct)% used" + (if $ow.resets_at then ", resets \($ow.resets_at)" else "" end) + ")" else null end)}}] | from_entries),
+              windows: $ws, reason: (.[7] | s), out: $is_out,
+              out_resets_at: $ores,
+              out_reason: (if $hit_out then "\(.[1]) hit usage limit" + (if $ores then " (resets \($ores))" else "" end)
+                           elif $ow then "\(.[1]) is out of usage (\($ow.label) \($ow.used_pct)% used" + (if $ow.resets_at then ", resets \($ow.resets_at)" else "" end) + ")"
+                           else null end)}}] | from_entries),
        checkouts: (one("checkouts")[1] | n), checkouts_scanned: (one("checkouts")[1] != "-"),
        repos: [$r[] | select(.[0] == "checkout") | {remote: .[1], path: .[2], fetch_age_s: (.[3] | n)} + (if (.[4] // "-") == "-" then {} else {flags: (.[4] | split(","))} end)]}
       | .checkouts_listed = ((.checkouts // 0) == 0 or (.repos | length) > 0)
@@ -493,6 +499,26 @@ cmd_node() {
         is_closed "$id" && continue
         [[ "$(meta "$id" backend)" == hc:agy && -n "$(meta "$id" dispatched)" ]] || continue
         hc_agy_look "$id"
+      done ;;
+    # (internal: the device agent's usage refresh & limit-stop check on guest workers)
+    usage-refresh)
+      usage_device_refresh 1 ;;
+    usage-look)
+      [[ -n "${CHARTROOM_GUEST:-}" ]] || die "node usage-look runs only in a guest home on a device"
+      local m id b a lv scr mach
+      mach="$(device_cfg NAME 2>/dev/null || true)"; [[ -n "$mach" ]] || mach="$(usage_machine_name)"
+      task_meta_files
+      for m in "${TASK_METAS[@]+"${TASK_METAS[@]}"}"; do
+        id="${m%/meta.json}"; id="${id##*/}"
+        is_closed "$id" && continue
+        [[ -n "$(meta "$id" dispatched)" ]] || continue
+        b="$(canon_backend "$(meta "$id" backend)")"
+        [[ "$b" == hc:* ]] || continue
+        a="${b#*:}"
+        lv="$(hc_live "$id" 2>/dev/null || echo unknown)"
+        case "$lv" in working|listening|parked|not-started|gone|unknown) continue ;; esac
+        scr="$(hc_screen "$id" 2>/dev/null)" || continue
+        usage_limit_look "$id" hc "$a" "$scr" "$lv" "$mach" || true
       done ;;
     *) die "usage: chartroom node probe [--json] | node init [--cpu PCT] [--mem PCT] [--battery pause|allow] [--priority normal|nice|background] [--project-roots DIRS] [--force] | node limits [<name|here> CPU/MEM|off|on|--clone on|off] | node add [--name N] [--alias A]... [--replace NAME|ID] | node rename <name|id> <new> | node revoke <name|id> | node rotate <name|id> | node update <name|id>...|--all | node ping <name|id> | node prepare <name> <repo>..." ;;
   esac

@@ -48,28 +48,35 @@ Tokens, cookies, emails, and org IDs are never stored or logged.
 | `claude` | 1) Claude OAuth usage API (`https://api.anthropic.com/api/oauth/usage`) using Claude Code's active OAuth token (macOS Keychain `"Claude Code-credentials"` first on macOS, else `~/.claude/.credentials.json`, verified against `claude auth status` `orgId` in memory so a stale file from another account is never queried), passed via stdin to `curl -K -`; reads only active account-wide windows (`five_hour`, `seven_day`), ignoring model-scoped buckets and `extra_usage`. 2) Claude Code `statusLine` JSON piped to `chartroom usage record claude` | API key / Bedrock / Vertex billing, signed out, missing or mismatched OAuth token, or HTTP error |
 | `codex` | 1) Live `codex app-server` JSON-RPC `account/rateLimits/read` (matches Codex `/status` in real time, reading only the primary `codex` bucket and ignoring model-scoped buckets). 2) Fallback: latest `event_msg` (`payload.type == "token_count"`) with `limit_id == "codex"` under `~/.codex/sessions/` | Not signed in, `app-server` unavailable, and no Codex session files with `rate_limits` |
 | `agy` | `agy --output-format json -p=/usage` (via `hc exec` in ssh on macOS); tracks the active model group's `5h` and `weekly` (`7d`) buckets (`remaining_fraction` and `reset_time`) | Not signed in, `GEMINI_API_KEY` mode, or ssh without a running hc core |
-| `grok` | `grok usage --json` (Grok's daemon route) | Shell route (`grok usage` tells users to run `/usage` inside grok), team-managed limits, or not signed in |
+| `grok` | `grok usage --json` (shell-route error and team-managed limits reported verbatim; daemon-route JSON parsing unverified until captured live) | Shell route (`grok usage` tells users to run `/usage` inside grok), team-managed limits, unverified daemon JSON, or not signed in |
 
-- **Never guessed.** Unknown agents are reported as `unknown` with the exact reason and are
-  never treated as exhausted. Readings older than `CHARTROOM_USAGE_STALE_MINUTES` (30) are
-  flagged stale with their age. Once a window's `resets_at` passes, it stops locking out the
-  agent automatically (marked reset until a fresh reading arrives; never estimated).
-- **Skipping exhausted agents.** An agent is out when any active window is at or above
-  `CHARTROOM_USAGE_LIMIT_PCT` (default 95; warn at `CHARTROOM_USAGE_WARN_PCT`, 80) or after a
-  worker hits a usage-limit error (`hit_limit`), until `resets_at` (or fallback cooldown
+- **Never guessed; automatic refresh.** Unknown agents are reported as `unknown` with the exact
+  reason and are never treated as exhausted. `watch` refreshes local and synced node usage
+  automatically every `CHARTROOM_USAGE_REFRESH_MINUTES` (5; `0` disables), and enrolled nodes
+  refresh their own readings into `$XDG_STATE_HOME/chartroom/usage/` for every heartbeat. Readings
+  older than `CHARTROOM_USAGE_STALE_MINUTES` (30) are flagged stale with their age. Once a
+  window's `resets_at` passes, it stops locking out the agent automatically (marked reset until a
+  fresh reading arrives; never estimated).
+- **Skipping exhausted agents.** An agent is out when any active account-wide window is at or
+  above `CHARTROOM_USAGE_LIMIT_PCT` (default 95; warn at `CHARTROOM_USAGE_WARN_PCT`, 80) or after
+  a worker hits a usage-limit stop (`hit_limit`), until `resets_at` (or fallback cooldown
   `CHARTROOM_USAGE_COOLDOWN_MINUTES`, 60). `spread_local_backends`, `spread_node_agents`,
-  `place_remote_lacks`, and `$CR_BACKEND_ORDER` fallback all skip out agents; `chartroom doctor`
-  and `chartroom nodes` report them with their reset times.
-- **Detecting worker limit stops.** `watch_look` calls `usage_limit_look` on each task's screen
-  tail (session runners) or error output (headless), ignoring diff/code/command lines. On a real
-  usage-limit stop for `claude`, `codex`, `agy`, or `grok`, chartroom marks the agent out and
-  raises `agent: out-of-usage: <agent> resets <time>; available: <agents> (move with: chartroom move <id>)`
+  `place_remote_lacks`, and `$CR_BACKEND_ORDER` fallback all skip out agents; an explicit
+  `--backend` for an exhausted agent prints a warning with its reset time. `chartroom doctor` and
+  `chartroom nodes` report exhausted agents with their reset times.
+- **Detecting worker limit stops.** `watch_look` (and `guest_usage_look_all` / `node usage-look`
+  on enrolled nodes) invokes `usage_limit_look` only on idle/stopped session workers (never while
+  mid-turn) or headless error output, matching only whole-line anchored limit-stop banners in the
+  terminal tail and ignoring agent prose (`●`, `•`), tool output (`⎿`), diffs, and code. On a
+  real limit stop for `claude`, `codex`, `agy`, or `grok`, chartroom marks only that machine's
+  agent out and raises `agent: out-of-usage: <agent>[ on <node>] resets <time>; available: <agents> (move with: chartroom move <id>)`
   once per dispatch/steer.
 - **Moving work (`chartroom move <id>`).** Stops the old worker safely, clears runner handles,
   records handoff notes in `tasks/<id>/inbox.md`, and re-dispatches onto another available agent
   (`--agent` or `--backend` to choose explicitly; `--dry-run` to preview; `--force` to override
-  exhaustion). The task's brief, branch, worktree, commits, and uncommitted changes are kept
-  intact — unlanded work is never discarded.
+  exhaustion). Tasks with Claude-only needs (`mcp`/`browser`/`claude`) refuse automatic moves off
+  Claude unless `--agent` or `--force` is given. The task's brief, branch, worktree, commits, and
+  uncommitted changes are kept intact — unlanded work is never discarded.
 
 ## Common to all
 

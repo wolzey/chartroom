@@ -213,7 +213,15 @@ select_backend() { # <id> -> sets SELECTED
   want="$(meta "$id" backend)"; src="$(meta "$id" backend_source)"; src="${src:-explicit}"
   CR_TASK_COMMAND="$(meta "$id" command)"
   if [[ -n "$want" && "$src" == explicit ]]; then
-    if why="$(probe_backend "$want")"; then SELECTED="$(canon_backend "$want")"; return 0; fi
+    if why="$(probe_backend "$want")"; then
+      SELECTED="$(canon_backend "$want")"
+      local ea="" uwhy=""
+      [[ "$SELECTED" == *:* ]] && ea="${SELECTED#*:}"
+      if [[ -n "$ea" && "$SELECTED" != node:* ]] && uwhy="$(usage_agent_out "$ea")"; then
+        warn "explicit backend $SELECTED: $uwhy (proceeding because --backend was chosen explicitly)"
+      fi
+      return 0
+    fi
     local next="" na=""
     for b in $CR_BACKEND_ORDER; do
       na=""; [[ "$b" == *:* ]] && na="${b#*:}"
@@ -1576,7 +1584,17 @@ watch_scan_lines() { # <id> <from-offset> <to-offset>
           # So did one answered in the last CHARTROOM_PERMIT_QUIET_SECONDS (300): the prompt it shows is
           # that card's, still on the screen as the answer arrives.
           *" agent: awaiting-input"*) permit_open "$id" || permit_answered_within "$id" "$(cfg PERMIT_QUIET_SECONDS '' 300)" || wake "$id" "$line" ;;
-          *" agent: out-of-usage"*) wake "$id" "$line" ;;
+          *" agent: out-of-usage"*)
+            if [[ "$(backend_runner "$id")" == node ]]; then
+              local na nm nrtxt nriso
+              na="$(backend_agent "$id")"; nm="$(node_name_of "$id")"
+              if [[ -n "$na" && -n "$nm" ]]; then
+                nrtxt="$(usage_extract_reset_text "$line")"
+                nriso="$(usage_parse_reset_iso "$nrtxt")"
+                usage_record_hit_limit "$na" "$nm" "$nriso" "$nrtxt" "$id" "$line" >/dev/null 2>&1 || true
+              fi
+            fi
+            wake "$id" "$line" ;;
         esac ;;
       permit) if [[ "$line" == *" permit: asks "* || "$line" == *" permit: refused: a worker tried "* ]]; then wake "$id" "$line"; fi ;;
     esac

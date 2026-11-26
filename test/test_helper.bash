@@ -31,6 +31,8 @@ common_setup() {
   # no test starts the CPU sampler (lib/cpuload.sh) behind an agent or an app server; a probe's own
   # sample is short
   export CHARTROOM_CPU_SAMPLER=off CR_PROBE_SAMPLE=1
+  # No background usage refresh in unrelated tests (test/usage.bats enables it explicitly where tested).
+  export CHARTROOM_USAGE_REFRESH_MINUTES=0
   unset CHARTROOM_PLACEMENT CHARTROOM_PLACE_HOLD_SECONDS CHARTROOM_GUEST
   unset CHARTROOM_FLEET_DIR CHARTROOM_BRAIN_URL CHARTROOM_DEVICE_HEARTBEAT CHARTROOM_NODE_STALE_SECONDS CHARTROOM_NODE_LOST_MINUTES
   # (A runner's own would move herdr's socket away from this test's HOME: see herdr_sock_up.)

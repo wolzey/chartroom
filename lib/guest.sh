@@ -606,9 +606,23 @@ guest_agy_look_all() {
   done
 }
 
+GUEST_USAGE_AT=0
+guest_usage_look_all() {
+  local g now_s; now_s="$(date +%s)"
+  (( now_s - GUEST_USAGE_AT >= 30 )) || return 0
+  GUEST_USAGE_AT="$now_s"
+  for g in "$(guest_root)"/*/; do
+    [[ -d "$g/.push" ]] || continue
+    if compgen -G "$g/.push/*.json" >/dev/null 2>&1; then
+      guest_run "$(basename "$g")" node usage-look >/dev/null 2>&1 || true
+    fi
+  done
+}
+
 guest_push_all() {
   local g sf home id now_s
   guest_agy_look_all || true
+  guest_usage_look_all || true
   for g in "$(guest_root)"/*/; do
     [[ -d "$g/.push" ]] || continue
     home="$(basename "$g")"
