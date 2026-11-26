@@ -588,7 +588,7 @@ guest_push_task() { # <home> <id>
 }
 
 GUEST_PARKED_AT=0
-# agy has no hooks to report a prompt or a turn that ends unreported, and no watch runs here: every
+# agy has no hook (only the guard) to report a prompt or a turn that ends unreported, and no watch runs here: every
 # 5 s a home with an hc:agy task asks hc (chartroom node agy-look), whose lines go up with its log.
 GUEST_AGY_AT=0
 guest_agy_look_all() {

@@ -326,7 +326,7 @@ Verified on agy 1.5.17 and 1.5.18 in hc 0.1.21 on a Mac (November 2026), against
   reporting`; the stall watchdog covers a quiet one (agy's braille spinner and its tasks' clocks
   do not count as output; its phase line, `Generating...` or `Editing files...`, does). The trust dialog's own `blocked`, while the
   dispatch answers it, wakes nothing.
-- **On a node** (`node:agy`), no watch runs on the device and agy has no hooks to report: the device
+- **On a node** (`node:agy`), no watch runs on the device and agy has no reporting hooks (only the guard): the device
   agent asks hc about each guest `hc:agy` worker every 5 s (`chartroom node agy-look`, in the guest
   home) and writes what the brain's watch wakes on into its log, which goes up with the rest:
   `agent: awaiting-input: hc: agy is waiting on a permission: <words>`, and `agent: turn-ended` for

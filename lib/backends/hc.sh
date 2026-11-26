@@ -23,8 +23,8 @@
 # (verified on codex-cli 0.158.0, hc 0.1.16), so it keeps its notify hook for turn ends, and its
 # approval prompts come from the terminal title it sets, which hc carries (below, lib/stuck.sh).
 # agy reports its state over OSC 7501 as Claude does (verified on agy 1.5.17, hc 0.1.21): working,
-# idle, done, blocked with the dialog's kind and words, and hc counts its turns; it gets no hooks
-# at all, and its brief goes in as `agy -i <brief>` (lib/agents.sh).
+# idle, done, blocked with the dialog's kind and words, and hc counts its turns; it gets no reporting hooks
+# (only the pattern kill guard), and its brief goes in as `agy -i <brief>` (lib/agents.sh).
 # The terminal's address is recorded and every later call checks it still carries the task's name.
 
 declare -A HC_TURNS=() # watch: each task's hc turn count at the last look
