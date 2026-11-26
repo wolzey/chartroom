@@ -289,8 +289,8 @@ Verified on agy 1.5.17 in hc 0.1.21 on a Mac (November 2026), against a signed-i
   the first one after the trust dialog included (verified with chartroom's launcher in front).
   So: a prompt wakes the XO as `agent: awaiting-input: hc: agy is waiting on a permission: <words>`;
   a turn that ends with no report from the worker wakes as `hc: agent stopped its turn without
-  reporting`; the stall watchdog covers a quiet one (agy's braille spinner, its `Generating...`
-  line and its tasks' clocks do not count as output). The trust dialog's own `blocked`, while the
+  reporting`; the stall watchdog covers a quiet one (agy's braille spinner and its tasks' clocks
+  do not count as output; its phase line, `Generating...` or `Editing files...`, does). The trust dialog's own `blocked`, while the
   dispatch answers it, wakes nothing.
 - **Steer.** `hc send` pastes and presses Enter, and refuses a blocked agy (exit 9, verified), as it
   does Claude; chartroom also reads agy's dialogs on its screen (each ends in a `↑/↓ Navigate · ...`
