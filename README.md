@@ -713,15 +713,17 @@ chartroom move <id> --agent codex    # move to a specific agent (--dry-run previ
   disabled extra-usage spend). Readings refresh automatically during `watch` (and on enrolled
   nodes during device heartbeats) every `CHARTROOM_USAGE_REFRESH_MINUTES` (5). Where no number
   exists, it reports `unknown` and why. Readings are stored under `$CHARTROOM_HOME/usage/` with
-  sample time, machine, plan, and a non-secret auth/provider label (`claude.ai`, `chatgpt`,
-  `google`) — never tokens, cookies, emails, or org/account IDs. Readings older than
-  `CHARTROOM_USAGE_STALE_MINUTES` (30) are flagged stale with their age.
+  sample time, machine, plan, and a non-identifying account label (an optional
+  `CHARTROOM_USAGE_ACCOUNT_<AGENT>` alias, or `<provider> #<6-hex>` hashed in memory from the
+  account/org ID so distinct subscriptions split cleanly across machines) — never tokens, cookies,
+  emails, or raw org/account IDs. Readings older than `CHARTROOM_USAGE_STALE_MINUTES` (30) are
+  flagged stale with their age.
 - **Exhausted agents are skipped.** Once any active window reaches `CHARTROOM_USAGE_LIMIT_PCT`
   (default 95%; warning at `CHARTROOM_USAGE_WARN_PCT`, 80%) or a worker hits a usage-limit error,
-  automatic dispatch (`spread_pick`), node placement, and fallback skip that agent until its
-  `resets_at` passes; an explicit `--backend` for an exhausted agent prints a warning with its
-  reset time. `chartroom doctor`, `chartroom nodes`, and the dashboard's **Subscription usage**
-  panel all show exhausted and near-limit agents with their reset times.
+  automatic dispatch (`spread_pick`), automatic re-dispatch, node placement, and fallback skip
+  that agent until its `resets_at` passes; an explicit `--backend` for an exhausted agent prints a
+  warning with its reset time. `chartroom doctor`, `chartroom nodes`, and the dashboard's
+  **Subscription usage** panel all show exhausted and near-limit agents with their reset times.
 - **Detecting stops and moving work.** During `watch` (and on enrolled nodes via guest checks),
   chartroom detects anchored usage-limit stop banners on idle/stopped workers (`claude`, `codex`,
   `agy`, `grok`) — ignoring mid-turn output, prose, and tool output — marks only that machine's
@@ -951,6 +953,7 @@ machine), then `~/.config/chartroom/config` (`KEY=VALUE`, no shell evaluation;
 | `CHARTROOM_STALL_BUSY_MAX_MINUTES` | `60` | a quiet command still using CPU holds the `stalled` wake back for up to this long |
 | `CHARTROOM_USAGE_LIMIT_PCT` / `CHARTROOM_USAGE_WARN_PCT` | `95` / `80` | percent used at which an agent is treated as out of usage (skipped on dispatch) or near limit |
 | `CHARTROOM_USAGE_STALE_MINUTES` / `_REFRESH_MINUTES` / `_COOLDOWN_MINUTES` | `30` / `5` / `60` | age after which a usage reading is marked stale; cache refresh interval; fallback lockout when a limit error has no parseable reset time |
+| `CHARTROOM_USAGE_ACCOUNT_<AGENT>` | *(auto hash)* | optional non-identifying label (e.g. `work`, `personal`) for `CLAUDE`/`CODEX`/`AGY`/`GROK` readings; defaults to `<provider> #<6-hex>` hashed in memory from org/account ID |
 | `CHARTROOM_CODEX_HOOKS_DIALOG` | `ask` | Codex's "Hooks need review" dialog at startup: `ask` wakes the XO; `skip` takes Esc in a worktree chartroom created, so those hooks do not run for that worker. Never trusts a hook |
 | `CHARTROOM_BASH_SEARCH` | see Install | environment only: colon-separated dirs searched for a bash ≥ 4 when started under an older one (PATH is always searched first) |
 | `CHARTROOM_PATH_APPEND` | `/opt/homebrew/bin:/usr/local/bin` on macOS, else empty | environment only: dirs appended to PATH when they exist and are missing; empty turns it off |

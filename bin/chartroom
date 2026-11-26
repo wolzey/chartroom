@@ -219,6 +219,11 @@ select_backend() { # <id> -> sets SELECTED
       [[ "$SELECTED" == *:* ]] && ea="${SELECTED#*:}"
       if [[ -n "$ea" && "$SELECTED" != node:* ]] && uwhy="$(usage_agent_out "$ea")"; then
         warn "explicit backend $SELECTED: $uwhy (proceeding because --backend was chosen explicitly)"
+      elif [[ -n "$ea" && "$SELECTED" == node:* ]]; then
+        local enm=""; enm="$(node_name_of "$id")"
+        if [[ -n "$enm" ]] && uwhy="$(usage_agent_out "$ea" "$enm")"; then
+          warn "explicit backend $SELECTED ($enm): $uwhy (proceeding because --backend was chosen explicitly)"
+        fi
       fi
       return 0
     fi
@@ -243,7 +248,42 @@ select_backend() { # <id> -> sets SELECTED
     return 0
   fi
   [[ -n "$want" ]] || die 'no backend available; run chartroom doctor'
-  SELECTED="$want"
+  SELECTED="$(canon_backend "$want")"
+  local ea="" uwhy="" nm=""
+  [[ "$SELECTED" == *:* ]] && ea="${SELECTED#*:}"
+  if [[ "$src" == auto && -n "$ea" ]]; then
+    if [[ "$SELECTED" == node:* ]]; then
+      nm="$(node_name_of "$id")"
+      if [[ -n "$nm" ]] && uwhy="$(usage_agent_out "$ea" "$nm")"; then
+        local row="" next_a="" only=0
+        spread_claude "$id" && only=1
+        nodes_settings
+        row="$(nodes_device_row "$(fleet_device_json "$(meta "$id" node)")" "$(date +%s)" 2>/dev/null || true)"
+        if [[ -n "$row" ]]; then
+          row="$(spread_node_agents "[$row]" | jq -c '.[0]')"
+          next_a="$(spread_pick "$(spread_summary "$id")" "$(jq -c '.spread_agents // []' <<<"$row")" "$only" 2>/dev/null || true)"
+        fi
+        if [[ -n "$next_a" ]]; then
+          SELECTED_NODE_BACKEND="hc:$next_a"
+          SELECTED="node:$next_a"
+          warn "re-dispatching $id on $nm: $ea is unavailable ($uwhy); switching to $SELECTED"
+        else
+          die "cannot re-dispatch $id on $SELECTED ($nm): $uwhy (no other signed-in agent available on $nm; use chartroom move $id to move it)"
+        fi
+      fi
+    elif uwhy="$(usage_agent_out "$ea")"; then
+      local bs next_a="" only=0
+      bs="$(spread_local_backends)"
+      spread_claude "$id" && only=1
+      next_a="$(spread_pick "$(spread_summary "$id")" "$(printf '%s\n' "$bs" | jq -Rsc 'split("\n") | map(select(length>0) | split(":")[1])')" "$only" 2>/dev/null || true)"
+      if [[ -n "$next_a" ]]; then
+        SELECTED="$(grep ":$next_a$" <<<"$bs" | head -1)"
+        warn "re-dispatching $id: $want is unavailable ($uwhy); switching to $SELECTED"
+      else
+        die "cannot re-dispatch $id on $SELECTED: $uwhy (no other signed-in full-session agent available; wait for reset or use chartroom move $id --agent <A> --force)"
+      fi
+    fi
+  fi
 
 }
 
@@ -739,6 +779,8 @@ cmd_dispatch() {
   if [[ -n "$(meta "$id" node)" ]] && spread_claude "$id"; then
     die "Claude-only tools are configured on this machine; set $id node=here before dispatch"
   fi
+  local prev_agent=""
+  [[ -z "$(meta "$id" dispatched)" ]] || prev_agent="$(backend_agent "$id")"
   select_backend "$id"
   # where it runs: the node with the most room (lib/place.sh), unless nothing can be placed
   if [[ $dry -eq 1 ]]; then
@@ -755,6 +797,16 @@ cmd_dispatch() {
     if [[ "$SELECTED" == node:* && -n "$SELECTED_NODE_BACKEND" ]]; then meta_set "$id" node_backend "$SELECTED_NODE_BACKEND"; fi
     meta_set "$id" backend "$SELECTED"
     runner="${SELECTED%%:*}"; agent=""; [[ "$SELECTED" == *:* ]] && agent="${SELECTED#*:}"
+    if [[ -n "$prev_agent" && -n "$agent" && "$prev_agent" != "$agent" ]]; then
+      local pk
+      for pk in session_id thread_id model effort permission sandbox; do
+        [[ -z "$(meta "$id" "$pk")" ]] || meta_set "$id" "$pk" ""
+      done
+      if [[ "$kind" == ship && "$prev_agent" =~ ^(codex|agy)$ ]]; then
+        meta_set "$id" review_required 1
+      fi
+      prev_agent="$agent"
+    fi
     # (a worktree of a task on another machine is made there)
     if [[ "$runner" != node && ( "$runner" != subagent || "$kind" == ship ) ]]; then
       wt="$(cmd_worktree "$id")" || exit 1
@@ -1585,16 +1637,21 @@ watch_scan_lines() { # <id> <from-offset> <to-offset>
           # that card's, still on the screen as the answer arrives.
           *" agent: awaiting-input"*) permit_open "$id" || permit_answered_within "$id" "$(cfg PERMIT_QUIET_SECONDS '' 300)" || wake "$id" "$line" ;;
           *" agent: out-of-usage"*)
+            local wake_line="$line"
             if [[ "$(backend_runner "$id")" == node ]]; then
-              local na nm nrtxt nriso
+              local na nm nrtxt nriso navail
               na="$(backend_agent "$id")"; nm="$(node_name_of "$id")"
               if [[ -n "$na" && -n "$nm" ]]; then
                 nrtxt="$(usage_extract_reset_text "$line")"
                 nriso="$(usage_parse_reset_iso "$nrtxt")"
                 usage_record_hit_limit "$na" "$nm" "$nriso" "$nrtxt" "$id" "$line" >/dev/null 2>&1 || true
+                navail="$(usage_available_agents "$na" "$nm")"
+                if [[ "$wake_line" == *"; available: "*" (move with:"* ]]; then
+                  wake_line="${wake_line%%; available: *}; available: ${navail:-none} (move with:${wake_line#* (move with:}"
+                fi
               fi
             fi
-            wake "$id" "$line" ;;
+            wake "$id" "$wake_line" ;;
         esac ;;
       permit) if [[ "$line" == *" permit: asks "* || "$line" == *" permit: refused: a worker tried "* ]]; then wake "$id" "$line"; fi ;;
     esac

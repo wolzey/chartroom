@@ -12,6 +12,7 @@ setup() {
   export CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/claude"
   mkdir -p "$CODEX_HOME/sessions/2026/11/26" "$CLAUDE_CONFIG_DIR"
   unset CHARTROOM_CLAUDE_USAGE_FILE CHARTROOM_CLAUDE_USAGE_URL CHARTROOM_CLAUDE_PLAN CHARTROOM_CLAUDE_ACCOUNT
+  unset CHARTROOM_USAGE_ACCOUNT_CLAUDE CHARTROOM_USAGE_ACCOUNT_CODEX CHARTROOM_USAGE_ACCOUNT_AGY CHARTROOM_USAGE_ACCOUNT_GROK
 }
 
 teardown() {
@@ -838,4 +839,155 @@ EOF
     sleep 0.1
   done
   [ -f "$fresh_home/usage/desk--codex.json" ]
+}
+
+@test "re-dispatch of auto tasks skips out agents, node wakes list fleet agents, clock resets and move pre-checks hold, pid uses BASHPID, and account labels stay non-identifying" {
+  use_fake hc agy
+  export FAKE_HC_DIR="$BATS_TEST_TMPDIR/hc"
+  mkdir -p "$FAKE_HC_DIR"
+  core_up
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$BIN/codex"
+  printf '#!/usr/bin/env bash\necho '\''{"loggedIn":true}'\''\n' >"$BIN/claude"
+  chmod +x "$BIN/codex" "$BIN/claude"
+
+  local fut ep_fut now_iso
+  ep_fut="$(jq -rn '(now | floor) + 3600')"
+  fut="$(jq -rn --argjson e "$ep_fut" '$e | todate')"
+  now_iso="$(iso_offset 0)"
+
+  # P2-1: Re-dispatching an already-dispatched automatic task whose stored agent is now out
+  # must NOT silently re-dispatch onto the exhausted agent; it switches to another available agent,
+  # and refuses when no other signed-in full-session agent is available.
+  local rid
+  rid="$(new_task)"
+  set_meta "$rid" '.backend="hc:codex" | .backend_source="auto" | .dispatched="2026-11-26T00:00:00Z"'
+  cr usage record codex --hit-limit --resets-at "$fut" --message "You've hit your usage limit"
+  run cr dispatch "$rid" --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"switching to hc:agy"* ]]
+  [[ "$output" == *"would run here, as hc:agy"* ]]
+  [[ "$output" == *"$fut"* ]]
+  # When all other local agents are also out, re-dispatch refuses rather than sending work to codex.
+  cr usage record agy --hit-limit --resets-at "$fut" --message "Usage limit reached"
+  cr usage record claude --hit-limit --resets-at "$fut" --message "You've hit your weekly limit"
+  run cr dispatch "$rid" --dry-run
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"cannot re-dispatch $rid on hc:codex"* ]]
+  [[ "$output" == *"$fut"* ]]
+  cr usage clear codex >/dev/null
+  cr usage clear agy >/dev/null
+  cr usage clear claude >/dev/null
+  cr close "$rid" >/dev/null
+
+  # P3-1: A node's out-of-usage event scanned by the brain's watch rewrites `available:` to
+  # reflect the brain's fleet-wide view (including the brain's local agents), not just the node's.
+  local nid
+  nid="$(new_task --backend node:claude)"
+  set_meta "$nid" '.dispatched="2026-11-26T00:00:00Z" | .node="dev-mini" | .node_name="mini" | .node_backend="hc:claude"'
+  printf '%s agent: out-of-usage: claude on mini resets %s; available: none (move with: chartroom move %s)\n' \
+    "$now_iso" "$fut" "$nid" >>"$CHARTROOM_HOME/tasks/$nid/events.log"
+  run cr watch --once --timeout 2
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"out-of-usage: claude on mini resets $fut; available: "*"codex"* ]]
+  [[ "$output" == *"(move with: chartroom move $nid)"* ]]
+  # Brain also recorded claude as out on mini (not on desk).
+  run cr usage --agent claude --json
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.[] | select(.machine=="mini") | .out' <<<"$output")" = true ]
+  set_meta "$nid" '.closed="2026-11-26T00:00:00Z"'
+
+  # P3-2: A clock-only reset seen after that hour stays in the past (already reset) instead of
+  # rolling +1 day into a ~23h lockout, while an overnight wrap (>6h behind, e.g. 11pm -> 3am)
+  # still rolls to tomorrow; Codex's ordinal date + year shape also parses cleanly.
+  run bash -c '
+    source "'"$REPO_ROOT/lib/core.sh"'"
+    source "'"$REPO_ROOT/lib/usage.sh"'"
+    # 1795734000 = 2026-11-26T23:00:00Z = 4:00 PM America/Denver -> 3pm already passed 1h ago
+    p_past="$(usage_parse_reset_iso "3pm (America/Denver)" 1795734000)"
+    # 1795759200 = 2026-11-27T06:00:00Z = 11:00 PM America/Denver -> 3am is 4h ahead tomorrow
+    p_wrap="$(usage_parse_reset_iso "3am (America/Denver)" 1795759200)"
+    # Codex ordinal date + year
+    p_ord="$(usage_parse_reset_iso "Nov 30th, 2026 3:05 PM (UTC)" 1795700000)"
+    printf "%s|%s|%s\n" "$p_past" "$p_wrap" "$p_ord"
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "2026-11-26T22:00:00Z|2026-11-27T10:00:00Z|2026-11-30T15:05:00Z" ]
+
+  # P3-3: `chartroom move --node mini --agent codex` checks mini's usage BEFORE stopping the old worker.
+  export CHARTROOM_FLEET_DIR="$BATS_TEST_TMPDIR/fleet"
+  mkdir -p "$CHARTROOM_FLEET_DIR/devices"
+  jq -cn '{id:"n-111111111111",name:"mini",aliases:[],host:"mini.local",enrolled:1795700000}' \
+    >"$CHARTROOM_FLEET_DIR/devices/n-111111111111.json"
+  jq -cn --argjson ls "$(date +%s)" \
+    '{last_seen:$ls,caps:["dispatch","place"],probe:"runner\thc\tup\ntool\tcodex\tok\nlogin\tcodex\tok\n"}' \
+    >"$CHARTROOM_FLEET_DIR/devices/n-111111111111.seen.json"
+  cr homes add test "$CHARTROOM_HOME" >/dev/null
+  # codex is ok on desk, but out on mini.
+  cr usage record codex --machine mini --hit-limit --resets-at "$fut" --message "You've hit your usage limit"
+  local mid old_term
+  mid="$(new_task --backend hc:claude)"
+  run cr dispatch "$mid"
+  [ "$status" -eq 0 ]
+  old_term="$(meta_of "$mid" hc_terminal)"
+  [ -n "$old_term" ]
+  [ -f "$FAKE_HC_DIR/terms/$old_term.json" ]
+  run cr move "$mid" --node mini --agent codex
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"codex on mini is out of usage"* ]]
+  # Old worker was NOT stopped and its metadata was NOT cleared!
+  [ -f "$FAKE_HC_DIR/terms/$old_term.json" ]
+  [ "$(meta_of "$mid" hc_terminal)" = "$old_term" ]
+  [ -n "$(meta_of "$mid" dispatched)" ]
+  [ "$(meta_of "$mid" backend)" = hc:claude ]
+
+  # P3-4: Background `usage_device_refresh 0` records subshell $BASHPID (not parent $$) in .refresh.pid.
+  run bash -c '
+    export XDG_STATE_HOME="'"$XDG_STATE_HOME"'"
+    export CHARTROOM_MACHINE_NAME=mini
+    source "'"$REPO_ROOT/lib/core.sh"'"
+    source "'"$REPO_ROOT/lib/usage.sh"'"
+    CR_USAGE_REFRESH_MIN=5
+    usage_refresh_local() { sleep 0.4; }
+    parent_pid=$$
+    usage_device_refresh 0
+    pf="$XDG_STATE_HOME/chartroom/usage/.refresh.pid"
+    for _ in $(seq 1 30); do [[ -s "$pf" ]] && break; sleep 0.02; done
+    got="$(cat "$pf" 2>/dev/null || true)"
+    wait 2>/dev/null || true
+    echo "parent=$parent_pid got=$got"
+    [[ "$got" =~ ^[0-9]+$ && "$got" != "$parent_pid" ]]
+  '
+  [ "$status" -eq 0 ]
+
+  # P3-5: Non-identifying account labels distinguish separate subscriptions without storing raw IDs,
+  # split identical-percentage readings across machines, and honor CHARTROOM_USAGE_ACCOUNT_<AGENT>.
+  run bash -c '
+    source "'"$REPO_ROOT/lib/core.sh"'"
+    source "'"$REPO_ROOT/lib/usage.sh"'"
+    a1="$(usage_account_label claude claude.ai "org-11111111-aaaa")"
+    a2="$(usage_account_label claude claude.ai "org-22222222-bbbb")"
+    a3="$(CHARTROOM_USAGE_ACCOUNT_CLAUDE=personal usage_account_label claude claude.ai "org-11111111-aaaa")"
+    printf "%s|%s|%s\n" "$a1" "$a2" "$a3"
+    [[ "$a1" =~ ^claude\.ai\ #[0-9a-f]{6}$ ]]
+    [[ "$a2" =~ ^claude\.ai\ #[0-9a-f]{6}$ ]]
+    [[ "$a1" != "$a2" ]]
+    [[ "$a1" != *"org-11111111"* && "$a2" != *"org-22222222"* ]]
+    [[ "$a3" == "personal" ]]
+  '
+  [ "$status" -eq 0 ]
+
+  # Two machines with identical Codex percentages/plan but different accountIds split into 2 rows
+  # with distinct non-identifying `chatgpt #<6-hex>` labels and zero raw UUIDs on disk.
+  jq --argjson e "$ep_fut" \
+    '.accountId = "acct-aaaa-1111" | .rateLimits.primary.resetsAt = $e | .rateLimitsByLimitId.codex.primary.resetsAt = $e' \
+    "$REPO_ROOT/test/fixtures/usage/codex-appserver-ratelimits.json" | cr usage record codex --machine desk
+  jq --argjson e "$ep_fut" \
+    '.accountId = "acct-bbbb-2222" | .rateLimits.primary.resetsAt = $e | .rateLimitsByLimitId.codex.primary.resetsAt = $e' \
+    "$REPO_ROOT/test/fixtures/usage/codex-appserver-ratelimits.json" | cr usage record codex --machine mini
+  ! grep -qiE 'acct-aaaa-1111|acct-bbbb-2222|accountId' "$CHARTROOM_HOME/usage/desk--codex.json" "$CHARTROOM_HOME/usage/mini--codex.json"
+  run cr usage --agent codex --json
+  [ "$status" -eq 0 ]
+  [ "$(jq 'length' <<<"$output")" -eq 2 ]
+  [ "$(jq -r '.[0].account' <<<"$output")" != "$(jq -r '.[1].account' <<<"$output")" ]
+  [[ "$(jq -r '.[0].account' <<<"$output")" =~ ^chatgpt\ #[0-9a-f]{6}$ ]]
 }

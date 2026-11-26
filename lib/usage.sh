@@ -57,6 +57,27 @@ usage_agent_bin() { # <agent>
   printf '%s' "$b"
 }
 
+# Build a non-identifying account label (never storing emails or raw org/account IDs).
+# Precedence: CHARTROOM_USAGE_ACCOUNT_<AGENT> alias > "<base> #<6-hex sha256>" > "<base>".
+usage_account_label() { # <agent> <base_label> [raw_id_in_memory]
+  local agent="$1" base="${2:-}" raw_id="${3:-}" upper alias h=""
+  upper="${agent^^}"
+  alias="$(cfg "USAGE_ACCOUNT_${upper}" '' '')"
+  if [[ -n "$alias" ]]; then
+    printf '%s' "$alias"
+    return 0
+  fi
+  if [[ -n "$raw_id" ]]; then
+    if command -v shasum >/dev/null 2>&1; then h="$(printf '%s:%s' "$agent" "$raw_id" | shasum -a 256 | cut -c1-6)"
+    elif command -v sha256sum >/dev/null 2>&1; then h="$(printf '%s:%s' "$agent" "$raw_id" | sha256sum | cut -c1-6)"; fi
+  fi
+  if [[ -n "$h" ]]; then
+    printf '%s #%s' "${base:-$agent}" "$h"
+  else
+    printf '%s' "$base"
+  fi
+}
+
 # Write one reading atomically (0600), preserving any active hit_limit unless explicitly replaced.
 usage_write_record() { # <agent> <machine> <json> [replace_hit 0|1]
   local agent="$1" machine="$2" doc="$3" rep="${4:-0}" f tmp prev='null'
@@ -231,10 +252,10 @@ usage_parse_claude_statusline() {
 }
 
 # Parse a Codex session JSONL `token_count` event (stdin) into a schema-1 reading.
-# Args: <machine> <local true|false>
+# Args: <machine> <local true|false> [account]
 usage_parse_codex_event() {
-  local machine="$1" loc="$2"
-  jq -c --argjson schema "$CR_USAGE_SCHEMA" --arg m "$machine" --argjson loc "$loc" --arg rec "$(now)" '
+  local machine="$1" loc="$2" acct="${3:-}"
+  jq -c --argjson schema "$CR_USAGE_SCHEMA" --arg m "$machine" --argjson loc "$loc" --arg acct "$acct" --arg rec "$(now)" '
     def norm_iso:
       if . == null or . == "" then null
       elif type == "number" then (if . > 0 then (floor | todate) else null end)
@@ -259,7 +280,7 @@ usage_parse_codex_event() {
     | (($rl.rate_limit_reached_type // null) != null or ($rl.spend_control_reached == true)) as $reached
     | {
         schema: $schema, agent: "codex", machine: $m, local: $loc,
-        account: "chatgpt",
+        account: (if $acct == "" then "chatgpt" else $acct end),
         plan: ($rl.plan_type // null),
         status: (if ($wins | length) > 0 then "ok" else "unknown" end),
         source: "codex-sessions",
@@ -274,11 +295,11 @@ usage_parse_codex_event() {
 # Parse `codex app-server` JSON-RPC `account/rateLimits/read` result (stdin) into a schema-1 reading.
 # Uses only the primary account-wide "codex" bucket (never model-scoped side buckets) and strips
 # accountId, credits balances, and reset-credit IDs.
-# Args: <machine> <local true|false> <sampled_at ISO>
+# Args: <machine> <local true|false> <sampled_at ISO> [account]
 usage_parse_codex_appserver() {
-  local machine="$1" loc="$2" sampled="${3:-$(now)}"
+  local machine="$1" loc="$2" sampled="${3:-$(now)}" acct="${4:-}"
   jq -c --argjson schema "$CR_USAGE_SCHEMA" --arg m "$machine" --argjson loc "$loc" \
-    --arg sampled "$sampled" --arg rec "$(now)" '
+    --arg sampled "$sampled" --arg acct "$acct" --arg rec "$(now)" '
     def norm_iso:
       if . == null or . == "" then null
       elif type == "number" then (if . > 0 then (floor | todate) else null end)
@@ -306,7 +327,7 @@ usage_parse_codex_appserver() {
        or ($rl.spendControlReached == true)) as $reached
     | {
         schema: $schema, agent: "codex", machine: $m, local: $loc,
-        account: "chatgpt",
+        account: (if $acct == "" then "chatgpt" else $acct end),
         plan: ($rl.planType // $rl.plan_type // null),
         status: (if ($wins | length) > 0 then "ok" else "unknown" end),
         source: "codex-app-server",
@@ -319,11 +340,11 @@ usage_parse_codex_appserver() {
 }
 
 # Parse `agy --output-format json -p=/usage` output (stdin) into a schema-1 reading.
-# Args: <machine> <local true|false> <model_hint> <sampled_at ISO>
+# Args: <machine> <local true|false> <model_hint> <sampled_at ISO> [account]
 usage_parse_agy_json() {
-  local machine="$1" loc="$2" hint="${3:-}" sampled="${4:-$(now)}"
+  local machine="$1" loc="$2" hint="${3:-}" sampled="${4:-$(now)}" acct="${5:-}"
   jq -c --argjson schema "$CR_USAGE_SCHEMA" --arg m "$machine" --argjson loc "$loc" \
-    --arg hint "$hint" --arg sampled "$sampled" --arg rec "$(now)" '
+    --arg hint "$hint" --arg sampled "$sampled" --arg acct "$acct" --arg rec "$(now)" '
     def r1: ((. * 10 + 0.5) | floor) / 10;
     def norm_reset:
       if . == null or . == "" then null
@@ -346,7 +367,7 @@ usage_parse_agy_json() {
     | ([ $wins[] | select(.label == "5h") ] + [ $wins[] | select(.label != "5h") ]) as $ordered
     | {
         schema: $schema, agent: "agy", machine: $m, local: $loc,
-        account: "google",
+        account: (if $acct == "" then "google" else $acct end),
         plan: ($primary.name // null),
         status: (if ($ordered | length) > 0 then "ok" else "unknown" end),
         source: "agy-usage",
@@ -462,12 +483,13 @@ usage_claude_oauth_token() { # [expected_org_id]
 }
 
 usage_read_claude() { # [machine]
-  local m="${1:-$(usage_machine_name)}" b auth="" plan="" acct="" api_prov="" logged="" exp_org="" tok="" out="" code="" url sampled
+  local m="${1:-$(usage_machine_name)}" b auth="" plan="" acct="" acct_label="" api_prov="" logged="" exp_org="" tok="" out="" code="" url sampled
   sampled="$(now)"
   # Test / offline fixture hook: CHARTROOM_CLAUDE_USAGE_FILE bypasses network cleanly.
   if [[ -n "${CHARTROOM_CLAUDE_USAGE_FILE:-}" && -r "${CHARTROOM_CLAUDE_USAGE_FILE}" ]]; then
-    plan="${CHARTROOM_CLAUDE_PLAN:-}"; acct="${CHARTROOM_CLAUDE_ACCOUNT:-claude.ai}"
-    if out="$(usage_parse_claude_api "$m" true "$plan" "$acct" "$sampled" <"$CHARTROOM_CLAUDE_USAGE_FILE" 2>/dev/null)"; then
+    plan="${CHARTROOM_CLAUDE_PLAN:-}"
+    acct_label="$(usage_account_label claude "${CHARTROOM_CLAUDE_ACCOUNT:-claude.ai}" "")"
+    if out="$(usage_parse_claude_api "$m" true "$plan" "$acct_label" "$sampled" <"$CHARTROOM_CLAUDE_USAGE_FILE" 2>/dev/null)"; then
       printf '%s\n' "$out"; return 0
     fi
   fi
@@ -482,25 +504,28 @@ usage_read_claude() { # [machine]
     acct="$(jq -r '.authMethod // ""' <<<"$auth")"
     api_prov="$(jq -r '.apiProvider // ""' <<<"$auth")"
     plan="$(jq -r '.planTier // .subscriptionType // ""' <<<"$auth")"
-    # Keep orgId in shell memory only to verify credential account match; never stored or printed.
+    # Keep orgId in shell memory only to verify credential match and compute a non-identifying 6-hex tag.
     exp_org="$(jq -r '.orgId // ""' <<<"$auth")"
+    acct_label="$(usage_account_label claude "${acct:-claude.ai}" "$exp_org")"
     if [[ "$logged" == false ]]; then
-      usage_unknown_record claude "$m" true claude-oauth-api "claude is not signed in" "$plan" "$acct"
+      usage_unknown_record claude "$m" true claude-oauth-api "claude is not signed in" "$plan" "$acct_label"
       return 0
     fi
     if [[ -n "$acct" && "$acct" != "claude.ai" && "$acct" != "oauth" ]]; then
-      usage_unknown_record claude "$m" true claude-oauth-api "claude uses $acct billing (no subscription rate limits)" "$plan" "$acct"
+      usage_unknown_record claude "$m" true claude-oauth-api "claude uses $acct billing (no subscription rate limits)" "$plan" "$acct_label"
       return 0
     fi
     if [[ -n "$api_prov" && "$api_prov" != "firstParty" ]]; then
-      usage_unknown_record claude "$m" true claude-oauth-api "claude uses $api_prov provider (no subscription rate limits)" "$plan" "$acct"
+      usage_unknown_record claude "$m" true claude-oauth-api "claude uses $api_prov provider (no subscription rate limits)" "$plan" "$acct_label"
       return 0
     fi
+  else
+    acct_label="$(usage_account_label claude claude.ai "")"
   fi
   tok="$(usage_claude_oauth_token "$exp_org" || true)"
   exp_org=""
   if [[ -z "$tok" ]]; then
-    usage_unknown_record claude "$m" true claude-oauth-api "no matching Claude OAuth credential found for active account (use claude /login or pipe statusLine to chartroom usage record claude)" "$plan" "$acct"
+    usage_unknown_record claude "$m" true claude-oauth-api "no matching Claude OAuth credential found for active account (use claude /login or pipe statusLine to chartroom usage record claude)" "$plan" "$acct_label"
     return 0
   fi
   url="${CHARTROOM_CLAUDE_USAGE_URL:-https://api.anthropic.com/api/oauth/usage}"
@@ -508,13 +533,13 @@ usage_read_claude() { # [machine]
   code="$(printf 'header = "Authorization: Bearer %s"\nheader = "anthropic-beta: oauth-2025-04-20"\nheader = "User-Agent: chartroom/%s"\n' "$tok" "${CR_VERSION:-0}" |
     curl -sS -K - --max-time 12 -o "$tmp" -w '%{http_code}' "$url" 2>/dev/null)" || code=000
   tok="" # drop from shell memory promptly
-  if [[ "$code" == 200 ]] && out="$(usage_parse_claude_api "$m" true "$plan" "$acct" "$sampled" <"$tmp" 2>/dev/null)"; then
+  if [[ "$code" == 200 ]] && out="$(usage_parse_claude_api "$m" true "$plan" "$acct_label" "$sampled" <"$tmp" 2>/dev/null)"; then
     rm -f "$tmp"
     printf '%s\n' "$out"
     return 0
   fi
   rm -f "$tmp"
-  usage_unknown_record claude "$m" true claude-oauth-api "Claude usage endpoint returned HTTP ${code:-000}" "$plan" "$acct"
+  usage_unknown_record claude "$m" true claude-oauth-api "Claude usage endpoint returned HTTP ${code:-000}" "$plan" "$acct_label"
 }
 
 # Query live Codex rate limits via `codex app-server` JSON-RPC `account/rateLimits/read`
@@ -570,13 +595,17 @@ PY
 }
 
 usage_read_codex() { # [machine]
-  local m="${1:-$(usage_machine_name)}" codex_home="${CODEX_HOME:-$HOME/.codex}" b raw sampled sdir f line best=""
+  local m="${1:-$(usage_machine_name)}" codex_home="${CODEX_HOME:-$HOME/.codex}" b raw sampled sdir f line best="" raw_aid="" acct_label=""
   sampled="$(now)"
   b="$(usage_agent_bin codex)"
   # 1. Live `codex app-server` RPC (matches Codex /status in real time).
   if [[ -n "$b" ]] && raw="$(usage_codex_appserver_read "$b")" && [[ -n "$raw" ]]; then
     if jq -e '(.rateLimitsByLimitId.codex // .rateLimits) | type == "object"' <<<"$raw" >/dev/null 2>&1; then
-      usage_parse_codex_appserver "$m" true "$sampled" <<<"$raw"
+      # Hash accountId in memory into a non-identifying 6-hex tag; never store raw accountId.
+      raw_aid="$(jq -r '.accountId // .rateLimitsByLimitId.codex.accountId // .rateLimits.accountId // ""' <<<"$raw" 2>/dev/null || true)"
+      acct_label="$(usage_account_label codex chatgpt "$raw_aid")"
+      raw_aid=""
+      usage_parse_codex_appserver "$m" true "$sampled" "$acct_label" <<<"$raw"
       return 0
     fi
   fi
@@ -606,22 +635,24 @@ usage_read_codex() { # [machine]
     usage_unknown_record codex "$m" true codex-sessions "no Codex session with rate_limits found under $sdir"
     return 0
   fi
-  usage_parse_codex_event "$m" true <<<"$best"
+  acct_label="$(usage_account_label codex chatgpt "")"
+  usage_parse_codex_event "$m" true "$acct_label" <<<"$best"
 }
 
 usage_read_agy() { # [machine]
-  local m="${1:-$(usage_machine_name)}" b out rc=0 run=() sampled
+  local m="${1:-$(usage_machine_name)}" b out rc=0 run=() sampled acct_label=""
   sampled="$(now)"
+  acct_label="$(usage_account_label agy google "")"
   b="$(usage_agent_bin agy)"
   if [[ -z "$b" ]]; then
-    usage_unknown_record agy "$m" true agy-usage "agy not on PATH"
+    usage_unknown_record agy "$m" true agy-usage "agy not on PATH" "" "$acct_label"
     return 0
   fi
   if [[ -n "${CHARTROOM_GATE:-}${SSH_CONNECTION:-}${SSH_CLIENT:-}" ]]; then
     if declare -F hc_probe >/dev/null 2>&1 && hc_probe >/dev/null 2>&1; then
       run=(env -u HC_TERMINAL_ID "$(hc_bin)" exec --timeout 20 --)
     elif [[ "$(uname -s)" == Darwin ]]; then
-      usage_unknown_record agy "$m" true agy-usage "agy quota cannot be read from an ssh session without a running hc core (keychain locked)"
+      usage_unknown_record agy "$m" true agy-usage "agy quota cannot be read from an ssh session without a running hc core (keychain locked)" "" "$acct_label"
       return 0
     fi
   fi
@@ -631,7 +662,7 @@ usage_read_agy() { # [machine]
     out="$(cd / && run_bounded 20 "$b" --output-format json -p=/usage </dev/null 2>&1)" || rc=$?
   fi
   if [[ $rc -eq 0 ]] && jq -e '.command.name == "usage" and (.command.data.groups | type) == "array"' <<<"$out" >/dev/null 2>&1; then
-    usage_parse_agy_json "$m" true "${CR_AGY_MODEL:-}" "$sampled" <<<"$out"
+    usage_parse_agy_json "$m" true "${CR_AGY_MODEL:-}" "$sampled" "$acct_label" <<<"$out"
     return 0
   fi
   local why
@@ -639,7 +670,7 @@ usage_read_agy() { # [machine]
   if grep -qi 'sign in' <<<"$out"; then why="agy is not signed in"
   elif grep -qi 'GEMINI_API_KEY\|API key' <<<"$out"; then why="agy uses GEMINI_API_KEY (no account quota)"
   elif [[ -z "$why" ]]; then why="agy -p=/usage exited $rc"; fi
-  usage_unknown_record agy "$m" true agy-usage "$why"
+  usage_unknown_record agy "$m" true agy-usage "$why" "" "$acct_label"
 }
 
 usage_read_one() { # <agent> [machine]
@@ -710,7 +741,7 @@ usage_device_refresh() { # [force 0|1]
     if [[ "$oldp" =~ ^[0-9]+$ ]] && pid_alive "$oldp"; then return 0; fi
   fi
   (
-    echo $$ >"$pf"
+    echo "$BASHPID" >"$pf"
     trap 'rm -f "$pf"' EXIT
     CR_USAGE_DIR_BASE="${XDG_STATE_HOME:-$HOME/.local/state}/chartroom"
     usage_refresh_local 0 "$m"
@@ -1066,28 +1097,31 @@ def parse_clock(s):
         return None
     return hh, mm
 
-# "Nov 23 at 3am", "Nov 30, 10:30am", "Nov 30 10am"
-m = re.match(r'^([A-Za-z]{3})[a-z]*\s+(\d{1,2})(?:[,\s]+(?:at\s+)?)(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)$', t, re.I)
+# "Nov 23 at 3am", "Nov 30, 10:30am", "Nov 30 10am", "Nov 30th, 2026 3:05 PM"
+m = re.match(r'^([A-Za-z]{3})[a-z]*\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?(?:[,\s]+(?:at\s+)?)(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)$', t, re.I)
 if m and m.group(1).lower() in months:
-    clk = parse_clock(m.group(3))
+    clk = parse_clock(m.group(4))
     if clk:
         mon, day = months[m.group(1).lower()], int(m.group(2))
-        yr = now.year
+        yr = int(m.group(3)) if m.group(3) else now.year
         dt = datetime.datetime(yr, mon, day, clk[0], clk[1], tzinfo=tz)
         # Only roll to next year across the Dec -> Jan boundary (within 30 days ahead),
         # never turning a recent past date (e.g. Nov 23 read on Nov 26) into a 1-year lockout.
-        if dt < now:
+        if not m.group(3) and dt < now:
             dt_next = datetime.datetime(yr + 1, mon, day, clk[0], clk[1], tzinfo=tz)
             if (dt_next - now) <= datetime.timedelta(days=30):
                 dt = dt_next
         print(dt.astimezone(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
         sys.exit(0)
 
-# Time-only "3pm", "3:05 PM", "14:30" (next occurrence in tz)
+# Time-only "3pm", "3:05 PM", "14:30".
+# If the clock time already passed within the last 6 hours (e.g. a stale banner first noticed
+# after its reset hour), keep today's past timestamp so it is treated as already reset instead
+# of falsely locking out for ~23 hours. Roll to tomorrow only when > 6h behind (e.g. 11pm -> 3am).
 clk = parse_clock(t)
 if clk:
     dt = now.replace(hour=clk[0], minute=clk[1], second=0, microsecond=0)
-    if dt <= now:
+    if dt <= now and (now - dt) > datetime.timedelta(hours=6):
         dt += datetime.timedelta(days=1)
     print(dt.astimezone(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
 PY
@@ -1301,6 +1335,21 @@ usage_limit_look() { # <id> <runner> <agent> <screen> [live] [machine]
 
 # ---------------------------------------------------------------- chartroom move (Part 3)
 
+# Returns 0 (and prints reason) if <agent> on <machine> is out of usage according to either
+# the brain's stored record or an optional pre-built nodes_device_row JSON.
+usage_target_out() { # <agent> <machine> [node_row_json]
+  local ca="$1" tm="$2" trow="${3:-}" why=""
+  if why="$(usage_agent_out "$ca" "$tm")"; then
+    printf '%s' "$why"
+    return 0
+  fi
+  if [[ -n "$trow" ]] && jq -e --arg a "$ca" '.usage[$a].out == true' <<<"$trow" >/dev/null 2>&1; then
+    jq -r --arg a "$ca" '.usage[$a].out_reason // "\($a) is out of usage"' <<<"$trow"
+    return 0
+  fi
+  return 1
+}
+
 # Move a task off an exhausted (or unwanted) agent onto another agent, keeping the exact same
 # brief, branch, worktree, commits, and uncommitted changes. Never discards unlanded work.
 cmd_move() {
@@ -1340,8 +1389,32 @@ cmd_move() {
     dirty="$(git -C "$wt" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
   fi
 
-  # Choose destination backend (never silently picking an exhausted agent, the same agent, or
-  # sending a Claude-only task onto codex/agy unless explicitly overridden).
+  # Resolve target machine BEFORE selecting agent or stopping the old worker, so a bad node
+  # or an exhausted agent on the target node fails cleanly without disturbing the running worker.
+  local target_machine="" target_dev_json="" target_is_remote=0 target_row=""
+  local here_m; here_m="$(usage_machine_name)"
+  if [[ -n "$want_node" && "$want_node" != here && "$want_node" != any && "$want_node" != none && "$want_node" != "$here_m" ]]; then
+    local tdid=""
+    declare -F fleet_resolve >/dev/null 2>&1 || die "move: unknown node '$want_node'"
+    tdid="$(fleet_resolve "$want_node")" || exit 1
+    target_dev_json="$(fleet_device_json "$tdid")"
+    [[ "$(jq -r '.status // ""' <<<"$target_dev_json")" != revoked ]] || die "move: $want_node is revoked"
+    jq -e '.caps | index("dispatch")' <<<"$target_dev_json" >/dev/null 2>&1 ||
+      die "move: $want_node's agent cannot take work yet (chartroom node update $want_node)"
+    node_home >/dev/null
+    target_machine="$(jq -r '.name // empty' <<<"$target_dev_json")"
+    target_is_remote=1
+    if declare -F nodes_device_row >/dev/null 2>&1; then
+      nodes_settings 2>/dev/null || true
+      target_row="$(nodes_device_row "$target_dev_json" "$(date +%s)" 2>/dev/null || true)"
+    fi
+  fi
+  target_machine="${target_machine:-$here_m}"
+
+  local target_uwhy=""
+
+  # Choose destination backend (never silently picking an exhausted agent, the same agent on the
+  # same machine, or sending a Claude-only task onto codex/agy unless explicitly overridden).
   local needs_claude=0
   if declare -F spread_claude >/dev/null 2>&1 && spread_claude "$id"; then needs_claude=1; fi
   if [[ -n "$want_backend" ]]; then
@@ -1351,59 +1424,91 @@ cmd_move() {
     if [[ "$needs_claude" == 1 && "$new_agent" != claude ]]; then
       warn "move: $id declares Claude-only needs (mcp/browser/claude); moving to $new_backend because --backend was explicit"
     fi
-    if [[ "$force" != 1 ]] && usage_agent_out "$new_agent" >/dev/null; then
-      die "move: $new_agent is out of usage ($(usage_agent_out "$new_agent")); pass --force to override"
+    if [[ "$target_is_remote" == 1 ]]; then
+      local nb; nb="$(node_backends)"
+      [[ "$new_backend" =~ ^($nb)$ ]] || die "move: only ${nb//|/ and } run on another machine (got $new_backend)"
+    fi
+    if [[ "$force" != 1 ]] && target_uwhy="$(usage_target_out "$new_agent" "$target_machine" "$target_row")"; then
+      die "move: $new_agent on $target_machine is out of usage ($target_uwhy); pass --force to override"
     fi
   elif [[ -n "$want_agent" ]]; then
     [[ "$want_agent" =~ ^($KNOWN_AGENTS)$ ]] || die "move: unknown agent '$want_agent' (known: ${KNOWN_AGENTS//|/, })"
     if [[ "$needs_claude" == 1 && "$want_agent" != claude ]]; then
       warn "move: $id declares Claude-only needs (mcp/browser/claude); moving to $want_agent because --agent was explicit"
     fi
-    if [[ "$force" != 1 ]] && usage_agent_out "$want_agent" >/dev/null; then
-      die "move: $want_agent is out of usage ($(usage_agent_out "$want_agent")); pass --force to override"
+    if [[ "$force" != 1 ]] && target_uwhy="$(usage_target_out "$want_agent" "$target_machine" "$target_row")"; then
+      die "move: $want_agent on $target_machine is out of usage ($target_uwhy); pass --force to override"
     fi
-    local r
-    for r in hc herdr tmux cmux headless; do
-      agent_runs_on "$want_agent" "$r" || continue
-      if probe_backend "$r:$want_agent" >/dev/null 2>&1; then new_backend="$r:$want_agent"; break; fi
-    done
-    [[ -n "$new_backend" ]] || die "move: no usable runner for $want_agent here (run chartroom doctor)"
+    if [[ "$target_is_remote" == 1 ]]; then
+      local nb; nb="$(node_backends)"
+      [[ "hc:$want_agent" =~ ^($nb)$ ]] || die "move: $want_agent cannot run on another machine (supported: ${nb//|/, })"
+      if [[ -n "$target_row" ]]; then
+        [[ "$(jq -r '.runner.hc // ""' <<<"$target_row")" == up ]] || die "move: hc is not answering on $target_machine"
+        [[ "$(jq -r --arg a "$want_agent" '.tools[$a].status // "missing"' <<<"$target_row")" == ok ]] || die "move: $want_agent is not installed on $target_machine"
+        [[ "$(jq -r --arg a "$want_agent" '.logins[$a].status // "missing"' <<<"$target_row")" == ok ]] || die "move: $want_agent is not signed in on $target_machine"
+      fi
+      new_backend="hc:$want_agent"
+    else
+      local r
+      for r in hc herdr tmux cmux headless; do
+        agent_runs_on "$want_agent" "$r" || continue
+        if probe_backend "$r:$want_agent" >/dev/null 2>&1; then new_backend="$r:$want_agent"; break; fi
+      done
+      [[ -n "$new_backend" ]] || die "move: no usable runner for $want_agent here (run chartroom doctor)"
+    fi
     new_agent="$want_agent"
   else
-    if [[ "$needs_claude" == 1 && "$force" != 1 ]]; then
-      if [[ "$old_agent" == claude ]]; then
-        local cwhy; cwhy="$(usage_agent_out claude || true)"
-        die "move: $id needs Claude (mcp/browser/claude) and cannot be moved to codex or agy${cwhy:+ ($cwhy)}; wait for reset or pass --agent A / --force to override"
-      fi
+    local same_machine=1
+    if [[ "$target_is_remote" == 1 ]]; then
+      [[ "$old_runner" == node && "$(node_name_of "$id")" == "$target_machine" ]] || same_machine=0
+    elif [[ "$old_runner" == node ]]; then
+      same_machine=0
     fi
-    local bs avail pick only_cl=0
+    if [[ "$needs_claude" == 1 && "$force" != 1 && "$same_machine" == 1 && "$old_agent" == claude ]]; then
+      local cwhy; cwhy="$(usage_agent_out claude "$target_machine" || true)"
+      die "move: $id needs Claude (mcp/browser/claude) and cannot be moved to codex or agy${cwhy:+ ($cwhy)}; wait for reset or pass --agent A / --force to override"
+    fi
+    local avail pick only_cl=0
     [[ "$needs_claude" == 1 && "$force" != 1 ]] && only_cl=1
-    bs="$(spread_local_backends)"
-    avail="$(printf '%s\n' "$bs" | jq -Rsc --arg old "$old_agent" 'split("\n") | map(select(length>0) | split(":")[1]) | map(select(. != $old))')"
-    pick="$(spread_pick "$(spread_summary "$id")" "$avail" "$only_cl")" || true
-    if [[ -n "$pick" ]]; then
-      new_backend="$(grep ":$pick$" <<<"$bs" | head -1)"
+    if [[ "$target_is_remote" == 1 ]]; then
+      local srow
+      srow="$(spread_node_agents "[$target_row]" | jq -c '.[0]')"
+      avail="$(jq -c --arg old "$old_agent" --argjson same "$same_machine" '(.spread_agents // []) | if $same == 1 then map(select(. != $old)) else . end' <<<"$srow")"
+      pick="$(spread_pick "$(spread_summary "$id")" "$avail" "$only_cl")" || true
+      [[ -n "$pick" ]] || die "move: no signed-in agent with remaining usage is available on $target_machine (run chartroom usage and chartroom nodes)"
+      new_backend="hc:$pick"
       new_agent="$pick"
     else
-      # Fallback for tmux/cmux/headless setups without hc/herdr: pick first usable backend for another agent.
-      local cand ca
-      for cand in ${CR_BACKEND_ORDER//,/ }; do
-        cand="$(canon_backend "$cand")"
-        [[ "$cand" == *:* ]] || continue
-        ca="${cand#*:}"
-        [[ "$ca" != "$old_agent" ]] || continue
-        [[ "$only_cl" != 1 || "$ca" == claude ]] || continue
-        usage_agent_out "$ca" >/dev/null && continue
-        if probe_backend "$cand" >/dev/null 2>&1; then
-          new_backend="$cand"; new_agent="$ca"; break
-        fi
-      done
+      local bs
+      bs="$(spread_local_backends)"
+      avail="$(printf '%s\n' "$bs" | jq -Rsc --arg old "$old_agent" --argjson same "$same_machine" 'split("\n") | map(select(length>0) | split(":")[1]) | if $same == 1 then map(select(. != $old)) else . end')"
+      pick="$(spread_pick "$(spread_summary "$id")" "$avail" "$only_cl")" || true
+      if [[ -n "$pick" ]]; then
+        new_backend="$(grep ":$pick$" <<<"$bs" | head -1)"
+        new_agent="$pick"
+      else
+        # Fallback for tmux/cmux/headless setups without hc/herdr: pick first usable backend for another agent.
+        local cand ca
+        for cand in ${CR_BACKEND_ORDER//,/ }; do
+          cand="$(canon_backend "$cand")"
+          [[ "$cand" == *:* ]] || continue
+          ca="${cand#*:}"
+          [[ "$same_machine" != 1 || "$ca" != "$old_agent" ]] || continue
+          [[ "$only_cl" != 1 || "$ca" == claude ]] || continue
+          usage_agent_out "$ca" >/dev/null && continue
+          if probe_backend "$cand" >/dev/null 2>&1; then
+            new_backend="$cand"; new_agent="$ca"; break
+          fi
+        done
+      fi
+      [[ -n "$new_backend" ]] || die "move: no other signed-in agent with remaining usage is available here (was ${old_agent:-none}; run chartroom usage and chartroom doctor)"
     fi
-    [[ -n "$new_backend" ]] || die "move: no other signed-in agent with remaining usage is available here (was ${old_agent:-none}; run chartroom usage and chartroom doctor)"
   fi
 
   if [[ "$dry" -eq 1 ]]; then
-    echo "would move $id from ${old_backend:-auto} to $new_backend (keeps branch ${branch:-detached}, $commits commit(s), $dirty uncommitted change(s))"
+    local target_suffix=""
+    [[ "$target_is_remote" == 1 ]] && target_suffix=" on $target_machine"
+    echo "would move $id from ${old_backend:-auto} to $new_backend$target_suffix (keeps branch ${branch:-detached}, $commits commit(s), $dirty uncommitted change(s))"
     return 0
   fi
 
@@ -1449,6 +1554,7 @@ cmd_move() {
   meta_set "$id" backend_source explicit
   meta_set "$id" moved_from "${old_backend:-unknown}"
   if [[ -n "$want_node" ]]; then
+    meta_set "$id" node_backend ""
     node_pin "$id" "$want_node" >/dev/null
   fi
 
@@ -1571,18 +1677,27 @@ cmd_usage_record() {
     echo "recorded usage limit for $agent on $machine"
     return 0
   fi
-  local payload doc
+  local payload doc eff_acct
   payload="$(cat)"
   [[ -n "$payload" ]] || die "usage record: expected JSON on stdin"
   case "$agent" in
-    claude) doc="$(usage_parse_claude_statusline "$machine" "$loc" "$plan" "$acct" "$(now)" <<<"$payload")" ;;
+    claude)
+      eff_acct="${acct:-$(usage_account_label claude claude.ai "")}"
+      doc="$(usage_parse_claude_statusline "$machine" "$loc" "$plan" "$eff_acct" "$(now)" <<<"$payload")" ;;
     codex)
       if jq -e 'has("rateLimits") or has("rateLimitsByLimitId")' <<<"$payload" >/dev/null 2>&1; then
-        doc="$(usage_parse_codex_appserver "$machine" "$loc" "$(now)" <<<"$payload")"
+        local raw_aid=""
+        raw_aid="$(jq -r '.accountId // .rateLimitsByLimitId.codex.accountId // .rateLimits.accountId // ""' <<<"$payload" 2>/dev/null || true)"
+        eff_acct="${acct:-$(usage_account_label codex chatgpt "$raw_aid")}"
+        raw_aid=""
+        doc="$(usage_parse_codex_appserver "$machine" "$loc" "$(now)" "$eff_acct" <<<"$payload")"
       else
-        doc="$(usage_parse_codex_event "$machine" "$loc" <<<"$payload")"
+        eff_acct="${acct:-$(usage_account_label codex chatgpt "")}"
+        doc="$(usage_parse_codex_event "$machine" "$loc" "$eff_acct" <<<"$payload")"
       fi ;;
-    agy) doc="$(usage_parse_agy_json "$machine" "$loc" "${CR_AGY_MODEL:-}" "$(now)" <<<"$payload")" ;;
+    agy)
+      eff_acct="${acct:-$(usage_account_label agy google "")}"
+      doc="$(usage_parse_agy_json "$machine" "$loc" "${CR_AGY_MODEL:-}" "$(now)" "$eff_acct" <<<"$payload")" ;;
     *) die "usage record: unsupported agent '$agent' for JSON record (use --hit-limit to record a limit hit)" ;;
   esac
   usage_write_record "$agent" "$machine" "$doc" 0

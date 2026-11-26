@@ -40,9 +40,12 @@ cmux is implemented against its documented CLI but **unverified on a real cmux i
 ## Subscription usage, exhaustion, and moving work (lib/usage.sh)
 
 chartroom tracks real subscription/plan usage per agent (and per machine when remote nodes
-report different plans or numbers) under `$CHARTROOM_HOME/usage/<machine>--<agent>.json`.
-The `account` field intentionally stores only the non-secret auth/provider label (`claude.ai`,
-`chatgpt`, `google`) — tokens, cookies, emails, and account/org UUIDs are never stored or logged.
+report different plans, accounts, or numbers) under `$CHARTROOM_HOME/usage/<machine>--<agent>.json`.
+The `account` field stores only a non-identifying label: an optional
+`CHARTROOM_USAGE_ACCOUNT_<AGENT>` alias (e.g. `work`, `personal`), or `<provider> #<6-hex>`
+derived in memory via SHA-256 of the org/account ID so separate subscriptions on different
+machines split cleanly — tokens, cookies, emails, and raw account/org UUIDs are never stored or
+logged.
 
 | Agent | Real usage source | When unavailable (`unknown`) |
 |---|---|---|
@@ -62,9 +65,10 @@ The `account` field intentionally stores only the non-secret auth/provider label
   above `CHARTROOM_USAGE_LIMIT_PCT` (default 95; warn at `CHARTROOM_USAGE_WARN_PCT`, 80) or after
   a worker hits a usage-limit stop (`hit_limit`), until `resets_at` (or fallback cooldown
   `CHARTROOM_USAGE_COOLDOWN_MINUTES`, 60). `spread_local_backends`, `spread_node_agents`,
-  `place_remote_lacks`, and `$CR_BACKEND_ORDER` fallback all skip out agents; an explicit
-  `--backend` for an exhausted agent prints a warning with its reset time. `chartroom doctor` and
-  `chartroom nodes` report exhausted agents with their reset times.
+  re-dispatch of already-dispatched automatic tasks, `place_remote_lacks`, and `$CR_BACKEND_ORDER`
+  fallback all skip out agents; an explicit `--backend` for an exhausted agent prints a warning
+  with its reset time. `chartroom doctor` and `chartroom nodes` report exhausted agents with their
+  reset times.
 - **Detecting worker limit stops.** `watch_look` (and `guest_usage_look_all` / `node usage-look`
   on enrolled nodes) checks for usage-limit stops only on idle/stopped session workers (never
   while mid-turn) or headless error output. For Claude workers with a recorded `session_id`, it
