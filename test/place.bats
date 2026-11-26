@@ -242,6 +242,28 @@ dry() { run cr dispatch "$1" --dry-run; echo "$output"; }
   dry "$id"; [[ "$output" == "$id would run here"*"its agent is older (chartroom node update m3)"* ]]
   beat m3 $M3; jq -c '.last_seen -= 400' "$FLEET/devices/$M3.seen.json" >"$FLEET/t" && mv "$FLEET/t" "$FLEET/devices/$M3.seen.json"
   dry "$id"; [[ "$output" == "$id would run here"*"it is stale"* ]]
+  # Automatic work may use a remote agent even when none is signed in locally.
+  cp "$BATS_TEST_TMPDIR/good" "$BATS_TEST_TMPDIR/m3.probe"; beat m3 $M3
+  auto="$(new_task)"
+  answering
+  run cr dispatch "$auto"
+  [ "$status" -eq 0 ]
+  [ "$(meta_of "$auto" backend)" = node:codex ]
+  [ "$(meta_of "$auto" node_backend)" = hc:codex ]
+  [ "$(meta_of "$auto" node)" = "$M3" ]
+  mcp="$(new_task --needs mcp)"
+  tweak m3 $M3 $'s/^login\tclaude\tok/login\tclaude\tno/'
+  dry "$mcp"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"no signed-in full-session agent for this task"* ]]
+  # A pin still chooses its agent when automatic machine placement is off.
+  pinned="$(new_task --node m3)"
+  CHARTROOM_PLACEMENT=local run cr dispatch "$pinned"
+  [ "$status" -eq 0 ]
+  [ "$(meta_of "$pinned" backend)" = node:codex ]
+  [ "$(meta_of "$pinned" node_backend)" = hc:codex ]
+  explicit="$(new_task --backend node:codex --node m3)"
+  [ "$(meta_of "$explicit" node_backend)" = hc:codex ]
 }
 
 @test "placement: work that is here already, or that only this machine has, stays; a pin decides" {

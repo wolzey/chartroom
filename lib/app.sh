@@ -115,7 +115,7 @@ app_snapshot_json() {
       machine: $machine, version: $version, rows: ., inbox: $inbox, artifacts: $artifacts, cards: $cards,
       answers: $answers, tells: $tells, snoozes: $snoozes, focus: $focus, requests: $requests, initiatives: $initiatives,
       permits: $permits}' >"$f"
-  jq -c -f "$CR_ROOT/lib/app/snapshot.jq" "$f"
+  jq -c -f "$CR_ROOT/lib/app/snapshot.jq" "$f" | jq -c --argjson agents "$(spread_summary)" '. + {agents:$agents}'
   rm -f "$f"
 }
 

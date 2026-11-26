@@ -32,7 +32,7 @@
 # tool the project pins comes with mise. `env` (--needs env, or a brief that names an .env file) is an
 # env file in the project's checkout: no secret is ever copied, so never a clone without one.
 
-CR_NEEDS_TOOLS='docker|ruby|go|node|gh|codex|claude|agy|herdr|tmux|env'
+CR_NEEDS_TOOLS='docker|ruby|go|node|gh|codex|claude|agy|herdr|tmux|env|mcp|browser'
 CR_CARRY_MAX_FILE=1048576
 CR_CARRY_MAX_ALL=8388608
 CR_CARRY_MAX_FILES=200
@@ -78,7 +78,7 @@ place_tools() { # <id>
     tr ',' '\n' <<<"$own"; tr ',' '\n' <<<"$p"
     if place_brief_words "$id" | grep -qiE '(^|[^a-z0-9])(docker|docker-compose|testcontainers?)([^a-z0-9]|$)'; then echo docker; fi
     if place_brief_words "$id" | grep -oE '(^|[^A-Za-z0-9_])\.env(\.[A-Za-z]+)*' | grep -qviE '\.(example|sample|template|dist|defaults|test)$'; then echo env; fi
-  } | grep -E "^($CR_NEEDS_TOOLS)$" | sort -u || true
+  } | grep -E "^($CR_NEEDS_TOOLS)$" | grep -vE "^(mcp|browser)$" | sort -u || true
 }
 
 # The tools a project pins for mise (.tool-versions, mise.toml) at the task's base, one per line.
@@ -238,8 +238,9 @@ place_needs() { # <id> <backend it would run there, hc:claude ...>
   stays="$(place_stays "$1")"
   [[ -n "$stays" ]] || scan="$(place_scan "$1")"
   local agent=""; [[ "$2" != hc:* ]] || agent="${2#hc:}"
-  jq -c --arg agent "$agent" --arg stays "$stays" --arg tools "$(place_tools "$1")" --arg own "$(place_remote "$(meta "$1" project)")" --arg pins "$(place_pins "$1")" --arg stored "$(env_stored "$(place_remote "$(meta "$1" project)")" && echo 1)" '
-    . + {agent: $agent, stored: ($stored == "1"), tools: ($tools | split("\n") | map(select(length > 0))), own: $own, pins: ($pins | split("\n") | map(select(length > 0))),
+  if spread_auto "$1"; then agent=auto; fi
+  jq -c --arg claude "$(spread_claude "$1" && echo 1)" --arg agent "$agent" --arg stays "$stays" --arg tools "$(place_tools "$1")" --arg own "$(place_remote "$(meta "$1" project)")" --arg pins "$(place_pins "$1")" --arg stored "$(env_stored "$(place_remote "$(meta "$1" project)")" && echo 1)" '
+    . + {agent: $agent, claude_only: ($claude == "1"), stored: ($stored == "1"), tools: ($tools | split("\n") | map(select(length > 0 and . != "mcp" and . != "browser"))), own: $own, pins: ($pins | split("\n") | map(select(length > 0))),
          repos: ((if $own == "" then [] else [$own] end) + .repos | unique),
          here: (if $stays != "" then $stays else .here end)}' <<<"$scan"
 }
@@ -277,8 +278,8 @@ PLACE_JQ='
       // (if ($n.tools | index("gh")) and ($row.logins.gh.status // "missing") != "ok" then "gh is not logged in" else null end);
   def place_remote_lacks($n):
     if $n.agent != "" and .runner.hc != "up" then "hc is not answering"
-    elif $n.agent != "" and (.tools[$n.agent].status // "missing") != "ok" then "\($n.agent) is \(.tools[$n.agent].status // "missing")"
-    elif $n.agent != "" and (.logins[$n.agent].status // "missing") != "ok" then "\($n.agent) is not logged in"
+    elif $n.agent != "" and $n.agent != "auto" and (.tools[$n.agent].status // "missing") != "ok" then "\($n.agent) is \(.tools[$n.agent].status // "missing")"
+    elif $n.agent != "" and $n.agent != "auto" and (.logins[$n.agent].status // "missing") != "ok" then "\($n.agent) is not logged in"
     elif (.disk_free_pct // 100) < 15 then "its disk is \(.disk_free_pct)% free"
     else . as $row | ($n.own // "") as $own
       | ([$row.repos[]? | select(.remote == $own)]) as $mine
@@ -352,6 +353,7 @@ place_choose() { # <id> <needs json> <rows json> <excluded ids json> <dry 0|1> <
                elif (.device.caps | index("place")) == null then "its agent is older (chartroom node update \(.machine))"
                else null end)
            // (if .contact != "ok" and (.local | not) then "it could not be read: \(.error // .contact)" else null end)
+           // (if $n.agent == "auto" and ([.spread_agents[]? | select(($n.claude_only | not) or . == "claude")] | length) == 0 then "no signed-in full-session agent for this task" else null end)
            // place_paused // place_lacks($n)
            // (if .local then null else place_remote_lacks($n) end)
            // (if $bad[$id] then "\($bad[$id])" else null end)
@@ -403,6 +405,7 @@ place_task() { # <id> <over 0|1> <dry 0|1> [refused ids json]
   if [[ -n "$(meta "$id" dispatched)" ]]; then return 0; fi # (a worker started again where it was: not new work)
   needs="$(place_needs "$id" "$b")"
   rows="$(place_rows "$devs")"
+  if spread_auto "$id"; then rows="$(spread_node_agents "$rows")"; fi
   nodes_settings
   out="$(place_choose "$id" "$needs" "$rows" "$x" "$dry" "$over")" || die "placement failed"
   PLACE_WORDS="$(place_words "$out")"
@@ -412,6 +415,10 @@ place_task() { # <id> <over 0|1> <dry 0|1> [refused ids json]
     die "not dispatched: no node can take $id now. $PLACE_WORDS. Dispatch it again when one has room (chartroom node limits shows and sets the limits), or add --over-limit."
   fi
   PLACED="$pick"
+  if spread_auto "$id"; then
+    spread_select_row "$id" "$(jq -c --arg pick "$pick" '.[] | select((if .local then "here" else .device.id end) == $pick)' <<<"$rows")"
+    b="$SELECTED"
+  fi
   if [[ "$dry" == 1 ]]; then PLACE_NAME="$name"; return 0; fi
   if [[ "$pick" == here ]]; then
     log_event "$id" note "placed here$(jq -r 'if .here then " (it stays on this machine: \(.here))" else "" end' <<<"$needs"). $PLACE_WORDS"

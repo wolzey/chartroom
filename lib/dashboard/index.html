@@ -977,6 +977,7 @@ function render(d) {
   document.getElementById("meta").textContent =
     (d.home_name ? d.home_name + " · " : "") + d.home + " · updated " + new Date(d.generated_at).toLocaleTimeString() +
     (d.pr_enrichment && d.pr_enrichment.enabled ? " · PR states via gh" : "");
+  document.getElementById("meta").textContent += (d.agents || []).map(a => ` · ${a.agent}: ${a.live} live, reviews ${a.clean} clean / ${a.rework} rework`).join("");
   renderFocus(d);
   const max = Math.max(1, ...LANES.map(([k]) => focusCount(d, k)));
   for (const [k] of LANES) {

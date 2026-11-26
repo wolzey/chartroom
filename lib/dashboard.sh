@@ -117,7 +117,7 @@ dashboard_json() { # [pr-states-file]
     --argjson artifacts "$arts" --argjson artifact_counts "$(jq -c "$ARTIFACT_COUNTS_JQ" <<<"$arts")" \
     --arg home "$CR_HOME" --arg home_name "$(home_name_of "$CR_HOME")" --arg version "$CR_VERSION" --argjson focus "$(focus_json)" \
     -f "$CR_ROOT/lib/dashboard/lanes.jq" |
-    todo_attach "$arts" # .todo, the commander's next steps (lib/todo.sh)
+    todo_attach "$arts" | jq --argjson agents "$(spread_summary)" '. + {agents:$agents}' # .todo, the commander's next steps (lib/todo.sh)
 }
 
 # For `doctor`: the configured bind address, whether an access token exists, and the bind

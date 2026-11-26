@@ -564,7 +564,7 @@ function App() {
     main = html`<${BoardPage} all=${boardAll} list=${boardList} filters=${boardFilters} setFilters=${setBoardFilters}
       selKey=${boardSel} setSelKey=${(k) => { setBoardSel(k); if (!wide()) setQvOpen(true); }} prs=${prsMap} onCompose=${() => setComposer(true)} />`;
     const t = boardList.find((x) => x.key === boardSel);
-    aside = t ? quickOf(t, () => { setBoardSel(null); setQvOpen(false); }) : html`<${BoardSummary} list=${boardList} prs=${prsMap} />`;
+    aside = t ? quickOf(t, () => { setBoardSel(null); setQvOpen(false); }) : html`<${BoardSummary} list=${boardList} prs=${prsMap} home=${boardFilters.home} snapshots=${((data && data.homes) || []).filter(h => !boardFilters.home || h.name === boardFilters.home).map(h => h.snapshot).filter(Boolean)} />`;
   } else if (route.name === "fleet") {
     const ms = (fleet && fleet.machines) || [];
     const m = ms.find((x) => x.name === route.machine) || ms[0];

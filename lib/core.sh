@@ -210,8 +210,8 @@ load_config() {
   cfg_set CR_WORKSPACE WORKSPACE CAP_CREW_WORKSPACE chartroom-crew
   cfg_set CR_WATCH_INTERVAL WATCH_INTERVAL CAP_WATCH_INTERVAL 3
   cfg_set CR_WATCH_HC_INTERVAL WATCH_HC_INTERVAL '' 60
-  # Every agent's full sessions before any headless run (the commander's rule r-851d: workers run as
-  # full sessions): a machine without claude starts Codex in hc, not `codex exec`.
+  # Diagnostic order for explicit-backend alternatives. Automatic selection is full-session
+  # balancing in lib/spread.sh; this order cannot enable a headless fallback.
   cfg_set CR_BACKEND_ORDER BACKEND_ORDER '' 'hc:claude hc:codex hc:agy herdr:claude herdr:codex herdr:agy cmux:claude cmux:codex tmux:claude tmux:codex headless:codex headless:claude command'
   CR_BACKEND_ORDER="${CR_BACKEND_ORDER//,/ }"
   cfg_set CR_HARNESS HARNESS '' generic
@@ -220,7 +220,7 @@ load_config() {
   cfg_set CR_CODEX_SCOUT_SANDBOX CODEX_SCOUT_SANDBOX '' workspace-write
   # The model a Codex or agy worker gets when its task names none (new --model wins); empty: the
   # agent's own default. Usually set in a home's config, for that home's crew.
-  cfg_set CR_CODEX_MODEL CODEX_MODEL '' ''
+  cfg_set CR_CODEX_MODEL CODEX_MODEL '' 'gpt-6-astra'
   cfg_set CR_AGY_MODEL AGY_MODEL '' ''
   cfg_set CR_CLAUDE_PERMISSION CLAUDE_PERMISSION '' ''
   cfg_set CR_CLAUDE_HEADLESS_PERMISSION CLAUDE_HEADLESS_PERMISSION '' acceptEdits
@@ -309,6 +309,7 @@ log_event() {
   if is_store_task "$1"; then store_event "$1" "$2" "${3//$'\n'/ }"
   else printf '%s %s: %s\n' "$(now)" "$2" "${3//$'\n'/ }" >>"$(tdir "$1")/events.log"; fi
   stamp_changed; bell_ring "" watch
+  if [[ "$2" == "done" ]]; then review_sync "$1" || warn "cold review pending for $1"; fi
 }
 # A line as another chartroom wrote it ("<ts> <kind>: <text>"), appended verbatim (a pinned
 # task's device: lib/backends/node.sh). A store task takes its kind and text (the store stamps it).
@@ -316,6 +317,8 @@ log_event_line() { # <id> <line>
   if is_store_task "$1"; then local rest="${2:21}"; store_event "$1" "${rest%%: *}" "${rest#*: }"
   else printf '%s\n' "$2" >>"$(tdir "$1")/events.log"; fi
   stamp_changed; bell_ring "" watch
+  # Remote pushes must return before the node can answer the review diff request.
+  # The watch consumes this done event and creates the review outside the push handler.
 }
 pid_alive() { [[ -n "${1:-}" ]] && kill -0 "$1" 2>/dev/null; }
 

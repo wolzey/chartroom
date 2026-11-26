@@ -71,7 +71,7 @@ db() { python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); [print("|
   [ ! -d "$wt" ]
   [ -n "$(meta_of "$id" closed)" ]
   run cr status
-  [[ "$output" == "no open tasks" ]]
+  [[ "$output" == "no open tasks"$'\n'"agents: "* ]]
   [ ! -e "$CHARTROOM_HOME/tasks/$id/meta.json" ]
 }
 

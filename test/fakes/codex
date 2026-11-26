@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # fake codex: headless `exec --json` only. Logs argv, emits thread.started, then a message.
 printf '%s\n' "$*" >>"${FAKE_LOG:-/dev/null}"
+[[ "${1:-}" != login ]] || exit "${FAKE_CODEX_LOGIN_RC:-0}"
 [[ "${1:-}" == exec ]] || { echo "fake codex: interactive mode not simulated" >&2; exit 2; }
 thread="th-fake-1"
 printf '{"type":"thread.started","thread_id":"%s"}\n' "$thread"

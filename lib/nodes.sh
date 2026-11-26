@@ -426,7 +426,9 @@ nodes_for() { # <id> <json 0|1>
   place_on "$devs" || { echo "$id would run here: no machine is placed on (no device, or CHARTROOM_PLACEMENT=local)"; return 0; }
   select_backend "$id" >/dev/null 2>&1 || true; b="$SELECTED"
   [[ "$b" =~ ^($(node_backends))$ ]] || { echo "$id would run here: only $(node_backends | tr '|' ' ') workers are placed (it is ${b:-unknown})"; return 0; }
-  out="$(place_choose "$id" "$(place_needs "$id" "$b")" "$(place_rows "$devs")" '[]' 1 0)" || die "placement failed"
+  local rows; rows="$(place_rows "$devs")"
+  if spread_auto "$id"; then rows="$(spread_node_agents "$rows")"; fi
+  out="$(place_choose "$id" "$(place_needs "$id" "$b")" "$rows" '[]' 1 0)" || die "placement failed"
   if [[ "$2" == 1 ]]; then printf '%s\n' "$out"; return 0; fi
   jq -r "$PLACE_JQ"'"\(.pick.name // "none: it would not be dispatched") takes \($id) now" ,
     (.nodes[] | "  \(.name): " + (if .why then "no: \(.why)" else "yes, \(if .u then "\(.u * 100 | floor)% full with it" else "use not known" end)"
