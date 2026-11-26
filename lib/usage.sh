@@ -78,11 +78,24 @@ usage_account_label() { # <agent> <base_label> [raw_id_in_memory]
   fi
 }
 
-# Write one reading atomically (0600), preserving any active hit_limit unless explicitly replaced.
+# Write one reading atomically (0600) under a per-record mkdir lock, preserving any active
+# hit_limit unless explicitly replaced so concurrent refresh + hit_limit writes never race.
 usage_write_record() { # <agent> <machine> <json> [replace_hit 0|1]
-  local agent="$1" machine="$2" doc="$3" rep="${4:-0}" f tmp prev='null'
+  local agent="$1" machine="$2" doc="$3" rep="${4:-0}" f tmp prev='null' lock i locked=0
   f="$(usage_file "$agent" "$machine")"
   mkdir -p "$(usage_dir)"
+  lock="$f.lock"
+  for ((i = 0; i < 50; i++)); do
+    if mkdir "$lock" 2>/dev/null; then
+      printf '%s\n' "${BASHPID:-$$}" >"$lock/pid" 2>/dev/null || true
+      locked=1; break
+    fi
+    local lp; lp="$(cat "$lock/pid" 2>/dev/null || true)"
+    if [[ "$lp" =~ ^[0-9]+$ ]] && ! pid_alive "$lp"; then
+      rm -rf "$lock"; continue
+    fi
+    sleep 0.05
+  done
   if [[ "$rep" != 1 && -s "$f" ]]; then prev="$(cat "$f" 2>/dev/null || echo null)"; fi
   doc="$(jq -c --argjson prev "$prev" --argjson rep "$rep" '
     if $rep == 1 or ($prev | type) != "object" then .
@@ -96,10 +109,16 @@ usage_write_record() { # <agent> <machine> <json> [replace_hit 0|1]
            and ((.reason // "") | test("not signed in|not on PATH|not installed|API key"; "i") | not)
         then $prev + {recorded_at: .recorded_at, last_error: .reason, hit_limit: (.hit_limit // $prev.hit_limit)}
         else . end
-    end' <<<"$doc")" || return 1
-  tmp="$f.tmp.$$"
-  ( umask 077; printf '%s\n' "$doc" >"$tmp" ) && mv "$tmp" "$f"
-  stamp_changed
+    end' <<<"$doc")" || { (( locked == 1 )) && rm -rf "$lock"; return 1; }
+  tmp="$f.tmp.${BASHPID:-$$}"
+  if ( umask 077; printf '%s\n' "$doc" >"$tmp" ) && mv "$tmp" "$f"; then
+    (( locked == 1 )) && rm -rf "$lock"
+    stamp_changed
+  else
+    rm -f "$tmp"
+    (( locked == 1 )) && rm -rf "$lock"
+    return 1
+  fi
 }
 
 # ---------------------------------------------------------------- shared evaluation (jq)
@@ -138,8 +157,8 @@ USAGE_EVAL_JQ='
         if $hre != null then $now < $hre
         elif $hat != null then ($now - $hat) < $cool_s
         else false end)) as $hit_active
-    | ([$wins[] | select(.state == "out")]) as $out_wins
-    | ([$wins[] | select(.state == "near")]) as $near_wins
+    | ([$wins[] | select(.state == "out" and ((.scoped // false) | not))]) as $out_wins
+    | ([$wins[] | select(.state == "near" and ((.scoped // false) | not))]) as $near_wins
     | ($hit_active or (($out_wins | length) > 0) or (.limit_reached == true and ($stale | not))) as $is_out
     | (if $is_out then "out"
        elif ($near_wins | length) > 0 then "near"
@@ -183,17 +202,20 @@ usage_parse_claude_api() {
       elif type == "number" then (if . > 0 then (floor | todate) else null end)
       else (tostring | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z")) end;
     def r1: ((. * 10 + 0.5) | floor) / 10;
-    def win($id; $lbl; $obj):
+    def win($id; $lbl; $obj; $scoped):
       if ($obj | type) == "object" and ($obj.utilization // $obj.used_percentage // $obj.percent) != null then
         (($obj.utilization // $obj.used_percentage // $obj.percent) | tonumber | if . < 0 then 0 elif . > 100 then 100 else . end | r1) as $u
         | [{id: $id, label: $lbl, used_pct: $u, left_pct: ((100 - $u) | r1),
-            resets_at: ($obj.resets_at | norm_iso), active: true}]
+            resets_at: ($obj.resets_at | norm_iso), active: true, scoped: $scoped}]
       else [] end;
-    (win("five_hour"; "5h"; .five_hour) + win("seven_day"; "7d"; .seven_day)) as $w0
-    | (if ($w0 | length) > 0 then $w0
+    (win("five_hour"; "5h"; .five_hour; false) + win("seven_day"; "7d"; .seven_day; false)) as $w_acct
+    | (win("seven_day_opus"; "7d opus"; .seven_day_opus; true)
+       + win("seven_day_sonnet"; "7d sonnet"; .seven_day_sonnet; true)) as $w_scoped
+    | (if ($w_acct | length) > 0 then ($w_acct + $w_scoped)
        else
-         # Only account-wide active limits (scope == null); never model/surface-scoped or inactive buckets.
-         [(.limits // [])[] | select(.is_active == true and (.scope // null) == null and .percent != null
+         # Account-wide active limits (scope == null) govern exhaustion; model-scoped buckets
+         # are kept as informational windows (`scoped: true`, excluded from out/near checks).
+         ([(.limits // [])[] | select(.is_active == true and (.scope // null) == null and .percent != null
             and ((.kind // "") == "weekly_all" or (.kind // "") == "five_hour" or (.group // "") == "five_hour" or (.group // "") == "weekly"))
           | ((.percent | tonumber | if . < 0 then 0 elif . > 100 then 100 else . end | r1)) as $u
           | {id: (.kind // .group // "limit"),
@@ -201,7 +223,15 @@ usage_parse_claude_api() {
                      elif .group == "five_hour" or (.kind // "" | test("5h|five_hour")) then "5h"
                      else (.kind // .group // "limit") end),
              used_pct: $u, left_pct: ((100 - $u) | r1),
-             resets_at: (.resets_at | norm_iso), active: true}]
+             resets_at: (.resets_at | norm_iso), active: true, scoped: false}]
+          + (if ($w_scoped | length) > 0 then $w_scoped
+             else [(.limits // [])[] | select((.scope.model // null) != null and .percent != null)
+               | ((.percent | tonumber | if . < 0 then 0 elif . > 100 then 100 else . end | r1)) as $u
+               | {id: (.kind // "weekly_scoped"),
+                  label: ("7d " + ((.scope.model.display_name // "scoped") | ascii_downcase)),
+                  used_pct: $u, left_pct: ((100 - $u) | r1),
+                  resets_at: (.resets_at | norm_iso), active: (.is_active == true), scoped: true}]
+             end))
        end) as $wins
     | {
         schema: $schema, agent: "claude", machine: $m, local: $loc,
@@ -811,7 +841,7 @@ usage_probe_tsv() {
         def s: if . == null or . == "" then "-" else (tostring | gsub("[\t\n\r]"; " ")) end;
         def ep: if . == null or . == "" then "-" else (tostring | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | (try fromdateiso8601 catch "-") | tostring) end;
         ["usage", (.agent | s), (.status | s), (.plan | s), (.account | s), (.sampled_at | s),
-         ((.windows // []) | map("\(.label):\(.used_pct // ""):\(.resets_at | ep)") | join(",") | s),
+         ((.windows // []) | map(select((.scoped // false) | not) | "\(.label):\(.used_pct // ""):\(.resets_at | ep)") | join(",") | s),
          (.reason | s),
          ((.hit_limit.resets_at // null) | ep)] | @tsv' "$f" 2>/dev/null || true
     done
@@ -960,10 +990,25 @@ usage_available_agents() { # [exclude_agent] [exclude_machine]
   if declare -F spread_local_backends >/dev/null 2>&1; then bs="$(spread_local_backends 2>/dev/null || true)"; fi
   for a in codex agy claude; do
     [[ "$a" != "$excl" || "$here" != "$excl_m" ]] || continue
-    [[ "$bs" == *":$a"* ]] || continue
     usage_agent_out "$a" "$here" >/dev/null && continue
+    local usable=0
+    if [[ "$bs" == *":$a"* ]]; then
+      usable=1
+    else
+      # Fallback for tmux/cmux/headless setups without hc/herdr (mirrors cmd_move).
+      local cand
+      for cand in ${CR_BACKEND_ORDER//,/ }; do
+        cand="$(canon_backend "$cand" 2>/dev/null || printf '%s' "$cand")"
+        [[ "$cand" == *":$a" ]] || continue
+        if declare -F agent_login_why >/dev/null 2>&1 && ! agent_login_why "$a" >/dev/null 2>&1; then break; fi
+        if declare -F probe_backend >/dev/null 2>&1 && probe_backend "$cand" >/dev/null 2>&1; then
+          usable=1; break
+        fi
+      done
+    fi
+    (( usable == 1 )) || continue
     rec="$(usage_of "$a" "$here")"
-    left="$(jq -r 'if .status == "ok" and ((.windows // []) | length) > 0 then ([.windows[] | select(.reset_passed != true and .left_pct != null) | "\(.label) \(.left_pct | floor)% left"] | join(", ")) else "" end' <<<"$rec" 2>/dev/null || true)"
+    left="$(jq -r 'if .status == "ok" and ((.windows // []) | length) > 0 then ([.windows[] | select((.scoped // false) | not) | select(.reset_passed != true and .left_pct != null) | "\(.label) \(.left_pct | floor)% left"] | join(", ")) else "" end' <<<"$rec" 2>/dev/null || true)"
     out+=("$a${left:+ ($left)}")
   done
   # Also list available agents on online enrolled nodes (excluding the same exhausted node+agent).
@@ -1133,18 +1178,22 @@ PY
 # Claude Code records `isApiErrorMessage:true, apiError:"usage_limit_reached"` on the exact
 # message where it stopped. A generic transient 429 (`error:"rate_limit"` without
 # `apiError:"usage_limit_reached"`) only matches if its text is a real anchored limit banner.
+# Exit codes:
+#   0 = authoritative limit stop found (prints "<text>\t<reset_text>")
+#   1 = authoritative transcript file exists and shows NO limit stop (do NOT fall back to screen)
+#   2 = no readable transcript file found for this session_id
 usage_claude_transcript_limit() { # <session_id>
   local sid="$1" cfg_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}" f="" row="" api_err="" txt=""
-  [[ -n "$sid" && "$sid" =~ ^[A-Za-z0-9_-]{8,128}$ ]] || return 1
+  [[ -n "$sid" && "$sid" =~ ^[A-Za-z0-9_-]{8,128}$ ]] || return 2
   shopt -s nullglob
   local matches=("$cfg_dir"/projects/*/"$sid.jsonl")
   if (( ${#matches[@]} == 0 )) && [[ "$cfg_dir" != "$HOME/.claude" ]]; then
     matches=("$HOME"/.claude/projects/*/"$sid.jsonl")
   fi
   shopt -u nullglob
-  (( ${#matches[@]} > 0 )) || return 1
+  (( ${#matches[@]} > 0 )) || return 2
   f="${matches[0]}"
-  [[ -r "$f" ]] || return 1
+  [[ -r "$f" ]] || return 2
   row="$(tail -n 30 "$f" 2>/dev/null | jq -rs '
     [.[] | select(type == "object" and (.type == "assistant" or .type == "user"))]
     | last // empty
@@ -1165,23 +1214,35 @@ usage_claude_transcript_limit() { # <session_id>
 }
 
 # Detect a real plan/subscription usage-limit stop in a worker's screen tail or headless output.
-# Prints "<matched_line>\t<reset_text>" on match (rc 0), or nothing (rc 1).
+# Prints "<matched_text>\t<reset_text>" on match (rc 0), or nothing (rc 1).
 # Grounded in real strings extracted from the installed binaries (codex-cli 0.160.0, claude 2.1.332,
 # agy 1.5.18, grok) and real Claude transcripts:
 #   - Normalizes curly apostrophe U+2019 (’) to straight ' and strips TUI error markers (■, ⚠, ✖, ✕, ✗, ×, Error:).
-#   - Inspects only the bottom 4 non-prompt/non-footer lines in screen mode.
-#   - Rejects agent prose/tool prefixes (●, ⎿, •, │, ├, └), diffs, comments, numbered code lines.
-#   - Matches only whole-line anchored real agent limit-stop banners / errors.
+#   - In screen mode, tracks prose/tool blocks (●, ⎿, •, ✦, │, ├, └, diffs, code) across the
+#     bottom 20 non-footer lines so indented continuations quoting a limit banner NEVER match,
+#     and evaluates only the bottom 4 lines.
+#   - In screen mode for Codex, requires the real TUI error marker (■ / Error: / ⚠ / ✖) at col 0.
+#   - Joins up to 2 wrapped continuation lines after a matched banner so wrapped reset times survive.
 usage_screen_limit() { # <agent> <screen_or_output> [screen|headless]
-  local agent="$1" scr="$2" mode="${3:-screen}" tail_lines="" line norm hit="" rx=""
+  local agent="$1" scr="$2" mode="${3:-screen}" filtered="" line norm hit="" rx=""
+  local -a raw_lines=() nb_idx=()
   if [[ "$mode" == headless ]]; then
-    tail_lines="$(grep -vE '^[[:space:]]*$' <<<"$scr" | tail -n 8 || true)"
+    filtered="$(grep -vE '^[[:space:]]*$' <<<"$scr" | tail -n 8 || true)"
   else
-    # Strip blank lines, [hc] notes, box dividers, and interactive prompt/status-bar footers,
-    # then look ONLY at the bottom 4 actual output lines (where a limit banner sits at rest).
-    tail_lines="$(grep -vE '^[[:space:]]*$|^\[hc\] |^[[:space:]]*[─━═┄┈-]{3,}[[:space:]]*$|^[[:space:]]*(❯|›|>)[[:space:]]*$|shift\+tab to cycle|for shortcuts|\? for help|esc to cancel|Ask Codex to do anything|Type a message|^[[:space:]]*[0-9]+% (left|context)|^[[:space:]]*ctx [0-9]+%' <<<"$scr" | tail -n 4 || true)"
+    # Strip [hc] notes, box dividers, and interactive prompt/status-bar footers, preserving blank
+    # lines so paragraph boundaries after prose markers (● / • / ✦ / ⎿) stay visible across up to
+    # 30 tail lines before evaluating only the bottom 4 non-blank output lines.
+    filtered="$(grep -vE '^\[hc\] |^[[:space:]]*[─━═┄┈-]{3,}[[:space:]]*$|^[[:space:]]*(❯|›|>)[[:space:]]*$|shift\+tab to cycle|for shortcuts|\? for help|esc to cancel|Ask Codex to do anything|Type a message|^[[:space:]]*[0-9]+% (left|context)|^[[:space:]]*ctx [[:space:]0-9]+%' <<<"$scr" | tail -n 30 || true)"
   fi
-  [[ -n "$tail_lines" ]] || return 1
+  [[ -n "$filtered" ]] || return 1
+  local idx=0
+  while IFS= read -r line; do
+    raw_lines+=("$line")
+    if [[ "$line" =~ [^[:space:]] ]]; then nb_idx+=("$idx"); fi
+    idx=$((idx + 1))
+  done <<<"$filtered"
+  local n=${#raw_lines[@]} nb_n=${#nb_idx[@]}
+  (( nb_n > 0 )) || return 1
   case "$agent" in
     claude)
       rx="^(you've hit your (5-hour |weekly |session |usage |monthly spend |channel's monthly spend |fast )?limit([[:space:].,·•—-].*)?|you're out of usage credits([[:space:].,·•—-].*)?|your org is out of usage([[:space:].,·•—-].*)?|claude( ai)? usage limit reached([[:space:].,·•—|-].*)?|out of extra usage([[:space:].,·•—-].*)?|goal paused[[:space:]]*[·•—-][[:space:]]*usage limit reached.*)$" ;;
@@ -1196,23 +1257,63 @@ usage_screen_limit() { # <agent> <screen_or_output> [screen|headless]
     *)
       rx="^(you've hit your (usage )?limit|usage limit reached|quota exhausted)([[:space:].,:].*)?$" ;;
   esac
-  while IFS= read -r line; do
-    [[ -n "$line" ]] || continue
-    # Reject agent prose/tool markers (Claude ● / ⎿, Codex •, tree/box chars), diffs, comments, code, line numbers.
-    if [[ "$mode" != headless ]]; then
-      grep -qE '^[[:space:]]*(●|⎿|•|│|├|└|\+|-|#|//|/\*|\*[[:space:]]|\$ |> |`|[0-9]+:[[:space:]])' <<<"$line" && continue
-      grep -qE '(rx=|usage_screen_limit|\b(grep|echo|printf|case)\b)' <<<"$line" && continue
+  # Bottom 4 non-blank output lines are eligible in screen mode; all 8 in headless mode.
+  local min_raw_idx=0
+  if [[ "$mode" != headless ]] && (( nb_n > 4 )); then
+    min_raw_idx="${nb_idx[$((nb_n - 4))]}"
+  fi
+  local in_prose=0 i j hit_idx=-1
+  for ((i = 0; i < n; i++)); do
+    line="${raw_lines[$i]}"
+    if [[ ! "$line" =~ [^[:space:]] ]]; then
+      in_prose=0; continue
     fi
-    # Normalize curly apostrophe (U+2019 -> '), trim whitespace, strip TUI error prefixes (■, ⚠, ✖, ✕, ✗, ×, Error:).
+    if [[ "$mode" != headless ]]; then
+      # Prose/tool/diff/code prefixes start a prose paragraph and never match.
+      if grep -qE '^[[:space:]]*(●|⎿|•|✦|│|├|└|\+|-|#|//|/\*|\*[[:space:]]|\$ |> |`|[0-9]+:[[:space:]])' <<<"$line"; then
+        in_prose=1; continue
+      fi
+      # Explicit TUI error marker at col 0 (■ / ⚠ / ✖ / Error:) breaks out of any prose block.
+      local has_err_mark=0
+      if grep -qE '^[[:space:]]?(■|⚠|✖|✕|✗|×|Error:)' <<<"$line"; then
+        has_err_mark=1; in_prose=0
+      fi
+      # Any continuation line inside a prose paragraph (indented OR wrapped to column 0),
+      # or any line indented by 2+ spaces, is quoted prose rather than an agent error banner.
+      if [[ "$in_prose" == 1 ]] || [[ "$line" =~ ^[[:space:]]{2,} ]]; then
+        continue
+      fi
+      (( i >= min_raw_idx )) || continue
+      grep -qE '(rx=|usage_screen_limit|\b(grep|echo|printf|case)\b)' <<<"$line" && continue
+      # Codex TUI renders its own limit banner with a leading error marker (■ / Error: / ⚠ / ✖).
+      if [[ "$agent" == codex && "$has_err_mark" != 1 ]]; then
+        continue
+      fi
+    fi
+    # Normalize curly apostrophe (U+2019 -> '), trim whitespace, strip TUI error prefixes.
     norm="$(sed -E "s/’/'/g; s/^[[:space:]]+//; s/[[:space:]]+$//; s/^(Error:[[:space:]]*|(■|⚠|✖|✕|✗|×)[[:space:]]*)//i" <<<"$line")"
     [[ -n "$norm" ]] || continue
     if grep -qiE "$rx" <<<"$norm"; then
-      hit="${norm:0:200}"
+      hit="$norm"
+      hit_idx=$i
     fi
-  done <<<"$tail_lines"
-  [[ -n "$hit" ]] || return 1
-  local rtxt; rtxt="$(usage_extract_reset_text "$hit")"
-  printf '%s\t%s\n' "$hit" "$rtxt"
+  done
+  (( hit_idx >= 0 )) || return 1
+  # Join up to 2 wrapped continuation lines after the matched banner so reset times split across
+  # lines (e.g. Codex wrapping "... visit\nhttps://... or try again at 3:05 PM.") are preserved.
+  local joined="$hit" nxt
+  for ((j = hit_idx + 1; j <= hit_idx + 2 && j < n; j++)); do
+    nxt="${raw_lines[$j]}"
+    [[ "$nxt" =~ [^[:space:]] ]] || break
+    if [[ "$mode" != headless ]] && grep -qE '^[[:space:]]*(●|⎿|•|✦|■|⚠|✖|✕|✗|×|❯|›|>)' <<<"$nxt"; then
+      break
+    fi
+    nxt="$(sed -E "s/’/'/g; s/^[[:space:]]+//; s/[[:space:]]+$//" <<<"$nxt")"
+    [[ -n "$nxt" ]] || break
+    joined+=" $nxt"
+  done
+  local rtxt; rtxt="$(usage_extract_reset_text "$joined")"
+  printf '%s\t%s\n' "${joined:0:200}" "$rtxt"
   return 0
 }
 
@@ -1271,9 +1372,16 @@ usage_limit_look() { # <id> <runner> <agent> <screen> [live] [machine]
       case "$live" in working|listening|parked|not-started) return 0 ;; esac
       if grep -qi 'esc to interrupt' <<<"$(tail -n 6 <<<"$scr")"; then return 0; fi
       # 1. For Claude workers, prefer the structured transcript signal when session_id is known.
+      # When a readable transcript exists and shows no limit stop (rc 1), trust it and NEVER fall
+      # back to screen scraping (prevents false lockouts when a reply quotes a limit banner).
       if [[ "$agent" == claude ]]; then
         sid="$(meta "$id" session_id 2>/dev/null || true)"
-        if [[ -n "$sid" ]] && match="$(usage_claude_transcript_limit "$sid")"; then :; else match=""; fi
+        if [[ -n "$sid" ]]; then
+          local tr_rc=0
+          match="$(usage_claude_transcript_limit "$sid")" || tr_rc=$?
+          if [[ $tr_rc -eq 1 ]]; then return 0; fi
+          [[ $tr_rc -eq 0 ]] || match=""
+        fi
       fi
       if [[ -z "$match" ]]; then
         text="$scr"; mode="screen"
@@ -1411,6 +1519,19 @@ cmd_move() {
   fi
   target_machine="${target_machine:-$here_m}"
 
+  # Never move a started task onto another machine: remote dispatch starts from base_sha and
+  # would strand local unpushed commits or uncommitted worktree edits. Moving a remote node task
+  # back to this machine (`--node here` or no `--node`) is safe because node_recall bundles its branch home.
+  if [[ "$target_is_remote" == 1 ]]; then
+    local proj_has_branch=0 proj_dir; proj_dir="$(meta "$id" project)"
+    if [[ -n "$branch" && -n "$proj_dir" ]] && git -C "$proj_dir" rev-parse -q --verify "refs/heads/$branch" >/dev/null 2>&1; then
+      proj_has_branch=1
+    fi
+    if [[ -n "$wt" && -d "$wt" ]] || (( commits > 0 || dirty > 0 || proj_has_branch == 1 )) || [[ "$old_runner" == node ]] || [[ -n "$(meta "$id" dispatched)" ]]; then
+      die "move: cannot move $id to another machine ($target_machine) after work has started: remote dispatch starts from base_sha and would strand unpushed commits or worktree edits (move locally with 'chartroom move $id', or recall home with 'chartroom move $id --node here')"
+    fi
+  fi
+
   local target_uwhy=""
 
   # Choose destination backend (never silently picking an exhausted agent, the same agent on the
@@ -1512,6 +1633,24 @@ cmd_move() {
     return 0
   fi
 
+  # Pre-check dispatch readiness BEFORE stopping the old worker so a broken brief or unplaceable
+  # target node fails cleanly without leaving the task undispatched.
+  if [[ "$no_dispatch" -eq 0 ]]; then
+    grep -qE '^## Spec' "$(tdir "$id")/brief.md" || die "move: brief is missing its Spec section; nothing moved"
+    if ! grep -A3 -E "^## (Commander|Captain)'s intent" "$(tdir "$id")/brief.md" | grep -qvE "^(## |<!--|\s*$)"; then
+      die "move: brief has no commander's intent yet; nothing moved"
+    fi
+    if [[ "$target_is_remote" == 1 ]]; then
+      [[ "$needs_claude" != 1 ]] || die "move: Claude-only tools are configured on this machine; cannot move $id to $target_machine"
+      if declare -F place_stays >/dev/null 2>&1; then
+        local stays; stays="$(place_stays "$id")"
+        if [[ -n "$stays" && "$stays" != "pinned here" ]]; then
+          die "move: cannot move $id to $target_machine: $stays"
+        fi
+      fi
+    fi
+  fi
+
   # 1. Stop old worker safely without touching the worktree or branch.
   if [[ "$old_runner" == node ]]; then
     node_recall "$id" || die "move: could not recall $id from $(node_name_of "$id"); nothing moved"
@@ -1576,7 +1715,10 @@ cmd_move() {
   echo "moved $id: ${old_backend:-auto} -> $new_backend (kept $commits commit(s), $dirty uncommitted change(s)$cleared_note)"
 
   if [[ "$no_dispatch" -eq 0 ]]; then
-    cmd_dispatch "$id"
+    if ! ( cmd_dispatch "$id" ); then
+      log_event "$id" note "moved to $new_backend but dispatch failed; worktree and commits are intact (run: chartroom dispatch $id)"
+      die "move: $id switched to $new_backend (worktree and commits intact), but dispatch failed — run: chartroom dispatch $id"
+    fi
   fi
 }
 

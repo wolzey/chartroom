@@ -49,7 +49,7 @@ logged.
 
 | Agent | Real usage source | When unavailable (`unknown`) |
 |---|---|---|
-| `claude` | 1) Claude OAuth usage API (`https://api.anthropic.com/api/oauth/usage`) using Claude Code's active OAuth token (macOS Keychain `"Claude Code-credentials"` first on macOS, else `~/.claude/.credentials.json`, verified against `claude auth status` `orgId` in memory so a stale file from another account is never queried), passed via stdin to `curl -K -`; reads only active account-wide windows (`five_hour`, `seven_day`), ignoring model-scoped buckets and `extra_usage`. 2) Claude Code `statusLine` JSON piped to `chartroom usage record claude` | API key / Bedrock / Vertex billing, signed out, missing or mismatched OAuth token, or HTTP error |
+| `claude` | 1) Claude OAuth usage API (`https://api.anthropic.com/api/oauth/usage`) using Claude Code's active OAuth token (macOS Keychain `"Claude Code-credentials"` first on macOS, else `~/.claude/.credentials.json`, verified against `claude auth status` `orgId` in memory so a stale file from another account is never queried), passed via stdin to `curl -K -`; account-wide windows (`five_hour`, `seven_day`) govern exhaustion, while model-scoped buckets (`seven_day_opus`, `seven_day_sonnet`) display as informational `scoped: true` windows without marking Claude out. 2) Claude Code `statusLine` JSON piped to `chartroom usage record claude` | API key / Bedrock / Vertex billing, signed out, missing or mismatched OAuth token, or HTTP error |
 | `codex` | 1) Live `codex app-server` JSON-RPC `account/rateLimits/read` (matches Codex `/status` in real time, reading only the primary `codex` bucket and ignoring model-scoped buckets). 2) Fallback: latest `event_msg` (`payload.type == "token_count"`) with `limit_id == "codex"` under `~/.codex/sessions/` | Not signed in, `app-server` unavailable, and no Codex session files with `rate_limits` |
 | `agy` | `agy --output-format json -p=/usage` (via `hc exec` in ssh on macOS); tracks the active model group's `5h` and `weekly` (`7d`) buckets (`remaining_fraction` and `reset_time`) | Not signed in, `GEMINI_API_KEY` mode, or ssh without a running hc core |
 | `grok` | `grok usage --json` (shell-route error and team-managed limits reported verbatim; daemon-route JSON parsing unverified until captured live) | Shell route (`grok usage` tells users to run `/usage` inside grok), team-managed limits, unverified daemon JSON, or not signed in |
@@ -71,12 +71,13 @@ logged.
   reset times.
 - **Detecting worker limit stops.** `watch_look` (and `guest_usage_look_all` / `node usage-look`
   on enrolled nodes) checks for usage-limit stops only on idle/stopped session workers (never
-  while mid-turn) or headless error output. For Claude workers with a recorded `session_id`, it
-  first checks the worker's structured session transcript for a trailing `isApiErrorMessage`
-  (`apiError: "usage_limit_reached"` or `error: "rate_limit"`), which works regardless of TUI
-  gutter layout and cannot match prose. Otherwise it matches whole-line anchored limit banners
-  in the bottom 4 non-footer lines (normalizing curly apostrophes and TUI error prefixes like
-  Codex's `■ `, and rejecting prose/tool/diff/code lines like `●`, `⎿`, `•`). agy's screen
+  while mid-turn) or headless error output. For Claude workers with a readable session transcript,
+  it trusts the structured transcript (`isApiErrorMessage` with `apiError: "usage_limit_reached"`,
+  or `error: "rate_limit"` with a real limit banner) and never falls back to screen scraping when
+  the transcript confirms a normal turn. Otherwise it matches whole-line anchored limit banners in
+  the bottom 4 non-footer lines (normalizing curly apostrophes, requiring Codex's `■`/error prefix
+  on interactive screens, joining up to 2 wrapped lines to keep split reset times, and rejecting
+  prose/tool blocks `●`/`⎿`/`•`/`✦` along with their indented continuations). agy's screen
   patterns use real strings from the `agy` binary (`Usage limit reached`, `individual quota
   reached`, `RESOURCE_EXHAUSTED` / `exhausted your capacity`), though agy's live interactive
   limit-stop screen layout has not been observed live yet. On a match, chartroom marks only that
@@ -84,15 +85,18 @@ logged.
   wiped early by routine account-wide readings) and raises
   `agent: out-of-usage: <agent>[ on <node>] resets <time>; available: <agents> (move with: chartroom move <id>)`
   once per dispatch/steer.
-- **Moving work (`chartroom move <id>`).** Stops the old worker safely, clears runner handles
-  (plus agent-specific `model`/`effort`/`permission`/`sandbox` when switching agents), preserves
-  the non-Claude cold-review requirement (`review_required=1`) whenever a Codex or agy ship task
-  moves to Claude, records handoff notes in `tasks/<id>/inbox.md`, and re-dispatches onto
-  another available agent (`--agent` or `--backend` to choose explicitly; `--dry-run` to
-  preview; `--force` to override exhaustion). Tasks with Claude-only needs (`mcp`/`browser`/
-  `claude`) refuse automatic moves off Claude unless `--agent` or `--force` is given. The task's
-  brief, branch, worktree, commits, and uncommitted changes are kept intact — unlanded work is
-  never discarded.
+- **Moving work (`chartroom move <id>`).** Pre-checks target usage, brief readiness, and node
+  eligibility before stopping the old worker; refuses `--node <device>` for started tasks with
+  local commits or worktree edits so remote dispatch never strands unpushed work (recalling a
+  remote task home with `chartroom move <id>` or `--node here` is lossless via `node_recall`).
+  Clears runner handles (plus agent-specific `model`/`effort`/`permission`/`sandbox` when
+  switching agents), preserves the non-Claude cold-review requirement (`review_required=1`)
+  whenever a Codex or agy ship task moves to Claude, records handoff notes in `tasks/<id>/inbox.md`,
+  and re-dispatches onto another available agent (`--agent` or `--backend` to choose explicitly;
+  `--dry-run` to preview; `--force` to override exhaustion). Tasks with Claude-only needs
+  (`mcp`/`browser`/`claude`) refuse automatic moves off Claude unless `--agent` or `--force` is
+  given. The task's brief, branch, worktree, commits, and uncommitted changes are kept intact —
+  unlanded work is never discarded.
 
 ## Common to all
 

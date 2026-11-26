@@ -731,7 +731,8 @@ chartroom move <id> --agent codex    # move to a specific agent (--dry-run previ
   Run `chartroom move <id>` to stop the old worker and re-dispatch onto an available agent while
   keeping the exact brief, branch, worktree, commits, and uncommitted changes; tasks with
   Claude-only needs (`mcp`/`browser`/`claude`) refuse automatic moves off Claude unless `--agent`
-  or `--force` is given.
+  or `--force` is given, and `--node <device>` refuses started tasks with local work so unpushed
+  commits or edits are never stranded (use `--node here` to recall remote node work home).
 
 During the trial, `CHARTROOM_REVIEW_NON_CLAUDE=opus` (default) gates new Codex and agy ship
 tasks. Scouts and tasks created before the gate are exempt. A `done` event marks review pending;

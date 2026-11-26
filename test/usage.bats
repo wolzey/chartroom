@@ -675,7 +675,8 @@ JSON
 
   # 1. Real redacted Claude /api/oauth/usage shape: seven_day=58%, five_hour=null,
   #    seven_day_opus=99%, weekly_scoped=99%, extra_usage.spend_limit_reached=true, spend=100%.
-  #    Must read 58% used / 42% left, state=ok, out=false.
+  #    Must read account-wide 7d 58% used / 42% left (state=ok, out=false) while keeping 7d opus
+  #    as an informational scoped window (`scoped: true`, excluded from out/near).
   jq --arg r7 "$fut7" \
     '.seven_day.resets_at = $r7 | .seven_day_opus.resets_at = $r7 | .limits |= map(.resets_at = $r7)' \
     "$REPO_ROOT/test/fixtures/usage/claude-oauth-api-real.json" >"$BATS_TEST_TMPDIR/claude-real.json"
@@ -684,17 +685,20 @@ JSON
   [ "$status" -eq 0 ]
   [ "$(jq -r '.[0].state' <<<"$output")" = ok ]
   [ "$(jq -r '.[0].out' <<<"$output")" = false ]
-  [ "$(jq -r '.[0].windows | length' <<<"$output")" -eq 1 ]
-  [ "$(jq -r '.[0].windows[0] | [.label,.used_pct,.left_pct] | @csv' <<<"$output")" = '"7d",58,42' ]
+  [ "$(jq '[.[0].windows[] | select(.scoped != true)] | length' <<<"$output")" -eq 1 ]
+  [ "$(jq -r '.[0].windows[] | select(.label=="7d") | [.used_pct,.left_pct,.scoped] | @csv' <<<"$output")" = '58,42,false' ]
+  [ "$(jq -r '.[0].windows[] | select(.label=="7d opus") | [.used_pct,.left_pct,.scoped] | @csv' <<<"$output")" = '99,1,true' ]
 
-  # Also when top-level seven_day is null, limits[] fallback uses only active scope==null buckets (never weekly_scoped 99%).
+  # Also when top-level seven_day is null, limits[] fallback uses only active scope==null buckets
+  # for exhaustion (out=false, state=ok) while keeping scoped buckets informational (`scoped: true`).
   jq '.seven_day = null' "$BATS_TEST_TMPDIR/claude-real.json" >"$BATS_TEST_TMPDIR/claude-limits-only.json"
   CHARTROOM_CLAUDE_USAGE_FILE="$BATS_TEST_TMPDIR/claude-limits-only.json" CHARTROOM_CLAUDE_PLAN=max_20x \
     run cr usage --agent claude --json --refresh
   [ "$status" -eq 0 ]
   [ "$(jq -r '.[0].state' <<<"$output")" = ok ]
-  [ "$(jq -r '.[0].windows | length' <<<"$output")" -eq 1 ]
-  [ "$(jq -r '.[0].windows[0] | [.label,.used_pct,.left_pct] | @csv' <<<"$output")" = '"7d",58,42' ]
+  [ "$(jq -r '.[0].out' <<<"$output")" = false ]
+  [ "$(jq '[.[0].windows[] | select(.scoped != true)] | length' <<<"$output")" -eq 1 ]
+  [ "$(jq -r '.[0].windows[] | select(.label=="7d") | [.used_pct,.left_pct,.scoped] | @csv' <<<"$output")" = '58,42,false' ]
 
   # 2. Claude credential precedence & account orgId cross-check:
   #    Keychain must win over a stale ~/.claude/.credentials.json from another account, and a
@@ -913,7 +917,7 @@ EOF
   [ "$status" -eq 0 ]
   [ "$output" = "2026-11-26T22:00:00Z|2026-11-27T10:00:00Z|2026-11-30T15:05:00Z" ]
 
-  # P3-3: `chartroom move --node mini --agent codex` checks mini's usage BEFORE stopping the old worker.
+  # P3-3: `chartroom move --node mini --agent codex` checks mini's usage BEFORE touching anything.
   export CHARTROOM_FLEET_DIR="$BATS_TEST_TMPDIR/fleet"
   mkdir -p "$CHARTROOM_FLEET_DIR/devices"
   jq -cn '{id:"n-111111111111",name:"mini",aliases:[],host:"mini.local",enrolled:1795700000}' \
@@ -924,21 +928,44 @@ EOF
   cr homes add test "$CHARTROOM_HOME" >/dev/null
   # codex is ok on desk, but out on mini.
   cr usage record codex --machine mini --hit-limit --resets-at "$fut" --message "You've hit your usage limit"
-  local mid old_term
+  local uid
+  uid="$(new_task --backend hc:claude --kind scout)"
+  run cr move "$uid" --node mini --agent codex --no-dispatch
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"codex on mini is out of usage"* ]]
+  [ "$(meta_of "$uid" backend)" = hc:claude ]
+  [ -z "$(meta_of "$uid" node)" ]
+  cr close "$uid" >/dev/null
+
+  # P1-1: `chartroom move --node mini` on a started local task with commits/edits MUST refuse
+  # even when codex IS available on mini (remote dispatch starts from base_sha and would strand
+  # local commits/edits), leaving the old worker untouched.
+  cr usage clear codex --machine mini >/dev/null
+  local mid old_term mwt msha
   mid="$(new_task --backend hc:claude)"
   run cr dispatch "$mid"
   [ "$status" -eq 0 ]
   old_term="$(meta_of "$mid" hc_terminal)"
+  mwt="$(meta_of "$mid" worktree)"
   [ -n "$old_term" ]
   [ -f "$FAKE_HC_DIR/terms/$old_term.json" ]
-  run cr move "$mid" --node mini --agent codex
+  echo 'local work' >"$mwt/local.txt"
+  git -C "$mwt" add local.txt
+  git -C "$mwt" commit -qm 'feat: local commit that must not be stranded'
+  msha="$(git -C "$mwt" rev-parse HEAD)"
+  echo 'uncommitted wip' >>"$mwt/local.txt"
+
+  run cr move "$mid" --node mini --agent codex --no-dispatch
   [ "$status" -ne 0 ]
-  [[ "$output" == *"codex on mini is out of usage"* ]]
-  # Old worker was NOT stopped and its metadata was NOT cleared!
+  [[ "$output" == *"cannot move"* ]]
+  # Old worker was NOT stopped, metadata NOT cleared, and commits/edits intact!
   [ -f "$FAKE_HC_DIR/terms/$old_term.json" ]
   [ "$(meta_of "$mid" hc_terminal)" = "$old_term" ]
   [ -n "$(meta_of "$mid" dispatched)" ]
   [ "$(meta_of "$mid" backend)" = hc:claude ]
+  [ -z "$(meta_of "$mid" node)" ]
+  [ "$(git -C "$mwt" rev-parse HEAD)" = "$msha" ]
+  grep -qxF 'uncommitted wip' "$mwt/local.txt"
 
   # P3-4: Background `usage_device_refresh 0` records subshell $BASHPID (not parent $$) in .refresh.pid.
   run bash -c '
@@ -990,4 +1017,92 @@ EOF
   [ "$(jq 'length' <<<"$output")" -eq 2 ]
   [ "$(jq -r '.[0].account' <<<"$output")" != "$(jq -r '.[1].account' <<<"$output")" ]
   [[ "$(jq -r '.[0].account' <<<"$output")" =~ ^chatgpt\ #[0-9a-f]{6}$ ]]
+}
+
+@test "quoted limit banners in idle prose never trigger lockouts, wrapped Codex banners keep reset times, scoped Claude buckets display without marking out, and headless/tmux fallback appears in available list" {
+  # P2-1a: Claude with a readable session transcript showing a normal reply must trust the
+  # transcript and NEVER fall back to screen matching even if the screen quotes a limit banner.
+  mkdir -p "$CLAUDE_CONFIG_DIR/projects/demo-proj"
+  echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I documented the banner."}]}}' \
+    >"$CLAUDE_CONFIG_DIR/projects/demo-proj/sess-normal-9999.jsonl"
+  local tid
+  tid="$(new_task --backend hc:claude)"
+  set_meta "$tid" '.dispatched="2026-11-26T00:00:00Z" | .session_id="sess-normal-9999"'
+  run bash -c '
+    export CHARTROOM_HOME="'"$CHARTROOM_HOME"'"
+    export CLAUDE_CONFIG_DIR="'"$CLAUDE_CONFIG_DIR"'"
+    source "'"$REPO_ROOT/lib/core.sh"'"
+    source "'"$REPO_ROOT/lib/store.sh"'"
+    source "'"$REPO_ROOT/lib/usage.sh"'"
+    load_config
+    usage_limit_look "'"$tid"'" hc claude "You'\''ve hit your limit · resets 3pm" idle desk
+  '
+  [ "$status" -eq 0 ]
+  ! events "$tid" | grep -q 'out-of-usage'
+  [ ! -f "$CHARTROOM_HOME/usage/desk--claude.json" ]
+
+  # P2-1b: Idle prose-continuation screens (both indented and col-0 wrapped) quoting limit banners
+  # must NOT match for claude, codex, or agy.
+  local scr_cl scr_cl0 scr_cx scr_ag scr_ag0 scr_wrap
+  scr_cl=$'● I updated the docs. The message users see is:\n  You'\''ve hit your limit · resets 3pm\n❯ \n? for help'
+  scr_cl0=$'● I updated the docs. The message users see is:\nYou'\''ve hit your limit · resets 3pm\n❯ '
+  scr_cx=$'• Added the limit banner test. Codex prints this when it stops:\n  You'\''ve hit your usage limit. Upgrade to Pro or try again at 3:05 PM.\n› Ask Codex to do anything'
+  scr_ag=$'✦ Done. The quota error reads:\n  Usage limit reached. Try again later.'
+  scr_ag0=$'✦ Done. The quota error reads:\nUsage limit reached. Try again later.'
+  run bash -c '
+    source "'"$REPO_ROOT/lib/core.sh"'"
+    source "'"$REPO_ROOT/lib/usage.sh"'"
+    ! usage_screen_limit claude "$1" screen
+    ! usage_screen_limit claude "$2" screen
+    ! usage_screen_limit codex "$3" screen
+    ! usage_screen_limit agy "$4" screen
+    ! usage_screen_limit agy "$5" screen
+  ' _ "$scr_cl" "$scr_cl0" "$scr_cx" "$scr_ag" "$scr_ag0"
+  [ "$status" -eq 0 ]
+
+  # P3-1: A real Codex ■ limit banner wrapped across two lines preserves its reset time.
+  scr_wrap=$'■ You'\''ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit\nhttps://chatgpt.com/codex/settings/usage to purchase more credits or try again at 3:05 PM.'
+  run bash -c '
+    source "'"$REPO_ROOT/lib/core.sh"'"
+    source "'"$REPO_ROOT/lib/usage.sh"'"
+    usage_screen_limit codex "$1" screen
+  ' _ "$scr_wrap"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'\t'"3:05 PM" ]]
+
+  # P3-2: Real redacted Claude response includes scoped 7d opus (99%) as an informational window
+  # (scoped=true) so dashboard/CLI show it while account-wide state stays ok (out=false).
+  local fut7; fut7="$(iso_offset 320000)"
+  jq --arg r7 "$fut7" \
+    '.seven_day.resets_at = $r7 | .seven_day_opus.resets_at = $r7 | .limits |= map(.resets_at = $r7)' \
+    "$REPO_ROOT/test/fixtures/usage/claude-oauth-api-real.json" >"$BATS_TEST_TMPDIR/claude-real-scoped.json"
+  CHARTROOM_CLAUDE_USAGE_FILE="$BATS_TEST_TMPDIR/claude-real-scoped.json" CHARTROOM_CLAUDE_PLAN=max_20x \
+    run cr usage --agent claude --json --refresh
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.[0].state' <<<"$output")" = ok ]
+  [ "$(jq -r '.[0].out' <<<"$output")" = false ]
+  [ "$(jq -r '.[0].windows[] | select(.label=="7d") | [.used_pct,.left_pct,.scoped] | @csv' <<<"$output")" = '58,42,false' ]
+  [ "$(jq -r '.[0].windows[] | select(.label=="7d opus") | [.used_pct,.left_pct,.scoped] | @csv' <<<"$output")" = '99,1,true' ]
+
+  # P3-4: On a machine without hc/herdr (headless/tmux only), usage_available_agents still lists
+  # usable fallback agents instead of saying none.
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$BIN/codex"
+  printf '#!/usr/bin/env bash\necho '\''{"loggedIn":true}'\''\n' >"$BIN/claude"
+  chmod +x "$BIN/codex" "$BIN/claude"
+  run bash -c '
+    export PATH="'"$BIN"':$PATH"
+    export CHARTROOM_HOME="'"$CHARTROOM_HOME"'"
+    export CHARTROOM_MACHINE_NAME=desk
+    export CHARTROOM_BACKEND_ORDER="headless:codex headless:claude"
+    source "'"$REPO_ROOT/lib/core.sh"'"
+    source "'"$REPO_ROOT/lib/agents.sh"'"
+    source "'"$REPO_ROOT/lib/spread.sh"'"
+    source "'"$REPO_ROOT/lib/usage.sh"'"
+    load_config
+    spread_local_backends() { :; }
+    probe_backend() { [[ "$1" == headless:codex || "$1" == headless:claude ]]; }
+    usage_available_agents claude desk
+  '
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"codex"* ]]
 }
