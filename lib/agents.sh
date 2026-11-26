@@ -53,12 +53,13 @@ agy_login_why() {
   [[ -z "$AGY_LOGIN_WHY" ]] || { printf '%s' "$AGY_LOGIN_WHY"; return 1; }
 }
 
-# agy's flags for a task: its model and effort, its mode (meta permission: auto, accept-edits or
+# agy's flags for a task: its model (task_model) and effort, its mode (meta permission: auto, accept-edits or
 # plan; empty is agy's own default, auto), and the task's folder as a workspace directory, by its
-# real path (agy compares resolved paths: /tmp/x is outside a workspace given as /private/tmp/x).
+# real path (agy compares resolved paths: a folder given through a symlink, as macOS's /tmp is,
+# reads as outside the workspace, and each write there asks).
 agy_args() { # <id>
   local m e p
-  m="$(meta "$1" model)"; e="$(meta "$1" effort)"; p="$(meta "$1" permission)"
+  m="$(task_model "$1" agy)"; e="$(meta "$1" effort)"; p="$(meta "$1" permission)"
   [[ -n "$m" ]] && printf '%s\n' --model "$m"
   [[ -n "$e" ]] && printf '%s\n' --effort "$e"
   if [[ -n "$p" ]]; then
@@ -87,9 +88,20 @@ codex_sandbox_args() { # <id>
   esac
 }
 
+# The model a task's worker runs: its own (new --model), else the home's default for its agent
+# (CHARTROOM_CODEX_MODEL, CHARTROOM_AGY_MODEL), else nothing (the agent's own default). Claude's
+# default stays Claude's.
+task_model() { # <id> <agent>
+  local m; m="$(meta "$1" model)"
+  if [[ -z "$m" ]]; then
+    case "$2" in codex) m="$CR_CODEX_MODEL" ;; agy) m="$CR_AGY_MODEL" ;; esac
+  fi
+  printf '%s' "$m"
+}
+
 codex_model_args() { # <id>
   local m e
-  m="$(meta "$1" model)"; e="$(meta "$1" effort)"
+  m="$(task_model "$1" codex)"; e="$(meta "$1" effort)"
   [[ -n "$m" ]] && printf '%s\n' -m "$m"
   [[ -n "$e" ]] && printf '%s\n' -c "model_reasoning_effort=$e"
   return 0

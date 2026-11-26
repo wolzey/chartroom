@@ -84,6 +84,31 @@ setup() { common_setup; }
   [[ "$output" == *"msg: fake codex ran"* ]]
 }
 
+@test "a home's default Codex and agy model goes to a task that names none; the task's own wins; Claude's is untouched" {
+  use_fake codex claude
+  mkdir -p "$CHARTROOM_HOME"
+  printf 'CHARTROOM_CODEX_MODEL=gpt-6-astra\nCHARTROOM_AGY_MODEL=gemini-fake-high\n' >"$CHARTROOM_HOME/config"
+  id="$(new_task --backend headless:codex)"
+  cr dispatch "$id" >/dev/null
+  wait_event "$id" ' exited: codex process ended'
+  grep -q -- "exec --json -C $(meta_of "$id" worktree) -s danger-full-access -m gpt-6-astra " "$FAKE_LOG"
+  : >"$FAKE_LOG"
+  id2="$(new_task --backend headless:codex --model gpt-6-sol)"
+  cr dispatch "$id2" >/dev/null
+  wait_event "$id2" ' exited: codex process ended'
+  grep -q -- " -m gpt-6-sol " "$FAKE_LOG"
+  refute() { if "$@"; then return 1; fi; }
+  refute grep -q -- "gpt-6-astra" "$FAKE_LOG"
+  # the argv of an interactive Codex and agy worker, and of a Claude one (no default of chartroom's)
+  source_cr() { CHARTROOM_HOME="$CHARTROOM_HOME" bash -c 'source "$1/lib/core.sh"; source "$1/lib/homes.sh"; source "$1/lib/agents.sh"; load_config; shift; "$@"' _ "$REPO_ROOT" "$@"; }
+  id3="$(new_task --backend tmux:codex)"; id4="$(new_task --backend tmux:claude)"
+  [ "$(source_cr codex_model_args "$id3" | paste -sd' ' -)" = "-m gpt-6-astra" ]
+  [ "$(source_cr task_model "$id4" claude)" = "" ]
+  [ "$(source_cr task_model "$id" agy)" = "gemini-fake-high" ]
+  run cr doctor
+  [ "$status" -eq 0 ]
+}
+
 @test "a device's guest Claude worker gets its task folder in its settings file, not by --add-dir (no dialog)" {
   use_fake tmux claude
   export FAKE_TMUX_DIR="$BATS_TEST_TMPDIR/tmux"; mkdir -p "$FAKE_TMUX_DIR"

@@ -268,8 +268,9 @@ Verified on agy 1.5.17 in hc 0.1.21 on a Mac (November 2026), against a signed-i
 
 - **Start.** hc runs the launcher with the brief's line, which goes to agy as `agy -i "<brief>"` (agy
   takes a first prompt only so). Its flags: `--add-dir <task folder>` by its real path (agy compares
-  resolved paths: `/tmp/x` given, `/private/tmp/x` written, is outside its workspace and asks),
-  `--model`/`--effort` from the task, and `--mode` from `--permission` (`auto`, the default,
+  resolved paths: a folder given through a symlink, as macOS's `/tmp` is, reads as outside its
+  workspace, and each write there asks),
+  `--model` from the task or the home's `CHARTROOM_AGY_MODEL`, `--effort` from the task, and `--mode` from `--permission` (`auto`, the default,
   `accept-edits` or `plan`; anything else refuses at dispatch). In auto mode agy runs edits and
   safe commands itself and asks for the rest. herdr starts it with `herdr agent start --kind agy`
   (herdr 0.9.5 knows agy) and the same flags; chartroom then types the brief, as for Codex.
@@ -379,7 +380,8 @@ Verified on agy 1.5.17 in hc 0.1.21 on a Mac (November 2026), against a signed-i
   setting (`chartroom set <id> sandbox=<mode>`) wins.
 - Thread id from the first `thread.started` event; `steer` after the run runs
   `codex exec … resume <thread> "<message>"` with the full conversation (verified).
-- `model` / `effort` in meta map to `-m` and `model_reasoning_effort`.
+- `model` / `effort` in meta map to `-m` and `model_reasoning_effort`; a task with no model gets the
+  home's `CHARTROOM_CODEX_MODEL` (every Codex runner: hc, herdr, tmux, cmux, headless, a device).
 - The wrapper appends `exited: … (exit N)`; a process that dies without one is reported `lost`. A
   run whose `codex.jsonl` stops growing wakes as `stalled` (`claude.jsonl` for headless:claude).
 

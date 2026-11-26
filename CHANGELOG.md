@@ -15,6 +15,8 @@ are stable from 0.1.0.
   agy's version and whether it is signed in (`agy models`), and what it lacks: chartroom installs no hooks for it, so no
   permission cards, grants or pattern-kill guard; its steers are taken but not checked against their text; it is never parked.
   A dispatch where agy is not signed in stops before it starts a terminal. Never `headless:agy`, `tmux:agy` or `cmux:agy`.
+- `CHARTROOM_CODEX_MODEL` and `CHARTROOM_AGY_MODEL` (usually in a home's `config`): the model a Codex or agy worker gets when
+  its task names none; `new --model` still wins, and a task on a device carries it there.
 - An "always" answer on a Bash line covers each of its commands by the program and its fixed leading words (`gh run view:*`),
   so the next run with other ids or flags matches; never a command chained in, a substitution, a redirect off `/dev/null`,
   or another kind of call than the one answered. Script runners, hosts and verbs like push, api, delete or merge stay exact.

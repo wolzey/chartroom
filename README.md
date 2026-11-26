@@ -830,6 +830,7 @@ machine), then `~/.config/chartroom/config` (`KEY=VALUE`, no shell evaluation;
 | `CHARTROOM_TMUX_SOCKET` | *(default server)* | run the crew on `tmux -L <name>` |
 | `CHARTROOM_COMMAND` | *(empty)* | default template for the `command` backend |
 | `CHARTROOM_CODEX_SHIP_SANDBOX` / `_SCOUT_SANDBOX` | `danger-full-access` / `workspace-write` | |
+| `CHARTROOM_CODEX_MODEL` / `CHARTROOM_AGY_MODEL` | (the agent's own) | the model a Codex or agy worker gets when its task names none (`new --model` wins); usually in a home's `config`. A task on a device carries it there |
 | `CHARTROOM_CLAUDE_PERMISSION` | *(agent default)* | interactive Claude `--permission-mode` |
 | `CHARTROOM_CLAUDE_HEADLESS_PERMISSION` | `acceptEdits` | |
 | `CHARTROOM_CLAUDE_ALLOWED_TOOLS` | `Bash Read Edit Write Glob Grep WebFetch WebSearch` | headless Claude |

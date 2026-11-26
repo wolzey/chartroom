@@ -218,6 +218,10 @@ load_config() {
   cfg_set CR_BRANCH_PREFIX BRANCH_PREFIX '' chartroom/
   cfg_set CR_CODEX_SHIP_SANDBOX CODEX_SHIP_SANDBOX '' danger-full-access
   cfg_set CR_CODEX_SCOUT_SANDBOX CODEX_SCOUT_SANDBOX '' workspace-write
+  # The model a Codex or agy worker gets when its task names none (new --model wins); empty: the
+  # agent's own default. Usually set in a home's config, for that home's crew.
+  cfg_set CR_CODEX_MODEL CODEX_MODEL '' ''
+  cfg_set CR_AGY_MODEL AGY_MODEL '' ''
   cfg_set CR_CLAUDE_PERMISSION CLAUDE_PERMISSION '' ''
   cfg_set CR_CLAUDE_HEADLESS_PERMISSION CLAUDE_HEADLESS_PERMISSION '' acceptEdits
   cfg_set CR_CLAUDE_ALLOWED_TOOLS CLAUDE_ALLOWED_TOOLS '' 'Bash Read Edit Write Glob Grep WebFetch WebSearch'
