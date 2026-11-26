@@ -698,6 +698,10 @@ the watch creates and dispatches a linked **hc:claude, claude-opus-5-5** cold re
 background. Keep the watch running for reviews and retries. The reviewer receives a copy of the
 brief and `chartroom git <id> diff <base-sha>...`, never the worker's report. It writes findings
 ranked P0–P3 and posts a clear Clean or Rework verdict; case and ordinary punctuation do not matter.
+A leading `Clean`, `Rework`, or `Not clean` (optionally after `Verdict:`) takes precedence over
+explanatory prose. A completion with no verdict is consumed once and keeps acceptance blocked
+until the reviewer posts a verdict. If no review task exists, accept names the review-sync command
+and the watch as ways to start it.
 The original stays in review; accept and ordinary close wait for that verdict. A finished review
 does not automatically accept the work: the commander still decides. `accept <id> --skip-review`
 explicitly bypasses the gate for that task and records the decision.

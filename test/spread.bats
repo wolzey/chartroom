@@ -83,7 +83,7 @@ review_runner() {
   [ -z "$(meta_of "$id" review_task)" ]
   [ "$(meta_of "$id" review_pending)" = 1 ]
   run cr accept "$id"
-  [ "$status" -ne 0 ]; [[ "$output" == *"cold review"* ]]
+  [ "$status" -ne 0 ]; [[ "$output" == *"chartroom review-sync $id"*"chartroom watch"* ]]
   cr review-sync "$id"
   rid="$(meta_of "$id" review_task)"
   [ -n "$rid" ]
@@ -102,6 +102,11 @@ review_runner() {
   [ -n "$(meta_of "$rid" dispatched)" ]
   [ -z "$(meta_of "$rid" review_error)" ]
   cr event "$rid" done 'finished without a verdict'
+  cr review-sync "$rid"
+  [ "$(meta_of "$rid" review_checked)" = 1 ]
+  [ -z "$(meta_of "$rid" review_pending)" ]
+  run cr watch --once --timeout 1
+  [ ! -e "$CHARTROOM_HOME/tasks/$rid/.review-next" ]
   run cr accept "$id"
   [ "$status" -ne 0 ]
   cr event "$rid" done 'Verdict — Clean: no findings'
@@ -180,4 +185,26 @@ review_runner() {
   [ "$(meta_of "$id" review_skipped)" = 1 ]
   cr review-sync "$id"
   [ -z "$(meta_of "$id" review_task)" ]
+}
+
+@test "leading review verdicts override negated words in prose and propagate to notes and tallies" {
+  reviewable_task
+  cr event "$id" done 'implementation ready'
+  cr review-sync "$id"
+  rid="$(meta_of "$id" review_task)"
+  check_verdict() {
+    cr event "$rid" done "$1"
+    cr review-sync "$rid"
+    [ "$(meta_of "$rid" review_result)" = "$2" ]
+    [ "$(meta_of "$id" review_result)" = "$2" ]
+    events "$id" | tail -1 | grep -q "cold review $rid finished: $2$"
+    run cr status --spread --json
+    [ "$(jq -r --arg verdict "$2" '.[] | select(.agent=="codex") | .[$verdict]' <<<"$output")" = 1 ]
+  }
+  check_verdict 'Clean: no rework needed' clean
+  check_verdict 'Not clean: P1 x' rework
+  check_verdict 'Rework: clean once P1 is fixed' rework
+  check_verdict 'VERDICT: Clean: no rework needed' clean
+  check_verdict 'Verdict: Not clean: P1 x' rework
+  check_verdict 'Verdict: Rework: clean once P1 is fixed' rework
 }

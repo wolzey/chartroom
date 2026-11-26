@@ -124,17 +124,24 @@ review_verdict() { # Explicit verdict, tolerant of case, punctuation and ordinar
   local line
   events_path "$1"
   line="$(awk '$2=="done:" {l=$0; sub(/^[^ ]+ done: */, "", l)} END {print tolower(l)}' "$EVENTS_PATH")"
-  if grep -qE '(^|[^a-z])(rework|needs? (rework|changes|fixes)|changes requested)([^a-z]|$)' <<<"$line"; then echo rework
+  # A leading verdict owns the meaning; explanatory prose may negate the other word.
+  line="$(sed -E 's/^[[:space:]]*verdict[[:space:]]*:[[:space:]]*//' <<<"$line")"
+  if grep -qE '^[[:space:]]*not[[:space:]]+clean([^a-z]|$)' <<<"$line"; then echo rework
+  elif grep -qE '^[[:space:]]*clean([^a-z]|$)' <<<"$line"; then echo clean
+  elif grep -qE '^[[:space:]]*rework([^a-z]|$)' <<<"$line"; then echo rework
+  elif grep -qE '(^|[^a-z])(not[[:space:]]+clean|rework|needs? (rework|changes|fixes)|changes requested)([^a-z]|$)' <<<"$line"; then echo rework
   elif grep -qE '(^|[^a-z])(clean|no (actionable )?findings|no issues)([^a-z]|$)' <<<"$line"; then echo clean; fi
 }
 review_record_verdict() { # Caller holds the original task's review lock.
-  local id="$1" parent verdict
+  local id="$1" parent verdict n
+  n="$(review_count "$id")"
   parent="$(meta "$id" review_of)"; verdict="$(review_verdict "$id")"
+  # Consume even a verdictless completion; a later done event makes it due again.
+  meta_set "$id" review_pending ""
+  meta_set "$id" review_checked "$n"
   [[ -n "$verdict" ]] || return 0
   meta_set "$id" review_result "$verdict"
   meta_set "$id" review_error ""
-  meta_set "$id" review_pending ""
-  meta_set "$id" review_checked "$(review_count "$id")"
   if [[ "$(meta "$parent" review_task)" == "$id" ]]; then
     if [[ "$(meta "$parent" review_checked)" == "$(review_count "$parent")" ]]; then meta_set "$parent" review_pending ""; fi
     meta_set "$parent" review_result "$verdict"
@@ -271,4 +278,10 @@ spread_doctor_nodes() {
   done | jq -sc '[.[] | . as $r | {node:.machine, status:.device.status, agents:
     (["codex","agy","claude"] | map(. as $a | {key:$a,value:{signed_in:($r.logins[$a].status == "ok"),
       usable:($r.device.status == "online" and $r.runner.hc == "up" and $r.tools[$a].status == "ok" and $r.logins[$a].status == "ok")}}) | from_entries)}]'
+}
+
+review_wait_reason() {
+  local rid; rid="$(meta "$1" review_task)"
+  if [[ -n "$rid" ]]; then echo "cold review for $1 has not finished (review task: $rid)"
+  else echo "cold review for $1 has not started; run chartroom review-sync $1 or keep chartroom watch running"; fi
 }

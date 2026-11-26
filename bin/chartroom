@@ -1413,7 +1413,7 @@ cmd_accept() {
     meta_set "$id" review_skipped 1
     log_event "$id" note "cold review skipped by explicit accept --skip-review"
   fi
-  review_ready "$id" || die "cold review for $id has not finished (review task: $(meta "$id" review_task))"
+  review_ready "$id" || die "$(review_wait_reason "$id")"
   log_event "$id" note "accepted"
   echo "accepted $id: done (chartroom close $id removes its worktree)"
   # Follow-ups after an accept are rare: its worker parks now, not after the grace (lib/park.sh).
@@ -1432,7 +1432,7 @@ accept_many() {
     if ! id="$(cmd_resolve "$a" 2>/dev/null)" || ! task_exists "$id"; then echo "chartroom: $a: no such task" >&2; rc=1; continue; fi
     st="$(state_of "$id")"
     [[ "$st" == review ]] || { echo "chartroom: $a: $id is $st, not awaiting review" >&2; rc=1; continue; }
-    if ! review_ready "$id"; then echo "chartroom: cold review for $id has not finished" >&2; rc=1; continue; fi
+    if ! review_ready "$id"; then echo "chartroom: $(review_wait_reason "$id")" >&2; rc=1; continue; fi
     accepted+=("$id")
     if is_store_task "$id"; then lines+="$id"$'\t'note$'\t'accepted$'\n'; else log_event "$id" note "accepted"; fi
   done
