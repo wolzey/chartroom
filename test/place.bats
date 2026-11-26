@@ -252,10 +252,13 @@ dry() { run cr dispatch "$1" --dry-run; echo "$output"; }
   [ "$(meta_of "$auto" node_backend)" = hc:codex ]
   [ "$(meta_of "$auto" node)" = "$M3" ]
   mcp="$(new_task --needs mcp)"
-  tweak m3 $M3 $'s/^login\tclaude\tok/login\tclaude\tno/'
+  # Even a signed-in remote Claude cannot supply this machine's MCP tools.
   dry "$mcp"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"no signed-in full-session agent for this task"* ]]
+  [[ "$output" == *"Claude-only tools are configured on this machine"* ]]
+  cr set "$mcp" node=m3 >/dev/null
+  run cr dispatch "$mcp" --dry-run
+  [ "$status" -ne 0 ]; [[ "$output" == *"set $mcp node=here"* ]]
   # A pin still chooses its agent when automatic machine placement is off.
   pinned="$(new_task --node m3)"
   CHARTROOM_PLACEMENT=local run cr dispatch "$pinned"

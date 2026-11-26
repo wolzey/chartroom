@@ -28,6 +28,9 @@ Before your first dispatch in a session, read:
   `references/harness-claude.md` (Claude Code), `references/harness-codex.md` (Codex CLI), or
   `references/harness-generic.md` (Gemini CLI, pi, opencode, Cursor, anything else).
 
+New non-Claude ship tasks queue cold Opus review tasks through the watch. `accept` and ordinary
+`close` wait for a review verdict; use `accept <id> --skip-review` only for an explicit per-task bypass.
+
 ## Hard rules (priority order)
 
 1. **Never write to a project.** You read project repos to scope work. Every change, however

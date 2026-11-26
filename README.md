@@ -680,27 +680,32 @@ failed and closed tasks do not. Existing workers keep their assignment.
 
 Use `--needs mcp` or `--needs browser`, or a brief line `Needs: mcp`, `Needs: browser`, or
 `Needs: claude`, when the work needs browser or MCP tools available only to Claude.
-These requirements select Claude unless an explicit backend overrides them. Name the requirement
+These requirements keep the task on this machine and select Claude unless an explicit backend
+overrides the agent. A remote pin must be changed to `node=here` before dispatch. Name the requirement
 explicitly: merely mentioning a tool in prose does not force an agent. A machine pin still allows
 automatic agent selection on that machine. The agent choice occurs at dispatch so edits to the
 brief and current node availability are included.
 
 `chartroom status` prints live counts and review outcomes per agent; `status --spread --json`
 returns just those counters. Both support `--all-homes`. The dashboard displays the same counters
-and `dashboard --json --all-homes` (also `board`) includes them for each home. `doctor` reports local agent sign-ins
+and `dashboard --json --all-homes` (also `board`) includes them for each home.
+`dashboard --all-homes` without JSON prints a board for each home. `doctor` reports local agent sign-ins
 and full-session usability, plus each enrolled node's last reported agent availability.
 
-During the trial, `CHARTROOM_REVIEW_NON_CLAUDE=opus` (default) creates a linked **hc:claude,
-claude-opus-5-5** cold review when a Codex or agy worker reports done. The reviewer receives a
-copy of the brief and `chartroom git <id> diff <base-sha>...`, never the worker's report.
-It writes findings ranked P0–P3 and reports `done 'clean: ...'` or `done 'rework: ...'`.
-The original stays in review; accept and ordinary close wait for that explicit verdict.
-A finished review does not automatically accept the work: the commander still decides.
-If hc:claude or the worker's Git is unavailable, the review stays queued with a blocked event;
-dispatch its linked review task when the runner and diff are available. A queued reviewer fetches
-a missing diff before reviewing. Repeated completion delivery is idempotent; a new done
-on the original creates another review round. The tally counts completed review rounds, including
-closed reviews. Set `CHARTROOM_REVIEW_NON_CLAUDE=off` in the home's config to end the trial gate.
+During the trial, `CHARTROOM_REVIEW_NON_CLAUDE=opus` (default) gates new Codex and agy ship
+tasks. Scouts and tasks created before the gate are exempt. A `done` event marks review pending;
+the watch creates and dispatches a linked **hc:claude, claude-opus-5-5** cold review in the
+background. Keep the watch running for reviews and retries. The reviewer receives a copy of the
+brief and `chartroom git <id> diff <base-sha>...`, never the worker's report. It writes findings
+ranked P0–P3 and posts a clear Clean or Rework verdict; case and ordinary punctuation do not matter.
+The original stays in review; accept and ordinary close wait for that verdict. A finished review
+does not automatically accept the work: the commander still decides. `accept <id> --skip-review`
+explicitly bypasses the gate for that task and records the decision.
+If hc:claude or the worker's Git is unavailable, the review shows blocked and the watch retries.
+A repeated completion reuses its review when the captured diff is unchanged; a changed diff gets
+a new review. The tally counts reviewed original tasks, including closed tasks, by their latest
+review result, rather than counting review rounds. Set `CHARTROOM_REVIEW_NON_CLAUDE=off` in the
+home's config to end the trial gate.
 
 `CI=true` disables session runners. Details, including how each one confirms delivery:
 [skills/chartroom/references/backends.md](skills/chartroom/references/backends.md).
@@ -854,7 +859,7 @@ machine), then `~/.config/chartroom/config` (`KEY=VALUE`, no shell evaluation;
 | `CHARTROOM_COMMAND` | *(empty)* | default template for the `command` backend |
 | `CHARTROOM_CODEX_SHIP_SANDBOX` / `_SCOUT_SANDBOX` | `danger-full-access` / `workspace-write` | |
 | `CHARTROOM_REVIEW_NON_CLAUDE` | `opus` | cold review gate; `off` disables it |
-| `CHARTROOM_CODEX_MODEL` / `CHARTROOM_AGY_MODEL` | `gpt-6-astra` / (the agent's own) | the model a Codex or agy worker gets when its task names none (`new --model` wins); usually in a home's `config`. A task on a device carries it there |
+| `CHARTROOM_CODEX_MODEL` / `CHARTROOM_AGY_MODEL` | (the agent's own) | the model a Codex or agy worker gets when its task names none (`new --model` wins); usually in a home's `config`. A task on a device carries it there |
 | `CHARTROOM_CLAUDE_PERMISSION` | *(agent default)* | interactive Claude `--permission-mode` |
 | `CHARTROOM_CLAUDE_HEADLESS_PERMISSION` | `acceptEdits` | |
 | `CHARTROOM_CLAUDE_ALLOWED_TOOLS` | `Bash Read Edit Write Glob Grep WebFetch WebSearch` | headless Claude |

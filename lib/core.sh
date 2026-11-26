@@ -220,7 +220,7 @@ load_config() {
   cfg_set CR_CODEX_SCOUT_SANDBOX CODEX_SCOUT_SANDBOX '' workspace-write
   # The model a Codex or agy worker gets when its task names none (new --model wins); empty: the
   # agent's own default. Usually set in a home's config, for that home's crew.
-  cfg_set CR_CODEX_MODEL CODEX_MODEL '' 'gpt-6-astra'
+  cfg_set CR_CODEX_MODEL CODEX_MODEL '' ''
   cfg_set CR_AGY_MODEL AGY_MODEL '' ''
   cfg_set CR_CLAUDE_PERMISSION CLAUDE_PERMISSION '' ''
   cfg_set CR_CLAUDE_HEADLESS_PERMISSION CLAUDE_HEADLESS_PERMISSION '' acceptEdits
@@ -309,7 +309,7 @@ log_event() {
   if is_store_task "$1"; then store_event "$1" "$2" "${3//$'\n'/ }"
   else printf '%s %s: %s\n' "$(now)" "$2" "${3//$'\n'/ }" >>"$(tdir "$1")/events.log"; fi
   stamp_changed; bell_ring "" watch
-  if [[ "$2" == "done" ]]; then review_sync "$1" || warn "cold review pending for $1"; fi
+  if [[ "$2" == "done" ]]; then review_mark "$1"; fi
 }
 # A line as another chartroom wrote it ("<ts> <kind>: <text>"), appended verbatim (a pinned
 # task's device: lib/backends/node.sh). A store task takes its kind and text (the store stamps it).

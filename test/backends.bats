@@ -69,7 +69,7 @@ setup() { common_setup; }
   [ "$status" -eq 0 ]
   [[ "$output" == *"thread th-fake-1"* ]]
   [ "$(meta_of "$id" thread_id)" = th-fake-1 ]
-  grep -q -- "exec --json -C $(meta_of "$id" worktree) -s danger-full-access -m gpt-6-astra -o $CHARTROOM_HOME/tasks/$id/final.md Read the brief" "$FAKE_LOG"
+  grep -q -- "exec --json -C $(meta_of "$id" worktree) -s danger-full-access -o $CHARTROOM_HOME/tasks/$id/final.md Read the brief" "$FAKE_LOG"
   run cr steer "$id" "more"
   [ "$status" -ne 0 ]; [[ "$output" == *"mid-run"* ]]
   wait_event "$id" ' exited: codex process ended \(exit 0\)'

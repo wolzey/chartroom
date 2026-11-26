@@ -3,10 +3,11 @@
 Automatic dispatch balances the home's live tasks among signed-in Codex, agy and Claude
 agents available on the selected machine, ties in that order. It uses hc or herdr only.
 `--backend` wins; `--needs mcp|browser` or a brief line `Needs: mcp|browser|claude` selects
-Claude for its tools. Agent selection waits until dispatch, after the brief has been filled.
-`CHARTROOM_CODEX_MODEL` defaults to `gpt-6-astra`; a task's `--model` wins.
-`CHARTROOM_REVIEW_NON_CLAUDE=opus` (default; `off` disables) gates non-Claude completion
-on a linked hc:claude Opus 5.5 cold review of the brief and diff. See README's Backends
+Claude for its tools and keeps the task on this machine. Agent selection waits until dispatch, after the brief has been filled.
+`CHARTROOM_CODEX_MODEL` is unset by default; configure a model per home. A task's `--model` wins.
+`CHARTROOM_REVIEW_NON_CLAUDE=opus` (default; `off` disables) gates new non-Claude ship completion
+on a linked hc:claude Opus 5.5 cold review of the brief and diff, launched by the watch.
+Scouts and pre-gate tasks are exempt; unchanged diffs reuse their review. See README's Backends
 section for review verdicts, queued reviews and the spread counters.
 
 A backend is `<runner>:<agent>`: **where** the worker runs × **which** agent runs. Runners are

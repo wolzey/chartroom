@@ -157,7 +157,8 @@ place_brief_words() { sed '/^## Authority/,/^## Worker protocol/d' "$(tdir "$1")
 # Why a task stays on this machine, whatever its brief says ("" when it need not).
 place_stays() { # <id>
   local id="$1" project; project="$(meta "$id" project)"
-  if [[ -n "$(meta "$id" node_here)" ]]; then echo "pinned here"
+  if spread_claude "$id"; then echo "Claude-only tools are configured on this machine"
+  elif [[ -n "$(meta "$id" node_here)" ]]; then echo "pinned here"
   elif [[ -z "$(home_name_of "$CR_HOME")" ]]; then echo "this home is not registered (chartroom homes add), so another machine cannot report back to it"
   elif [[ -n "$(meta "$id" migrated_from)" ]]; then echo "it was moved here with its work"
   elif [[ -n "$(meta "$id" worktree)" && -d "$(meta "$id" worktree)" ]]; then echo "its worktree is here"

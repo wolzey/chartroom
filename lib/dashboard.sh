@@ -309,6 +309,7 @@ cmd_board() {
   if [[ $json -eq 1 ]]; then dashboard_json; return; fi
   board="$(dashboard_json)"
   jq -e '.focus' <<<"$board" >/dev/null && focus_line "$(jq -c '.focus | {projects, since, until}' <<<"$board")" "$(jq '.focus.held' <<<"$board")"
+  spread_line "$(jq -c .agents <<<"$board")"
   jq -r --argjson color "$color" '
     def c($code): if $color == 1 then "\u001b[" + $code + "m" + . + "\u001b[0m" else . end;
     def cut($n): if length > $n then .[0:$n - 1] + "…" else . end;

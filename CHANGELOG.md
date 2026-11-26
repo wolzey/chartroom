@@ -7,6 +7,12 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- Automatic new work balances signed-in Codex, agy and Claude full sessions by live task count,
+  with fixed ties and a local Claude opt-out for MCP/browser needs. Status and dashboards show
+  the spread and task-level review outcomes; doctor reports agent usability locally and on nodes.
+- New non-Claude ship tasks queue cold Opus 5.5 reviews through the watch before acceptance.
+  Reviews retry unavailable Git or runners, reuse unchanged diffs, and accept case-insensitive
+  verdicts. Scouts and pre-gate tasks are exempt; `accept --skip-review` records a per-task bypass.
 - **agy (Antigravity CLI) as a crew agent, in full sessions only**: `hc:agy`, `herdr:agy`, and `node:agy` on a device where agy is
   signed in. Its brief goes in as `agy -i`, with the task's folder as `--add-dir` (by its real path) and `--model`, `--effort`,
   `--mode` from the task. hc reads agy's own state (OSC 7501: working, done, blocked with the dialog's kind and words), so a
