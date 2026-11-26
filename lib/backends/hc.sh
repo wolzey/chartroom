@@ -22,6 +22,9 @@
 # herdr, claude gets only the prompt hook. Codex reports no state to hc, no status and no turns
 # (verified on codex-cli 0.158.0, hc 0.1.16), so it keeps its notify hook for turn ends, and its
 # approval prompts come from the terminal title it sets, which hc carries (below, lib/stuck.sh).
+# agy reports its state over OSC 7501 as Claude does (verified on agy 1.5.17, hc 0.1.21): working,
+# idle, done, blocked with the dialog's kind and words, and hc counts its turns; it gets no hooks
+# at all, and its brief goes in as `agy -i <brief>` (lib/agents.sh).
 # The terminal's address is recorded and every later call checks it still carries the task's name.
 
 declare -A HC_TURNS=() # watch: each task's hc turn count at the last look
@@ -209,6 +212,8 @@ hc_confirm_brief() { # <id> <text> <events.log offset before launch>
 
 hc_launch() { # <id> <wt> <agent>
   local id="$1" wt="$2" agent="$3" argv=() launcher task tab out t before rc=0
+  # (A worker that is not signed in would sit at agy's sign-in screen with its brief unread.)
+  if [[ "$agent" == agy ]]; then local why; why="$(agy_login_why)" || die "$why"; fi
   hc_clear_stale "$id"; meta_set "$id" hc_launched ""
   # Claude starts under a session id of chartroom's choosing, fresh each dispatch, so a parked
   # worker can be resumed (lib/park.sh).
@@ -220,6 +225,8 @@ hc_launch() { # <id> <wt> <agent>
   fi
   # hc's manual: codex needs --no-daemon under hc, or its commands run outside hc.
   [[ "$agent" == codex ]] && argv+=(--no-daemon)
+  # agy takes a first prompt only as -i <prompt> (the launcher's "$@" follows it).
+  [[ "$agent" == agy ]] && argv+=(-i)
   launcher="$(write_launcher "$id" "$wt" --forward "${argv[@]}")"
   task="$(task_prompt "$id")"
   hc_space; tab="tb$(new_uuid | tr -d -)"
@@ -399,6 +406,10 @@ hc_watch() { # <id>
   local id="$1" W prev pturn what
   hc_handle_set "$id" || return 0
   hc_watch_word "$id"
+  # agy says blocked at its folder trust dialog too, which a launch still under way answers itself
+  # (handle_trust raises any it will not answer): until the launch is done that is still starting,
+  # so a prompt that follows it is a change the next look sees.
+  [[ "$W" == blocked && "$(meta "$id" hc_launched)" != 1 && "$(backend_agent "$id")" == agy ]] && W=starting
   prev="${HST[$id]:-}"; pturn="${HC_TURNS[$id]:-}"
   if [[ "$W" != "$prev" || ( "$W" =~ ^(idle|done)$ && -n "$pturn" && "$HC_TURN" -gt "$pturn" ) ]]; then
     # (Recorded, so the log's account of a prompt ends with it: lib/stuck.sh reads it.)
@@ -408,6 +419,10 @@ hc_watch() { # <id>
         if [[ -n "$HC_TITLE_BLOCKED" ]]; then
           what="$(screen_prompt "$id" "$(backend_agent "$id")" "$(hc_screen "$id" 2>/dev/null || true)")"
           prompt_sync "$id" "${what:-$CODEX_TITLE_WHAT}"
+        elif [[ "$(backend_agent "$id")" == agy ]]; then
+          # hc carries agy's own words for it: the kind (permission, question) and the dialog's line.
+          what="$(hcx get "$(meta "$id" hc_terminal)" --json 2>/dev/null | jq -r '.status | [(.kind // "prompt"), (.msg // "" | gsub("[\n\t]"; " ") | .[0:160])] | if .[1] == "" then "agy is waiting on a \(.[0])" else "agy is waiting on a \(.[0]): \(.[1])" end' 2>/dev/null || true)"
+          log_event "$id" agent "awaiting-input: hc: ${what:-agy is waiting on an approval or question prompt}"
         else log_event "$id" agent "awaiting-input: hc: agent is waiting on an approval or question prompt"; fi ;;
       error) wake "$id" "hc: agent reported an error; read its screen (chartroom peek $id)" ;;
       # (Codex: its notify's `agent: turn-ended` wakes through the event stream instead.)

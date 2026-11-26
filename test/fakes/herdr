@@ -6,7 +6,8 @@
 #                  sending enter clears it.
 #   $S/agents/<n>  live agents, "<pane> <tab> <status>"; a leftover one makes start agent_name_taken.
 #   $S/panes/<p>   panes `pane list/get/close` know besides agents' (sweep), "<tab> <cwd>".
-# `agent prompt` simulates Claude's UserPromptSubmit hook for task $FAKE_HERDR_TASK.
+# `agent prompt` simulates Claude's UserPromptSubmit hook for task $FAKE_HERDR_TASK, and with
+# FAKE_HERDR_PROMPT_STATUS=<status> the agent reports that status after it (an agent with no hook).
 #   $S/machines.json   what `machine list --json` prints (default: none saved)
 #   $S/agent-list.json what `agent list` prints (the radar's flagships; without it `agent list` is
 #                      unknown, as before); `--machine <m>` reads
@@ -62,7 +63,8 @@ case "$cmd" in
   "agent prompt")
     [[ -f "$S/agents/$1" ]] || err agent_not_found "agent target $1 not found"
     trust_up && err agent_blocked "agent $1 is waiting at a dialog"
-    [[ -n "${FAKE_HERDR_TASK:-}" ]] && jq -cn --arg p "$2" '{prompt:$p}' | "${CHARTROOM_BIN:?}" hook "$FAKE_HERDR_TASK" prompt-submit ;;
+    [[ -n "${FAKE_HERDR_TASK:-}" ]] && jq -cn --arg p "$2" '{prompt:$p}' | "${CHARTROOM_BIN:?}" hook "$FAKE_HERDR_TASK" prompt-submit
+    if [[ -n "${FAKE_HERDR_PROMPT_STATUS:-}" ]]; then read -r pane tab st <"$S/agents/$1"; echo "$pane $tab $FAKE_HERDR_PROMPT_STATUS" >"$S/agents/$1"; fi ;;
   "agent wait") : ;;
   "pane list")
     for f in "$S"/panes/*; do [[ -f "$f" ]] || continue; read -r tab cwd <"$f"

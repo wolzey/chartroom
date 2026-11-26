@@ -348,6 +348,36 @@ herdr_trust_screen() {
   events "$id" | grep -q "agent: prompt-received"
 }
 
+@test "herdr:agy: herdr starts agy with its flags, its trust dialog is answered, and a steer never types into its dialogs" {
+  use_fake herdr agy
+  export FAKE_HERDR_DIR="$BATS_TEST_TMPDIR/herdr"; mkdir -p "$FAKE_HERDR_DIR"; herdr_sock_up
+  printf 'Do you trust the contents of this project?\n\n> Yes, I trust this folder\n  No, exit\n\n  ↑/↓ Navigate · enter Confirm\n                         auto · Gemini 4 Neon · high\n' >"$FAKE_HERDR_DIR/screen"
+  id="$(new_task --backend herdr:agy)"
+  export FAKE_HERDR_PROMPT_STATUS=working
+  run cr dispatch "$id"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"herdr agy worker running"* ]]
+  grep -qF "agent start $id --kind agy --pane " "$FAKE_HERDR_DIR/calls.log"
+  grep -qF -- "-- --add-dir $(cd "$CHARTROOM_HOME/tasks/$id" && pwd -P)" "$FAKE_HERDR_DIR/calls.log"
+  grep -q "^agent send-keys $id enter$" "$FAKE_HERDR_DIR/calls.log"
+  refute() { if "$@"; then return 1; fi; }
+  refute grep -q "^agent send-keys $id down$" "$FAKE_HERDR_DIR/calls.log"
+  grep -q "^agent prompt $id Read the brief at" "$FAKE_HERDR_DIR/calls.log"
+  events "$id" | grep -q "note: accepted workspace trust for its own worktree"
+  # an approval on its screen: the steer is refused before anything is typed
+  printf '/w/report.md  +1\nReason: outside workspace\n\nAllow creation of this file?\n> 1. Yes, allow creation\n  2. Yes, and always allow non-workspace access\n  3. No, deny creation\n\n  ↑/↓ Navigate · f full diff\nesc to cancel                 auto · Gemini 4 Neon · high\n' >"$FAKE_HERDR_DIR/screen"
+  : >"$FAKE_HERDR_DIR/calls.log"
+  run cr steer "$id" "yes"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"blocked at a dialog (agy approval prompt: Allow creation of this file?)"* ]]
+  refute grep -q "^agent prompt" "$FAKE_HERDR_DIR/calls.log"
+  # nothing on screen: it goes in, taken but unchecked
+  rm -f "$FAKE_HERDR_DIR/screen"
+  run cr steer "$id" "also list the tests folder"
+  [ "$status" -eq 0 ]
+  [[ "$output" == "submitted, not verified"* ]]
+}
+
 @test "herdr: a stale agent from an earlier start is closed only when it is this task's own" {
   use_fake herdr claude
   export FAKE_HERDR_DIR="$BATS_TEST_TMPDIR/herdr"; mkdir -p "$FAKE_HERDR_DIR/agents"; herdr_sock_up
@@ -466,9 +496,9 @@ herdr_trust_screen() {
   [ "$(jq -r '.backends[]|select(.backend=="cmux:claude").available' <<<"$output")" = true ]
 }
 
-@test "default order is hc, herdr, cmux, tmux, headless, command" {
+@test "default order is hc, herdr, cmux, tmux (every agent's), then headless, command" {
   run cr doctor --json
-  [ "$(jq -r '.order|join(" ")' <<<"$output")" = "hc:claude herdr:claude cmux:claude tmux:claude headless:codex headless:claude command" ]
+  [ "$(jq -r '.order|join(" ")' <<<"$output")" = "hc:claude hc:codex hc:agy herdr:claude herdr:codex herdr:agy cmux:claude cmux:codex tmux:claude tmux:codex headless:codex headless:claude command" ]
 }
 
 @test "legacy backend names still work on old records" {

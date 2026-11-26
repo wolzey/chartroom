@@ -658,12 +658,14 @@ that is recognised from Claude Code's own session record when its transcript is 
 
 ## Backends
 
-A backend is `<runner>:<agent>`, where the agent is `claude` or `codex`.
+A backend is `<runner>:<agent>`, where the agent is `claude`, `codex` or `agy` (Antigravity CLI; full sessions
+only: `hc:agy`, `herdr:agy`, or `node:agy` on a device where agy is signed in).
 
 | Backend | Runs in | Watch | Steering | Needs | Status |
 |---|---|---|---|---|---|
 | `hc:<agent>` | an herdr-core terminal, in its own tab of the Herdr app's `$CHARTROOM_WORKSPACE` space | yes (`chartroom attach`, or the app) | live | herdr-core running (the Herdr app, or `hc server start`); the window may be closed | `hc:claude` verified (hc 0.1.14, herdr-app 0.1.9, Claude Code 2.1.314); `hc:codex` implemented, not yet run against a real codex |
-| `herdr:<agent>` | a herdr tab (first class) | yes | live | herdr running | verified (herdr 0.9.1) |
+| `hc:agy` | an herdr-core terminal running `agy -i <brief>` | yes | live (taken, not checked against its text) | agy signed in (`chartroom doctor` says) | verified (agy 1.5.17, hc 0.1.21). No chartroom hooks: no permission cards or grants, never parked |
+| `herdr:<agent>` | a herdr tab (first class) | yes | live | herdr running | verified (herdr 0.9.1); `herdr:agy` built to the same rules, not run against a signed-in agy |
 | `cmux:<agent>` | a cmux tab (macOS) | yes | live | cmux app, automation socket mode if the XO runs outside cmux | **implemented, unverified on real cmux** |
 | `tmux:<agent>` | a tmux window | yes (`chartroom attach`) | live | tmux ≥ 3.0 | verified (tmux 3.x) |
 | `headless:claude` | `claude -p`, stream-json in/out | `peek` | live (stdin stream), resume after | claude CLI | verified (2.1.289) |
@@ -672,7 +674,7 @@ A backend is `<runner>:<agent>`, where the agent is `claude` or `codex`.
 | `subagent` | the host harness's subagent | no | host | Claude Code only | carried over, not re-verified |
 | `joined:<agent>` | a session you started yourself, that ran `chartroom join` | `peek`; `attach` if it is in tmux/herdr/cmux | mailbox | the `join` skill in that session | verified (Claude Code 2.1.293 in tmux) |
 
-Default automatic order: `hc:claude herdr:claude cmux:claude tmux:claude headless:codex headless:claude command`
+Default automatic order, every agent's full sessions before any headless run: `hc:claude hc:codex hc:agy herdr:claude herdr:codex herdr:agy cmux:claude cmux:codex tmux:claude tmux:codex headless:codex headless:claude command`
 (`CHARTROOM_BACKEND_ORDER`). When a backend is chosen automatically and the first choice isn't
 available, chartroom uses the next one and records `note: backend fallback: herdr:claude
 unavailable (herdr not on PATH); using tmux:claude (steering: live)`. When you name a backend

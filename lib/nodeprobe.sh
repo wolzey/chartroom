@@ -79,9 +79,11 @@ checks() {
     local s="$1"; shift
     if command -v perl >/dev/null 2>&1; then perl -e 'alarm shift; exec @ARGV or exit 127' "$s" "$@"; else "$@"; fi
   }
-  for t in git jq bash claude codex gh go docker ruby node herdr tmux chartroom mise; do
+  for t in git jq bash claude codex agy gh go docker ruby node herdr tmux chartroom mise; do
     b="$(command -v "$t" 2>/dev/null || true)"
     if [[ -z "$b" && "$t" == mise ]]; then continue; fi # (optional: what installs the tools a project pins)
+    # (agy installs itself in ~/.local/bin, which a non-login PATH may lack)
+    if [[ -z "$b" && "$t" == agy && -x "$HOME/.local/bin/agy" ]]; then b="$HOME/.local/bin/agy"; fi
     if [[ -z "$b" ]]; then ck_kv tool "$t" missing -; continue; fi
     case "$t" in
       bash)
@@ -101,8 +103,9 @@ checks() {
         if [[ $rc -eq 0 && -n "$v" ]]; then ck_kv tool "$t" ok "$v"; else ck_kv tool "$t" error "$(ck_why "$b" "$out" "$rc")"; fi ;;
     esac
   done
-  for t in claude codex gh; do
+  for t in claude codex agy gh; do
     b="$(command -v "$t" 2>/dev/null || true)"
+    if [[ -z "$b" && "$t" == agy && -x "$HOME/.local/bin/agy" ]]; then b="$HOME/.local/bin/agy"; fi
     if [[ -z "$b" ]]; then ck_kv login "$t" missing -; continue; fi
     if [[ "$logins" != 1 ]]; then ck_kv login "$t" unknown "no runner core, and an ssh session cannot read the login keychain"; continue; fi
     rc=0
@@ -113,6 +116,12 @@ checks() {
         elif grep -qE '"loggedIn"[[:space:]]*:[[:space:]]*false' <<<"$out"; then ck_kv login claude no "not logged in"
         else ck_kv login claude unknown "claude auth status gave no answer (exit $rc)"; fi ;;
       codex) if ck_run 20 "$b" login status >/dev/null 2>&1; then ck_kv login codex ok -; else ck_kv login codex no "codex login status failed"; fi ;;
+      # (`agy models` lists the account's models, or says "Please sign in" and exits 1 at once)
+      agy)
+        out="$(cd / && ck_run 20 "$b" models </dev/null 2>&1)" || rc=$?
+        if [[ $rc -eq 0 ]]; then ck_kv login agy ok -
+        elif grep -qi 'sign in' <<<"$out"; then ck_kv login agy no "not signed in (run agy once in a terminal)"
+        else ck_kv login agy unknown "agy models gave no answer (exit $rc)"; fi ;;
       gh) if ck_run 20 "$b" auth status >/dev/null 2>&1; then ck_kv login gh ok -; else ck_kv login gh no "gh auth status failed"; fi ;;
     esac
   done

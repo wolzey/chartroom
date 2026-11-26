@@ -210,7 +210,9 @@ load_config() {
   cfg_set CR_WORKSPACE WORKSPACE CAP_CREW_WORKSPACE chartroom-crew
   cfg_set CR_WATCH_INTERVAL WATCH_INTERVAL CAP_WATCH_INTERVAL 3
   cfg_set CR_WATCH_HC_INTERVAL WATCH_HC_INTERVAL '' 60
-  cfg_set CR_BACKEND_ORDER BACKEND_ORDER '' 'hc:claude herdr:claude cmux:claude tmux:claude headless:codex headless:claude command'
+  # Every agent's full sessions before any headless run (the commander's rule r-851d: workers run as
+  # full sessions): a machine without claude starts Codex in hc, not `codex exec`.
+  cfg_set CR_BACKEND_ORDER BACKEND_ORDER '' 'hc:claude hc:codex hc:agy herdr:claude herdr:codex herdr:agy cmux:claude cmux:codex tmux:claude tmux:codex headless:codex headless:claude command'
   CR_BACKEND_ORDER="${CR_BACKEND_ORDER//,/ }"
   cfg_set CR_HARNESS HARNESS '' generic
   cfg_set CR_BRANCH_PREFIX BRANCH_PREFIX '' chartroom/

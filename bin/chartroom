@@ -158,7 +158,7 @@ valid_backend() {
   local b; b="$(canon_backend "$1")"
   case "$b" in
     command|subagent) return 0 ;;
-    *:*) [[ "${b%%:*}" =~ ^($SESSION_RUNNERS|headless|node)$ && "${b#*:}" =~ ^($KNOWN_AGENTS)$ ]] ;;
+    *:*) [[ "${b%%:*}" =~ ^($SESSION_RUNNERS|headless|node)$ && "${b#*:}" =~ ^($KNOWN_AGENTS)$ ]] && agent_runs_on "${b#*:}" "${b%%:*}" ;;
     *) return 1 ;;
   esac
 }
@@ -180,7 +180,20 @@ probe_backend() { # <backend>
   why="$("${r}_probe" "$a" 2>&1)" || { echo "$why"; return 1; }
   if [[ -n "$a" && "$r" != headless && "$r" != node ]]; then # (a node task's agent runs on its device)
     [[ -n "$(agent_bin "$a")" ]] || { echo "$a not on PATH"; return 1; }
+    if [[ "$a" == agy ]]; then
+      agent_runs_on agy "$r" || { echo "chartroom runs agy only as a full session (${AGY_RUNNERS//|/, })"; return 1; }
+      "$(agent_bin agy)" --version >/dev/null 2>&1 </dev/null || { echo "agy --version failed at $(agent_bin agy)"; return 1; }
+    fi
   fi
+  return 0
+}
+# A backend chartroom may pick on its own here: available, and its agent able to start work now.
+# (An explicit hc:agy is not asked this: placement may send it to a node where agy is signed in,
+# and a launch here says so if it is not.)
+auto_ok() { # <backend> -> prints why not
+  local why
+  why="$(probe_backend "$1")" || { echo "$why"; return 1; }
+  if [[ "$(canon_backend "$1")" == *:agy ]]; then agy_login_why || return 1; fi
   return 0
 }
 
@@ -199,7 +212,7 @@ select_backend() { # <id> -> sets SELECTED
   fi
   for b in $CR_BACKEND_ORDER; do
     [[ -z "$first" ]] && first="$b"
-    if why="$(probe_backend "$b")"; then
+    if why="$(auto_ok "$b")"; then
       SELECTED="$(canon_backend "$b")"
       if [[ "$SELECTED" != "$(canon_backend "$first")" ]]; then
         local msg; msg="backend fallback: ${reasons[*]}; using $SELECTED (steering: $(steer_mode_of "$SELECTED"))"
@@ -333,7 +346,10 @@ cmd_new() {
   [[ "$kind" =~ ^(ship|scout)$ ]] || die "kind must be ship or scout (got $kind)"
   local source=explicit
   if [[ -z "$backend" || "$backend" == auto ]]; then backend=""; source=auto
-  else valid_backend "$backend" || die "unknown backend '$backend' (runners: ${RUNNERS//|/, }; agents: ${KNOWN_AGENTS//|/, }; e.g. tmux:claude)"; backend="$(canon_backend "$backend")"; fi
+  else
+    [[ "$backend" != *:agy ]] || agent_runs_on agy "${backend%%:*}" || die "agy runs only as a full session: --backend hc:agy or herdr:agy (or --node DEVICE on a device where agy is signed in), never ${backend%%:*}:agy"
+    valid_backend "$backend" || die "unknown backend '$backend' (runners: ${RUNNERS//|/, }; agents: ${KNOWN_AGENTS//|/, }; e.g. tmux:claude)"; backend="$(canon_backend "$backend")"
+  fi
   [[ "$backend" != command || -n "$command" || -n "$CR_COMMAND" ]] || die "the command backend needs --command TEMPLATE or CHARTROOM_COMMAND"
   project="$(cd "$project" 2>/dev/null && pwd)" || die "project path not found"
   git -C "$project" rev-parse --git-dir >/dev/null 2>&1 || die "$project is not a git repo"
@@ -1797,9 +1813,11 @@ cmd_doctor() {
   jqv="$(command -v jq >/dev/null && jq --version 2>/dev/null || echo missing)"
   gitv="$(command -v git >/dev/null && git --version 2>/dev/null | awk '{print $3}' || echo missing)"
   [[ "$jqv" == missing || "$gitv" == missing ]] && ok=0
-  local all="hc:claude hc:codex herdr:claude herdr:codex cmux:claude cmux:codex tmux:claude tmux:codex headless:claude headless:codex command subagent"
+  local all="hc:claude hc:codex hc:agy herdr:claude herdr:codex herdr:agy cmux:claude cmux:codex tmux:claude tmux:codex headless:claude headless:codex command subagent"
+  # (asked once, here, not in each backend's own subshell below)
+  [[ -z "$(agent_bin agy)" ]] || agy_login_why >/dev/null || true
   for b in $all; do
-    if why="$(probe_backend "$b")"; then avail=yes; why=""; else avail=no; fi
+    if why="$(auto_ok "$b")"; then avail=yes; why=""; else avail=no; fi
     [[ -z "$first_ok" && "$avail" == yes && " $CR_BACKEND_ORDER " == *" $b "* ]] && first_ok="$b"
     rows+=("$(jq -cn --arg b "$b" --arg a "$avail" --arg w "$why" --arg s "$(steer_mode_of "$b")" '{backend:$b,available:($a=="yes"),steering:$s,reason:$w}')")
   done
@@ -1815,11 +1833,12 @@ cmd_doctor() {
     printf '%s\n' "${rows[@]}" | jq -s --arg v "$CR_VERSION" --arg h "$CR_HOME" --arg hs "$CR_HOME_SOURCE" --arg o "$CR_BACKEND_ORDER" --arg auto "$first_ok" --arg harness "$CR_HARNESS" \
       --arg bv "$BASH_VERSION" --arg bp "$BASH" --arg bf "$CR_BASH_FROM" --arg added "$added" \
       --argjson dash "$(dashboard_doctor_json)" --argjson pdf "$(page_doctor_json)" --arg hname "$hname" --arg hcfg "$hcfg" --arg ws "$CR_WORKSPACE" \
+      --argjson agy "$(agy_doctor_json)" \
       '{version:$v,home:$h,home_source:$hs,home_name:(if $hname=="" then null else $hname end),
         home_config:(if $hcfg=="" then null else $hcfg end),workspace:$ws,harness:$harness,
         bash:{version:$bv,path:$bp,rerun_from:(if $bf=="" then null else $bf end)},
         path:{thin:($added!=""),added:($added|split(" ")|map(select(.!="")))},
-        order:($o|split(" ")),auto:(if $auto=="" then null else $auto end),dashboard:$dash,pdf:$pdf,backends:.}'
+        order:($o|split(" ")),auto:(if $auto=="" then null else $auto end),dashboard:$dash,pdf:$pdf,agents:{agy:$agy},backends:.}'
   else
     echo "chartroom $CR_VERSION"
     [[ "$CR_HOME_SOURCE" == "registered home"* ]] && hname=""
@@ -1839,6 +1858,7 @@ cmd_doctor() {
     echo "auto:     ${first_ok:-none available}"
     dashboard_doctor_json | jq -r '"dashboard: port \(.port), bind \(.bind)\(if .bind | startswith("127.") then "" else " (on the network)" end), access token \(if .token_set then "set" else "not set" end), \(if .running then "running on " + .running else "not running" end)"'
     page_doctor_json | jq -r 'if .chrome then "pdf:      \(.chrome) (chartroom artifact pdf)" else "pdf:      - \(.why)" end'
+    agy_doctor_json | jq -r '"agy:      " + (if .path == null then "- not on PATH" else "\(.version // "?") at \(.path), \(if .signed_in then "signed in" else (.why // "not signed in") end)" end) + "; runs as \(.runners | join(", ")) only; \(.limits)"'
     node_doctor_line
     fleet_doctor_line
     device_doctor_line
@@ -1847,6 +1867,20 @@ cmd_doctor() {
       { printf 'BACKEND\tOK\tSTEERING\tWHY NOT\n'; cat; } | table
   fi
   [[ $ok -eq 1 ]] || { warn "missing required dependency (jq and git are required)"; return 1; }
+}
+
+# agy as doctor sees it: where it is, its version, whether it is signed in, and what chartroom
+# does not do for an agy worker (lib/agents.sh).
+agy_doctor_json() {
+  local b v="" why="" signed=false
+  b="$(agent_bin agy)"
+  if [[ -n "$b" ]]; then
+    v="$("$b" --version 2>/dev/null </dev/null | head -1 || true)"
+    if why="$(agy_login_why)"; then signed=true; why=""; fi
+  fi
+  jq -cn --arg p "$b" --arg v "$v" --arg w "$why" --argjson s "$signed" --arg r "$AGY_RUNNERS" --arg l "$AGY_LIMITS" \
+    '{path:(if $p=="" then null else $p end),version:(if $v=="" then null else $v end),signed_in:$s,
+      why:(if $w=="" then null else $w end),runners:($r|split("|")|map(if . == "node" then "node (a device where agy is signed in)" else . + ":agy" end)),limits:$l}'
 }
 
 cmd_version() { echo "chartroom $CR_VERSION (state schema $CR_SCHEMA)"; }
@@ -1920,12 +1954,14 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                 [--node DEVICE|here] [--needs TOOLS]
                                           create a task record + brief scaffold. B is
                                           <runner>:<agent> (runners: hc herdr cmux tmux headless;
-                                          agents: claude codex), command, subagent, or auto
+                                          agents: claude codex agy; agy runs in hc and herdr
+                                          only), command, subagent, or auto
                                           (omit --backend: pick per CHARTROOM_BACKEND_ORDER).
                                           --grant (repeatable): push-branch, open-pr, merge-auto,
                                           comment-pr, prod-read, enforced by the permission hooks
-                                          --node: pin it to an enrolled device (hc:claude or
-                                          hc:codex there), or here; unpinned, dispatch places it.
+                                          --node: pin it to an enrolled device (hc:claude,
+                                          hc:codex or hc:agy there), or here; unpinned, dispatch
+                                          places it.
                                           --needs docker,ruby,...: only a node where those work
   chartroom join [--title T] [--kind ship|scout] [--agent A]
                                           run INSIDE a running agent session (not launched by

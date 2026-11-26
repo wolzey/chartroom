@@ -1,7 +1,10 @@
 # shellcheck shell=bash
 # herdr runner (first class): all workers share one herdr workspace labelled
 # $CHARTROOM_WORKSPACE, one unfocused tab per task; the herdr agent name is the task id.
-# herdr tracks agent state itself (working/idle/done/blocked), so no hooks are needed.
+# herdr tracks agent state itself (working/idle/done/blocked), so no hooks are needed. It starts
+# agy itself (`herdr agent start --kind agy`, herdr 0.9.5); chartroom then types the brief, as for
+# Codex. herdr:agy is built to the same rules as hc:agy but was not run against a signed-in agy
+# (skills/chartroom/references/backends.md).
 
 herdr_probe() {
   [[ -n "$(bin_of herdr)" ]] || { echo "herdr not on PATH"; return 1; }
@@ -118,6 +121,8 @@ herdr_brief_waits() { # <id> <agent> <tab>
 
 herdr_launch() { # <id> <wt> <agent>
   local id="$1" wt="$2" agent="$3" ws pane tab
+  # (A worker that is not signed in would sit at agy's sign-in screen with its brief unread.)
+  if [[ "$agent" == agy ]]; then local why; why="$(agy_login_why)" || die "$why"; fi
   herdr_clear_stale "$id"; meta_set "$id" herdr_launched ""
   crew_workspace "$wt"; ws="$CREW_WS"
   if [[ -n "$CREW_FRESH_PANE" ]]; then

@@ -27,7 +27,9 @@ def login_check($tools):
 ([.nodes[]? | select(.local == true) | .machine] | first // null) as $brain
 | [.nodes[]? | . as $n
     | (($n.contact // "") == "ok") as $up
-    | [ ($n.logins // {} | to_entries[] | login_check($n.tools // {})) ] as $logins
+    # (agy is a crew agent only where it is installed and signed in: placement reads its sign-in,
+    # and doctor reports it; a machine without it, or signed out of it, is not the worse for it)
+    | [ ($n.logins // {} | to_entries[] | select(.key != "agy") | login_check($n.tools // {})) ] as $logins
     | [ ($n.tools // {} | to_entries[] | select(.key | test("^(git|jq|bash|claude|codex|gh|chartroom)$"))
         | check(.value | tool_ok; .key; (.value.version // .value.status))) ] as $tools
     | [ $n.tools.docker // empty | select(.status != "missing") | check(tool_ok; "docker"; (.version // .status)) ] as $extra

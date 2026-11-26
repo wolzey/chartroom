@@ -120,7 +120,10 @@ or choose by this rubric, checking `chartroom doctor` for what is available:
 | `command` | Any other agent CLI, from a template (`--command 'aider --message-file {brief}'`) | Via `peek` | between runs | Yes |
 | `subagent` | Read-only scouts and quick questions, only where your harness has subagents | No | host | No |
 
-`<agent>` is `claude` or `codex`. Spread work across vendors when tasks are independent. A
+`<agent>` is `claude`, `codex` or `agy` (agy runs only as `hc:agy`, `herdr:agy`, or on a node; it has no
+permission cards or grants, and `chartroom doctor` says whether it is signed in). Prefer full sessions:
+the agents do better in their own harness, so Codex work goes to `hc:codex` unless the commander asks for
+headless. Spread work across vendors when tasks are independent. A
 degraded tool should never stall the fleet. If you named a backend and it is unavailable,
 dispatch fails and names the next viable one. Tell the commander only if it changes what they
 can watch or steer.
