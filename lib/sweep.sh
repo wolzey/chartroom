@@ -111,7 +111,12 @@ sweep_procs_json() {
   while IFS=$'\t' read -r pid ppid age cpu pcpu rss tty args; do
     cwd="${cwd_of[$pid]:-}"; root=""; gone=0
     if [[ "$cwd" == *" (deleted)" ]]; then cwd="${cwd% (deleted)}"; gone=1; fi
-    if [[ -n "$only" && "$cwd" != "$only"* && "$cwd" != "$only_p"* && "$args" != *"$only"* && "$args" != *"$only_p"* ]]; then continue; fi
+    if [[ -n "$only" && "$cwd" != "$only"* && "$cwd" != "$only_p"* && "$args" != *"$only"* && "$args" != *"$only_p"* ]]; then
+      # A user systemd/launchd can adopt the test's orphans without living under its
+      # temp directory. Keep that supervisor as context for orphaned in sweep.jq;
+      # it is neither a chartroom loop nor a task worker and cannot be a target.
+      case "${args%% *}" in systemd|*/systemd|init|*/init|launchd|*/launchd) ;; *) continue ;; esac
+    fi
     for ((i = 0; i < ${#prefixes[@]}; i++)); do
       pre="${prefixes[$i]}"
       [[ "$cwd" == "$pre"* ]] || continue
