@@ -1245,6 +1245,9 @@ function renderUsage(d) {
         else h.append(" · resets " + u.out_resets_at);
       }
       winsCol.append(h);
+    } else if (st === "out" && u.limit_reached && !wins.some((w) => w.state === "out" && !w.scoped)) {
+      // out with room left in every window: the agent itself allows no more use (Codex's spend cap or block)
+      winsCol.append(el("div", { class: "u-hit" }, "limit reached: " + u.agent + " allows no more use for now"));
     }
 
     const liveN = u.live_workers || 0;

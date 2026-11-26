@@ -56,13 +56,19 @@ logged.
 
 - **Never guessed; automatic refresh.** Unknown agents are reported as `unknown` with the exact
   reason and are never treated as exhausted. `watch` refreshes local and synced node usage
-  automatically every `CHARTROOM_USAGE_REFRESH_MINUTES` (5; `0` disables), and enrolled nodes
-  refresh their own readings into `$XDG_STATE_HOME/chartroom/usage/` for every heartbeat. Readings
+  automatically every `CHARTROOM_USAGE_REFRESH_MINUTES` (5; `0` disables; one refresh at a time), and enrolled nodes
+  refresh their own readings into `$XDG_STATE_HOME/chartroom/usage/` for every heartbeat, which
+  carries them as `usage` lines (`lib/nodeprobe.sh`: model-only windows marked `:s`, the agent's
+  own limit flag, and the last worker stop's reset and time); the brain reads those lines with
+  the same evaluator as its own readings, in `nodes` at once and in its kept records at each
+  refresh. Readings
   older than `CHARTROOM_USAGE_STALE_MINUTES` (30) are flagged stale with their age. Once a
   window's `resets_at` passes, it stops locking out the agent automatically (marked reset until a
   fresh reading arrives; never estimated).
 - **Skipping exhausted agents.** An agent is out when any active account-wide window is at or
-  above `CHARTROOM_USAGE_LIMIT_PCT` (default 95; warn at `CHARTROOM_USAGE_WARN_PCT`, 80) or after
+  above `CHARTROOM_USAGE_LIMIT_PCT` (default 95; warn at `CHARTROOM_USAGE_WARN_PCT`, 80), when
+  the agent itself reports no more use allowed (Codex `ordinaryUsageAllowed: false`,
+  `rateLimitReachedType` or `spendControlReached`: `limit_reached`, while the reading is fresh), or after
   a worker hits a usage-limit stop (`hit_limit`), until `resets_at` (or fallback cooldown
   `CHARTROOM_USAGE_COOLDOWN_MINUTES`, 60). `spread_local_backends`, `spread_node_agents`,
   re-dispatch of already-dispatched automatic tasks, `place_remote_lacks`, and `$CR_BACKEND_ORDER`
@@ -84,7 +90,8 @@ logged.
   machine's agent out until its reset time (or fallback cooldown / `chartroom usage clear`, never
   wiped early by routine account-wide readings) and raises
   `agent: out-of-usage: <agent>[ on <node>] resets <time>; available: <agents> (move with: chartroom move <id>)`
-  once per dispatch/steer.
+  once per stop: again after a re-dispatch or steer, once the worker is seen working again however
+  it was resumed, or for a stop with another reset time.
 - **Moving work (`chartroom move <id>`).** Pre-checks target usage, brief readiness, and node
   eligibility before stopping the old worker; refuses `--node <device>` for started tasks with
   local commits or worktree edits so remote dispatch never strands unpushed work (recalling a

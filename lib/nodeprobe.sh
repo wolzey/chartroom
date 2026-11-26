@@ -42,6 +42,13 @@
 #   path_source login|inherited
 #   tool NAME ok|old|down|missing|error VERSION-OR-WHY  (error: the binary and its first line)
 #   login NAME ok|no|unknown|missing DETAIL
+#   usage AGENT STATUS PLAN ACCOUNT SAMPLED-AT WINDOWS REASON HIT-RESETS LIMIT-REACHED HIT-AT
+#                          (each subscription reading this machine keeps: WINDOWS is
+#                          "LABEL:USED-PCT:RESETS-EPOCH[:s],...", ":s" marking a window that binds
+#                          one model only, never the account; LIMIT-REACHED 1 when the agent itself
+#                          says no more use is allowed (Codex's spend cap or block), else 0;
+#                          HIT-RESETS and HIT-AT the epochs of a worker's last limit stop. A
+#                          chartroom older than these last two fields sends only the first nine)
 #   checkouts N | checkout CANONICAL-REMOTE PATH FETCH-AGE-SECONDS FLAGS  (the latter only for
 #                          $CR_PROBE_PROJECT, or every one, its age not read, with CR_PROBE_CHECKOUTS=1;
 #                          FLAGS: "cloned" for one chartroom cloned here itself (lib/guest.sh), and
@@ -361,13 +368,17 @@ probe_main() {
         ua="$(jq -r 'select(.local == true) | .agent // empty' "$uf" 2>/dev/null || true)"
         [[ -n "$ua" && "$useen" != *" $ua "* ]] || continue
         useen+="$ua "
+        # (the line is the `usage` one in the header; lib/usage.sh usage_probe_rec reads it)
         jq -r '
           def s: if . == null or . == "" then "-" else (tostring | gsub("[\t\n\r]"; " ")) end;
           def ep: if . == null or . == "" then "-" else (tostring | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | (try fromdateiso8601 catch "-") | tostring) end;
           ["usage", (.agent | s), (.status | s), (.plan | s), (.account | s), (.sampled_at | s),
-           ((.windows // []) | map("\(.label):\(.used_pct // ""):\(.resets_at | ep)") | join(",") | s),
+           ((.windows // []) | map("\((.label // .id // "-") | tostring | gsub("[\t\n\r:,]"; " ")):\(.used_pct // ""):\(.resets_at | ep)"
+             + (if .scoped == true then ":s" else "" end)) | join(",") | s),
            (.reason | s),
-           ((.hit_limit.resets_at // null) | ep)] | @tsv' "$uf" 2>/dev/null || true
+           ((.hit_limit.resets_at // null) | ep),
+           (if .limit_reached == true then "1" else "0" end),
+           ((.hit_limit.at // null) | ep)] | @tsv' "$uf" 2>/dev/null || true
       done
     done
   fi

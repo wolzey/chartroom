@@ -145,24 +145,12 @@ NODES_ROW_JQ='
        path_source: (one("path_source")[1] | s),
        tools: ([$r[] | select(.[0] == "tool") | {key: .[1], value: {status: .[2], version: (.[3] | s)}}] | from_entries),
        logins: ([$r[] | select(.[0] == "login" and .[1] != "-") | {key: .[1], value: {status: .[2], detail: (.[3] | s)}}] | from_entries),
-       usage: ([$r[] | select(.[0] == "usage" and .[1] != "-")
-         | (.[6] // "-" | if . == "-" or . == "" then [] else split(",") | map(select(length > 0) | split(":")
-             | (.[1] | tonumber? // null) as $u | select($u != null)
-             | (.[2] // "-" | tonumber? // null) as $re
-             | {label: .[0], used_pct: $u, left_pct: ([100 - $u, 0] | max),
-                resets_at: (if $re != null and $re > 0 then ($re | floor | todate) else null end),
-                out: ($u >= $ulim and ($re == null or $re <= 0 or $unow < $re))}) end) as $ws
-         | (.[8] // "-" | if . == "-" or . == "" then null else (tonumber? // null) end) as $hre
-         | ($hre != null and $hre > $unow) as $hit_out
-         | ([$ws[] | select(.out)] | sort_by(-.used_pct) | .[0] // null) as $ow
-         | ($hit_out or $ow != null) as $is_out
-         | (if $hit_out then ($hre | floor | todate) elif $ow then $ow.resets_at else null end) as $ores
-         | {key: .[1], value: {status: (.[2] | s), plan: (.[3] | s), account: (.[4] | s), sampled_at: (.[5] | s),
-              windows: $ws, reason: (.[7] | s), out: $is_out,
-              out_resets_at: $ores,
-              out_reason: (if $hit_out then "\(.[1]) hit usage limit" + (if $ores then " (resets \($ores))" else "" end)
-                           elif $ow then "\(.[1]) is out of usage (\($ow.label) \($ow.used_pct)% used" + (if $ow.resets_at then ", resets \($ow.resets_at)" else "" end) + ")"
-                           else null end)}}] | from_entries),
+       # (each reading read and judged as lib/usage.sh reads and judges one kept here)
+       usage: ([$r[] | select(.[0] == "usage" and (.[1] // "-") != "-")
+         | usage_probe_rec($m.machine // ""; ($unow | todate))
+         | eval_rec($unow; $ulim; $uwarn; $ustale; $ucool)
+         | {key: .agent, value: {status, plan, account, sampled_at, windows, reason, limit_reached, hit_limit,
+              state, near, stale, hit_active, out, out_resets_at, out_reason}}] | from_entries),
        checkouts: (one("checkouts")[1] | n), checkouts_scanned: (one("checkouts")[1] != "-"),
        repos: [$r[] | select(.[0] == "checkout") | {remote: .[1], path: .[2], fetch_age_s: (.[3] | n)} + (if (.[4] // "-") == "-" then {} else {flags: (.[4] | split(","))} end)]}
       | .checkouts_listed = ((.checkouts // 0) == 0 or (.repos | length) > 0)
@@ -180,8 +168,10 @@ NODES_ROW_JQ='
                  else null end)
     end)'
 
-nodes_settings() { # sets NODE_C, NODE_MG
+nodes_settings() { # sets NODE_C, NODE_MG, and NODES_USAGE_ARGS (the usage thresholds a row judges readings by)
   NODE_C="$(cfg WORKER_CPU '' 1.5)"; NODE_MG="$(cfg WORKER_MEM_GB '' 1.5)"
+  NODES_USAGE_ARGS=(--argjson ulim "$((10#${CR_USAGE_LIMIT_PCT:-95}))" --argjson uwarn "$((10#${CR_USAGE_WARN_PCT:-80}))"
+    --argjson ustale "$((10#${CR_USAGE_STALE_MIN:-30} * 60))" --argjson ucool "$((10#${CR_USAGE_COOLDOWN_MIN:-60} * 60))")
   [[ "$NODE_C" =~ ^[0-9]+(\.[0-9]+)?$ && "$NODE_MG" =~ ^[0-9]+(\.[0-9]+)?$ ]] ||
     die "CHARTROOM_WORKER_CPU and CHARTROOM_WORKER_MEM_GB must be numbers, such as 1.5 (got '$NODE_C', '$NODE_MG')"
 }
@@ -205,14 +195,24 @@ nodes_json() { # <remote to look for, or ""> [ssh: 1 for the ssh list alone]
       node_contact "$dir/$i.out" "$dir/$i.err" "$dir/$i.rc"
       jq -n --argjson m "$(jq -c --argjson i "$i" '.[$i]' <<<"$machines")" --rawfile probe "$dir/$i.out" \
         --arg contact "$NODE_CONTACT" --arg err "$NODE_ERR" --arg want "$want" --argjson now "$now" --argjson unow "$now" \
-        --argjson c "$NODE_C" --argjson mg "$NODE_MG" --argjson ulim "${CR_USAGE_LIMIT_PCT:-95}" "$NODES_ROW_JQ"
+        --argjson c "$NODE_C" --argjson mg "$NODE_MG" "${NODES_USAGE_ARGS[@]}" "$USAGE_EVAL_JQ$USAGE_PROBE_JQ$NODES_ROW_JQ"
     done
     n="$(jq length <<<"$devs")"
     for ((i = 0; i < n; i++)); do nodes_device_row "$(jq -c --argjson i "$i" '.[$i]' <<<"$devs")" "$now" "$want"; done
   } | jq -s --arg want "$want" --argjson c "$NODE_C" --argjson mg "$NODE_MG" \
     --argjson urec "$(if declare -F usage_all_json >/dev/null 2>&1; then usage_all_json; else echo '[]'; fi)" '
-    ($urec | map({key: "\(.machine)|\(.agent)", value: {status, plan, account, sampled_at, windows, reason, out, out_resets_at, out_reason}}) | from_entries) as $um
-    | {nodes: map(del(.repos) | .machine as $mn | .usage = ((.usage // {}) + ([$um | to_entries[] | select(.key | startswith($mn + "|")) | {key: (.key | split("|")[1]), value: .value}] | from_entries))),
+    def epoch: if . == null then null else (tostring | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | try fromdateiso8601 catch null) end;
+    ($urec | map({key: "\(.machine)|\(.agent)", value: {status, plan, account, sampled_at, windows, reason, limit_reached, hit_limit,
+        state, near, stale, hit_active, out, out_resets_at, out_reason}}) | from_entries) as $um
+    # What the brain keeps for a machine wins over its probe, but a node heard by heartbeat is newer
+    # than the last sync of it the brain keeps: there, a kept reading counts only for an agent the heartbeat
+    # did not carry, or for a limit stop the brain heard (from a node task) after the probe of that
+    # heartbeat began (with a minute of margin, as lib/usage.sh usage_sync_nodes allows).
+    | {nodes: map(del(.repos) | .machine as $mn | (.device.last_seen // null) as $hb
+        | .usage = ((.usage // {}) as $pu | $pu + ([$um | to_entries[] | select(.key | startswith($mn + "|"))
+            | {key: (.key | split("|")[1]), value: .value}
+            | select($hb == null or $pu[.key] == null
+                     or (.value.hit_active == true and ((.value.hit_limit.at | epoch) // 0) > ($hb - 60)))] | from_entries))),
        project: (if $want == "" then null else $want end), settings: {worker_cpu: $c, worker_mem_gb: $mg}}'
   rm -rf "$dir"
 }
@@ -233,7 +233,7 @@ nodes_device_row() { # <device json> <now> [remote to look for]
   jq -n --argjson m "$(jq -c '{machine: .name, local: false, target: null, via: "heartbeat",
         device: {id, status, last_seen, seen_age_s, version, enrolled, aliases, caps}}' <<<"$d")" \
     --arg probe "$probe" --arg contact "$contact" --arg err "$err" --arg want "${3:-}" --argjson now "$at" --argjson unow "$2" \
-    --argjson c "$NODE_C" --argjson mg "$NODE_MG" --argjson ulim "${CR_USAGE_LIMIT_PCT:-95}" "$NODES_ROW_JQ"
+    --argjson c "$NODE_C" --argjson mg "$NODE_MG" "${NODES_USAGE_ARGS[@]}" "$USAGE_EVAL_JQ$USAGE_PROBE_JQ$NODES_ROW_JQ"
 }
 
 # The terminal table.
@@ -467,7 +467,7 @@ node_row_local() {
   local now_s; now_s="$(date +%s)"
   jq -cn --argjson m "$(jq -cn --arg m "$(radar_machine_name)" '{machine: $m, local: true, target: null, via: "this machine"}')" \
     --rawfile probe "$dir/out" --arg contact "$NODE_CONTACT" --arg err "$NODE_ERR" --arg want "" --argjson now "$now_s" --argjson unow "$now_s" \
-    --argjson c "$NODE_C" --argjson mg "$NODE_MG" --argjson ulim "${CR_USAGE_LIMIT_PCT:-95}" "$NODES_ROW_JQ"
+    --argjson c "$NODE_C" --argjson mg "$NODE_MG" "${NODES_USAGE_ARGS[@]}" "$USAGE_EVAL_JQ$USAGE_PROBE_JQ$NODES_ROW_JQ"
   rm -rf "$dir"
 }
 

@@ -779,84 +779,79 @@ usage_device_refresh() { # [force 0|1]
   return 0
 }
 
+# A heartbeat's `usage` line (lib/nodeprobe.sh's header: the one producer) as a schema-1 reading,
+# read by the brain's stored records (usage_from_probe_line) and `chartroom nodes` (NODES_ROW_JQ)
+# alike, so both judge it with eval_rec as the node judged it. Input: the line's fields, "usage"
+# first. A line from an older chartroom has no LIMIT-REACHED or HIT-AT field and no ":s" marks.
+# shellcheck disable=SC2016
+USAGE_PROBE_JQ='
+  def usage_probe_rec($m; $rec):
+    def d: if . == null or . == "" or . == "-" then null else . end;
+    def r1: ((. * 10 + 0.5) | floor) / 10;
+    def ep: d | if . == null then null else (tonumber? // null) | if . != null and . > 0 then floor else null end end;
+    def parse_w:
+      if . == null or . == "" or . == "-" then []
+      else split(",") | map(select(length > 0) | split(":")
+        | (.[1] | tonumber? // null) as $u
+        | select($u != null)
+        | (.[2] | ep) as $re
+        | {id: .[0], label: .[0], used_pct: ($u | r1), left_pct: ((100 - $u) | if . < 0 then 0 elif . > 100 then 100 else . end | r1),
+           resets_at: (if $re != null then ($re | todate) else null end),
+           active: ($re != null)}
+          + (if (.[3] // "") == "s" then {scoped: true} else {} end)) end;
+    . as $f
+    | ($f[8] | ep) as $hre
+    | ($f[10] | ep) as $hat
+    | {schema: '"$CR_USAGE_SCHEMA"', agent: $f[1], machine: $m, local: false,
+       account: ($f[4] | d), plan: ($f[3] | d),
+       status: (if $f[2] == "ok" then "ok" else "unknown" end),
+       source: "node-probe",
+       reason: ($f[7] | d),
+       sampled_at: (($f[5] | d) // $rec), recorded_at: $rec,
+       windows: ($f[6] | parse_w),
+       limit_reached: ($f[9] == "1")}
+      + (if $hre != null or $hat != null then
+           {hit_limit: {at: (if $hat != null then ($hat | todate) else $rec end),
+                        resets_at: (if $hre != null then ($hre | todate) else null end),
+                        resets_text: null, task: null, message: "worker hit usage limit on \($m)"}}
+         else {} end);
+'
+
 # Sync usage lines from remote enrolled devices' last heartbeats into $CHARTROOM_HOME/usage/.
+# The node's line is the truth for its own readings, a limit stop and its clearing included; only
+# a stop the brain recorded itself (from a node task's wake) after that heartbeat's probe began is
+# kept over it. (A probe takes seconds before its heartbeat is heard, hence the minute's margin.)
 usage_sync_nodes() {
   declare -F fleet_devices_json >/dev/null 2>&1 || return 0
-  local devs n i dev name probe line a st plan acct sampled wspec why hre doc
+  local devs n i dev name probe seen line doc prev f
   devs="$(fleet_devices_json 2>/dev/null || echo '[]')"
   n="$(jq length <<<"$devs" 2>/dev/null || echo 0)"
   for ((i = 0; i < n; i++)); do
     dev="$(jq -c --argjson i "$i" '.[$i]' <<<"$devs")"
     [[ "$(jq -r '.status // ""' <<<"$dev")" =~ ^(online|stale)$ ]] || continue
     name="$(jq -r '.name // ""' <<<"$dev")"; probe="$(jq -r '.probe // ""' <<<"$dev")"
+    seen="$(jq -r '.last_seen // 0 | tonumber? // 0 | floor' <<<"$dev")"
     [[ -n "$name" && -n "$probe" ]] || continue
-    while IFS=$'\t' read -r _ a st plan acct sampled wspec why hre; do
-      [[ -n "$a" ]] || continue
-      doc="$(usage_from_probe_line "$name" "$a" "$st" "$plan" "$acct" "$sampled" "$wspec" "$why" "${hre:-}")" || continue
-      usage_write_record "$a" "$name" "$doc" 0
-    done < <(awk -F'\t' '$1 == "usage" { print }' <<<"$probe")
+    while IFS= read -r line; do
+      doc="$(usage_from_probe_line "$name" "$line")" || continue
+      [[ -n "$doc" ]] || continue
+      f="$(usage_file "$(jq -r .agent <<<"$doc")" "$name")"
+      prev="$(cat "$f" 2>/dev/null || true)"
+      jq -e 'type == "object"' <<<"$prev" >/dev/null 2>&1 || prev=null
+      doc="$(jq -c --argjson prev "$prev" --argjson seen "$seen" '
+        def epoch: if . == null then null else (tostring | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | try fromdateiso8601 catch null) end;
+        if .hit_limit == null and ($prev | type) == "object" and $prev.hit_limit != null
+           and (($prev.hit_limit.at | epoch) // 0) > ($seen - 60)
+        then .hit_limit = $prev.hit_limit else . end' <<<"$doc")" || continue
+      usage_write_record "$(jq -r .agent <<<"$doc")" "$name" "$doc" 1
+    done < <(awk -F'\t' '$1 == "usage" && $2 != "" && $2 != "-" { print }' <<<"$probe")
   done
 }
 
-# Convert one nodeprobe `usage` TSV line into a schema-1 reading JSON.
-# Format: usage <agent> <status> <plan|-> <account|-> <sampled_at|-> <wspec|-> <reason|-> [hit_resets_epoch|->]
-# wspec: comma-separated "<label>:<used_pct>:<resets_epoch_or_->" (e.g. "5h:12.0:1795700000,7d:94.0:1795900000")
-usage_from_probe_line() { # <machine> <agent> <status> <plan> <acct> <sampled> <wspec> <reason> [hit_resets_epoch]
-  jq -cn --argjson schema "$CR_USAGE_SCHEMA" --arg m "$1" --arg a "$2" --arg st "$3" \
-    --arg plan "$4" --arg acct "$5" --arg sampled "$6" --arg wspec "$7" --arg why "$8" \
-    --arg hre "${9:-}" --arg rec "$(now)" '
-    def d: if . == "" or . == "-" then null else . end;
-    def r1: ((. * 10 + 0.5) | floor) / 10;
-    def parse_w:
-      if . == "" or . == "-" then []
-      else split(",") | map(select(length > 0) | split(":")
-        | (.[1] | tonumber? // null) as $u
-        | select($u != null)
-        | (.[2] // "-" | tonumber? // null) as $re
-        | {id: .[0], label: .[0], used_pct: ($u | r1), left_pct: ((100 - $u) | if . < 0 then 0 elif . > 100 then 100 else . end | r1),
-           resets_at: (if $re != null and $re > 0 then ($re | floor | todate) else null end),
-           active: ($re != null and $re > 0)}) end;
-    ($hre | d | if . != null then (tonumber? // null) else null end) as $he
-    | {schema: $schema, agent: $a, machine: $m, local: false,
-       account: ($acct | d), plan: ($plan | d),
-       status: (if $st == "ok" then "ok" else "unknown" end),
-       source: "node-probe",
-       reason: ($why | d),
-       sampled_at: (($sampled | d) // $rec), recorded_at: $rec,
-       windows: ($wspec | parse_w)}
-      + (if $he != null and $he > 0 then {hit_limit: {at: $rec, resets_at: ($he | floor | todate), resets_text: null, task: null, message: "worker hit usage limit on \($m)"}} else {} end)'
-}
-
-# Print local usage as nodeprobe TSV lines without writing any files (lib/nodeprobe.sh is strictly read-only).
-usage_probe_tsv() {
-  local d f seen=" "
-  for d in "${CHARTROOM_HOME:+$CHARTROOM_HOME/usage}" "${XDG_STATE_HOME:-$HOME/.local/state}/chartroom/usage"; do
-    [[ -n "$d" && -d "$d" ]] || continue
-    shopt -s nullglob
-    for f in "$d"/*.json; do
-      local a; a="$(jq -r 'select(.local == true) | .agent // empty' "$f" 2>/dev/null || true)"
-      [[ -n "$a" && "$seen" != *" $a "* ]] || continue
-      seen+="$a "
-      jq -r '
-        def s: if . == null or . == "" then "-" else (tostring | gsub("[\t\n\r]"; " ")) end;
-        def ep: if . == null or . == "" then "-" else (tostring | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | (try fromdateiso8601 catch "-") | tostring) end;
-        ["usage", (.agent | s), (.status | s), (.plan | s), (.account | s), (.sampled_at | s),
-         ((.windows // []) | map(select((.scoped // false) | not) | "\(.label):\(.used_pct // ""):\(.resets_at | ep)") | join(",") | s),
-         (.reason | s),
-         ((.hit_limit.resets_at // null) | ep)] | @tsv' "$f" 2>/dev/null || true
-    done
-    shopt -u nullglob
-  done
-  if [[ "$seen" != *" codex "* && -d "${CODEX_HOME:-$HOME/.codex}/sessions" ]]; then
-    local cdoc; cdoc="$(CHARTROOM_CODEX_APP_SERVER=off usage_read_codex "$(usage_machine_name)" 2>/dev/null || true)"
-    [[ -z "$cdoc" ]] || jq -r '
-      select(.status == "ok")
-      | def s: if . == null or . == "" then "-" else (tostring | gsub("[\t\n\r]"; " ")) end;
-      def ep: if . == null or . == "" then "-" else (tostring | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | (try fromdateiso8601 catch "-") | tostring) end;
-      ["usage", (.agent | s), (.status | s), (.plan | s), (.account | s), (.sampled_at | s),
-       ((.windows // []) | map("\(.label):\(.used_pct // ""):\(.resets_at | ep)") | join(",") | s),
-       (.reason | s), "-"] | @tsv' <<<"$cdoc" 2>/dev/null || true
-  fi
+# One heartbeat `usage` line (tab-separated, as lib/nodeprobe.sh prints it) as a schema-1 reading.
+usage_from_probe_line() { # <machine> <line>
+  jq -cn --arg m "$1" --arg line "$2" --arg rec "$(now)" \
+    "$USAGE_PROBE_JQ"'($line | split("\t")) | select(.[0] == "usage" and (.[1] // "-") != "-") | usage_probe_rec($m; $rec)'
 }
 
 # ---------------------------------------------------------------- query & exhaustion checks
@@ -1369,8 +1364,13 @@ usage_limit_look() { # <id> <runner> <agent> <screen> [live] [machine]
   case "$r" in
     hc|herdr|tmux|cmux)
       # Never trigger while the worker is actively mid-turn (editing/reading code or outputting prose).
-      case "$live" in working|listening|parked|not-started) return 0 ;; esac
-      if grep -qi 'esc to interrupt' <<<"$(tail -n 6 <<<"$scr")"; then return 0; fi
+      # A worker seen working again has resumed, however it was resumed (a steer, hc keys, attach, a
+      # person's answer), so its next limit stop is a new one and raises its own wake.
+      case "$live" in
+        working) rm -f "$d/.usage-limit"; return 0 ;;
+        listening|parked|not-started) return 0 ;;
+      esac
+      if grep -qi 'esc to interrupt' <<<"$(tail -n 6 <<<"$scr")"; then rm -f "$d/.usage-limit"; return 0; fi
       # 1. For Claude workers, prefer the structured transcript signal when session_id is known.
       # When a readable transcript exists and shows no limit stop (rc 1), trust it and NEVER fall
       # back to screen scraping (prevents false lockouts when a reply quotes a limit banner).
@@ -1414,12 +1414,13 @@ usage_limit_look() { # <id> <runner> <agent> <screen> [live] [machine]
     match="$(usage_screen_limit "$agent" "$text" "$mode")" || return 0
   fi
   hit="${match%%$'\t'*}"; rtxt="${match#*$'\t'}"
-  # Deduplicate per dispatch/steer: one wake until the task is steered or re-dispatched.
+  # One wake per stop: the same stop stays on screen across looks, so it is raised again only
+  # after a re-dispatch, a steer, the worker seen working (above), or a stop with another reset.
   f="$d/.usage-limit"
   local steer_cnt
   events_path "$id"
   steer_cnt="$(grep -c ' steered: ' "$EVENTS_PATH" 2>/dev/null || true)"
-  sig="$(meta "$id" dispatched):${steer_cnt:-0}:$agent"
+  sig="$(meta "$id" dispatched):${steer_cnt:-0}:$agent:$rtxt"
   last_sig="$(cat "$f" 2>/dev/null || true)"
   [[ "$sig" != "$last_sig" ]] || return 0
   printf '%s\n' "$sig" >"$f"
@@ -1762,7 +1763,6 @@ cmd_usage() {
   case "$sub" in
     record) shift; cmd_usage_record "$@"; return ;;
     clear) shift; cmd_usage_clear "$@"; return ;;
-    probe-tsv) shift; usage_probe_tsv "$@"; return ;;
   esac
   local json=0 refresh=0 only_agent=""
   while [[ $# -gt 0 ]]; do
@@ -1872,7 +1872,14 @@ usage_watch_refresh() {
   local now_s; printf -v now_s '%(%s)T' -1
   (( now_s >= USAGE_WATCH_NEXT )) || return 0
   USAGE_WATCH_NEXT=$((now_s + CR_USAGE_REFRESH_MIN * 60))
+  # one refresh at a time: a slow one (agy through hc, many Codex sessions) is let finish, never doubled
+  local pf oldp
+  pf="$(usage_dir)/.watch-refresh.pid"
+  mkdir -p "$(usage_dir)" 2>/dev/null || return 0
+  oldp="$(cat "$pf" 2>/dev/null || true)"
+  if [[ "$oldp" =~ ^[0-9]+$ ]] && pid_alive "$oldp"; then return 0; fi
   CHARTROOM_HOME="$CR_HOME" nohup "$CR_BIN" usage --json </dev/null >/dev/null 2>&1 3>&- &
+  printf '%s\n' "$!" >"$pf" 2>/dev/null || true
   return 0
 }
 

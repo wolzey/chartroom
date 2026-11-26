@@ -18,6 +18,7 @@ setup() {
 teardown() {
   [[ ! -f "$BATS_TEST_TMPDIR/core.pid" ]] || kill "$(cat "$BATS_TEST_TMPDIR/core.pid")" 2>/dev/null || true
   [[ ! -f "$BATS_TEST_TMPDIR/dash.pid" ]] || kill "$(cat "$BATS_TEST_TMPDIR/dash.pid")" 2>/dev/null || true
+  [[ ! -f "$BATS_TEST_TMPDIR/ep.pid" ]] || kill "$(cat "$BATS_TEST_TMPDIR/ep.pid")" 2>/dev/null || true
   return 0
 }
 
@@ -1105,4 +1106,190 @@ EOF
   '
   [ "$status" -eq 0 ]
   [[ "$output" == *"codex"* ]]
+}
+
+# Judge one stored reading as the machine holding it does (lib/usage.sh eval_rec, default thresholds).
+local_verdict() { # <record file>
+  bash -c '
+    source "'"$REPO_ROOT/lib/core.sh"'"
+    source "'"$REPO_ROOT/lib/usage.sh"'"
+    jq -c --argjson now "$(date +%s)" "$USAGE_EVAL_JQ"'"'"'eval_rec($now; 95; 80; 1800; 3600)
+      | {state, out, limit_reached: (.limit_reached == true), hit_active}'"'"' "$1"' _ "$1"
+}
+
+# Give the brain a heartbeat from enrolled node "mini" carrying <probe output>, heard at [epoch].
+heartbeat_from_mini() { # <probe output file> [last_seen epoch]
+  export CHARTROOM_FLEET_DIR="$BATS_TEST_TMPDIR/fleet"
+  mkdir -p "$CHARTROOM_FLEET_DIR/devices"
+  jq -cn '{id:"n-222222222222",name:"mini",aliases:[],host:"mini.local",enrolled:1795700000}' \
+    >"$CHARTROOM_FLEET_DIR/devices/n-222222222222.json"
+  jq -cn --rawfile p "$1" --argjson ls "${2:-$(date +%s)}" '{last_seen:$ls,caps:["dispatch","place"],probe:$p}' \
+    >"$CHARTROOM_FLEET_DIR/devices/n-222222222222.seen.json"
+  # the endpoint hearing it, as the app server leaves it (lib/fleet.sh asks ps that it is one)
+  if [[ ! -f "$BATS_TEST_TMPDIR/ep.pid" ]]; then
+    bash -c 'exec -a "python3 lib/app/server.py" sleep 300' 3>&- &
+    echo $! >"$BATS_TEST_TMPDIR/ep.pid"
+    echo "$! $(( $(date +%s) - 3600 ))" >"$CHARTROOM_FLEET_DIR/endpoint"
+  fi
+}
+
+@test "a reading taken on a node reaches the brain with every flag intact for claude, codex and agy" {
+  local ep7 node_usage="$XDG_STATE_HOME/chartroom/usage" a nv bv sv
+  ep7="$(jq -rn '(now | floor) + 320000')"
+  export CHARTROOM_NODES=none CHARTROOM_NODE_CONFIG="$BATS_TEST_TMPDIR/nodecfg/node"
+
+  # The node "mini" reads its own agents from the real redacted samples:
+  #  - claude: account-wide 7d 58%, Opus-only weekly bucket 99% (scoped: never locks the account)
+  #  - codex:  app-server 26% used, but ordinaryUsageAllowed=false and rateLimitReachedType set
+  #  - agy:    100% left on every bucket
+  jq --argjson e "$ep7" '(.seven_day.resets_at, .seven_day_opus.resets_at) = ($e | todate) | .limits |= map(.resets_at = ($e | todate))' \
+    "$REPO_ROOT/test/fixtures/usage/claude-oauth-api-real.json" >"$BATS_TEST_TMPDIR/claude-real.json"
+  jq --argjson e "$ep7" '.ordinaryUsageAllowed = false
+      | (.rateLimits, .rateLimitsByLimitId.codex) |= (.rateLimitReachedType = "rate_limit_reached" | .primary.resetsAt = $e)' \
+    "$REPO_ROOT/test/fixtures/usage/codex-appserver-ratelimits.json" >"$BATS_TEST_TMPDIR/codex-as.json"
+  cat >"$BIN/codex" <<EOF
+#!/usr/bin/env bash
+if [[ "\${1:-}" == "app-server" ]]; then
+  while IFS= read -r line; do
+    if [[ "\$line" == *"account/rateLimits/read"* ]]; then
+      printf '{"jsonrpc":"2.0","id":2,"result":%s}\n' "\$(jq -c . "$BATS_TEST_TMPDIR/codex-as.json")"
+      exit 0
+    fi
+  done
+fi
+exit 0
+EOF
+  cat >"$BIN/agy" <<EOF
+#!/usr/bin/env bash
+[[ "\$*" == *"-p=/usage"* ]] && cat "$REPO_ROOT/test/fixtures/usage/agy-usage.json"
+exit 0
+EOF
+  chmod +x "$BIN/codex" "$BIN/agy"
+  CHARTROOM_CLAUDE_USAGE_FILE="$BATS_TEST_TMPDIR/claude-real.json" CHARTROOM_MACHINE_NAME=mini CHARTROOM_HOME="" \
+    run cr node usage-refresh
+  [ "$status" -eq 0 ]
+  # agy: a worker stopped at its limit two minutes ago with no reset time it could read (the
+  # record a guest's `node usage-look` leaves: hit_limit with resets_at null, within the cooldown)
+  jq --arg at "$(iso_offset -120)" '.hit_limit = {at: $at, resets_at: null, resets_text: null, task: "t1", message: "limit"}' \
+    "$node_usage/mini--agy.json" >"$BATS_TEST_TMPDIR/agy.json" && mv "$BATS_TEST_TMPDIR/agy.json" "$node_usage/mini--agy.json"
+
+  # What the node itself makes of each reading.
+  [ "$(local_verdict "$node_usage/mini--claude.json")" = '{"state":"ok","out":false,"limit_reached":false,"hit_active":false}' ]
+  [ "$(local_verdict "$node_usage/mini--codex.json")" = '{"state":"out","out":true,"limit_reached":true,"hit_active":false}' ]
+  [ "$(local_verdict "$node_usage/mini--agy.json")" = '{"state":"out","out":true,"limit_reached":false,"hit_active":true}' ]
+
+  # Its heartbeat carries them as the brain will read them.
+  CHARTROOM_MACHINE_NAME=mini CHARTROOM_HOME="" cr node probe >"$BATS_TEST_TMPDIR/probe.out"
+  grep -q $'^usage\tclaude\tok\t.*7d opus:99:[0-9]*:s' "$BATS_TEST_TMPDIR/probe.out"
+  grep -q $'^usage\tcodex\tok\t.*\t1\t-$' "$BATS_TEST_TMPDIR/probe.out"
+  grep -qE $'^usage\tagy\tok\t.*\t-\t0\t[0-9]+$' "$BATS_TEST_TMPDIR/probe.out"
+  heartbeat_from_mini "$BATS_TEST_TMPDIR/probe.out"
+
+  # 1. Before any sync, `nodes` judges the heartbeat itself the same way.
+  run cr nodes --json
+  [ "$status" -eq 0 ]
+  for a in claude codex agy; do
+    nv="$(jq -c --arg a "$a" '.nodes[] | select(.machine == "mini") | .usage[$a]
+      | {state, out, limit_reached, hit_active}' <<<"$output")"
+    [ "$nv" = "$(local_verdict "$node_usage/mini--$a.json")" ]
+  done
+  [ "$(jq -r '.nodes[] | select(.machine == "mini") | .usage.claude.windows[] | select(.label == "7d opus") | .scoped' <<<"$output")" = true ]
+  run cr nodes
+  [[ "$output" == *"mini: codex reached usage limit"* ]]
+  [[ "$output" == *"mini: agy hit usage limit"* ]]
+  [[ "$output" != *"mini: claude"* ]]
+
+  # 2. After the brain syncs the heartbeat, its own stored readings agree too.
+  run cr usage --json
+  [ "$status" -eq 0 ]
+  for a in claude codex agy; do
+    [ "$(local_verdict "$CHARTROOM_HOME/usage/mini--$a.json")" = "$(local_verdict "$node_usage/mini--$a.json")" ]
+  done
+  [ "$(jq -r '.windows[] | select(.label == "7d opus") | .scoped' "$CHARTROOM_HOME/usage/mini--claude.json")" = true ]
+  [ "$(jq -r '.hit_limit.at' "$CHARTROOM_HOME/usage/mini--agy.json")" = "$(jq -r '.hit_limit.at' "$node_usage/mini--agy.json")" ]
+  # and placing work on mini skips exactly the out agents
+  run cr nodes --json
+  [ "$(jq -r '.nodes[] | select(.machine == "mini") | [.usage.claude.out, .usage.codex.out, .usage.agy.out] | @csv' <<<"$output")" = 'false,true,true' ]
+
+  # 3. A stop with no reset expires after the cooldown on the node and the brain alike.
+  jq --arg at "$(iso_offset -7200)" '.hit_limit.at = $at' "$node_usage/mini--agy.json" >"$BATS_TEST_TMPDIR/agy.json" \
+    && mv "$BATS_TEST_TMPDIR/agy.json" "$node_usage/mini--agy.json"
+  CHARTROOM_MACHINE_NAME=mini CHARTROOM_HOME="" cr node probe >"$BATS_TEST_TMPDIR/probe.out"
+  heartbeat_from_mini "$BATS_TEST_TMPDIR/probe.out"
+  [ "$(local_verdict "$node_usage/mini--agy.json" | jq -r .out)" = false ]
+  run cr nodes --json
+  [ "$(jq -r '.nodes[] | select(.machine == "mini") | .usage.agy.out' <<<"$output")" = false ]
+  cr usage --json >/dev/null
+  [ "$(local_verdict "$CHARTROOM_HOME/usage/mini--agy.json" | jq -r .out)" = false ]
+
+  # 4. A stop cleared on the node clears on the brain; one the brain heard after that heartbeat stays.
+  jq 'del(.hit_limit)' "$node_usage/mini--agy.json" >"$BATS_TEST_TMPDIR/agy.json" && mv "$BATS_TEST_TMPDIR/agy.json" "$node_usage/mini--agy.json"
+  CHARTROOM_MACHINE_NAME=mini CHARTROOM_HOME="" cr node probe >"$BATS_TEST_TMPDIR/probe.out"
+  heartbeat_from_mini "$BATS_TEST_TMPDIR/probe.out"
+  cr usage --json >/dev/null
+  [ "$(jq -r '.hit_limit' "$CHARTROOM_HOME/usage/mini--agy.json")" = null ]
+  heartbeat_from_mini "$BATS_TEST_TMPDIR/probe.out" "$(( $(date +%s) - 30 ))"
+  cr usage record agy --machine mini --hit-limit --message "You've hit your usage limit"
+  run cr nodes --json
+  [ "$(jq -r '.nodes[] | select(.machine == "mini") | .usage.agy.out' <<<"$output")" = true ]
+  cr usage --json >/dev/null
+  [ "$(local_verdict "$CHARTROOM_HOME/usage/mini--agy.json" | jq -r .out)" = true ]
+
+  # 5. A node still on the older nine-field line is read as before (no flags), never misread.
+  run bash -c '
+    source "'"$REPO_ROOT/lib/core.sh"'"
+    source "'"$REPO_ROOT/lib/usage.sh"'"
+    usage_from_probe_line mini "$(printf "usage\tcodex\tok\tpro\tchatgpt\t2026-11-26T22:00:00Z\t7d:26:4100500000\t-\t-")"'
+  [ "$status" -eq 0 ]
+  [ "$(jq -c '{limit_reached, hit_limit, w: .windows[0] | [.label, .used_pct, (.scoped // false)]}' <<<"$output")" = '{"limit_reached":false,"hit_limit":null,"w":["7d",26,false]}' ]
+}
+
+@test "one out-of-usage wake per limit stop, raised again once the worker resumed and stopped anew" {
+  use_fake hc
+  export FAKE_HC_DIR="$BATS_TEST_TMPDIR/hc"
+  mkdir -p "$FAKE_HC_DIR/terms"
+  core_up
+  local id fut1 fut2 n
+  fut1="$(iso_offset 7200)"; fut2="$(iso_offset 9000)"
+  id="$(new_task --backend hc:codex)"
+  set_meta "$id" '.dispatched="2026-11-26T00:00:00Z" | .hc_terminal="t-w" | .hc_launched="1"'
+  term() { # <state>
+    jq -cn --arg id "$id" --arg l "$CHARTROOM_HOME/tasks/$id/launch.sh" --arg st "$1" \
+      '{address:"t-w",name:$id,state:"live",argv:["bash",$l],status:{app:"codex",state:$st}}' >"$FAKE_HC_DIR/terms/t-w.json"
+  }
+  wakes() { events "$id" | grep -c 'agent: out-of-usage: codex' || true; }
+  term idle
+  printf "■ You've hit your usage limit. Try again at %s.\n› \n" "$fut1" >"$FAKE_HC_DIR/screen.t-w"
+  # The same stop, seen on three looks: one wake.
+  for n in 1 2 3; do cr watch --once --timeout 1 >/dev/null 2>&1 || true; done
+  [ "$(wakes)" -eq 1 ]
+  # Resumed without a steer (keys sent through hc), seen working, then stopped again: a second wake.
+  term working
+  printf "working...\n" >"$FAKE_HC_DIR/screen.t-w"
+  cr watch --once --timeout 1 >/dev/null 2>&1 || true
+  term idle
+  printf "■ You've hit your usage limit. Try again at %s.\n› \n" "$fut1" >"$FAKE_HC_DIR/screen.t-w"
+  cr watch --once --timeout 1 >/dev/null 2>&1 || true
+  [ "$(wakes)" -eq 2 ]
+  # A stop with another reset time, even unseen working between looks: a third.
+  printf "■ You've hit your usage limit. Try again at %s.\n› \n" "$fut2" >"$FAKE_HC_DIR/screen.t-w"
+  cr watch --once --timeout 1 >/dev/null 2>&1 || true
+  [ "$(wakes)" -eq 3 ]
+}
+
+@test "the brain's background usage refresh never runs twice at once" {
+  printf '#!/usr/bin/env bash\nsleep 30\n' >"$BATS_TEST_TMPDIR/slow-chartroom"
+  chmod +x "$BATS_TEST_TMPDIR/slow-chartroom"
+  run bash -c '
+    source "'"$REPO_ROOT/lib/core.sh"'"
+    source "'"$REPO_ROOT/lib/usage.sh"'"
+    CR_HOME="'"$CHARTROOM_HOME"'" CR_BIN="'"$BATS_TEST_TMPDIR/slow-chartroom"'" CR_USAGE_REFRESH_MIN=5
+    usage_watch_refresh; first="$(cat "$CR_HOME/usage/.watch-refresh.pid")"
+    USAGE_WATCH_NEXT=0; usage_watch_refresh; second="$(cat "$CR_HOME/usage/.watch-refresh.pid")"
+    kill "$first" 2>/dev/null; wait "$first" 2>/dev/null
+    USAGE_WATCH_NEXT=0; usage_watch_refresh; third="$(cat "$CR_HOME/usage/.watch-refresh.pid")"
+    kill "$third" 2>/dev/null
+    [[ "$first" == "$second" && "$third" != "$first" ]] && echo guarded'
+  [ "$status" -eq 0 ]
+  [ "$output" = guarded ]
 }

@@ -717,9 +717,12 @@ chartroom move <id> --agent codex    # move to a specific agent (--dry-run previ
   `CHARTROOM_USAGE_ACCOUNT_<AGENT>` alias, or `<provider> #<6-hex>` hashed in memory from the
   account/org ID so distinct subscriptions split cleanly across machines) — never tokens, cookies,
   emails, or raw org/account IDs. Readings older than `CHARTROOM_USAGE_STALE_MINUTES` (30) are
-  flagged stale with their age.
+  flagged stale with their age. An enrolled node sends its readings in every heartbeat, with
+  model-only windows marked and the agent's own limit flags and worker stops intact, so the brain
+  judges a node's agent exactly as the node does.
 - **Exhausted agents are skipped.** Once any active window reaches `CHARTROOM_USAGE_LIMIT_PCT`
-  (default 95%; warning at `CHARTROOM_USAGE_WARN_PCT`, 80%) or a worker hits a usage-limit error,
+  (default 95%; warning at `CHARTROOM_USAGE_WARN_PCT`, 80%), the agent itself allows no more use
+  (Codex's spend cap or block), or a worker hits a usage-limit error,
   automatic dispatch (`spread_pick`), automatic re-dispatch, node placement, and fallback skip
   that agent until its `resets_at` passes; an explicit `--backend` for an exhausted agent prints a
   warning with its reset time. `chartroom doctor`, `chartroom nodes`, and the dashboard's
@@ -727,7 +730,8 @@ chartroom move <id> --agent codex    # move to a specific agent (--dry-run previ
 - **Detecting stops and moving work.** During `watch` (and on enrolled nodes via guest checks),
   chartroom detects anchored usage-limit stop banners on idle/stopped workers (`claude`, `codex`,
   `agy`, `grok`) — ignoring mid-turn output, prose, and tool output — marks only that machine's
-  agent out, and wakes the XO once with `agent: out-of-usage: <agent> resets <time>; available: ...`.
+  agent out, and wakes the XO once per stop with `agent: out-of-usage: <agent> resets <time>; available: ...`
+  (a worker that resumes and stops again raises a new wake).
   Run `chartroom move <id>` to stop the old worker and re-dispatch onto an available agent while
   keeping the exact brief, branch, worktree, commits, and uncommitted changes; tasks with
   Claude-only needs (`mcp`/`browser`/`claude`) refuse automatic moves off Claude unless `--agent`

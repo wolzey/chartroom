@@ -7,6 +7,13 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- Subscription usage awareness: `chartroom usage` reads each agent's real quota (Claude's OAuth
+  usage endpoint, Codex's app-server or session files, agy's `/usage`; grok reads unknown) on this
+  machine and, by heartbeat, on enrolled nodes. Automatic dispatch, re-dispatch, placement and
+  fallback skip an agent that is out until its reset; `doctor`, `nodes` and the dashboard's
+  **Subscription usage** panel show what each subscription has left. The watch detects a worker's
+  limit stop, wakes the XO once per stop with the agents that have room, and `chartroom move`
+  re-dispatches the task onto one of them, keeping its branch, worktree and edits.
 - Automatic new work balances signed-in Codex, agy and Claude full sessions by live task count,
   with fixed ties and a local Claude opt-out for MCP/browser needs. Status and dashboards show
   the spread and task-level review outcomes; doctor reports agent usability locally and on nodes.
