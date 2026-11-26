@@ -703,13 +703,16 @@ chartroom move <id> --agent codex    # move to a specific agent (--dry-run previ
 ```
 
 - **Real sources only.** chartroom reads actual quota/rate-limit windows from each agent's own
-  mechanism (`claude` OAuth usage endpoint and optional `statusLine` input via `chartroom usage
-  record claude`; `codex` `token_count` `rate_limits` events under `~/.codex/sessions/`; `agy`
+  mechanism (`claude` OAuth usage endpoint using the active macOS Keychain or `.credentials.json`
+  credential verified against `claude auth status`, plus optional `statusLine` input via
+  `chartroom usage record claude`; `codex` live `codex app-server` `account/rateLimits/read` with
+  fallback to `token_count` `rate_limits` events under `~/.codex/sessions/`; `agy`
   `agy --output-format json -p=/usage`; `grok` `grok usage --json` when its daemon route is
-  active) and never guesses or estimates numbers. Where no number exists, it reports `unknown`
-  and why. Readings are stored under `$CHARTROOM_HOME/usage/` with sample time, machine, and
-  plan/account only — never tokens, cookies, emails, or org IDs. Readings older than
-  `CHARTROOM_USAGE_STALE_MINUTES` (30) are flagged stale with their age.
+  active) and never guesses or estimates numbers. Only active account-wide limiting windows mark
+  an agent out (never model-scoped side buckets or disabled extra-usage spend). Where no number
+  exists, it reports `unknown` and why. Readings are stored under `$CHARTROOM_HOME/usage/` with
+  sample time, machine, and plan/account only — never tokens, cookies, emails, or org IDs. Readings
+  older than `CHARTROOM_USAGE_STALE_MINUTES` (30) are flagged stale with their age.
 - **Exhausted agents are skipped.** Once any active window reaches `CHARTROOM_USAGE_LIMIT_PCT`
   (default 95%; warning at `CHARTROOM_USAGE_WARN_PCT`, 80%) or a worker hits a usage-limit error,
   automatic dispatch (`spread_pick`), node placement, and fallback skip that agent until its

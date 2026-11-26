@@ -9,10 +9,12 @@
 #
 # Sources (real only; never guessed or estimated):
 #   claude  1) Claude OAuth usage endpoint (https://api.anthropic.com/api/oauth/usage) using
-#              Claude Code's own OAuth token (~/.claude/.credentials.json or macOS Keychain
-#              "Claude Code-credentials"), passed via stdin to curl -K - (never on argv/logs)
+#              Claude Code's active OAuth token (macOS Keychain "Claude Code-credentials" first
+#              on macOS, else ~/.claude/.credentials.json, cross-checked against claude auth
+#              status orgId in memory), passed via stdin to curl -K - (never on argv/logs)
 #           2) Claude Code statusLine JSON (`chartroom usage record claude`, stdin)
-#   codex   Latest `token_count` event with non-null `rate_limits` under ~/.codex/sessions/
+#   codex   1) Live `codex app-server` JSON-RPC `account/rateLimits/read` (matches /status)
+#           2) Fallback: latest `token_count` event with `limit_id == "codex"` under ~/.codex/sessions/
 #   agy     `agy --output-format json -p=/usage` (via `hc exec` in ssh on macOS)
 #   grok    `grok usage --json` (daemon route; on shell route reports unknown + why)
 
@@ -167,7 +169,9 @@ usage_parse_claude_api() {
     (win("five_hour"; "5h"; .five_hour) + win("seven_day"; "7d"; .seven_day)) as $w0
     | (if ($w0 | length) > 0 then $w0
        else
-         [(.limits // [])[] | select(.is_active == true and .percent != null)
+         # Only account-wide active limits (scope == null); never model/surface-scoped or inactive buckets.
+         [(.limits // [])[] | select(.is_active == true and (.scope // null) == null and .percent != null
+            and ((.kind // "") == "weekly_all" or (.kind // "") == "five_hour" or (.group // "") == "five_hour" or (.group // "") == "weekly"))
           | ((.percent | tonumber | if . < 0 then 0 elif . > 100 then 100 else . end | r1)) as $u
           | {id: (.kind // .group // "limit"),
              label: (if .group == "weekly" or (.kind // "" | startswith("weekly")) then "7d"
@@ -259,6 +263,53 @@ usage_parse_codex_event() {
         source: "codex-sessions",
         reason: (if ($wins | length) > 0 then null else "Codex token_count event had no rate_limits windows" end),
         sampled_at: ((.timestamp // $rec) | norm_iso),
+        recorded_at: $rec,
+        windows: $wins,
+        limit_reached: $reached
+      }'
+}
+
+# Parse `codex app-server` JSON-RPC `account/rateLimits/read` result (stdin) into a schema-1 reading.
+# Uses only the primary account-wide "codex" bucket (never model-scoped side buckets) and strips
+# accountId, credits balances, and reset-credit IDs.
+# Args: <machine> <local true|false> <sampled_at ISO>
+usage_parse_codex_appserver() {
+  local machine="$1" loc="$2" sampled="${3:-$(now)}"
+  jq -c --argjson schema "$CR_USAGE_SCHEMA" --arg m "$machine" --argjson loc "$loc" \
+    --arg sampled "$sampled" --arg rec "$(now)" '
+    def norm_iso:
+      if . == null or . == "" then null
+      elif type == "number" then (if . > 0 then (floor | todate) else null end)
+      else (tostring | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z")) end;
+    def r1: ((. * 10 + 0.5) | floor) / 10;
+    def win_lbl($mins; $fallback):
+      if ($mins | type) != "number" or $mins <= 0 then $fallback
+      elif $mins == 300 then "5h"
+      elif $mins == 10080 then "7d"
+      elif ($mins % 1440) == 0 then "\($mins / 1440 | floor)d"
+      elif ($mins % 60) == 0 then "\($mins / 60 | floor)h"
+      else "\($mins | floor)m" end;
+    def win($id; $obj):
+      if ($obj | type) == "object" and ($obj.usedPercent // $obj.used_percent) != null then
+        (($obj.usedPercent // $obj.used_percent) | tonumber | if . < 0 then 0 elif . > 100 then 100 else . end | r1) as $u
+        | ($obj.windowDurationMins // $obj.window_minutes // null) as $wm
+        | [{id: $id, label: win_lbl($wm; $id), used_pct: $u, left_pct: ((100 - $u) | r1),
+            window_minutes: $wm,
+            resets_at: (($obj.resetsAt // $obj.resets_at) | norm_iso), active: true}]
+      else [] end;
+    (.rateLimitsByLimitId.codex // (if (.rateLimits.limitId // "codex") == "codex" then .rateLimits else null end)) as $rl
+    | (if ($rl | type) == "object" then (win("primary"; $rl.primary) + win("secondary"; $rl.secondary)) else [] end) as $wins
+    | ((.ordinaryUsageAllowed == false)
+       or (($rl.rateLimitReachedType // null) != null)
+       or ($rl.spendControlReached == true)) as $reached
+    | {
+        schema: $schema, agent: "codex", machine: $m, local: $loc,
+        account: "chatgpt",
+        plan: ($rl.planType // $rl.plan_type // null),
+        status: (if ($wins | length) > 0 then "ok" else "unknown" end),
+        source: "codex-app-server",
+        reason: (if ($wins | length) > 0 then null else "Codex app-server returned no rateLimits windows" end),
+        sampled_at: $sampled,
         recorded_at: $rec,
         windows: $wins,
         limit_reached: $reached
@@ -361,24 +412,71 @@ usage_unknown_record() { # <agent> <machine> <local true|false> <source> <reason
 
 # ---------------------------------------------------------------- live local readers
 
-# Read Claude's OAuth token the way Claude Code itself does, without ever printing it.
+# Read Claude's active OAuth token the way Claude Code itself does, without ever printing it.
+# On macOS Claude Code keeps active credentials in Keychain ("Claude Code-credentials", or
+# "Claude Code-credentials-<sha256_8>" for a custom CLAUDE_CONFIG_DIR), ahead of any stale
+# ~/.claude/.credentials.json file. Cross-checks organizationUuid against claude auth status
+# orgId (in memory only) so a leftover credential from another account is never queried.
 # Prints token to stdout only (callers must never echo/log it or pass it on a command line).
-usage_claude_oauth_token() {
-  local cfg_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}" f tok=""
-  f="$cfg_dir/.credentials.json"
-  if [[ -r "$f" ]]; then
-    tok="$(jq -r '.claudeAiOauth.accessToken // empty' "$f" 2>/dev/null || true)"
+usage_claude_keychain_service() {
+  local cfg_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}" def="$HOME/.claude" h=""
+  if [[ -z "${CLAUDE_CONFIG_DIR:-}" || "${cfg_dir%/}" == "${def%/}" ]]; then
+    printf 'Claude Code-credentials'
+    return 0
   fi
-  if [[ -z "$tok" && "$(uname -s)" == Darwin && -x /usr/bin/security && "${CHARTROOM_KEYCHAIN:-}" != none ]]; then
-    local raw
-    raw="$(/usr/bin/security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null || true)"
-    [[ -z "$raw" ]] || tok="$(jq -r '.claudeAiOauth.accessToken // empty' <<<"$raw" 2>/dev/null || true)"
+  if command -v shasum >/dev/null 2>&1; then h="$(printf '%s' "$cfg_dir" | shasum -a 256 | cut -c1-8)"
+  elif command -v sha256sum >/dev/null 2>&1; then h="$(printf '%s' "$cfg_dir" | sha256sum | cut -c1-8)"; fi
+  printf 'Claude Code-credentials%s' "${h:+-$h}"
+}
+
+usage_claude_extract_token() { # <raw_json> [expected_org_id] [require_org_match 0|1]
+  local raw="$1" exp_org="${2:-}" req_match="${3:-0}" tok="" cred_org=""
+  [[ -n "$raw" ]] || return 1
+  tok="$(jq -r '.claudeAiOauth.accessToken // empty' <<<"$raw" 2>/dev/null || true)"
+  [[ -n "$tok" ]] || return 1
+  cred_org="$(jq -r '.claudeAiOauth.organizationUuid // empty' <<<"$raw" 2>/dev/null || true)"
+  if [[ -n "$exp_org" ]]; then
+    if [[ -n "$cred_org" && "$cred_org" != "$exp_org" ]]; then return 2; fi
+    if [[ "$req_match" == 1 && "$cred_org" != "$exp_org" ]]; then return 2; fi
   fi
   printf '%s' "$tok"
+  return 0
+}
+
+usage_claude_oauth_token() { # [expected_org_id]
+  local exp_org="${1:-}" cfg_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}" f raw="" tok="" sec="" svc kc_used=0
+  f="$cfg_dir/.credentials.json"
+  # Determine Keychain tool (macOS default /usr/bin/security, or explicit CHARTROOM_KEYCHAIN path; "none" disables).
+  if [[ "${CHARTROOM_KEYCHAIN:-}" != none ]]; then
+    if [[ -n "${CHARTROOM_KEYCHAIN:-}" && -x "${CHARTROOM_KEYCHAIN}" ]]; then sec="$CHARTROOM_KEYCHAIN"
+    elif [[ "$(uname -s)" == Darwin && -x /usr/bin/security ]]; then sec="/usr/bin/security"; fi
+  fi
+  if [[ -n "$sec" ]]; then
+    kc_used=1
+    svc="$(usage_claude_keychain_service)"
+    if [[ -n "${CHARTROOM_GATE:-}${SSH_CONNECTION:-}${SSH_CLIENT:-}" ]] && declare -F hc_probe >/dev/null 2>&1 && hc_probe >/dev/null 2>&1; then
+      raw="$(env -u HC_TERMINAL_ID "$(hc_bin)" exec --timeout 10 -- "$sec" find-generic-password -s "$svc" -w 2>/dev/null || true)"
+    else
+      raw="$("$sec" find-generic-password -s "$svc" -w 2>/dev/null || true)"
+    fi
+    if tok="$(usage_claude_extract_token "$raw" "$exp_org" 0)"; then
+      printf '%s' "$tok"; return 0
+    fi
+  fi
+  if [[ -r "$f" ]]; then
+    raw="$(cat "$f" 2>/dev/null || true)"
+    # On macOS (where Keychain is Claude Code's primary store), only accept .credentials.json when
+    # orgId is unknown or explicitly matches claude auth status, so a stale file from another account
+    # is never silently queried.
+    if tok="$(usage_claude_extract_token "$raw" "$exp_org" "$kc_used")"; then
+      printf '%s' "$tok"; return 0
+    fi
+  fi
+  return 1
 }
 
 usage_read_claude() { # [machine]
-  local m="${1:-$(usage_machine_name)}" b auth="" plan="" acct="" api_prov="" logged="" tok="" out="" code="" url sampled
+  local m="${1:-$(usage_machine_name)}" b auth="" plan="" acct="" api_prov="" logged="" exp_org="" tok="" out="" code="" url sampled
   sampled="$(now)"
   # Test / offline fixture hook: CHARTROOM_CLAUDE_USAGE_FILE bypasses network cleanly.
   if [[ -n "${CHARTROOM_CLAUDE_USAGE_FILE:-}" && -r "${CHARTROOM_CLAUDE_USAGE_FILE}" ]]; then
@@ -398,6 +496,8 @@ usage_read_claude() { # [machine]
     acct="$(jq -r '.authMethod // ""' <<<"$auth")"
     api_prov="$(jq -r '.apiProvider // ""' <<<"$auth")"
     plan="$(jq -r '.planTier // .subscriptionType // ""' <<<"$auth")"
+    # Keep orgId in shell memory only to verify credential account match; never stored or printed.
+    exp_org="$(jq -r '.orgId // ""' <<<"$auth")"
     if [[ "$logged" == false ]]; then
       usage_unknown_record claude "$m" true claude-oauth-api "claude is not signed in" "$plan" "$acct"
       return 0
@@ -411,9 +511,10 @@ usage_read_claude() { # [machine]
       return 0
     fi
   fi
-  tok="$(usage_claude_oauth_token)"
+  tok="$(usage_claude_oauth_token "$exp_org" || true)"
+  exp_org=""
   if [[ -z "$tok" ]]; then
-    usage_unknown_record claude "$m" true claude-oauth-api "no Claude OAuth credential found (use claude /login or pipe statusLine to chartroom usage record claude)" "$plan" "$acct"
+    usage_unknown_record claude "$m" true claude-oauth-api "no matching Claude OAuth credential found for active account (use claude /login or pipe statusLine to chartroom usage record claude)" "$plan" "$acct"
     return 0
   fi
   url="${CHARTROOM_CLAUDE_USAGE_URL:-https://api.anthropic.com/api/oauth/usage}"
@@ -430,24 +531,86 @@ usage_read_claude() { # [machine]
   usage_unknown_record claude "$m" true claude-oauth-api "Claude usage endpoint returned HTTP ${code:-000}" "$plan" "$acct"
 }
 
+# Query live Codex rate limits via `codex app-server` JSON-RPC `account/rateLimits/read`
+# (the same live endpoint Codex's /status reads). Prints result JSON to stdout on success.
+usage_codex_appserver_read() { # <codex_bin>
+  local b="$1" py
+  [[ "${CHARTROOM_CODEX_APP_SERVER:-on}" != off ]] || return 1
+  py="$(cfg PYTHON '' python3)"
+  command -v "$py" >/dev/null 2>&1 || return 1
+  "$py" - "$b" <<'PY' 2>/dev/null
+import json, select, subprocess, sys, time
+cmd = [sys.argv[1], "app-server"]
+try:
+    p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+except Exception:
+    sys.exit(1)
+ok = False
+try:
+    for req in (
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"clientInfo": {"name": "chartroom", "version": "1"}}},
+        {"jsonrpc": "2.0", "method": "initialized"},
+        {"jsonrpc": "2.0", "id": 2, "method": "account/rateLimits/read", "params": {}},
+    ):
+        p.stdin.write(json.dumps(req) + "\n")
+    p.stdin.flush()
+    deadline = time.time() + 10.0
+    while time.time() < deadline:
+        r, _, _ = select.select([p.stdout], [], [], max(0.05, deadline - time.time()))
+        if not r:
+            continue
+        line = p.stdout.readline()
+        if not line:
+            break
+        try:
+            obj = json.loads(line)
+        except Exception:
+            continue
+        if obj.get("id") == 2 and isinstance(obj.get("result"), dict):
+            sys.stdout.write(json.dumps(obj["result"]))
+            ok = True
+            break
+        if obj.get("id") == 2 and "error" in obj:
+            break
+finally:
+    try: p.terminate()
+    except Exception: pass
+    try: p.wait(timeout=2)
+    except Exception:
+        try: p.kill()
+        except Exception: pass
+sys.exit(0 if ok else 1)
+PY
+}
+
 usage_read_codex() { # [machine]
-  local m="${1:-$(usage_machine_name)}" codex_home="${CODEX_HOME:-$HOME/.codex}" sdir f line best=""
+  local m="${1:-$(usage_machine_name)}" codex_home="${CODEX_HOME:-$HOME/.codex}" b raw sampled sdir f line best=""
+  sampled="$(now)"
+  b="$(usage_agent_bin codex)"
+  # 1. Live `codex app-server` RPC (matches Codex /status in real time).
+  if [[ -n "$b" ]] && raw="$(usage_codex_appserver_read "$b")" && [[ -n "$raw" ]]; then
+    if jq -e '(.rateLimitsByLimitId.codex // .rateLimits) | type == "object"' <<<"$raw" >/dev/null 2>&1; then
+      usage_parse_codex_appserver "$m" true "$sampled" <<<"$raw"
+      return 0
+    fi
+  fi
+  # 2. Fallback: latest `token_count` event with `limit_id == "codex"` under ~/.codex/sessions/.
   sdir="$codex_home/sessions"
   if [[ ! -d "$sdir" ]]; then
-    local b; b="$(usage_agent_bin codex)"
     if [[ -z "$b" ]]; then usage_unknown_record codex "$m" true codex-sessions "codex not on PATH"
     else usage_unknown_record codex "$m" true codex-sessions "no Codex session files under $sdir"; fi
     return 0
   fi
-  # Scan newest session files first (up to 40) for the latest token_count event with non-null rate_limits.
+  # Scan newest session files first (up to 40) for the latest account-wide codex token_count event.
   while IFS= read -r f; do
     [[ -n "$f" && -r "$f" ]] || continue
     grep -q '"rate_limits"' "$f" 2>/dev/null || continue
     line="$(grep '"rate_limits"' "$f" 2>/dev/null | jq -c '
       select(.type == "event_msg" and (.payload.type? == "token_count")
         and ((.payload.rate_limits | type) == "object")
+        and ((.payload.rate_limits.limit_id // "codex") == "codex")
         and (.payload.rate_limits.primary != null or .payload.rate_limits.secondary != null))' 2>/dev/null |
-      jq -sc '([.[] | select(.payload.rate_limits.limit_id == "codex")] | last) // (last // empty)' 2>/dev/null || true)"
+      jq -sc 'last // empty' 2>/dev/null || true)"
     if [[ -n "$line" ]]; then best="$line"; break; fi
   done < <(find "$sdir" -type f -name '*.jsonl' 2>/dev/null | while IFS= read -r p; do
       local mt; mt="$(stat -c %Y "$p" 2>/dev/null || stat -f %m "$p" 2>/dev/null || echo 0)"

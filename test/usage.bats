@@ -404,3 +404,114 @@ EOF
   grep -q 'id="usage"' "$REPO_ROOT/lib/dashboard/index.html"
   grep -q 'function renderUsage' "$REPO_ROOT/lib/dashboard/index.html"
 }
+
+@test "real redacted Claude and Codex response shapes ignore scoped buckets, extra_usage, and mismatched credentials" {
+  local fut7 ep7
+  fut7="$(iso_offset 320000)"
+  ep7="$(jq -rn '(now | floor) + 320000')"
+
+  # 1. Real redacted Claude /api/oauth/usage shape: seven_day=58%, five_hour=null,
+  #    seven_day_opus=99%, weekly_scoped=99%, extra_usage.spend_limit_reached=true, spend=100%.
+  #    Must read 58% used / 42% left, state=ok, out=false.
+  jq --arg r7 "$fut7" \
+    '.seven_day.resets_at = $r7 | .seven_day_opus.resets_at = $r7 | .limits |= map(.resets_at = $r7)' \
+    "$REPO_ROOT/test/fixtures/usage/claude-oauth-api-real.json" >"$BATS_TEST_TMPDIR/claude-real.json"
+  CHARTROOM_CLAUDE_USAGE_FILE="$BATS_TEST_TMPDIR/claude-real.json" CHARTROOM_CLAUDE_PLAN=max_20x \
+    run cr usage --agent claude --json --refresh
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.[0].state' <<<"$output")" = ok ]
+  [ "$(jq -r '.[0].out' <<<"$output")" = false ]
+  [ "$(jq -r '.[0].windows | length' <<<"$output")" -eq 1 ]
+  [ "$(jq -r '.[0].windows[0] | [.label,.used_pct,.left_pct] | @csv' <<<"$output")" = '"7d",58,42' ]
+
+  # Also when top-level seven_day is null, limits[] fallback uses only active scope==null buckets (never weekly_scoped 99%).
+  jq '.seven_day = null' "$BATS_TEST_TMPDIR/claude-real.json" >"$BATS_TEST_TMPDIR/claude-limits-only.json"
+  CHARTROOM_CLAUDE_USAGE_FILE="$BATS_TEST_TMPDIR/claude-limits-only.json" CHARTROOM_CLAUDE_PLAN=max_20x \
+    run cr usage --agent claude --json --refresh
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.[0].state' <<<"$output")" = ok ]
+  [ "$(jq -r '.[0].windows | length' <<<"$output")" -eq 1 ]
+  [ "$(jq -r '.[0].windows[0] | [.label,.used_pct,.left_pct] | @csv' <<<"$output")" = '"7d",58,42' ]
+
+  # 2. Claude credential precedence & account orgId cross-check:
+  #    Keychain must win over a stale ~/.claude/.credentials.json from another account, and a
+  #    mismatched organizationUuid must be rejected instead of querying the wrong account.
+  cat >"$CLAUDE_CONFIG_DIR/.credentials.json" <<'JSON'
+{"claudeAiOauth":{"accessToken":"tok-stale-wrong-acct","organizationUuid":"org-other"}}
+JSON
+  cat >"$BATS_TEST_TMPDIR/fake-security" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${FAKE_KC_MODE:-ok}" == ok ]]; then
+  echo '{"claudeAiOauth":{"accessToken":"tok-active-keychain","organizationUuid":"org-live"}}'
+  exit 0
+fi
+exit 44
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/fake-security"
+
+  # Keychain active token wins over stale .credentials.json when both exist.
+  run bash -c '
+    export CLAUDE_CONFIG_DIR="'"$CLAUDE_CONFIG_DIR"'"
+    export CHARTROOM_KEYCHAIN="'"$BATS_TEST_TMPDIR/fake-security"'"
+    source "'"$REPO_ROOT/lib/core.sh"'"
+    source "'"$REPO_ROOT/lib/usage.sh"'"
+    usage_claude_oauth_token "org-live"
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "tok-active-keychain" ]
+
+  # When Keychain fails and .credentials.json belongs to a different org (or is unattributed), reject it.
+  run bash -c '
+    export CLAUDE_CONFIG_DIR="'"$CLAUDE_CONFIG_DIR"'"
+    export CHARTROOM_KEYCHAIN="'"$BATS_TEST_TMPDIR/fake-security"'"
+    export FAKE_KC_MODE=miss
+    source "'"$REPO_ROOT/lib/core.sh"'"
+    source "'"$REPO_ROOT/lib/usage.sh"'"
+    usage_claude_oauth_token "org-live"
+  '
+  [ "$status" -ne 0 ]
+  [ -z "$output" ]
+
+  # Even with CHARTROOM_KEYCHAIN=none (Linux), an explicit organizationUuid mismatch is rejected.
+  run bash -c '
+    export CLAUDE_CONFIG_DIR="'"$CLAUDE_CONFIG_DIR"'"
+    export CHARTROOM_KEYCHAIN=none
+    source "'"$REPO_ROOT/lib/core.sh"'"
+    source "'"$REPO_ROOT/lib/usage.sh"'"
+    usage_claude_oauth_token "org-live"
+  '
+  [ "$status" -ne 0 ]
+  [ -z "$output" ]
+
+  # 3. Real redacted Codex app-server `account/rateLimits/read` shape:
+  #    Primary "codex" bucket is 26% used / 74% left; model-scoped "codex_scoped_model" is 100% reached.
+  #    Must read 26% used / 74% left, state=ok, out=false, source=codex-app-server, and strip accountId/credits.
+  jq --argjson e7 "$ep7" \
+    '.rateLimits.primary.resetsAt = $e7 | .rateLimitsByLimitId.codex.primary.resetsAt = $e7 | .rateLimitsByLimitId.codex_scoped_model.primary.resetsAt = $e7' \
+    "$REPO_ROOT/test/fixtures/usage/codex-appserver-ratelimits.json" >"$BATS_TEST_TMPDIR/codex-as.json"
+  cat >"$BIN/codex" <<EOF
+#!/usr/bin/env bash
+if [[ "\${1:-}" == "app-server" ]]; then
+  while IFS= read -r line; do
+    if [[ "\$line" == *"account/rateLimits/read"* ]]; then
+      printf '{"jsonrpc":"2.0","id":2,"result":%s}\n' "\$(jq -c . "$BATS_TEST_TMPDIR/codex-as.json")"
+      exit 0
+    fi
+  done
+  exit 0
+fi
+exit 0
+EOF
+  chmod +x "$BIN/codex"
+
+  run cr usage --agent codex --json --refresh
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.[0].source' <<<"$output")" = codex-app-server ]
+  [ "$(jq -r '.[0].state' <<<"$output")" = ok ]
+  [ "$(jq -r '.[0].out' <<<"$output")" = false ]
+  [ "$(jq -r '.[0].plan' <<<"$output")" = pro ]
+  [ "$(jq -r '.[0].windows | length' <<<"$output")" -eq 1 ]
+  [ "$(jq -r '.[0].windows[0] | [.label,.used_pct,.left_pct] | @csv' <<<"$output")" = '"7d",26,74' ]
+  # Verify accountId and credit balance are never stored on disk.
+  ! grep -qiE 'accountId|00000000-0000-0000-0000-000000000000|balance' "$CHARTROOM_HOME/usage/desk--codex.json"
+}
