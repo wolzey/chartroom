@@ -351,6 +351,26 @@ probe_main() {
     ( PATH="$lp"; checks 1 )
   fi
 
+  # ---------------------------------------------------------------- subscription usage (read-only)
+  if have jq; then
+    local ud uf ua useen=" "
+    for ud in "${CHARTROOM_HOME:+$CHARTROOM_HOME/usage}" "${XDG_STATE_HOME:-$HOME/.local/state}/chartroom/usage"; do
+      [[ -n "$ud" && -d "$ud" ]] || continue
+      for uf in "$ud"/*.json; do
+        [[ -r "$uf" ]] || continue
+        ua="$(jq -r 'select(.local != false) | .agent // empty' "$uf" 2>/dev/null || true)"
+        [[ -n "$ua" && "$useen" != *" $ua "* ]] || continue
+        useen+="$ua "
+        jq -r '
+          def s: if . == null or . == "" then "-" else (tostring | gsub("[\t\n\r]"; " ")) end;
+          def ep: if . == null or . == "" then "-" else (tostring | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | (try fromdateiso8601 catch "-") | tostring) end;
+          ["usage", (.agent | s), (.status | s), (.plan | s), (.account | s), (.sampled_at | s),
+           ((.windows // []) | map("\(.label):\(.used_pct // ""):\(.resets_at | ep)") | join(",") | s),
+           (.reason | s)] | @tsv' "$uf" 2>/dev/null || true
+      done
+    done
+  fi
+
   # ---------------------------------------------------------------- project checkouts
   # git repos at most three levels under the node's project roots (a worktree's .git is a file, so
   # worktrees are not counted), each known by its canonical remote: host/owner/repo, lowercased.

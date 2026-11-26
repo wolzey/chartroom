@@ -57,6 +57,7 @@ spread_local_backends() {
   local a r
   for a in codex agy claude; do
     agent_login_why "$a" >/dev/null || continue
+    if declare -F usage_agent_out >/dev/null 2>&1 && usage_agent_out "$a" >/dev/null; then continue; fi
     for r in hc herdr; do
       if probe_backend "$r:$a" >/dev/null; then printf '%s\n' "$r:$a"; break; fi
     done
@@ -74,12 +75,19 @@ spread_select_local() { # <id>, sets SELECTED; remote placement may replace it
 
 # Node probes already report tool and login status. Local candidates use the same login
 # checks plus runner probes; a remote candidate needs hc, the supported remote runner.
+# Agents that are out of subscription usage on a node are skipped until reset.
 spread_node_agents() { # <rows json> -> rows with spread_agents
-  local local_bs
+  local local_bs out_map='{}'
   local_bs="$(spread_local_backends)"
-  jq -c --argjson local_agents "$(printf '%s\n' "$local_bs" | jq -Rsc 'split("\n") | map(select(length>0) | split(":")[1])')" '
+  if declare -F usage_all_json >/dev/null 2>&1; then
+    out_map="$(usage_all_json | jq -c 'map(select(.out == true) | {key: "\(.machine)|\(.agent)", value: true}) | from_entries')"
+  fi
+  jq -c --argjson local_agents "$(printf '%s\n' "$local_bs" | jq -Rsc 'split("\n") | map(select(length>0) | split(":")[1])')" \
+    --argjson out "$out_map" '
     map(. as $r | . + {spread_agents: (if .local then $local_agents else
-      ["codex","agy","claude"] | map(. as $a | select($r.device.status == "online" and $r.runner.hc == "up" and $r.tools[$a].status == "ok" and $r.logins[$a].status == "ok")) end)})' <<<"$1"
+      ["codex","agy","claude"] | map(. as $a
+        | select($r.device.status == "online" and $r.runner.hc == "up" and $r.tools[$a].status == "ok" and $r.logins[$a].status == "ok"
+          and (($r.usage[$a].out // false) | not) and (($out["\($r.machine)|\($a)"] // false) | not))) end)})' <<<"$1"
 }
 spread_select_row() { # <id> <row>, sets SELECTED
   local a only=0
@@ -260,24 +268,35 @@ review_ready() { # Read-only acceptance guard; never creates tasks, fetches a di
 }
 
 spread_doctor_json() {
-  local a why usable bs rows=()
+  local a why uwhy usable bs rows=()
   bs="$(spread_local_backends)"
   for a in codex agy claude; do
     usable=false; [[ "$bs" != *":$a"* ]] || usable=true
     why="$(agent_login_why "$a")" || true
-    rows+=("$(jq -cn --arg a "$a" --arg why "$why" --argjson u "$usable" '{key:$a,value:{signed_in:($why == ""),usable:$u,reason:$why}}')")
+    uwhy=""
+    if [[ -z "$why" ]] && declare -F usage_agent_out >/dev/null 2>&1; then
+      uwhy="$(usage_agent_out "$a" || true)"
+    fi
+    rows+=("$(jq -cn --arg a "$a" --arg why "${why:-$uwhy}" --argjson u "$usable" --argjson uout "$([[ -n "$uwhy" ]] && echo true || echo false)" \
+      '{key:$a,value:{signed_in:($why == "" or $uout),usage_out:$uout,usable:$u,reason:$why}}')")
   done
   printf '%s\n' "${rows[@]}" | jq -sc from_entries
 }
 spread_doctor_nodes() {
-  local devs n i
+  local devs n i out_map='{}'
   nodes_settings
+  if declare -F usage_all_json >/dev/null 2>&1; then
+    out_map="$(usage_all_json | jq -c 'map(select(.out == true) | {key: "\(.machine)|\(.agent)", value: (.out_reason // "out of usage")}) | from_entries')"
+  fi
   devs="$(fleet_devices_json)"; n="$(jq length <<<"$devs")"
   for ((i=0;i<n;i++)); do
     nodes_device_row "$(jq -c --argjson i "$i" '.[$i]' <<<"$devs")" "$(date +%s)"
-  done | jq -sc '[.[] | . as $r | {node:.machine, status:.device.status, agents:
-    (["codex","agy","claude"] | map(. as $a | {key:$a,value:{signed_in:($r.logins[$a].status == "ok"),
-      usable:($r.device.status == "online" and $r.runner.hc == "up" and $r.tools[$a].status == "ok" and $r.logins[$a].status == "ok")}}) | from_entries)}]'
+  done | jq -sc --argjson out "$out_map" '[.[] | . as $r | {node:.machine, status:.device.status, agents:
+    (["codex","agy","claude"] | map(. as $a
+      | (($r.usage[$a].out // false) or ($out["\($r.machine)|\($a)"] != null)) as $uout
+      | {key:$a,value:{signed_in:($r.logins[$a].status == "ok"),usage_out:$uout,
+        reason:($r.usage[$a].out_reason // $out["\($r.machine)|\($a)"] // ""),
+        usable:($r.device.status == "online" and $r.runner.hc == "up" and $r.tools[$a].status == "ok" and $r.logins[$a].status == "ok" and ($uout | not))}}) | from_entries)}]'
 }
 
 review_wait_reason() {

@@ -112,12 +112,15 @@ dashboard_json() { # [pr-states-file]
   local prs='{}'
   if [[ -n "$prs_file" && -s "$prs_file" ]]; then prs="$(jq -c 'if type == "object" then . else {} end' "$prs_file" 2>/dev/null || echo '{}')"; fi
   arts="$(artifacts_json --open)"
+  local _agents _usage
+  _agents="$(spread_summary)"
+  _usage="$(usage_rows_json "$_agents")"
   printf '%s\n' "${rows[@]+"${rows[@]}"}" | jq -s \
     --argjson inbox "$(inbox_with_relays)" --argjson prs "$prs" --argjson hours "$hours" \
     --argjson artifacts "$arts" --argjson artifact_counts "$(jq -c "$ARTIFACT_COUNTS_JQ" <<<"$arts")" \
     --arg home "$CR_HOME" --arg home_name "$(home_name_of "$CR_HOME")" --arg version "$CR_VERSION" --argjson focus "$(focus_json)" \
     -f "$CR_ROOT/lib/dashboard/lanes.jq" |
-    todo_attach "$arts" | jq --argjson agents "$(spread_summary)" '. + {agents:$agents}' # .todo, the commander's next steps (lib/todo.sh)
+    todo_attach "$arts" | jq --argjson agents "$_agents" --argjson usage "$_usage" '. + {agents:$agents, usage:$usage}' # .todo, the commander's next steps (lib/todo.sh)
 }
 
 # For `doctor`: the configured bind address, whether an access token exists, and the bind

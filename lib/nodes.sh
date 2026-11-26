@@ -145,6 +145,18 @@ NODES_ROW_JQ='
        path_source: (one("path_source")[1] | s),
        tools: ([$r[] | select(.[0] == "tool") | {key: .[1], value: {status: .[2], version: (.[3] | s)}}] | from_entries),
        logins: ([$r[] | select(.[0] == "login" and .[1] != "-") | {key: .[1], value: {status: .[2], detail: (.[3] | s)}}] | from_entries),
+       usage: ([$r[] | select(.[0] == "usage" and .[1] != "-")
+         | (.[6] // "-" | if . == "-" or . == "" then [] else split(",") | map(select(length > 0) | split(":")
+             | (.[1] | tonumber? // null) as $u | select($u != null)
+             | (.[2] // "-" | tonumber? // null) as $re
+             | {label: .[0], used_pct: $u, left_pct: ([100 - $u, 0] | max),
+                resets_at: (if $re != null and $re > 0 then ($re | floor | todate) else null end),
+                out: ($u >= $ulim and ($re == null or $re <= 0 or $now < $re))}) end) as $ws
+         | ([$ws[] | select(.out)] | sort_by(-.used_pct) | .[0] // null) as $ow
+         | {key: .[1], value: {status: (.[2] | s), plan: (.[3] | s), account: (.[4] | s), sampled_at: (.[5] | s),
+              windows: $ws, reason: (.[7] | s), out: ($ow != null),
+              out_resets_at: (if $ow then $ow.resets_at else null end),
+              out_reason: (if $ow then "\(.[1]) is out of usage (\($ow.label) \($ow.used_pct)% used" + (if $ow.resets_at then ", resets \($ow.resets_at)" else "" end) + ")" else null end)}}] | from_entries),
        checkouts: (one("checkouts")[1] | n), checkouts_scanned: (one("checkouts")[1] != "-"),
        repos: [$r[] | select(.[0] == "checkout") | {remote: .[1], path: .[2], fetch_age_s: (.[3] | n)} + (if (.[4] // "-") == "-" then {} else {flags: (.[4] | split(","))} end)]}
       | .checkouts_listed = ((.checkouts // 0) == 0 or (.repos | length) > 0)
@@ -187,12 +199,15 @@ nodes_json() { # <remote to look for, or ""> [ssh: 1 for the ssh list alone]
       node_contact "$dir/$i.out" "$dir/$i.err" "$dir/$i.rc"
       jq -n --argjson m "$(jq -c --argjson i "$i" '.[$i]' <<<"$machines")" --rawfile probe "$dir/$i.out" \
         --arg contact "$NODE_CONTACT" --arg err "$NODE_ERR" --arg want "$want" --argjson now "$now" \
-        --argjson c "$NODE_C" --argjson mg "$NODE_MG" "$NODES_ROW_JQ"
+        --argjson c "$NODE_C" --argjson mg "$NODE_MG" --argjson ulim "${CR_USAGE_LIMIT_PCT:-95}" "$NODES_ROW_JQ"
     done
     n="$(jq length <<<"$devs")"
     for ((i = 0; i < n; i++)); do nodes_device_row "$(jq -c --argjson i "$i" '.[$i]' <<<"$devs")" "$now" "$want"; done
   } | jq -s --arg want "$want" --argjson c "$NODE_C" --argjson mg "$NODE_MG" \
-    '{nodes: map(del(.repos)), project: (if $want == "" then null else $want end), settings: {worker_cpu: $c, worker_mem_gb: $mg}}'
+    --argjson urec "$(if declare -F usage_all_json >/dev/null 2>&1; then usage_all_json; else echo '[]'; fi)" '
+    ($urec | map({key: "\(.machine)|\(.agent)", value: {status, plan, account, sampled_at, windows, reason, out, out_resets_at, out_reason}}) | from_entries) as $um
+    | {nodes: map(del(.repos) | .machine as $mn | .usage = ((.usage // {}) + ([$um | to_entries[] | select(.key | startswith($mn + "|")) | {key: (.key | split("|")[1]), value: .value}] | from_entries))),
+       project: (if $want == "" then null else $want end), settings: {worker_cpu: $c, worker_mem_gb: $mg}}'
   rm -rf "$dir"
 }
 
@@ -212,7 +227,7 @@ nodes_device_row() { # <device json> <now> [remote to look for]
   jq -n --argjson m "$(jq -c '{machine: .name, local: false, target: null, via: "heartbeat",
         device: {id, status, last_seen, seen_age_s, version, enrolled, aliases, caps}}' <<<"$d")" \
     --arg probe "$probe" --arg contact "$contact" --arg err "$err" --arg want "${3:-}" --argjson now "$at" \
-    --argjson c "$NODE_C" --argjson mg "$NODE_MG" "$NODES_ROW_JQ"
+    --argjson c "$NODE_C" --argjson mg "$NODE_MG" --argjson ulim "${CR_USAGE_LIMIT_PCT:-95}" "$NODES_ROW_JQ"
 }
 
 # The terminal table.
@@ -239,7 +254,7 @@ NODES_TABLE_JQ='
           (.hid_idle_s | ago),
           (if .crew_live != null then "\(.crew_live)" else "\(.agents_live | d)" end)
           + (if .crew_live != null and (.other_agents // 0) > 0 then " +\(.other_agents) other" elif .crew_live == null and .agents_live != null then " (all agents)" else "" end),
-          ([.logins | to_entries[] | "\(.key):\(.value.status)"] | join(" ") | if . == "" then "-" else . end),
+          (.usage // {}) as $u | ([.logins | to_entries[] | "\(.key):\(if ($u[.key].out // false) then "out" else .value.status end)"] | join(" ") | if . == "" then "-" else . end),
           ([.tools | to_entries[] | select(.value.status == "ok")] | length) as $ok
           | ([.tools | to_entries[] | select(.value.status != "ok") | "\(.value.status):\(.key)"] | join(" ")) as $bad
           | "\($ok) ok" + (if $bad == "" then "" else " " + $bad end),
@@ -274,6 +289,9 @@ cmd_nodes() {
   # why a tool is broken (the binary and its first line)
   jq -r '.nodes[] | select(.contact == "ok") | .machine as $m | (.tools // {}) | to_entries[]
     | select(.value.status == "error") | "\($m): \(.key) is broken: \(.value.version // "no detail")"' <<<"$doc"
+  # agents out of subscription usage, with their reset time
+  jq -r '.nodes[] | select(.contact == "ok") | .machine as $m | (.usage // {}) | to_entries[]
+    | select(.value.out == true) | "\($m): \(.value.out_reason // "\(.key) is out of usage\(if .value.out_resets_at then " (resets \(.value.out_resets_at))" else "" end)")"' <<<"$doc"
   if jq -e 'any(.nodes[]; .budgets.cpu != null)' <<<"$doc" >/dev/null; then
     echo "a node at either limit (the % after \"of\") takes no new task; chartroom node limits <name|here> 80/70 sets its CPU/memory limits. UTIL: how full it would be with one more worker"
   fi
@@ -442,7 +460,7 @@ node_row_local() {
   node_contact "$dir/out" "$dir/err" "$dir/rc"
   jq -cn --argjson m "$(jq -cn --arg m "$(radar_machine_name)" '{machine: $m, local: true, target: null, via: "this machine"}')" \
     --rawfile probe "$dir/out" --arg contact "$NODE_CONTACT" --arg err "$NODE_ERR" --arg want "" --argjson now "$(date +%s)" \
-    --argjson c "$NODE_C" --argjson mg "$NODE_MG" "$NODES_ROW_JQ"
+    --argjson c "$NODE_C" --argjson mg "$NODE_MG" --argjson ulim "${CR_USAGE_LIMIT_PCT:-95}" "$NODES_ROW_JQ"
   rm -rf "$dir"
 }
 

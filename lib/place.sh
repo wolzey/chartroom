@@ -281,6 +281,7 @@ PLACE_JQ='
     if $n.agent != "" and .runner.hc != "up" then "hc is not answering"
     elif $n.agent != "" and $n.agent != "auto" and (.tools[$n.agent].status // "missing") != "ok" then "\($n.agent) is \(.tools[$n.agent].status // "missing")"
     elif $n.agent != "" and $n.agent != "auto" and (.logins[$n.agent].status // "missing") != "ok" then "\($n.agent) is not logged in"
+    elif $n.agent != "" and $n.agent != "auto" and (.usage[$n.agent].out // false) then (.usage[$n.agent].out_reason // "\($n.agent) is out of usage")
     elif (.disk_free_pct // 100) < 15 then "its disk is \(.disk_free_pct)% free"
     else . as $row | ($n.own // "") as $own
       | ([$row.repos[]? | select(.remote == $own)]) as $mine

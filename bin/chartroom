@@ -105,6 +105,8 @@ source "$CR_ROOT/lib/device.sh"
 source "$CR_ROOT/lib/place.sh"
 # shellcheck source=../lib/spread.sh
 source "$CR_ROOT/lib/spread.sh"
+# shellcheck source=../lib/usage.sh
+source "$CR_ROOT/lib/usage.sh"
 # shellcheck source=../lib/guest.sh
 source "$CR_ROOT/lib/guest.sh"
 # shellcheck source=../lib/env.sh
@@ -193,9 +195,12 @@ probe_backend() { # <backend>
 # (An explicit hc:agy is not asked this: placement may send it to a node where agy is signed in,
 # and a launch here says so if it is not.)
 auto_ok() { # <backend> -> prints why not
-  local why
+  local why b a=""
   why="$(probe_backend "$1")" || { echo "$why"; return 1; }
-  if [[ "$(canon_backend "$1")" == *:agy ]]; then agy_login_why || return 1; fi
+  b="$(canon_backend "$1")"
+  [[ "$b" == *:* ]] && a="${b#*:}"
+  if [[ "$b" == *:agy ]]; then agy_login_why || return 1; fi
+  if [[ -n "$a" ]]; then usage_agent_why "$a" || return 1; fi
   return 0
 }
 
@@ -209,8 +214,12 @@ select_backend() { # <id> -> sets SELECTED
   CR_TASK_COMMAND="$(meta "$id" command)"
   if [[ -n "$want" && "$src" == explicit ]]; then
     if why="$(probe_backend "$want")"; then SELECTED="$(canon_backend "$want")"; return 0; fi
-    local next=""
-    for b in $CR_BACKEND_ORDER; do probe_backend "$b" >/dev/null && { next="$b"; break; }; done
+    local next="" na=""
+    for b in $CR_BACKEND_ORDER; do
+      na=""; [[ "$b" == *:* ]] && na="${b#*:}"
+      [[ -z "$na" ]] || ! usage_agent_out "$na" >/dev/null || continue
+      probe_backend "$b" >/dev/null && { next="$b"; break; }
+    done
     die "backend $want was chosen explicitly but is unavailable: $why${next:+ (next viable: $next; re-create the task with --backend $next, or omit --backend for automatic fallback)}"
   fi
   if spread_auto "$id"; then
@@ -1567,6 +1576,7 @@ watch_scan_lines() { # <id> <from-offset> <to-offset>
           # So did one answered in the last CHARTROOM_PERMIT_QUIET_SECONDS (300): the prompt it shows is
           # that card's, still on the screen as the answer arrives.
           *" agent: awaiting-input"*) permit_open "$id" || permit_answered_within "$id" "$(cfg PERMIT_QUIET_SECONDS '' 300)" || wake "$id" "$line" ;;
+          *" agent: out-of-usage"*) wake "$id" "$line" ;;
         esac ;;
       permit) if [[ "$line" == *" permit: asks "* || "$line" == *" permit: refused: a worker tried "* ]]; then wake "$id" "$line"; fi ;;
     esac
@@ -1772,8 +1782,17 @@ cmd_watch() {
             tmux|cmux|subagent|node) ;;
             *) covered=0 ;;
           esac
-          # Its own cadence (lib/stuck.sh): a prompt nothing reports, a brief behind a dialog, a stall.
+          # Its own cadence (lib/stuck.sh): a prompt nothing reports, a brief behind a dialog, a stall, a usage-limit stop.
           watch_look "$id" "$r" || true
+          if is_store_task "$id"; then store_render_events open; fi
+          events_path "$id"; f="$EVENTS_PATH"
+          if [[ -f "$f" ]]; then
+            size=$(($(wc -c <"$f")))
+            if (( size > ${OFF[$id]:-0} )); then
+              watch_scan_lines "$id" "${OFF[$id]:-0}" "$size"
+              OFF[$id]=$size
+            fi
+          fi
         fi
       done
       # Workers at rest for CHARTROOM_PARK_AFTER_MINUTES park (lib/park.sh): never a wake.
@@ -1781,6 +1800,7 @@ cmd_watch() {
       MC=()
       watch_relays
       watch_xo_context
+      usage_watch_refresh
       clock_ms
       if [[ $covered -eq 1 ]]; then next=$((NOW_MS + WATCH_SLOW_MS)); else next=$((NOW_MS + WATCH_IVL_MS)); fi
       if [[ $LOOK_ANY -eq 1 ]] && (( next > NOW_MS + LOOK_MS )); then next=$((NOW_MS + LOOK_MS)); fi
@@ -1879,11 +1899,12 @@ cmd_doctor() {
       --arg bv "$BASH_VERSION" --arg bp "$BASH" --arg bf "$CR_BASH_FROM" --arg added "$added" \
       --argjson dash "$(dashboard_doctor_json)" --argjson pdf "$(page_doctor_json)" --arg hname "$hname" --arg hcfg "$hcfg" --arg ws "$CR_WORKSPACE" \
       --argjson agy "$(agy_doctor_json)" --argjson agents "$(spread_doctor_json)" --argjson agent_nodes "$(spread_doctor_nodes)" \
+      --argjson usage "$(usage_rows_json)" \
       '{version:$v,home:$h,home_source:$hs,home_name:(if $hname=="" then null else $hname end),
         home_config:(if $hcfg=="" then null else $hcfg end),workspace:$ws,harness:$harness,
         bash:{version:$bv,path:$bp,rerun_from:(if $bf=="" then null else $bf end)},
         path:{thin:($added!=""),added:($added|split(" ")|map(select(.!="")))},
-        order:($o|split(" ")),auto:(if $auto=="" then null else $auto end),dashboard:$dash,pdf:$pdf,agents:($agents + {agy:($agents.agy + $agy)}),agent_nodes:$agent_nodes,backends:.}'
+        order:($o|split(" ")),auto:(if $auto=="" then null else $auto end),dashboard:$dash,pdf:$pdf,agents:($agents + {agy:($agents.agy + $agy)}),agent_nodes:$agent_nodes,usage:$usage,backends:.}'
   else
     echo "chartroom $CR_VERSION"
     [[ "$CR_HOME_SOURCE" == "registered home"* ]] && hname=""
@@ -1904,8 +1925,9 @@ cmd_doctor() {
     dashboard_doctor_json | jq -r '"dashboard: port \(.port), bind \(.bind)\(if .bind | startswith("127.") then "" else " (on the network)" end), access token \(if .token_set then "set" else "not set" end), \(if .running then "running on " + .running else "not running" end)"'
     page_doctor_json | jq -r 'if .chrome then "pdf:      \(.chrome) (chartroom artifact pdf)" else "pdf:      - \(.why)" end'
     agy_doctor_json | jq -r '"agy:      " + (if .path == null then "- not on PATH" else "\(.version // "?") at \(.path), \(if .signed_in then "signed in" else (.why // "not signed in") end)" end) + "; runs as \(.runners | join(", ")) only; \(.limits)"'
-    spread_doctor_json | jq -r 'to_entries[] | "agent:    \(.key): signed in=\(.value.signed_in), usable full session=\(.value.usable) \(.value.reason)"'
-    spread_doctor_nodes | jq -r '.[] | .node as $n | .agents | to_entries[] | "agent:    \($n) / \(.key): signed in=\(.value.signed_in), usable=\(.value.usable)"'
+    spread_doctor_json | jq -r 'to_entries[] | "agent:    \(.key): signed in=\(.value.signed_in), usable full session=\(.value.usable)\(if .value.reason != "" then " (\(.value.reason))" else "" end)"'
+    spread_doctor_nodes | jq -r '.[] | .node as $n | .agents | to_entries[] | "agent:    \($n) / \(.key): signed in=\(.value.signed_in), usable=\(.value.usable)\(if .value.reason != "" then " (\(.value.reason))" else "" end)"'
+    usage_doctor_lines
     node_doctor_line
     fleet_doctor_line
     device_doctor_line
@@ -2038,6 +2060,15 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           record: its worker stopped there (or its clone or setup
                                           cancelled), its branch brought home, its copy there closed.
                                           Then chartroom set <id> node=here, and dispatch it again
+  chartroom move <id> [--agent A | --backend R:A] [--node DEVICE|here] [--dry-run] [--force]
+                                          move a task onto another agent (e.g. after a usage limit),
+                                          keeping its brief, branch, worktree, commits and uncommitted
+                                          work; stops the old worker and dispatches the new one
+  chartroom usage [--json] [--refresh] [--agent A]
+                                          subscription usage per agent (and per machine where they
+                                          differ): plan/account, used and left per window, reset times,
+                                          reading age, live workers. Also: usage record <agent>
+                                          (--from-statusline | --hit-limit), usage clear <agent>
   chartroom nodes --for <id>              each machine and why it would take that task now, or not
   chartroom node prepare <name> <repo>... clone each repo there (a node that clones) and run its setup now,
                                           ahead of the task that needs it; says ready, or why not
@@ -2370,7 +2401,7 @@ if [[ "$cmd" =~ ^(status|ls|board|dashboard|todo|inbox|relay)$ ]]; then
   done
 fi
 case "$cmd" in
-  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|git|steer|stop|attach|park|accept|close|sweep|watch|dashboard|radar|node|nodes|fleet|device|doctor|homes|brain|tell|ask|snooze|app|attachment|link|brief|set|request|initiative|permit|version|help|store|remove|restore|done|removed) "cmd_$cmd" "$@" ;;
+  init|project|new|join|listen|worktree|dispatch|event|hook|status|board|resolve|inbox|relay|artifact|rule|focus|peek|git|steer|stop|attach|park|accept|close|sweep|watch|dashboard|radar|node|nodes|fleet|device|doctor|homes|brain|tell|ask|snooze|app|attachment|link|brief|set|request|initiative|permit|version|help|store|remove|restore|done|removed|usage|move) "cmd_$cmd" "$@" ;;
   review-sync) need_task "${1:-}"; review_sync "$1" ;;
   migrate-home) cmd_migrate_home "$@" ;;
   install-skills) cmd_install_skills "$@" ;;

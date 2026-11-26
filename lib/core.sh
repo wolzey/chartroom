@@ -248,6 +248,17 @@ load_config() {
   cfg_set CR_PERMIT_WAIT PERMIT_WAIT_SECONDS '' 900
   [[ "$CR_PERMIT_WAIT" =~ ^[0-9]+$ && "$CR_PERMIT_WAIT" -ge 1 ]] || die "CHARTROOM_PERMIT_WAIT_SECONDS must be whole seconds, such as 900"
   [[ "$CR_CODEX_HOOKS_DIALOG" =~ ^(ask|skip)$ ]] || die "CHARTROOM_CODEX_HOOKS_DIALOG must be ask or skip (got $CR_CODEX_HOOKS_DIALOG)"
+  # Subscription usage thresholds (lib/usage.sh): percent used at which an agent is considered out
+  # or near its limit, how old a reading may be before it is marked stale, how often cached
+  # readings refresh, and fallback cooldown when a usage-limit error carries no parseable reset.
+  cfg_set CR_USAGE_LIMIT_PCT USAGE_LIMIT_PCT '' 95
+  cfg_set CR_USAGE_WARN_PCT USAGE_WARN_PCT '' 80
+  cfg_set CR_USAGE_STALE_MIN USAGE_STALE_MINUTES '' 30
+  cfg_set CR_USAGE_REFRESH_MIN USAGE_REFRESH_MINUTES '' 5
+  cfg_set CR_USAGE_COOLDOWN_MIN USAGE_COOLDOWN_MINUTES '' 60
+  [[ "$CR_USAGE_LIMIT_PCT" =~ ^[0-9]+$ ]] && (( 10#$CR_USAGE_LIMIT_PCT >= 1 && 10#$CR_USAGE_LIMIT_PCT <= 100 )) || die "CHARTROOM_USAGE_LIMIT_PCT must be 1-100 (got $CR_USAGE_LIMIT_PCT)"
+  [[ "$CR_USAGE_WARN_PCT" =~ ^[0-9]+$ ]] && (( 10#$CR_USAGE_WARN_PCT >= 1 && 10#$CR_USAGE_WARN_PCT <= 100 )) || die "CHARTROOM_USAGE_WARN_PCT must be 1-100 (got $CR_USAGE_WARN_PCT)"
+  [[ "$CR_USAGE_STALE_MIN$CR_USAGE_REFRESH_MIN$CR_USAGE_COOLDOWN_MIN" =~ ^[0-9]+$ ]] || die "CHARTROOM_USAGE_STALE_MINUTES, CHARTROOM_USAGE_REFRESH_MINUTES and CHARTROOM_USAGE_COOLDOWN_MINUTES must be whole minutes"
 }
 
 # Stop a process and its children.
@@ -537,7 +548,14 @@ slugify() {
 }
 
 # The worker's single instruction, identical on every backend.
-task_prompt() { printf 'Read the brief at %s/brief.md and follow it exactly. Your task id is %s.' "$(tdir "$1")" "$1"; }
+task_prompt() {
+  local moved; moved="$(meta "$1" moved_from 2>/dev/null || true)"
+  if [[ -n "$moved" ]]; then
+    printf 'Read the brief at %s/brief.md and follow it exactly. Your task id is %s. This task was moved from %s; inspect git status/log and %s/inbox.md and continue from its existing commits.' "$(tdir "$1")" "$1" "$moved" "$(tdir "$1")"
+  else
+    printf 'Read the brief at %s/brief.md and follow it exactly. Your task id is %s.' "$(tdir "$1")" "$1"
+  fi
+}
 
 # A short signature of a prompt's text: whitespace runs collapsed and trimmed, so a typed
 # message and what the agent's prompt hook received compare equal; first 12 hex of sha256.

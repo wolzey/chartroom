@@ -38,7 +38,7 @@ brain_class() { # <command>
     version|help|-h|--help|-v|--version|homes|node|fleet|device|install-skills|brain|env) echo local ;;
     join|hook) echo refuse ;;
     watch|attach|dashboard|doctor|artifact|init|sweep|rule|new|project) echo hybrid ;;
-    worktree|dispatch|git|event|listen|status|ls|board|resolve|show|todo|inbox|relay|focus|peek|steer|stop|recall|park|accept|close|radar|nodes|tell|ask|snooze|link|brief|set|request|initiative|store|remove|restore|done|removed|permit) echo forward ;;
+    worktree|dispatch|git|event|listen|status|ls|board|resolve|show|todo|inbox|relay|focus|peek|steer|stop|recall|park|accept|close|radar|nodes|tell|ask|snooze|link|brief|set|request|initiative|store|remove|restore|done|removed|permit|usage|move) echo forward ;;
     app|attachment) echo local ;; # each refuses in a client home itself: the app runs on the brain; a file to attach must be there
     *) echo local ;; # an unknown command dies here as anywhere
   esac
@@ -108,6 +108,7 @@ brain_stdin_flag() { # <command> [args...]
   case "$1" in
     artifact) [[ "${2:-}" == add && "$last" == - ]] && echo --stdin ;;
     relay) [[ "$last" == - ]] && echo --stdin ;;
+    usage) [[ "${2:-}" == record && " $* " != *" --hit-limit "* ]] && echo --stdin ;;
   esac
   return 0
 }
