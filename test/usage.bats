@@ -344,17 +344,64 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" == "2026-11-23T10:00:00Z|2026-11-26T22:00:00Z|2026-11-28T21:06:40Z|3:05 PM|2026-"*Z ]]
 
-  # 5. Stale hit_limit clears automatically when a newer real reading is comfortably below warn threshold.
-  cr usage record claude --hit-limit --message "You've hit your session limit"
-  run cr usage --agent claude --json
-  [ "$(jq -r '.[0].out' <<<"$output")" = true ]
-  sleep 1
-  local ep5_ok; ep5_ok="$(jq -rn '(now | floor) + 7200')"
-  jq --argjson e5 "$ep5_ok" '.rate_limits.five_hour.used_percentage = 10.0 | .rate_limits.five_hour.resets_at = $e5 | .rate_limits.seven_day.used_percentage = 12.0 | .rate_limits.seven_day.resets_at = ($e5 + 86400)' \
+  # 5. P1-1: a worker hit_limit with a future resets_at MUST NOT be wiped by a routine reading
+  #    whose account-wide windows are below warn (e.g. monthly spend limit while 7d is 58%).
+  local ep5_58 ep7_58 fut_3d
+  ep5_58="$(jq -rn '(now | floor) + 7200')"
+  ep7_58="$(jq -rn '(now | floor) + 300000')"
+  fut_3d="$(jq -rn --argjson e "$ep7_58" '$e | todate')"
+  jq --argjson e5 "$ep5_58" --argjson e7 "$ep7_58" \
+    '.rate_limits.five_hour.used_percentage = 10.0 | .rate_limits.five_hour.resets_at = $e5 | .rate_limits.seven_day.used_percentage = 58.0 | .rate_limits.seven_day.resets_at = $e7' \
+    "$REPO_ROOT/test/fixtures/usage/claude-statusline.json" | cr usage record claude --machine desk --plan max
+  cr usage record claude --hit-limit --resets-at "$fut_3d" --message "You've hit your monthly spend limit"
+  # Age hit_limit.at by 10 minutes so the next routine reading is clearly newer.
+  local older_at; older_at="$(iso_offset -600)"
+  jq --arg t "$older_at" '.hit_limit.at = $t' "$CHARTROOM_HOME/usage/desk--claude.json" >"$BATS_TEST_TMPDIR/cl.tmp"
+  mv "$BATS_TEST_TMPDIR/cl.tmp" "$CHARTROOM_HOME/usage/desk--claude.json"
+  # Re-record the same 58% reading -> hit_limit must STILL hold until resets_at!
+  jq --argjson e5 "$ep5_58" --argjson e7 "$ep7_58" \
+    '.rate_limits.five_hour.used_percentage = 10.0 | .rate_limits.five_hour.resets_at = $e5 | .rate_limits.seven_day.used_percentage = 58.0 | .rate_limits.seven_day.resets_at = $e7' \
     "$REPO_ROOT/test/fixtures/usage/claude-statusline.json" | cr usage record claude --machine desk --plan max
   run cr usage --agent claude --json
   [ "$status" -eq 0 ]
+  [ "$(jq -r '.[0].out' <<<"$output")" = true ]
+  [ "$(jq -r '.[0].hit_active' <<<"$output")" = true ]
+  [ "$(jq -r '.[0].out_resets_at' <<<"$output")" = "$fut_3d" ]
+  # Explicit `usage clear` clears the lockout cleanly.
+  cr usage clear claude >/dev/null
+  run cr usage --agent claude --json
+  [ "$status" -eq 0 ]
   [ "$(jq -r '.[0].out' <<<"$output")" = false ]
+
+  # 6. P2-2: a transient Claude error:"rate_limit" WITHOUT apiError:"usage_limit_reached" or a limit banner
+  #    must NOT mark Claude out of subscription usage.
+  cat >"$CLAUDE_CONFIG_DIR/projects/demo-proj/sess-429-transient.jsonl" <<'JSON'
+{"type":"assistant","isApiErrorMessage":true,"error":"rate_limit","message":{"role":"assistant","content":[{"type":"text","text":"API Error: Request rejected (429) · Rate limited, please retry"}]}}
+JSON
+  run bash -c '
+    export CLAUDE_CONFIG_DIR="'"$CLAUDE_CONFIG_DIR"'"
+    source "'"$REPO_ROOT/lib/core.sh"'"
+    source "'"$REPO_ROOT/lib/usage.sh"'"
+    usage_claude_transcript_limit sess-429-transient
+  '
+  [ "$status" -ne 0 ]
+
+  # 7. P3-5: past month/day dates stay in the current year (never lock out for a year),
+  #    while Dec -> Jan year boundary rolls cleanly to next year.
+  run bash -c '
+    source "'"$REPO_ROOT/lib/core.sh"'"
+    source "'"$REPO_ROOT/lib/usage.sh"'"
+    p1="$(usage_parse_reset_iso "Nov 23 at 3am (America/Denver)" 1795700000)"
+    p2="$(usage_parse_reset_iso "Jan 2 at 3am (America/Denver)" 1798450000)"
+    printf "%s|%s\n" "$p1" "$p2"
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "2026-11-23T10:00:00Z|2027-01-02T10:00:00Z" ]
+
+  # 8. P3-4: WARN > LIMIT is rejected by config validation.
+  CHARTROOM_USAGE_WARN_PCT=96 CHARTROOM_USAGE_LIMIT_PCT=90 run cr usage --json
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"CHARTROOM_USAGE_WARN_PCT"* ]]
 
   # Diff / comment / code / agent prose / tool output lines must NEVER trigger a false positive.
   run bash -c '
@@ -551,6 +598,35 @@ EOF
   [ "$(cat "$CHARTROOM_HOME/tasks/$id/brief.md")" = "$brief_before" ]
   grep -q 'Moved from `hc:claude` to `hc:codex`' "$CHARTROOM_HOME/tasks/$id/inbox.md"
   events "$id" | grep -q 'moved from hc:claude to hc:codex'
+
+  # P1-2: `chartroom move` clearing model/effort must NOT leak IFS=", " into cmd_dispatch
+  # (otherwise `for i in $(seq 1 5)` inside runner wait loops collapses to 1 iteration).
+  ifs_id="$(new_task --backend hc:claude --model claude-opus-5-5)"
+  run bash -c '
+    export CHARTROOM_HOME="'"$CHARTROOM_HOME"'"
+    export CHARTROOM_MACHINE_NAME=desk
+    export FAKE_HC_DIR="'"$FAKE_HC_DIR"'"
+    source "'"$REPO_ROOT/lib/core.sh"'"
+    source "'"$REPO_ROOT/lib/store.sh"'"
+    source "'"$REPO_ROOT/lib/agents.sh"'"
+    source "'"$REPO_ROOT/lib/spread.sh"'"
+    source "'"$REPO_ROOT/lib/usage.sh"'"
+    load_config
+    migrating_guard() { :; }
+    cmd_resolve() { printf "%s" "$1"; }
+    is_joined() { return 1; }
+    valid_backend() { return 0; }
+    probe_backend() { return 0; }
+    cmd_dispatch() {
+      local n=0 i
+      for i in $(seq 1 5); do n=$((n + 1)); done
+      echo "DISPATCH_SEQ_ITERS=$n"
+      [ "$n" -eq 5 ]
+    }
+    cmd_move "'"$ifs_id"'" --agent codex
+  '
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"DISPATCH_SEQ_ITERS=5"* ]]
 
   # Moving a Codex ship task onto Claude preserves the required non-Claude Opus cold review gate.
   cr usage clear claude >/dev/null

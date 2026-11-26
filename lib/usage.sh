@@ -63,22 +63,14 @@ usage_write_record() { # <agent> <machine> <json> [replace_hit 0|1]
   f="$(usage_file "$agent" "$machine")"
   mkdir -p "$(usage_dir)"
   if [[ "$rep" != 1 && -s "$f" ]]; then prev="$(cat "$f" 2>/dev/null || echo null)"; fi
-  doc="$(jq -c --argjson prev "$prev" --argjson rep "$rep" --argjson warn "$CR_USAGE_WARN_PCT" '
-    def ep:
-      if . == null or . == "" then null
-      elif type == "number" then (if . > 0 then floor else null end)
-      else (tostring | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | try fromdateiso8601 catch null) end;
+  doc="$(jq -c --argjson prev "$prev" --argjson rep "$rep" '
     if $rep == 1 or ($prev | type) != "object" then .
     else
-      # Preserve an existing hit_limit UNLESS a newer real ok reading (sampled after hit_limit.at)
-      # shows all active windows comfortably below the warning threshold (clearly recovered/false-hit).
-      ((.sampled_at | ep) as $ns
-       | ($prev.hit_limit.at | ep) as $ha
-       | ((.status == "ok") and (((.windows // []) | length) > 0)
-          and ($ns != null and $ha != null and $ns > $ha)
-          and (all((.windows // [])[]; (.used_pct // 100) < $warn)))) as $recovered
-      | (if (.hit_limit // null) == null and ($prev.hit_limit // null) != null and ($recovered | not)
-         then .hit_limit = $prev.hit_limit else . end)
+      # Preserve an existing hit_limit across routine refreshes until its resets_at passes,
+      # its cooldown expires, or the user runs `chartroom usage clear`. A worker can be blocked
+      # by a spend/scoped/secondary limit even when account-wide windows look below threshold.
+      (if (.hit_limit // null) == null and ($prev.hit_limit // null) != null
+       then .hit_limit = $prev.hit_limit else . end)
       | if .status == "unknown" and $prev.status == "ok" and ((.windows // []) | length) == 0 and (($prev.windows // []) | length) > 0
            and ((.reason // "") | test("not signed in|not on PATH|not installed|API key"; "i") | not)
         then $prev + {recorded_at: .recorded_at, last_error: .reason, hit_limit: (.hit_limit // $prev.hit_limit)}
@@ -692,19 +684,38 @@ usage_refresh_local() { # [force 0|1] [machine]
 
 # Refresh local usage into the node-level state dir ($XDG_STATE_HOME/chartroom/usage) so
 # enrolled nodes (which have no CHARTROOM_HOME in launchd) emit live readings in every heartbeat.
+# Periodic calls (force=0) run in the background so slow CLIs never delay device heartbeats;
+# explicit calls (`chartroom node usage-refresh`, force=1) run synchronously.
 USAGE_DEVICE_NEXT=0
 usage_device_refresh() { # [force 0|1]
-  local force="${1:-0}" now_s m=""
+  local force="${1:-0}" now_s m="" cdir pf oldp
   (( CR_USAGE_REFRESH_MIN > 0 || force == 1 )) || return 0
   printf -v now_s '%(%s)T' -1
   (( force == 1 || now_s >= USAGE_DEVICE_NEXT )) || return 0
   USAGE_DEVICE_NEXT=$((now_s + (CR_USAGE_REFRESH_MIN > 0 ? CR_USAGE_REFRESH_MIN : 5) * 60))
   if declare -F device_cfg >/dev/null 2>&1; then m="$(device_cfg NAME 2>/dev/null || true)"; fi
   [[ -n "$m" ]] || m="$(usage_machine_name)"
+  cdir="$(usage_node_cache_dir)"
+  if [[ "$force" == 1 ]]; then
+    (
+      CR_USAGE_DIR_BASE="${XDG_STATE_HOME:-$HOME/.local/state}/chartroom"
+      usage_refresh_local 1 "$m"
+    ) >/dev/null 2>&1 || true
+    return 0
+  fi
+  mkdir -p "$cdir"
+  pf="$cdir/.refresh.pid"
+  if [[ -f "$pf" ]]; then
+    oldp="$(cat "$pf" 2>/dev/null || true)"
+    if [[ "$oldp" =~ ^[0-9]+$ ]] && pid_alive "$oldp"; then return 0; fi
+  fi
   (
+    echo $$ >"$pf"
+    trap 'rm -f "$pf"' EXIT
     CR_USAGE_DIR_BASE="${XDG_STATE_HOME:-$HOME/.local/state}/chartroom"
-    usage_refresh_local "$force" "$m"
-  ) >/dev/null 2>&1 || true
+    usage_refresh_local 0 "$m"
+  ) </dev/null >/dev/null 2>&1 3>&- &
+  return 0
 }
 
 # Sync usage lines from remote enrolled devices' last heartbeats into $CHARTROOM_HOME/usage/.
@@ -873,11 +884,22 @@ usage_live_counts_json() {
 #   (preferring the local machine's row, with `machines: [...]`).
 # - Enriches each row with `live_workers` counted per (machine, agent) from actually dispatched
 #   live workers (summed across `.machines` when a row is collapsed).
-usage_rows_json() {
-  local all live_map here
+# shellcheck disable=SC2120
+usage_rows_json() { # [precomputed status_rows JSON array]
+  local all live_map here pre_rows="${1:-}"
   all="$(usage_all_json)"
-  live_map="$(usage_live_counts_json 2>/dev/null || echo '{}')"
   here="$(usage_machine_name)"
+  if [[ -n "$pre_rows" ]]; then
+    live_map="$(jq -c --arg here "$here" '
+      map(select((.closed // "") == "" and (.dispatched // "") != ""
+                 and ((.state // "") | IN("review","done","closed","failed") | not))
+          | ((.backend // "") | sub("^herdr-"; "herdr:")) as $b
+          | select($b | contains(":"))
+          | "\(.machine // $here)|\($b | split(":") | last)")
+      | group_by(.) | map({key: .[0], value: length}) | from_entries' <<<"$pre_rows" 2>/dev/null || echo '{}')"
+  else
+    live_map="$(usage_live_counts_json 2>/dev/null || echo '{}')"
+  fi
   jq -cn --argjson all "$all" --argjson lmap "$live_map" --arg here "$here" '
     (["claude", "codex", "agy", "grok"]) as $order
     | def rank($a): ($order | index($a)) // 99;
@@ -934,7 +956,7 @@ usage_available_agents() { # [exclude_agent] [exclude_machine]
       done
     done
   fi
-  local IFS=', '; printf '%s' "${out[*]-}"
+  ( IFS=', '; printf '%s' "${out[*]-}" )
 }
 
 # ---------------------------------------------------------------- worker limit-stop detection (Part 3)
@@ -1052,8 +1074,12 @@ if m and m.group(1).lower() in months:
         mon, day = months[m.group(1).lower()], int(m.group(2))
         yr = now.year
         dt = datetime.datetime(yr, mon, day, clk[0], clk[1], tzinfo=tz)
-        if dt < now - datetime.timedelta(hours=12):
-            dt = datetime.datetime(yr + 1, mon, day, clk[0], clk[1], tzinfo=tz)
+        # Only roll to next year across the Dec -> Jan boundary (within 30 days ahead),
+        # never turning a recent past date (e.g. Nov 23 read on Nov 26) into a 1-year lockout.
+        if dt < now:
+            dt_next = datetime.datetime(yr + 1, mon, day, clk[0], clk[1], tzinfo=tz)
+            if (dt_next - now) <= datetime.timedelta(days=30):
+                dt = dt_next
         print(dt.astimezone(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
         sys.exit(0)
 
@@ -1070,11 +1096,11 @@ PY
 }
 
 # Check a Claude worker's structured session transcript for a trailing usage-limit API error.
-# Claude Code records `isApiErrorMessage:true, error:"rate_limit", apiError:"usage_limit_reached"`
-# on the exact message where it stopped. Checking only the last user/assistant message avoids
-# false positives from prose and ignores older limit errors after the worker resumed.
+# Claude Code records `isApiErrorMessage:true, apiError:"usage_limit_reached"` on the exact
+# message where it stopped. A generic transient 429 (`error:"rate_limit"` without
+# `apiError:"usage_limit_reached"`) only matches if its text is a real anchored limit banner.
 usage_claude_transcript_limit() { # <session_id>
-  local sid="$1" cfg_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}" f="" txt=""
+  local sid="$1" cfg_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}" f="" row="" api_err="" txt=""
   [[ -n "$sid" && "$sid" =~ ^[A-Za-z0-9_-]{8,128}$ ]] || return 1
   shopt -s nullglob
   local matches=("$cfg_dir"/projects/*/"$sid.jsonl")
@@ -1085,14 +1111,20 @@ usage_claude_transcript_limit() { # <session_id>
   (( ${#matches[@]} > 0 )) || return 1
   f="${matches[0]}"
   [[ -r "$f" ]] || return 1
-  txt="$(tail -n 30 "$f" 2>/dev/null | jq -rs '
+  row="$(tail -n 30 "$f" 2>/dev/null | jq -rs '
     [.[] | select(type == "object" and (.type == "assistant" or .type == "user"))]
     | last // empty
     | select(.type == "assistant" and .isApiErrorMessage == true
         and ((.apiError // "") == "usage_limit_reached" or (.error // "") == "rate_limit"))
-    | (.message.content | if type == "array" then ([.[] | select(.type == "text") | .text] | join(" ")) else (. // "") end)
-    | gsub("[\r\n]+"; " ") | gsub("^ +| +$"; "")' 2>/dev/null || true)"
+    | [(.apiError // ""),
+       ((.message.content | if type == "array" then ([.[] | select(.type == "text") | .text] | join(" ")) else (. // "") end)
+        | gsub("[\r\n\t]+"; " ") | gsub("^ +| +$"; ""))] | @tsv' 2>/dev/null || true)"
+  [[ -n "$row" ]] || return 1
+  api_err="${row%%$'\t'*}"; txt="${row#*$'\t'}"
   [[ -n "$txt" ]] || return 1
+  if [[ "$api_err" != usage_limit_reached ]]; then
+    usage_screen_limit claude "$txt" headless >/dev/null || return 1
+  fi
   local rtxt; rtxt="$(usage_extract_reset_text "$txt")"
   printf '%s\t%s\n' "${txt:0:200}" "$rtxt"
   return 0
@@ -1378,6 +1410,13 @@ cmd_move() {
   # 1. Stop old worker safely without touching the worktree or branch.
   if [[ "$old_runner" == node ]]; then
     node_recall "$id" || die "move: could not recall $id from $(node_name_of "$id"); nothing moved"
+    # Recall brings the branch home to the brain's project repo; recount commits from it.
+    if [[ -n "$branch" && -n "$base_sha" ]]; then
+      local proj; proj="$(meta "$id" project)"
+      if [[ -n "$proj" && -d "$proj" ]]; then
+        commits="$(git -C "$proj" rev-list --count "$base_sha..refs/heads/$branch" 2>/dev/null || echo "$commits")"
+      fi
+    fi
   elif [[ -n "$old_runner" && -n "$(meta "$id" dispatched)" ]]; then
     case "$old_runner" in
       hc|herdr|tmux|cmux) "${old_runner}_close" "$id" >/dev/null 2>&1 || true ;;
@@ -1424,7 +1463,9 @@ cmd_move() {
   } >>"$d/inbox.md"
 
   local cleared_note=""
-  if (( ${#cleared[@]} > 0 )); then local IFS=', '; cleared_note="; cleared ${cleared[*]}"; fi
+  if (( ${#cleared[@]} > 0 )); then
+    cleared_note="; cleared $(IFS=', '; printf '%s' "${cleared[*]}")"
+  fi
   log_event "$id" note "moved from ${old_backend:-auto} to $new_backend (kept worktree, branch ${branch:-detached}, $commits commit(s), $dirty uncommitted change(s)$cleared_note)"
   echo "moved $id: ${old_backend:-auto} -> $new_backend (kept $commits commit(s), $dirty uncommitted change(s)$cleared_note)"
 

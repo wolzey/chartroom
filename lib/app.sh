@@ -117,7 +117,7 @@ app_snapshot_json() {
       permits: $permits}' >"$f"
   local _agents _usage
   _agents="$(spread_summary)"
-  _usage="$(usage_rows_json)"
+  _usage="$(usage_rows_json "$(jq -c '.rows // []' "$f")")"
   jq -c -f "$CR_ROOT/lib/app/snapshot.jq" "$f" | jq -c --argjson agents "$_agents" --argjson usage "$_usage" '. + {agents:$agents, usage:$usage}'
   rm -f "$f"
 }

@@ -713,8 +713,9 @@ chartroom move <id> --agent codex    # move to a specific agent (--dry-run previ
   disabled extra-usage spend). Readings refresh automatically during `watch` (and on enrolled
   nodes during device heartbeats) every `CHARTROOM_USAGE_REFRESH_MINUTES` (5). Where no number
   exists, it reports `unknown` and why. Readings are stored under `$CHARTROOM_HOME/usage/` with
-  sample time, machine, and plan/account only — never tokens, cookies, emails, or org IDs. Readings
-  older than `CHARTROOM_USAGE_STALE_MINUTES` (30) are flagged stale with their age.
+  sample time, machine, plan, and a non-secret auth/provider label (`claude.ai`, `chatgpt`,
+  `google`) — never tokens, cookies, emails, or org/account IDs. Readings older than
+  `CHARTROOM_USAGE_STALE_MINUTES` (30) are flagged stale with their age.
 - **Exhausted agents are skipped.** Once any active window reaches `CHARTROOM_USAGE_LIMIT_PCT`
   (default 95%; warning at `CHARTROOM_USAGE_WARN_PCT`, 80%) or a worker hits a usage-limit error,
   automatic dispatch (`spread_pick`), node placement, and fallback skip that agent until its

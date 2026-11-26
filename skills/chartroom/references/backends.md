@@ -41,7 +41,8 @@ cmux is implemented against its documented CLI but **unverified on a real cmux i
 
 chartroom tracks real subscription/plan usage per agent (and per machine when remote nodes
 report different plans or numbers) under `$CHARTROOM_HOME/usage/<machine>--<agent>.json`.
-Tokens, cookies, emails, and org IDs are never stored or logged.
+The `account` field intentionally stores only the non-secret auth/provider label (`claude.ai`,
+`chatgpt`, `google`) — tokens, cookies, emails, and account/org UUIDs are never stored or logged.
 
 | Agent | Real usage source | When unavailable (`unknown`) |
 |---|---|---|
@@ -75,8 +76,8 @@ Tokens, cookies, emails, and org IDs are never stored or logged.
   patterns use real strings from the `agy` binary (`Usage limit reached`, `individual quota
   reached`, `RESOURCE_EXHAUSTED` / `exhausted your capacity`), though agy's live interactive
   limit-stop screen layout has not been observed live yet. On a match, chartroom marks only that
-  machine's agent out (and clears a stale lockout automatically once a newer real reading is
-  comfortably below warning) and raises
+  machine's agent out until its reset time (or fallback cooldown / `chartroom usage clear`, never
+  wiped early by routine account-wide readings) and raises
   `agent: out-of-usage: <agent>[ on <node>] resets <time>; available: <agents> (move with: chartroom move <id>)`
   once per dispatch/steer.
 - **Moving work (`chartroom move <id>`).** Stops the old worker safely, clears runner handles
