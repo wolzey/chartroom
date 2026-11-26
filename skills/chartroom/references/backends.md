@@ -272,9 +272,11 @@ Verified on agy 1.5.17 and 1.5.18 in hc 0.1.21 on a Mac (November 2026), against
   workspace, and each write there asks),
   `--model` from the task or the home's `CHARTROOM_AGY_MODEL`, `--effort` from the task, and `--mode` from `--permission` (`auto`,
   `accept-edits` or `plan`; anything else refuses at dispatch; none gives agy's own default). In auto
-  mode agy runs edits and safe commands itself and asks for the rest. agy's own default is not the
-  same everywhere: auto on the Macs seen (1.5.17, 1.5.18), but agy 1.5.17 on a Linux machine started
-  with no mode shown and asked before each command and file (November 2026). herdr starts it with `herdr agent start --kind agy`
+  mode agy runs edits and safe commands itself and asks for the rest. On the Macs seen (1.5.17, 1.5.18)
+  agy starts in auto mode with no `--mode`. On a Linux machine, agy 1.5.17 showed no mode on its
+  status line and asked before each command and each file it wrote, even when started with `--mode
+  auto` (November 2026): a worker there needs its dialogs answered (each wakes the XO, below), so
+  prefer a Mac for agy work until that changes. herdr starts it with `herdr agent start --kind agy`
   (herdr 0.9.5 knows agy) and the same flags; chartroom then types the brief, as for Codex.
 - **Sign-in.** `agy models` lists the account's models, or says `Please sign in` and exits 1 at once.
   Doctor shows it (`agy: <version> at <path>, signed in`), an automatic pick skips agy while it is

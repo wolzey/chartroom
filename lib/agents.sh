@@ -66,7 +66,7 @@ agy_login_why() {
 }
 
 # agy's flags for a task: its model (task_model) and effort, its mode (meta permission: auto, accept-edits or
-# plan; empty is agy's own default: auto on the Macs seen, not on a Linux one), and the task's folder as a workspace directory, by its
+# plan; empty is agy's own default: auto on the Macs seen; on a Linux one it asked even with auto), and the task's folder as a workspace directory, by its
 # real path (agy compares resolved paths: a folder given through a symlink, as macOS's /tmp is,
 # reads as outside the workspace, and each write there asks).
 agy_args() { # <id>
