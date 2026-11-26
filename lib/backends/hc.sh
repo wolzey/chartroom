@@ -421,8 +421,7 @@ hc_watch() { # <id>
           prompt_sync "$id" "${what:-$CODEX_TITLE_WHAT}"
         elif [[ "$(backend_agent "$id")" == agy ]]; then
           # hc carries agy's own words for it: the kind (permission, question) and the dialog's line.
-          what="$(hcx get "$(meta "$id" hc_terminal)" --json 2>/dev/null | jq -r '.status | [(.kind // "prompt"), (.msg // "" | gsub("[\n\t]"; " ") | .[0:160])] | if .[1] == "" then "agy is waiting on a \(.[0])" else "agy is waiting on a \(.[0]): \(.[1])" end' 2>/dev/null || true)"
-          log_event "$id" agent "awaiting-input: hc: ${what:-agy is waiting on an approval or question prompt}"
+          log_event "$id" agent "awaiting-input: hc: $(hc_agy_what "$id")"
         else log_event "$id" agent "awaiting-input: hc: agent is waiting on an approval or question prompt"; fi ;;
       error) wake "$id" "hc: agent reported an error; read its screen (chartroom peek $id)" ;;
       # (Codex: its notify's `agent: turn-ended` wakes through the event stream instead.)
@@ -438,6 +437,37 @@ hc_watch() { # <id>
   HST[$id]="$W"; HC_TURNS[$id]="$HC_TURN"
   return 0
 }
+# hc carries agy's own words for a dialog: its kind (permission, question) and the dialog's line.
+hc_agy_what() { # <id>
+  local what
+  what="$(hcx get "$(meta "$1" hc_terminal)" --json 2>/dev/null | jq -r '.status | [(.kind // "prompt"), (.msg // "" | gsub("[\n\t]"; " ") | .[0:160])] | if .[1] == "" then "agy is waiting on a \(.[0])" else "agy is waiting on a \(.[0]): \(.[1])" end' 2>/dev/null || true)"
+  printf '%s' "${what:-agy is waiting on an approval or question prompt}"
+}
+# On a device (a guest home: lib/guest.sh), where no watch runs: what hc_watch says of an agy
+# worker, written to its log as the lines Claude's and Codex's hooks write there, so the relay
+# carries them to the brain, whose watch wakes on them: `agent: awaiting-input: hc: agy is waiting
+# on a <kind>: <its words>` and `agent: turn-ended` for a turn that ends unreported. agy has no
+# hooks to say either. Its last look is kept beside its log (each look is a new process).
+hc_agy_look() { # <id>
+  local id="$1" W f prev="" pturn=""
+  hc_handle_set "$id" || return 0
+  f="$(tdir "$id")/.agy-look"
+  hc_watch_word "$id"
+  [[ "$W" == blocked && "$(meta "$id" hc_launched)" != 1 ]] && W=starting # (its trust dialog, as in hc_watch)
+  if [[ -f "$f" ]]; then read -r prev pturn <"$f" || true; fi
+  [[ "$pturn" =~ ^[0-9]+$ ]] || pturn=""
+  if [[ -n "$prev" ]] && [[ "$W" != "$prev" || ( "$W" =~ ^(idle|done)$ && -n "$pturn" && "$HC_TURN" -gt "$pturn" ) ]]; then
+    case "$W" in
+      blocked) log_event "$id" agent "awaiting-input: hc: $(hc_agy_what "$id")" ;;
+      idle|done)
+        if [[ "$prev" == working || ( -n "$pturn" && "$HC_TURN" -gt "$pturn" ) ]] && ! reported_since_dispatch "$id"; then
+          log_event "$id" agent "turn-ended"
+        fi ;;
+    esac
+  fi
+  printf '%s %s\n' "$W" "$HC_TURN" >"$f"
+}
+
 # (A revive starts a new run as a dispatch does: the launcher's `exited` of the parked one is history.)
 exited_since_dispatch() { # <id>
   events_path "$1"

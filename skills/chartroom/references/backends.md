@@ -270,9 +270,11 @@ Verified on agy 1.5.17 and 1.5.18 in hc 0.1.21 on a Mac (November 2026), against
   takes a first prompt only so). Its flags: `--add-dir <task folder>` by its real path (agy compares
   resolved paths: a folder given through a symlink, as macOS's `/tmp` is, reads as outside its
   workspace, and each write there asks),
-  `--model` from the task or the home's `CHARTROOM_AGY_MODEL`, `--effort` from the task, and `--mode` from `--permission` (`auto`, the default,
-  `accept-edits` or `plan`; anything else refuses at dispatch). In auto mode agy runs edits and
-  safe commands itself and asks for the rest. herdr starts it with `herdr agent start --kind agy`
+  `--model` from the task or the home's `CHARTROOM_AGY_MODEL`, `--effort` from the task, and `--mode` from `--permission` (`auto`,
+  `accept-edits` or `plan`; anything else refuses at dispatch; none gives agy's own default). In auto
+  mode agy runs edits and safe commands itself and asks for the rest. agy's own default is not the
+  same everywhere: auto on the Macs seen (1.5.17, 1.5.18), but agy 1.5.17 on a Linux machine started
+  with no mode shown and asked before each command and file (November 2026). herdr starts it with `herdr agent start --kind agy`
   (herdr 0.9.5 knows agy) and the same flags; chartroom then types the brief, as for Codex.
 - **Sign-in.** `agy models` lists the account's models, or says `Please sign in` and exits 1 at once.
   Doctor shows it (`agy: <version> at <path>, signed in`), an automatic pick skips agy while it is
@@ -298,6 +300,11 @@ Verified on agy 1.5.17 and 1.5.18 in hc 0.1.21 on a Mac (November 2026), against
   reporting`; the stall watchdog covers a quiet one (agy's braille spinner and its tasks' clocks
   do not count as output; its phase line, `Generating...` or `Editing files...`, does). The trust dialog's own `blocked`, while the
   dispatch answers it, wakes nothing.
+- **On a node** (`node:agy`), no watch runs on the device and agy has no hooks to report: the device
+  agent asks hc about each guest `hc:agy` worker every 5 s (`chartroom node agy-look`, in the guest
+  home) and writes what the brain's watch wakes on into its log, which goes up with the rest:
+  `agent: awaiting-input: hc: agy is waiting on a permission: <words>`, and `agent: turn-ended` for
+  a turn that ends unreported. The stall watchdog does not cover a node worker.
 - **Steer.** `hc send` pastes and presses Enter, and refuses a blocked agy (exit 9, verified), as it
   does Claude; chartroom also reads agy's dialogs on its screen (each ends in a `↑/↓ Navigate · ...`
   line) and refuses before typing on herdr too, since Enter at `> 1. Yes, allow creation` would

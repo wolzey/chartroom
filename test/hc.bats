@@ -290,6 +290,43 @@ agy_trust() {
   [[ "$output" == *"only hc:claude workers can be parked"* ]]
 }
 
+@test "hc:agy on a device: its prompts and unreported turns become the log lines the brain's watch wakes on" {
+  use_fake agy
+  core_up
+  export FAKE_HC_NO_HOOK=1
+  id="$(new_task --backend hc:agy)"
+  FAKE_HC_STATUS=working cr dispatch "$id" >/dev/null
+  log="$CHARTROOM_HOME/tasks/$id/events.log"
+  # only in a guest home: on the brain its own watch looks
+  run cr node agy-look
+  [ "$status" -ne 0 ]
+  export CHARTROOM_GUEST=1
+  cr node agy-look # (the first look only notes where it is)
+  refute grep -q " agent: " "$log"
+  set_term t1 '.status = {app: "antigravity", state: "blocked", kind: "permission", msg: "Run this command? ls -la"}'
+  cr node agy-look
+  cr node agy-look # (once per prompt, not per look)
+  [ "$(grep -c " agent: awaiting-input: hc: agy is waiting on a permission: Run this command? ls -la$" "$log")" = 1 ]
+  set_term t1 '.status = {app: "antigravity", state: "working"}'
+  cr node agy-look
+  set_term t1 '.status = {app: "antigravity", state: "done"} | .turn += 1'
+  cr node agy-look
+  [ "$(grep -c " agent: turn-ended$" "$log")" = 1 ]
+  # a turn that ends after the worker reported is not news
+  set_term t1 '.status = {app: "antigravity", state: "working"}'
+  cr node agy-look
+  cr event "$id" done "Listed the docs"
+  set_term t1 '.status = {app: "antigravity", state: "done"} | .turn += 1'
+  cr node agy-look
+  [ "$(grep -c " agent: turn-ended$" "$log")" = 1 ]
+  # and the brain's watch wakes on these lines, as they arrive relayed: the prompt with agy's words,
+  # the unreported turn (and the worker's own done, which is news anyway)
+  unset CHARTROOM_GUEST
+  watch_after true
+  grep -q "^\[$id\] .*agent: awaiting-input: hc: agy is waiting on a permission: Run this command? ls -la$" "$BATS_TEST_TMPDIR/wake"
+  grep -q "^\[$id\] .*agent: turn-ended (stopped its turn without reporting)$" "$BATS_TEST_TMPDIR/wake"
+}
+
 @test "hc:agy: not signed in, or not a session runner, it never starts; doctor says why and what agy lacks" {
   use_fake agy
   core_up

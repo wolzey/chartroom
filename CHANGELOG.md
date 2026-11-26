@@ -16,7 +16,8 @@ are stable from 0.1.0.
   permission cards, grants or pattern-kill guard; its steers are taken but not checked against their text; it is never parked.
   A dispatch where agy is not signed in stops before it starts a terminal. Never `headless:agy`, `tmux:agy` or `cmux:agy`.
   From an ssh session (a client home's command) the sign-in is asked inside the hc core, since a Mac's keychain is closed to
-  ssh; with no core answering, a Mac says it cannot tell instead of "not signed in".
+  ssh; with no core answering, a Mac says it cannot tell instead of "not signed in". On a node, the device agent asks hc about
+  its agy workers every 5 s and logs their prompts and unreported turns, so the XO is woken for them as for one on the brain.
 - `CHARTROOM_CODEX_MODEL` and `CHARTROOM_AGY_MODEL` (usually in a home's `config`): the model a Codex or agy worker gets when
   its task names none; `new --model` still wins, and a task on a device carries it there.
 - An "always" answer on a Bash line covers each of its commands by the program and its fixed leading words (`gh run view:*`),
