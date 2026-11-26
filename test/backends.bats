@@ -424,6 +424,10 @@ herdr_trust_screen() {
   grep -q -- "check_for_update_on_startup=false -s danger-full-access" "$l"
   eval "args=( $(sed -n 4p "$l") )"
   printf '%s\n' "${args[@]}" | grep -qxF "notify=[\"$CHARTROOM\",\"hook\",\"$id\",\"codex-notify\"]"
+  # the pattern kill guard, as a per-run hook whose text names no task (Codex trusts it once by its text)
+  guard="$(printf '%s\n' "${args[@]}" | grep '^hooks.PreToolUse=')"
+  [[ "$guard" == 'hooks.PreToolUse=[{matcher="Bash",hooks=[{type="command",command="CHARTROOM_HOME='*" $CHARTROOM hook - guard\"}]}]" ]]
+  [[ "$guard" != *"$id"* ]]
 }
 
 @test "cmux:claude (stub cmux): workspace once, surface per task, keys forced, close" {

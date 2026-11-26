@@ -566,7 +566,8 @@ a minute (`CHARTROOM_LOOK_INTERVAL`), with one read of its terminal or output fi
 - **A startup dialog never loses the brief.** Dispatch says the worker is waiting, exits 0 and
   raises the dialog; the brief starts once it clears. Codex's "Hooks need review" is never trusted
   for you: answer it, or set `CHARTROOM_CODEX_HOOKS_DIALOG=skip` to take Esc in worktrees chartroom
-  created, so those hooks do not run for those workers.
+  created, so those hooks do not run for those workers. The first Codex worker on a machine shows it
+  once for chartroom's own pattern kill guard; trust that one, and later workers start without it.
 - **A worker gone quiet** wakes once as `stalled: no output or events for 10 min ... Last output:
   ...`: a task in flight, not `waiting`, not parked, not at a prompt already raised, whose output and
   events have not changed for `CHARTROOM_STALL_MINUTES` (`0` turns it off). New output or an event

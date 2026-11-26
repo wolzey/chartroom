@@ -81,8 +81,22 @@ or `ps | grep` (`$(...)`, backticks, `xargs`, also behind `sudo`, `env`, `timeou
 `sh -c` script), and tells the agent to stop only processes it started, by their PID, or its own
 port's listener (`lsof -ti tcp:<port> -sTCP:LISTEN`). `kill <pid>` and that `lsof` form pass. Each
 refusal logs `note: blocked a pattern kill: <command>`. It reads the command line, not a script it
-runs. Verified on Claude Code 2.1.329: the deny holds under `bypassPermissions`. Not guarded:
-headless:claude (no `--settings`), Codex workers, subagents and joined sessions.
+runs. Verified on Claude Code 2.1.329: the deny holds under `bypassPermissions`.
+
+Every interactive Codex worker (hc, herdr, tmux, cmux) gets the same guard as a per-run hook,
+`-c hooks.PreToolUse=[{matcher="Bash", ... "chartroom hook - guard"}]`: the guard alone, never the
+permission broker, with the task taken from `CHARTROOM_TASK`. Codex runs a per-run hook only once it
+is trusted, and keeps that trust in `~/.codex/config.toml` by the hook's text
+(`/<session-flags>/config.toml:pre_tool_use:0:0` and a hash), not by task or folder. So the text
+names no task, and the first Codex worker on a machine (per home, and again whenever chartroom's
+path or the home changes) shows "Hooks need review" once, raised as `agent: awaiting-input` like any
+dialog. The commander trusts it there (Review hooks shows Source `Session flags` and the command),
+and later workers start without it. chartroom never trusts it for them. Esc, or
+`CHARTROOM_CODEX_HOOKS_DIALOG=skip`, starts that worker unguarded. Verified on codex-cli 0.160.0:
+Codex sends `tool_name: "Bash"` and `tool_input.command`, the deny blocks the command and the
+agent sees the advice, a relaunch with the same hook shows no dialog, and an allowed command runs.
+
+Not guarded: headless runs, subagents and joined sessions.
 
 **The brief is never typed at a dialog.** The text is dropped and Enter answers the dialog
 (verified on tmux, codex-cli 0.158.0). Dispatch exits 0 and says the worker is waiting. hc passes
@@ -113,8 +127,9 @@ stall watchdog.
   title change, many a second under its spinner, so the stream's jq reduces them to the one fact
   that matters. Only an overlay's own footer on a screen's last lines counts, never the same words in a
   transcript. A `PermissionRequest` hook also fires at once (verified), but a per-run hook raises
-  the "Hooks need review" dialog itself, at every dispatch, unless the commander trusts it, so
-  chartroom does not use one.
+  the "Hooks need review" dialog itself until the commander trusts it, and a hook whose text
+  names the task would raise it at every dispatch, so chartroom does not use one. (The Bash guard
+  is a per-run hook whose text names no task, trusted once per machine: see "The Bash guard".)
 - **`steer` refuses a Codex worker at a prompt.** Typed text and Enter at its approval overlay
   approve the command (verified through `hc send`, which does not refuse because hc does not
   know Codex is blocked).

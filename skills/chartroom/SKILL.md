@@ -269,7 +269,9 @@ On a wake:
   clears. Esc continues without those hooks, for this worker only. Trusting them lets them run
   outside the sandbox, so that is the commander's call. A repo with hooks raises this at every
   Codex dispatch, because Codex trusts by path and each worktree is new; if the commander has
-  said hooks can be skipped, set `CHARTROOM_CODEX_HOOKS_DIALOG=skip`.
+  said hooks can be skipped, set `CHARTROOM_CODEX_HOOKS_DIALOG=skip`. The first Codex worker on
+  each machine also shows it once for chartroom's own pattern kill guard (`hook - guard`, Source
+  `Session flags`). Ask the commander to trust that one there, and later workers start without it.
 - **stalled**: read the last output in the wake, then peek. A command that says it is idle, or a
   frozen screen, is probably wedged: `chartroom stop <id>`, then steer or re-dispatch it. An agent
   idle at its prompt: steer it, or close it if it is finished. If it is legitimately waiting on

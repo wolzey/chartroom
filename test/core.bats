@@ -333,6 +333,10 @@ EOF
   done
   jq -n '{tool_name:"Bash",tool_input:{command:"pkill -f vite"}}' | cr hook "$id" pre-bash | jq -e '.hookSpecificOutput.permissionDecisionReason | test("by their PID.*lsof -ti tcp:<port> -sTCP:LISTEN")'
   events "$id" | grep -qF "note: blocked a pattern kill: pkill -f vite"
+  # Codex's guard (hook - guard): the task comes from CHARTROOM_TASK, and an allowed call gets no answer at all
+  jq -n '{tool_name:"Bash",tool_input:{command:"killall node"}}' | CHARTROOM_TASK="$id" cr hook - guard | jq -e '.hookSpecificOutput.permissionDecision == "deny"'
+  events "$id" | grep -qF "note: blocked a pattern kill: killall node"
+  [ -z "$(jq -n '{tool_name:"Bash",tool_input:{command:"kill 1234"}}' | CHARTROOM_TASK="$id" cr hook - guard)" ]
 }
 
 @test "close refuses a dirty worktree (exit 2) and --discard removes it" {

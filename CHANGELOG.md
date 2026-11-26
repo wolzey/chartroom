@@ -7,6 +7,14 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- Codex workers get the pattern kill guard too. Every interactive Codex worker (hc, herdr, tmux,
+  cmux) starts with a per-run `PreToolUse` hook on `Bash`, `chartroom hook - guard`. It runs the
+  guard alone, never the permission broker, and takes the task from `CHARTROOM_TASK`, so the hook's
+  text names no task. Codex trusts a per-run hook by its text, so the first Codex worker on each
+  machine shows "Hooks need review" once. The commander trusts it there, and later workers start
+  without the dialog. chartroom never trusts it for them, and Esc starts that worker unguarded.
+  Verified on codex-cli 0.160.0: the deny blocks `killall -l`, the agent sees the advice, the
+  task logs `note: blocked a pattern kill: ...`, a relaunch shows no dialog, and `echo` still runs.
 - An "always" answer on a Bash line covers each of its commands by the program and its fixed leading words (`gh run view:*`),
   so the next run with other ids or flags matches; never a command chained in, a substitution, a redirect off `/dev/null`,
   or another kind of call than the one answered. Script runners, hosts and verbs like push, api, delete or merge stay exact.

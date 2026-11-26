@@ -41,6 +41,20 @@ codex_notify_args() { # <id>
   printf '%s\n' -c "notify=[\"$CR_BIN\",\"hook\",\"$1\",\"codex-notify\"]"
 }
 
+# The pattern kill guard for Codex (pattern_kill): a per-run PreToolUse hook on Bash that runs
+# `chartroom hook - guard`, the guard alone (no permission broker: that is Claude's). Codex runs a
+# per-run hook only once it is trusted, and keeps that trust by the hook's own text ("/<session-
+# flags>/config.toml:pre_tool_use:0:0" and its hash in ~/.codex/config.toml), so the text names no
+# task: the hook reads it from CHARTROOM_TASK, which the launcher exports. Its first launch on a
+# machine (per home) shows "Hooks need review" once; the commander trusts it there, and every later
+# worker starts without the dialog. Verified on codex-cli 0.160.0: tool_name Bash,
+# tool_input.command, and the deny is honored.
+codex_guard_args() {
+  local cmd
+  cmd="CHARTROOM_HOME=$(printf '%q' "$CR_HOME") $(printf '%q' "$CR_BIN") hook - guard"
+  printf '%s\n' -c "hooks.PreToolUse=[{matcher=\"Bash\",hooks=[{type=\"command\",command=$(jq -n --arg c "$cmd" '$c')}]}]"
+}
+
 # Claude Code hooks for interactive sessions (tmux, cmux): turn end, approval/idle
 # prompts and prompt receipt become events. Written per task, loaded with --settings, and
 # rewritten at every launch and resume, so an edit to the file does not outlive the session.
@@ -132,7 +146,7 @@ interactive_argv() { # <id> <agent> <hooks> [session|resume]
     codex)
       # Interactive codex otherwise self-updates on launch and exits, losing the brief.
       printf '%s\n' -c check_for_update_on_startup=false
-      codex_sandbox_args "$id"; codex_model_args "$id"
+      codex_sandbox_args "$id"; codex_model_args "$id"; codex_guard_args
       [[ "$hooks" == 1 ]] && codex_notify_args "$id"
       ;;
     *) die "unknown agent '$agent'" ;;
@@ -150,7 +164,8 @@ interactive_argv() { # <id> <agent> <hooks> [session|resume]
 # ~/.claude.json or ~/.codex/config.toml to pre-trust a path.
 #
 # Codex then asks about hooks: "Hooks need review" for any project or per-run hook it has not
-# seen, in each new worktree (its trust is by path, and hooks run outside the sandbox). chartroom
+# seen, in each new worktree (its trust is by path, and hooks run outside the sandbox), and once
+# per machine for chartroom's own guard (codex_guard_args) until the commander trusts it. chartroom
 # never trusts one. By default the dialog goes to the XO as `agent: awaiting-input`; with
 # CHARTROOM_CODEX_HOOKS_DIALOG=skip it takes Esc in a worktree chartroom created, which starts
 # the agent without those hooks.
