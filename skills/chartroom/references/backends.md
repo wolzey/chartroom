@@ -92,8 +92,31 @@ or `ps | grep` (`$(...)`, backticks, `xargs`, also behind `sudo`, `env`, `timeou
 `sh -c` script), and tells the agent to stop only processes it started, by their PID, or its own
 port's listener (`lsof -ti tcp:<port> -sTCP:LISTEN`). `kill <pid>` and that `lsof` form pass. Each
 refusal logs `note: blocked a pattern kill: <command>`. It reads the command line, not a script it
-runs. Verified on Claude Code 2.1.329: the deny holds under `bypassPermissions`. Not guarded:
-headless:claude (no `--settings`), Codex workers, subagents and joined sessions.
+runs. Verified on Claude Code 2.1.329: the deny holds under `bypassPermissions`.
+
+Every interactive Codex worker (hc, herdr, tmux, cmux) gets the same guard as a per-run hook,
+`-c hooks.PreToolUse=[{matcher="Bash", ... "chartroom hook - guard"}]`: the guard alone, never the
+permission broker, with the task taken from `CHARTROOM_TASK`. Codex runs a per-run hook only once it
+is trusted, and keeps that trust in `~/.codex/config.toml` by the hook's text
+(`/<session-flags>/config.toml:pre_tool_use:0:0` and a hash), not by task or folder. So the text
+names no task, and the first Codex worker on a machine (per home, and again whenever chartroom's
+path or the home changes) shows "Hooks need review" once, raised as `agent: awaiting-input` like any
+dialog. The commander trusts it there (Review hooks shows Source `Session flags` and the command),
+and later workers start without it. chartroom never trusts it for them. Esc, or
+`CHARTROOM_CODEX_HOOKS_DIALOG=skip`, starts that worker unguarded. Verified on codex-cli 0.160.0:
+Codex sends `tool_name: "Bash"` and `tool_input.command`, the deny blocks the command and the
+agent sees the advice, a relaunch with the same hook shows no dialog, and an allowed command runs.
+
+Every agy worker (hc, herdr, node) gets it too, through agy's own hooks: chartroom writes
+`tasks/<id>/.agents/hooks.json` at each launch, a `PreToolUse` hook on `run_command` that runs
+`chartroom hook <id> guard`. agy loads hooks from the `.agents` folder of each workspace folder, and
+the task's folder is one (`--add-dir`), so nothing goes into the worktree. agy sends
+`toolCall.args.CommandLine` and takes `{"decision": "deny", "reason": ...}`. An allowed call gets no
+answer, because agy's `allow` would skip its own approval and an empty object denies. Verified on agy
+1.5.18, interactive and `-p`: no trust prompt for the hook, the deny blocks `killall -l` ("tool
+call denied by pre-tool hook: ..."), the task logs the note, and `echo` still runs.
+
+Not guarded: headless runs, subagents and joined sessions.
 
 **The brief is never typed at a dialog.** The text is dropped and Enter answers the dialog
 (verified on tmux, codex-cli 0.158.0). Dispatch exits 0 and says the worker is waiting. hc passes
@@ -124,8 +147,9 @@ stall watchdog.
   title change, many a second under its spinner, so the stream's jq reduces them to the one fact
   that matters. Only an overlay's own footer on a screen's last lines counts, never the same words in a
   transcript. A `PermissionRequest` hook also fires at once (verified), but a per-run hook raises
-  the "Hooks need review" dialog itself, at every dispatch, unless the commander trusts it, so
-  chartroom does not use one.
+  the "Hooks need review" dialog itself until the commander trusts it, and a hook whose text
+  names the task would raise it at every dispatch, so chartroom does not use one. (The Bash guard
+  is a per-run hook whose text names no task, trusted once per machine: see "The Bash guard".)
 - **`steer` refuses a Codex worker at a prompt.** Typed text and Enter at its approval overlay
   approve the command (verified through `hc send`, which does not refuse because hc does not
   know Codex is blocked).
@@ -278,16 +302,25 @@ Verified on agy 1.5.17 and 1.5.18 in hc 0.1.21 on a Mac (November 2026), against
   takes a first prompt only so). Its flags: `--add-dir <task folder>` by its real path (agy compares
   resolved paths: a folder given through a symlink, as macOS's `/tmp` is, reads as outside its
   workspace, and each write there asks),
-  `--model` from the task or the home's `CHARTROOM_AGY_MODEL`, `--effort` from the task, and `--mode` from `--permission` (`auto`, the default,
-  `accept-edits` or `plan`; anything else refuses at dispatch). In auto mode agy runs edits and
-  safe commands itself and asks for the rest. herdr starts it with `herdr agent start --kind agy`
+  `--model` from the task or the home's `CHARTROOM_AGY_MODEL`, `--effort` from the task, and `--mode` from `--permission` (`auto`,
+  `accept-edits` or `plan`; anything else refuses at dispatch; none gives agy's own default). In auto
+  mode agy runs edits and safe commands itself and asks for the rest. On the Macs seen (1.5.17, 1.5.18)
+  agy starts in auto mode with no `--mode`. On a Linux machine, agy 1.5.17 showed no mode on its
+  status line and asked before each command and each file it wrote, even when started with `--mode
+  auto` (November 2026): a worker there needs its dialogs answered (each wakes the XO, below), so
+  prefer a Mac for agy work until that changes. herdr starts it with `herdr agent start --kind agy`
   (herdr 0.9.5 knows agy) and the same flags; chartroom then types the brief, as for Codex.
 - **Sign-in.** `agy models` lists the account's models, or says `Please sign in` and exits 1 at once.
   Doctor shows it (`agy: <version> at <path>, signed in`), an automatic pick skips agy while it is
   signed out, and a dispatch here stops before it starts a terminal (`agy is not signed in here`).
   An explicit `hc:agy` is still placed: a node reports agy's version and sign-in in its probe, and
   placement sends the task only to a machine where agy is signed in. Sign-in is not a fleet health
-  check (a machine without agy is not the worse for it).
+  check (a machine without agy is not the worse for it). agy keeps its sign-in in a Mac's login
+  keychain, which an ssh session cannot open (there `agy models` says `Please sign in` though agy
+  is signed in): from an ssh session, as a client home's command runs, the check is asked inside
+  the hc core (`hc exec`, in the login session, where its workers run too). With no core answering,
+  a Mac says it cannot tell (`agy's sign-in cannot be read from an ssh session ...`) rather than
+  "not signed in". A core itself started from an ssh session has the same closed keychain.
 - **Trust dialog.** "Do you trust the contents of this project?", the cursor (an ASCII `>`) on
   `Yes, I trust this folder`. Answered with Enter only in a worktree chartroom created; otherwise it
   is `awaiting-input` and the brief waits behind it. agy records trust by path in
@@ -301,16 +334,20 @@ Verified on agy 1.5.17 and 1.5.18 in hc 0.1.21 on a Mac (November 2026), against
   reporting`; the stall watchdog covers a quiet one (agy's braille spinner and its tasks' clocks
   do not count as output; its phase line, `Generating...` or `Editing files...`, does). The trust dialog's own `blocked`, while the
   dispatch answers it, wakes nothing.
+- **On a node** (`node:agy`), no watch runs on the device and agy has no reporting hooks (only the guard): the device
+  agent asks hc about each guest `hc:agy` worker every 5 s (`chartroom node agy-look`, in the guest
+  home) and writes what the brain's watch wakes on into its log, which goes up with the rest:
+  `agent: awaiting-input: hc: agy is waiting on a permission: <words>`, and `agent: turn-ended` for
+  a turn that ends unreported. The stall watchdog does not cover a node worker.
 - **Steer.** `hc send` pastes and presses Enter, and refuses a blocked agy (exit 9, verified), as it
   does Claude; chartroom also reads agy's dialogs on its screen (each ends in a `↑/↓ Navigate · ...`
   line) and refuses before typing on herdr too, since Enter at `> 1. Yes, allow creation` would
   approve it. A steer is `submitted, not verified`: agy takes it (hc's `working`, or a turn), but
   with no prompt hook its text is not checked.
 - **What chartroom does not do for agy** (doctor says so). agy has hooks of its own (`hooks.json`:
-  `PreInvocation`, `PreToolUse`, `Stop`, ...), but chartroom installs none: they load only from the
-  user's `~/.gemini/config/hooks.json`, a plugin, or a `.agents/hooks.json` in the worktree, all of
-  which outlive the task or touch the repo. So no permission cards, grants, holds or pattern-kill
-  guard apply to an agy worker (its own approvals come to the XO as `awaiting-input`, answered in
+  `PreInvocation`, `PreToolUse`, `Stop`, ...). chartroom installs one, the pattern-kill guard, in the
+  task folder's `.agents/hooks.json`; agy loads hooks from each workspace folder's `.agents`, and the
+  task folder is one (see "The Bash guard"). So no permission cards, grants or holds apply to an agy worker (its own approvals come to the XO as `awaiting-input`, answered in
   its terminal: `chartroom attach`), and no prompt signature. It is never parked: chartroom cannot
   pick the id of agy's conversation to resume it (`agy -r <id>` resumes one agy chose).
 - `stop` is `hc interrupt` (Esc; verified: `stopped`), `close` ends the terminal, `attach` shows it.

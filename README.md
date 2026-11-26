@@ -563,7 +563,8 @@ a minute (`CHARTROOM_LOOK_INTERVAL`), with one read of its terminal or output fi
 - **A startup dialog never loses the brief.** Dispatch says the worker is waiting, exits 0 and
   raises the dialog; the brief starts once it clears. Codex's "Hooks need review" is never trusted
   for you: answer it, or set `CHARTROOM_CODEX_HOOKS_DIALOG=skip` to take Esc in worktrees chartroom
-  created, so those hooks do not run for those workers.
+  created, so those hooks do not run for those workers. The first Codex worker on a machine shows it
+  once for chartroom's own pattern kill guard; trust that one, and later workers start without it.
 - **A worker gone quiet** wakes once as `stalled: no output or events for 10 min ... Last output:
   ...`: a task in flight, not `waiting`, not parked, not at a prompt already raised, whose output and
   events have not changed for `CHARTROOM_STALL_MINUTES` (`0` turns it off). New output or an event
@@ -661,7 +662,7 @@ only: `hc:agy`, `herdr:agy`, or `node:agy` on a device where agy is signed in).
 | Backend | Runs in | Watch | Steering | Needs | Status |
 |---|---|---|---|---|---|
 | `hc:<agent>` | an herdr-core terminal, in its own tab of the Herdr app's `$CHARTROOM_WORKSPACE` space | yes (`chartroom attach`, or the app) | live | herdr-core running (the Herdr app, or `hc server start`); the window may be closed | `hc:claude` verified (hc 0.1.14, herdr-app 0.1.9, Claude Code 2.1.314); `hc:codex` implemented, not yet run against a real codex |
-| `hc:agy` | an herdr-core terminal running `agy -i <brief>` | yes | live (taken, not checked against its text) | agy signed in (`chartroom doctor` says) | verified (agy 1.5.17 and 1.5.18, hc 0.1.21). No chartroom hooks: no permission cards or grants, never parked |
+| `hc:agy` | an herdr-core terminal running `agy -i <brief>` | yes | live (taken, not checked against its text) | agy signed in (`chartroom doctor` says) | verified (agy 1.5.17 and 1.5.18, hc 0.1.21). Only the pattern-kill guard hook: no permission cards or grants, never parked |
 | `herdr:<agent>` | a herdr tab (first class) | yes | live | herdr running | verified (herdr 0.9.1); `herdr:agy` built to the same rules, not run against a signed-in agy |
 | `cmux:<agent>` | a cmux tab (macOS) | yes | live | cmux app, automation socket mode if the XO runs outside cmux | **implemented, unverified on real cmux** |
 | `tmux:<agent>` | a tmux window | yes (`chartroom attach`) | live | tmux ≥ 3.0 | verified (tmux 3.x) |

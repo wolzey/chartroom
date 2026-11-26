@@ -13,14 +13,28 @@ are stable from 0.1.0.
 - New non-Claude ship tasks queue cold Opus 5.5 reviews through the watch before acceptance.
   Reviews retry unavailable Git or runners, reuse unchanged diffs, and accept case-insensitive
   verdicts. Scouts and pre-gate tasks are exempt; `accept --skip-review` records a per-task bypass.
+- Codex and agy workers get the pattern kill guard too. agy: chartroom writes the task folder's
+  `.agents/hooks.json` (a `PreToolUse` hook on `run_command`, `chartroom hook <id> guard`); agy loads
+  it because the task folder is a workspace folder, so nothing goes into the worktree, and it needs no
+  trust. Verified on agy 1.5.18, interactive and `-p`. Codex: every interactive Codex worker (hc, herdr, tmux,
+  cmux) starts with a per-run `PreToolUse` hook on `Bash`, `chartroom hook - guard`. It runs the
+  guard alone, never the permission broker, and takes the task from `CHARTROOM_TASK`, so the hook's
+  text names no task. Codex trusts a per-run hook by its text, so the first Codex worker on each
+  machine shows "Hooks need review" once. The commander trusts it there, and later workers start
+  without the dialog. chartroom never trusts it for them, and Esc starts that worker unguarded.
+  Verified on codex-cli 0.160.0: the deny blocks `killall -l`, the agent sees the advice, the
+  task logs `note: blocked a pattern kill: ...`, a relaunch shows no dialog, and `echo` still runs.
 - **agy (Antigravity CLI) as a crew agent, in full sessions only**: `hc:agy`, `herdr:agy`, and `node:agy` on a device where agy is
   signed in. Its brief goes in as `agy -i`, with the task's folder as `--add-dir` (by its real path) and `--model`, `--effort`,
   `--mode` from the task. hc reads agy's own state (OSC 7501: working, done, blocked with the dialog's kind and words), so a
   prompt wakes the XO as `awaiting-input: hc: agy is waiting on a permission: <its words>`, a turn that ends unreported wakes,
   and the stall watchdog knows its spinner. Its folder trust dialog is answered only for chartroom's own worktree. Doctor shows
-  agy's version and whether it is signed in (`agy models`), and what it lacks: chartroom installs no hooks for it, so no
-  permission cards, grants or pattern-kill guard; its steers are taken but not checked against their text; it is never parked.
+  agy's version and whether it is signed in (`agy models`), and what it lacks: chartroom installs only the pattern-kill guard
+  hook for it, so no permission cards or grants; its steers are taken but not checked against their text; it is never parked.
   A dispatch where agy is not signed in stops before it starts a terminal. Never `headless:agy`, `tmux:agy` or `cmux:agy`.
+  From an ssh session (a client home's command) the sign-in is asked inside the hc core, since a Mac's keychain is closed to
+  ssh; with no core answering, a Mac says it cannot tell instead of "not signed in". On a node, the device agent asks hc about
+  its agy workers every 5 s and logs their prompts and unreported turns, so the XO is woken for them as for one on the brain.
 - `CHARTROOM_CODEX_MODEL` and `CHARTROOM_AGY_MODEL` (usually in a home's `config`): the model a Codex or agy worker gets when
   its task names none; `new --model` still wins, and a task on a device carries it there.
 - An "always" answer on a Bash line covers each of its commands by the program and its fixed leading words (`gh run view:*`),
