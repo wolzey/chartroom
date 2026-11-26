@@ -294,16 +294,25 @@ Verified on agy 1.5.17 and 1.5.18 in hc 0.1.21 on a Mac (November 2026), against
   takes a first prompt only so). Its flags: `--add-dir <task folder>` by its real path (agy compares
   resolved paths: a folder given through a symlink, as macOS's `/tmp` is, reads as outside its
   workspace, and each write there asks),
-  `--model` from the task or the home's `CHARTROOM_AGY_MODEL`, `--effort` from the task, and `--mode` from `--permission` (`auto`, the default,
-  `accept-edits` or `plan`; anything else refuses at dispatch). In auto mode agy runs edits and
-  safe commands itself and asks for the rest. herdr starts it with `herdr agent start --kind agy`
+  `--model` from the task or the home's `CHARTROOM_AGY_MODEL`, `--effort` from the task, and `--mode` from `--permission` (`auto`,
+  `accept-edits` or `plan`; anything else refuses at dispatch; none gives agy's own default). In auto
+  mode agy runs edits and safe commands itself and asks for the rest. On the Macs seen (1.5.17, 1.5.18)
+  agy starts in auto mode with no `--mode`. On a Linux machine, agy 1.5.17 showed no mode on its
+  status line and asked before each command and each file it wrote, even when started with `--mode
+  auto` (November 2026): a worker there needs its dialogs answered (each wakes the XO, below), so
+  prefer a Mac for agy work until that changes. herdr starts it with `herdr agent start --kind agy`
   (herdr 0.9.5 knows agy) and the same flags; chartroom then types the brief, as for Codex.
 - **Sign-in.** `agy models` lists the account's models, or says `Please sign in` and exits 1 at once.
   Doctor shows it (`agy: <version> at <path>, signed in`), an automatic pick skips agy while it is
   signed out, and a dispatch here stops before it starts a terminal (`agy is not signed in here`).
   An explicit `hc:agy` is still placed: a node reports agy's version and sign-in in its probe, and
   placement sends the task only to a machine where agy is signed in. Sign-in is not a fleet health
-  check (a machine without agy is not the worse for it).
+  check (a machine without agy is not the worse for it). agy keeps its sign-in in a Mac's login
+  keychain, which an ssh session cannot open (there `agy models` says `Please sign in` though agy
+  is signed in): from an ssh session, as a client home's command runs, the check is asked inside
+  the hc core (`hc exec`, in the login session, where its workers run too). With no core answering,
+  a Mac says it cannot tell (`agy's sign-in cannot be read from an ssh session ...`) rather than
+  "not signed in". A core itself started from an ssh session has the same closed keychain.
 - **Trust dialog.** "Do you trust the contents of this project?", the cursor (an ASCII `>`) on
   `Yes, I trust this folder`. Answered with Enter only in a worktree chartroom created; otherwise it
   is `awaiting-input` and the brief waits behind it. agy records trust by path in
@@ -317,6 +326,11 @@ Verified on agy 1.5.17 and 1.5.18 in hc 0.1.21 on a Mac (November 2026), against
   reporting`; the stall watchdog covers a quiet one (agy's braille spinner and its tasks' clocks
   do not count as output; its phase line, `Generating...` or `Editing files...`, does). The trust dialog's own `blocked`, while the
   dispatch answers it, wakes nothing.
+- **On a node** (`node:agy`), no watch runs on the device and agy has no hooks to report: the device
+  agent asks hc about each guest `hc:agy` worker every 5 s (`chartroom node agy-look`, in the guest
+  home) and writes what the brain's watch wakes on into its log, which goes up with the rest:
+  `agent: awaiting-input: hc: agy is waiting on a permission: <words>`, and `agent: turn-ended` for
+  a turn that ends unreported. The stall watchdog does not cover a node worker.
 - **Steer.** `hc send` pastes and presses Enter, and refuses a blocked agy (exit 9, verified), as it
   does Claude; chartroom also reads agy's dialogs on its screen (each ends in a `↑/↓ Navigate · ...`
   line) and refuses before typing on herdr too, since Enter at `> 1. Yes, allow creation` would

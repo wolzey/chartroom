@@ -47,14 +47,26 @@ agy_guard_hooks() { # <id>
 
 # Signed in? `agy models` lists the account's models, or says "Please sign in" and exits 1 at once
 # (it never opens a browser or waits). Asked once per process. Empty: signed in.
+# agy keeps its sign-in in a Mac's login keychain, which is closed to an ssh session (a command
+# from a client home runs in one): there `agy models` says "Please sign in" though agy is signed
+# in (verified on agy 1.5.18). So from an ssh session it is asked inside the hc core (`hc exec`, a
+# core started in the login session, where workers run too), as lib/nodeprobe.sh asks logins; with
+# no core answering, a Mac says it cannot tell rather than "not signed in".
 AGY_LOGIN_WHY="" AGY_LOGIN_ASKED=""
 agy_login_why() {
   if [[ -z "$AGY_LOGIN_ASKED" ]]; then
-    local b out rc=0
+    local b out rc=0 run=()
     AGY_LOGIN_ASKED=1; b="$(agent_bin agy)"
+    if [[ -n "${CHARTROOM_GATE:-}${SSH_CONNECTION:-}${SSH_CLIENT:-}" ]]; then
+      if hc_probe >/dev/null 2>&1; then run=(env -u HC_TERMINAL_ID "$(hc_bin)" exec --timeout 20 --)
+      elif [[ "$(uname -s)" == Darwin ]]; then run=(none); fi
+    fi
     if [[ -z "$b" ]]; then AGY_LOGIN_WHY="agy not on PATH"
+    elif [[ "${run[0]:-}" == none ]]; then
+      AGY_LOGIN_WHY="agy's sign-in cannot be read from an ssh session (macOS keeps the login keychain closed there) and no hc core answers to ask in the login session: open Herdr, or run chartroom doctor on this machine itself"
     else
-      if command -v perl >/dev/null 2>&1; then out="$(cd / && perl -e 'alarm shift; exec @ARGV or exit 127' 20 "$b" models </dev/null 2>&1)" || rc=$?
+      if [[ ${#run[@]} -gt 0 ]]; then out="$(cd / && "${run[@]}" "$b" models </dev/null 2>&1)" || rc=$? # (hc bounds it)
+      elif command -v perl >/dev/null 2>&1; then out="$(cd / && perl -e 'alarm shift; exec @ARGV or exit 127' 20 "$b" models </dev/null 2>&1)" || rc=$?
       else out="$(cd / && "$b" models </dev/null 2>&1)" || rc=$?; fi
       if [[ $rc -ne 0 ]]; then
         if grep -qi 'sign in' <<<"$out"; then AGY_LOGIN_WHY="agy is not signed in here (run agy once in a terminal and finish its Google sign-in)"
@@ -66,7 +78,7 @@ agy_login_why() {
 }
 
 # agy's flags for a task: its model (task_model) and effort, its mode (meta permission: auto, accept-edits or
-# plan; empty is agy's own default, auto), and the task's folder as a workspace directory, by its
+# plan; empty is agy's own default: auto on the Macs seen; on a Linux one it asked even with auto), and the task's folder as a workspace directory, by its
 # real path (agy compares resolved paths: a folder given through a symlink, as macOS's /tmp is,
 # reads as outside the workspace, and each write there asks).
 agy_args() { # <id>

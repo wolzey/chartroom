@@ -2,13 +2,15 @@
 # fake agy (Antigravity CLI): only what chartroom asks of it outside a terminal. Interactive
 # sessions are the fake hc's and herdr's to simulate.
 #   --version            1.5.17-fake
-#   models               the account's models; FAKE_AGY_SIGNED_OUT=1: agy 1.5.17's sign-in error, exit 1
+#   models               the account's models; FAKE_AGY_SIGNED_OUT=1: agy 1.5.17's sign-in error, exit 1;
+#                        FAKE_AGY_KEYCHAIN_CLOSED=1: that error too, unless run inside the fake hc core
+#                        (`hc exec`, FAKE_IN_HC_CORE=1), as a Mac's ssh session reads a signed-in agy
 printf '%s\n' "$*" >>"${FAKE_LOG:-/dev/null}"
 case "${1:-}" in
   --version) echo "1.5.17-fake" ;;
   models)
     echo "Fetching available models..."
-    if [[ -n "${FAKE_AGY_SIGNED_OUT:-}" ]]; then echo "Error: Please sign in to view available models. Launch the CLI without arguments to sign in."; exit 1; fi
+    if [[ -n "${FAKE_AGY_SIGNED_OUT:-}" || ( -n "${FAKE_AGY_KEYCHAIN_CLOSED:-}" && -z "${FAKE_IN_HC_CORE-}" ) ]]; then echo "Error: Please sign in to view available models. Launch the CLI without arguments to sign in."; exit 1; fi
     printf 'gemini-fake-high\tGemini Fake (High)\n' ;;
   *) echo "fake agy: interactive mode not simulated" >&2; exit 2 ;;
 esac
