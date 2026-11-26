@@ -467,8 +467,8 @@ cmd_node() {
     agy-look)
       [[ -n "${CHARTROOM_GUEST:-}" ]] || die "node agy-look runs only in a guest home on a device (the brain's watch looks at its own)"
       local m id
-      for m in "$CR_HOME"/tasks/*/meta.json; do
-        [[ -f "$m" ]] || continue
+      task_meta_files
+      for m in "${TASK_METAS[@]+"${TASK_METAS[@]}"}"; do
         id="${m%/meta.json}"; id="${id##*/}"
         is_closed "$id" && continue
         [[ "$(meta "$id" backend)" == hc:agy && -n "$(meta "$id" dispatched)" ]] || continue
