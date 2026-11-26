@@ -117,7 +117,9 @@ dry() { run cr dispatch "$1" --dry-run; echo "$output"; }
   [[ "$output" == *"no node can take $id now"*"studio: cpu 81% of 80%"* ]]
   [ -z "$(meta_of "$id" dispatched)" ] && [ ! -e "$FLEET/placed/acme.$id.json" ]
   events "$id" | grep -q " note: not dispatched: no node can take it now"
-  # --over-limit is the override
+  # Exercise the local limit override explicitly; a remote at its limit can still
+  # rank below this machine once limits are ignored. No remote responder runs here.
+  cr set "$id" node=here >/dev/null
   run cr dispatch "$id" --over-limit
   echo "$output"
   [ "$status" -eq 0 ]
