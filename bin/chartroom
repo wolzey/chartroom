@@ -1801,14 +1801,17 @@ cmd_watch() {
             *) covered=0 ;;
           esac
           # Its own cadence (lib/stuck.sh): a prompt nothing reports, a brief behind a dialog, a stall, a usage-limit stop.
+          LOOK_LOGGED=0
           watch_look "$id" "$r" || true
-          if is_store_task "$id"; then store_render_events open; fi
-          events_path "$id"; f="$EVENTS_PATH"
-          if [[ -f "$f" ]]; then
-            size=$(($(wc -c <"$f")))
-            if (( size > ${OFF[$id]:-0} )); then
-              watch_scan_lines "$id" "${OFF[$id]:-0}" "$size"
-              OFF[$id]=$size
+          if [[ "${LOOK_LOGGED:-0}" == 1 ]]; then
+            if is_store_task "$id"; then store_render_events open; fi
+            events_path "$id"; f="$EVENTS_PATH"
+            if [[ -f "$f" ]]; then
+              size=$(($(wc -c <"$f")))
+              if (( size > ${OFF[$id]:-0} )); then
+                watch_scan_lines "$id" "${OFF[$id]:-0}" "$size"
+                OFF[$id]=$size
+              fi
             fi
           fi
         fi

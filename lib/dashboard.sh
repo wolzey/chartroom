@@ -114,7 +114,7 @@ dashboard_json() { # [pr-states-file]
   arts="$(artifacts_json --open)"
   local _agents _usage
   _agents="$(spread_summary)"
-  _usage="$(usage_rows_json "$_agents")"
+  _usage="$(usage_rows_json)"
   printf '%s\n' "${rows[@]+"${rows[@]}"}" | jq -s \
     --argjson inbox "$(inbox_with_relays)" --argjson prs "$prs" --argjson hours "$hours" \
     --argjson artifacts "$arts" --argjson artifact_counts "$(jq -c "$ARTIFACT_COUNTS_JQ" <<<"$arts")" \

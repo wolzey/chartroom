@@ -151,9 +151,9 @@ NODES_ROW_JQ='
              | (.[2] // "-" | tonumber? // null) as $re
              | {label: .[0], used_pct: $u, left_pct: ([100 - $u, 0] | max),
                 resets_at: (if $re != null and $re > 0 then ($re | floor | todate) else null end),
-                out: ($u >= $ulim and ($re == null or $re <= 0 or $now < $re))}) end) as $ws
+                out: ($u >= $ulim and ($re == null or $re <= 0 or $unow < $re))}) end) as $ws
          | (.[8] // "-" | if . == "-" or . == "" then null else (tonumber? // null) end) as $hre
-         | ($hre != null and $hre > $now) as $hit_out
+         | ($hre != null and $hre > $unow) as $hit_out
          | ([$ws[] | select(.out)] | sort_by(-.used_pct) | .[0] // null) as $ow
          | ($hit_out or $ow != null) as $is_out
          | (if $hit_out then ($hre | floor | todate) elif $ow then $ow.resets_at else null end) as $ores
@@ -204,7 +204,7 @@ nodes_json() { # <remote to look for, or ""> [ssh: 1 for the ssh list alone]
     for ((i = 0; i < n; i++)); do
       node_contact "$dir/$i.out" "$dir/$i.err" "$dir/$i.rc"
       jq -n --argjson m "$(jq -c --argjson i "$i" '.[$i]' <<<"$machines")" --rawfile probe "$dir/$i.out" \
-        --arg contact "$NODE_CONTACT" --arg err "$NODE_ERR" --arg want "$want" --argjson now "$now" \
+        --arg contact "$NODE_CONTACT" --arg err "$NODE_ERR" --arg want "$want" --argjson now "$now" --argjson unow "$now" \
         --argjson c "$NODE_C" --argjson mg "$NODE_MG" --argjson ulim "${CR_USAGE_LIMIT_PCT:-95}" "$NODES_ROW_JQ"
     done
     n="$(jq length <<<"$devs")"
@@ -232,7 +232,7 @@ nodes_device_row() { # <device json> <now> [remote to look for]
   probe="$(jq -r '.probe // ""' <<<"$d")"; at="$(jq -r --argjson now "$2" '.last_seen // $now' <<<"$d")"
   jq -n --argjson m "$(jq -c '{machine: .name, local: false, target: null, via: "heartbeat",
         device: {id, status, last_seen, seen_age_s, version, enrolled, aliases, caps}}' <<<"$d")" \
-    --arg probe "$probe" --arg contact "$contact" --arg err "$err" --arg want "${3:-}" --argjson now "$at" \
+    --arg probe "$probe" --arg contact "$contact" --arg err "$err" --arg want "${3:-}" --argjson now "$at" --argjson unow "$2" \
     --argjson c "$NODE_C" --argjson mg "$NODE_MG" --argjson ulim "${CR_USAGE_LIMIT_PCT:-95}" "$NODES_ROW_JQ"
 }
 
@@ -464,8 +464,9 @@ node_row_local() {
   local dir; dir="$(mktemp -d)"; nodes_settings
   CR_PROBE_CHECKOUTS=1 node_probe_local >"$dir/out" 2>"$dir/err" && echo 0 >"$dir/rc" || echo $? >"$dir/rc"
   node_contact "$dir/out" "$dir/err" "$dir/rc"
+  local now_s; now_s="$(date +%s)"
   jq -cn --argjson m "$(jq -cn --arg m "$(radar_machine_name)" '{machine: $m, local: true, target: null, via: "this machine"}')" \
-    --rawfile probe "$dir/out" --arg contact "$NODE_CONTACT" --arg err "$NODE_ERR" --arg want "" --argjson now "$(date +%s)" \
+    --rawfile probe "$dir/out" --arg contact "$NODE_CONTACT" --arg err "$NODE_ERR" --arg want "" --argjson now "$now_s" --argjson unow "$now_s" \
     --argjson c "$NODE_C" --argjson mg "$NODE_MG" --argjson ulim "${CR_USAGE_LIMIT_PCT:-95}" "$NODES_ROW_JQ"
   rm -rf "$dir"
 }

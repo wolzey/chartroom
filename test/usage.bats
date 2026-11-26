@@ -185,10 +185,10 @@ EOF
   chmod +x "$BIN/codex" "$BIN/claude"
 
   local fut past ep_fut ep_past now_iso
-  fut="$(iso_offset 3600)"
-  past="$(iso_offset -60)"
   ep_fut="$(jq -rn '(now | floor) + 3600')"
   ep_past="$(jq -rn '(now | floor) - 60')"
+  fut="$(jq -rn --argjson e "$ep_fut" '$e | todate')"
+  past="$(jq -rn --argjson e "$ep_past" '$e | todate')"
   now_iso="$(iso_offset 0)"
 
   # Mark codex at 96% (>= default 95% threshold) until fut.
@@ -260,39 +260,101 @@ EOF
   [[ "$output" == *"hc:codex"* ]]
 }
 
-@test "detects usage-limit stops per agent, wakes XO once with available agents, and ignores code/diff lines" {
-  # Direct pattern checks across all 4 agents (and non-matching code/diff lines).
-  run bash -c '
-    source "'"$REPO_ROOT/lib/core.sh"'"
-    source "'"$REPO_ROOT/lib/usage.sh"'"
-    usage_screen_limit claude "You'\''ve hit your limit · resets 2026-11-27T00:00:00Z"
-  '
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"2026-11-27T00:00:00Z"* ]]
+@test "detects real captured usage-limit stops per agent, parses real reset times, wakes XO once, and ignores prose/code" {
+  # 1. Real captured Codex binary strings (curly apostrophe U+2019 + TUI ■ prefix) in both screen and headless modes.
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    run bash -c '
+      source "'"$REPO_ROOT/lib/core.sh"'"
+      source "'"$REPO_ROOT/lib/usage.sh"'"
+      usage_screen_limit codex "$1" screen && usage_screen_limit codex "$1" headless
+    ' _ "$line"
+    [ "$status" -eq 0 ]
+  done <"$REPO_ROOT/test/fixtures/usage/limits/codex-binary-limits.txt"
 
+  # 2. Real captured Claude transcript limit entry (structured + screen + headless).
+  local claude_real_txt
+  claude_real_txt="$(jq -r '.message.content[0].text' "$REPO_ROOT/test/fixtures/usage/limits/claude-transcript-limit.jsonl")"
   run bash -c '
     source "'"$REPO_ROOT/lib/core.sh"'"
     source "'"$REPO_ROOT/lib/usage.sh"'"
-    usage_screen_limit codex "You'\''ve hit your usage limit. Try again in 2h 15m."
-  '
+    usage_screen_limit claude "$1" screen
+  ' _ "$claude_real_txt"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"in 2h 15m"* ]]
+  [[ "$output" == *"Nov 23 at 3am (America/Denver)"* ]]
 
+  # Structured Claude session transcript detection (works even if TUI drew under ⎿) and ignores stale errors after resume.
+  mkdir -p "$CLAUDE_CONFIG_DIR/projects/demo-proj"
+  cp "$REPO_ROOT/test/fixtures/usage/limits/claude-transcript-limit.jsonl" \
+    "$CLAUDE_CONFIG_DIR/projects/demo-proj/sess-limit-1234.jsonl"
   run bash -c '
+    export CLAUDE_CONFIG_DIR="'"$CLAUDE_CONFIG_DIR"'"
     source "'"$REPO_ROOT/lib/core.sh"'"
     source "'"$REPO_ROOT/lib/usage.sh"'"
-    usage_screen_limit agy "Model quota limit reached. Resets in 4h 30m."
+    usage_claude_transcript_limit sess-limit-1234
   '
   [ "$status" -eq 0 ]
-  [[ "$output" == *"in 4h 30m"* ]]
+  [[ "$output" == *"Nov 23 at 3am (America/Denver)"* ]]
+  # Once a newer normal assistant turn is appended, the older limit error no longer triggers.
+  echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Resumed and continuing."}]}}' \
+    >>"$CLAUDE_CONFIG_DIR/projects/demo-proj/sess-limit-1234.jsonl"
+  run bash -c '
+    export CLAUDE_CONFIG_DIR="'"$CLAUDE_CONFIG_DIR"'"
+    source "'"$REPO_ROOT/lib/core.sh"'"
+    source "'"$REPO_ROOT/lib/usage.sh"'"
+    usage_claude_transcript_limit sess-limit-1234
+  '
+  [ "$status" -ne 0 ]
 
+  # 3. Real agy and grok binary limit strings.
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    run bash -c '
+      source "'"$REPO_ROOT/lib/core.sh"'"
+      source "'"$REPO_ROOT/lib/usage.sh"'"
+      usage_screen_limit agy "$1" screen
+    ' _ "$line"
+    [ "$status" -eq 0 ]
+  done <"$REPO_ROOT/test/fixtures/usage/limits/agy-binary-limits.txt"
+
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    run bash -c '
+      source "'"$REPO_ROOT/lib/core.sh"'"
+      source "'"$REPO_ROOT/lib/usage.sh"'"
+      usage_screen_limit grok "$1" screen
+    ' _ "$line"
+    [ "$status" -eq 0 ]
+  done <"$REPO_ROOT/test/fixtures/usage/limits/grok-binary-limits.txt"
+
+  # 4. Real reset-time parsing: IANA timezones, pipe-epoch, local wall-clock, relative minutes/days.
   run bash -c '
     source "'"$REPO_ROOT/lib/core.sh"'"
     source "'"$REPO_ROOT/lib/usage.sh"'"
-    usage_screen_limit grok "Error: You'\''ve hit your usage limit. Try again at 2026-11-27T03:00:00Z."
+    r_den="$(usage_extract_reset_text "You'\''ve hit your monthly spend limit · your weekly limit resets Nov 23 at 3am (America/Denver)")"
+    i_den="$(usage_parse_reset_iso "$r_den" 1795000000)"
+    r_3pm="$(usage_extract_reset_text "You'\''ve hit your session limit · resets 3pm (America/Denver) · progress saved")"
+    i_3pm="$(usage_parse_reset_iso "$r_3pm" 1795700000)"
+    r_ep="$(usage_extract_reset_text "Claude AI usage limit reached|1795900000")"
+    i_ep="$(usage_parse_reset_iso "$r_ep" 1795700000)"
+    r_loc="$(usage_extract_reset_text "You’ve hit your usage limit. Upgrade to Plus, or try again at 3:05 PM.")"
+    i_loc="$(usage_parse_reset_iso "$r_loc" 1795700000)"
+    printf "%s|%s|%s|%s|%s\n" "$i_den" "$i_3pm" "$i_ep" "$r_loc" "$i_loc"
   '
   [ "$status" -eq 0 ]
-  [[ "$output" == *"2026-11-27T03:00:00Z"* ]]
+  [[ "$output" == "2026-11-23T10:00:00Z|2026-11-26T22:00:00Z|2026-11-28T21:06:40Z|3:05 PM|2026-"*Z ]]
+
+  # 5. Stale hit_limit clears automatically when a newer real reading is comfortably below warn threshold.
+  cr usage record claude --hit-limit --message "You've hit your session limit"
+  run cr usage --agent claude --json
+  [ "$(jq -r '.[0].out' <<<"$output")" = true ]
+  sleep 1
+  local ep5_ok; ep5_ok="$(jq -rn '(now | floor) + 7200')"
+  jq --argjson e5 "$ep5_ok" '.rate_limits.five_hour.used_percentage = 10.0 | .rate_limits.five_hour.resets_at = $e5 | .rate_limits.seven_day.used_percentage = 12.0 | .rate_limits.seven_day.resets_at = ($e5 + 86400)' \
+    "$REPO_ROOT/test/fixtures/usage/claude-statusline.json" | cr usage record claude --machine desk --plan max
+  run cr usage --agent claude --json
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.[0].out' <<<"$output")" = false ]
 
   # Diff / comment / code / agent prose / tool output lines must NEVER trigger a false positive.
   run bash -c '
@@ -368,7 +430,7 @@ EOF
   [ "$status" -eq 0 ]
   ! events "$mid_id" | grep -q 'out-of-usage'
 
-  # End-to-end watch detection on a headless:claude worker that stopped on a usage limit.
+  # End-to-end watch detection on headless:claude AND headless:codex (with curly apostrophe + error code).
   use_fake hc agy
   export FAKE_HC_DIR="$BATS_TEST_TMPDIR/hc"
   mkdir -p "$FAKE_HC_DIR"
@@ -398,6 +460,15 @@ EOF
   # Running watch again does not duplicate the out-of-usage wake.
   run cr watch --once --timeout 1
   [[ "$output" != *"out-of-usage"* ]]
+
+  # Headless codex with real curly-apostrophe message + structured usage_limit_reached code.
+  cid="$(new_task --backend headless:codex)"
+  set_meta "$cid" '.dispatched="2026-11-26T00:00:00Z" | .pid="999998"'
+  printf '{"type":"error","code":"usage_limit_reached","message":"You’ve hit your usage limit. Upgrade to Plus to continue using Codex, or try again at %s."}\n' "$fut" \
+    >"$CHARTROOM_HOME/tasks/$cid/codex.jsonl"
+  run cr watch --once --timeout 2
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"agent: out-of-usage: codex resets $fut"* ]]
 }
 
 @test "chartroom move switches an exhausted task to another agent while preserving brief, branch, commits, and uncommitted changes" {
@@ -409,8 +480,12 @@ EOF
   printf '#!/usr/bin/env bash\necho '\''{"loggedIn":true}'\''\n' >"$BIN/claude"
   chmod +x "$BIN/codex" "$BIN/claude"
 
-  id="$(new_task --backend hc:claude)"
-  cr worktree "$id"
+  id="$(new_task --backend hc:claude --model claude-opus-5-5)"
+  # Dispatch for real so move exercises stopping a live worker, clearing agent-specific model, and re-dispatching.
+  run cr dispatch "$id"
+  [ "$status" -eq 0 ]
+  old_term="$(meta_of "$id" hc_terminal)"
+  [ -n "$old_term" ]
   wt="$(meta_of "$id" worktree)"
   branch="$(meta_of "$id" branch)"
   brief_before="$(cat "$CHARTROOM_HOME/tasks/$id/brief.md")"
@@ -450,14 +525,23 @@ EOF
   [[ "$output" == *"Claude-only needs"* ]]
   [[ "$output" == *"would move $mcp_id from hc:claude to hc:codex"* ]]
 
-  # Move automatically onto codex (--no-dispatch so we verify state before launch, then verify prompt).
-  run cr move "$id" --no-dispatch
+  # Move automatically onto codex WITH full stop + re-dispatch (no --no-dispatch).
+  # Fake codex has no prompt hook; fake hc marks turn/working on run.
+  FAKE_HC_NO_HOOK=1 run cr move "$id"
   [ "$status" -eq 0 ]
   [[ "$output" == *"moved $id: hc:claude -> hc:codex"* ]]
+  [[ "$output" == *"cleared model=claude-opus-5-5"* ]]
 
-  # Backend switched, worktree/branch/commits/uncommitted/brief all preserved intact.
+  # Old terminal was stopped/removed; new worker dispatched on hc:codex with model cleared!
+  [ ! -f "$FAKE_HC_DIR/terms/$old_term.json" ]
+  new_term="$(meta_of "$id" hc_terminal)"
+  [ -n "$new_term" ]
+  [ "$new_term" != "$old_term" ]
   [ "$(meta_of "$id" backend)" = hc:codex ]
+  [ -z "$(meta_of "$id" model)" ]
   [ "$(meta_of "$id" moved_from)" = hc:claude ]
+  [ -n "$(meta_of "$id" dispatched)" ]
+  # Worktree/branch/commits/uncommitted/untracked/brief all preserved intact.
   [ "$(meta_of "$id" worktree)" = "$wt" ]
   [ "$(meta_of "$id" branch)" = "$branch" ]
   [ "$(git -C "$wt" branch --show-current)" = "$branch" ]
@@ -467,21 +551,40 @@ EOF
   [ "$(cat "$CHARTROOM_HOME/tasks/$id/brief.md")" = "$brief_before" ]
   grep -q 'Moved from `hc:claude` to `hc:codex`' "$CHARTROOM_HOME/tasks/$id/inbox.md"
   events "$id" | grep -q 'moved from hc:claude to hc:codex'
+
+  # Moving a Codex ship task onto Claude preserves the required non-Claude Opus cold review gate.
+  cr usage clear claude >/dev/null
+  run cr move "$id" --agent claude --no-dispatch
+  [ "$status" -eq 0 ]
+  [ "$(meta_of "$id" backend)" = hc:claude ]
+  [ "$(meta_of "$id" review_required)" = 1 ]
+  set_meta "$id" '.dispatched="2026-11-26T00:00:00Z"'
+  cr event "$id" done 'finished after move to claude'
+  [ "$(meta_of "$id" review_pending)" = 1 ]
+  run cr accept "$id"
+  [ "$status" -ne 0 ]
 }
 
-@test "dashboard JSON and HTML expose subscription usage with live worker counts" {
+@test "dashboard JSON and HTML expose subscription usage with per-machine dispatched live worker counts" {
   local ep5; ep5="$(jq -rn '(now | floor) + 5400')"
   jq --argjson e5 "$ep5" '.rate_limits.five_hour.used_percentage = 82.0 | .rate_limits.five_hour.resets_at = $e5 | .rate_limits.seven_day.used_percentage = 44.0 | .rate_limits.seven_day.resets_at = ($e5 + 86400)' \
     "$REPO_ROOT/test/fixtures/usage/claude-statusline.json" | cr usage record claude --machine desk --plan max_20x
+  jq --argjson e5 "$ep5" '.rate_limits.five_hour.used_percentage = 12.0 | .rate_limits.five_hour.resets_at = $e5 | .rate_limits.seven_day.used_percentage = 15.0 | .rate_limits.seven_day.resets_at = ($e5 + 86400)' \
+    "$REPO_ROOT/test/fixtures/usage/claude-statusline.json" | cr usage record claude --machine mini --plan max_20x
 
+  # Undispatched draft must NOT count as a live worker; dispatched local tasks count ONLY on desk (not mini).
   new_task --backend hc:claude >/dev/null
-  new_task --backend hc:claude >/dev/null
+  t_live1="$(new_task --backend hc:claude)"
+  t_live2="$(new_task --backend hc:claude)"
+  set_meta "$t_live1" '.dispatched="2026-11-26T00:00:00Z"'
+  set_meta "$t_live2" '.dispatched="2026-11-26T00:00:00Z"'
 
   run cr dashboard --json
   [ "$status" -eq 0 ]
-  [ "$(jq -r '.usage[] | select(.agent=="claude") | .state' <<<"$output")" = near ]
-  [ "$(jq -r '.usage[] | select(.agent=="claude") | .live_workers' <<<"$output")" = 2 ]
-  [ "$(jq -r '.usage[] | select(.agent=="claude") | .plan' <<<"$output")" = max_20x ]
+  [ "$(jq -r '.usage[] | select(.agent=="claude" and .machine=="desk") | .state' <<<"$output")" = near ]
+  [ "$(jq -r '.usage[] | select(.agent=="claude" and .machine=="desk") | .live_workers' <<<"$output")" = 2 ]
+  [ "$(jq -r '.usage[] | select(.agent=="claude" and .machine=="mini") | .live_workers' <<<"$output")" = 0 ]
+  [ "$(jq -r '.usage[] | select(.agent=="claude" and .machine=="desk") | .plan' <<<"$output")" = max_20x ]
 
   # Dashboard HTML contains the usage panel markup and renderer.
   grep -q 'id="usage"' "$REPO_ROOT/lib/dashboard/index.html"
@@ -606,14 +709,17 @@ EOF
   now_iso="$(iso_offset 0)"
 
   # 1. Node usage-refresh writes to $XDG_STATE_HOME/chartroom/usage (no CHARTROOM_HOME needed)
+  #    using the enrolled device NAME ("studio-node") even when it differs from hostname ("mini"),
   #    and `node probe` emits it read-only.
+  mkdir -p "$HOME/.config/chartroom"
+  echo "CHARTROOM_DEVICE_NAME=studio-node" >"$HOME/.config/chartroom/device"
   jq -c --arg ts "$now_iso" --argjson e5 "$ep5" \
     'select(.payload.rate_limits? != null) | .timestamp = $ts | .payload.rate_limits.primary.used_percent = 97.0 | .payload.rate_limits.primary.resets_at = $e5 | .payload.rate_limits.secondary = null' \
     "$REPO_ROOT/test/fixtures/usage/codex-session.jsonl" | head -n 1 >"$CODEX_HOME/sessions/2026/11/26/rollout-node.jsonl"
 
   CHARTROOM_MACHINE_NAME=mini CHARTROOM_HOME="" run cr node usage-refresh
   [ "$status" -eq 0 ]
-  [ -f "$XDG_STATE_HOME/chartroom/usage/mini--codex.json" ]
+  [ -f "$XDG_STATE_HOME/chartroom/usage/studio-node--codex.json" ]
   CHARTROOM_MACHINE_NAME=mini CHARTROOM_HOME="" run cr node probe
   [ "$status" -eq 0 ]
   [[ "$output" == *$'usage\tcodex\tok\tpro\tchatgpt'* ]]
@@ -622,8 +728,8 @@ EOF
   [ "$(jq -r '.usage.codex.out' <<<"$output")" = true ]
 
   # 2. Guest-side `node usage-look` detects an idle guest worker's limit stop, logs out-of-usage
-  #    with the node name, and mirrors hit_limit into $XDG_STATE_HOME/chartroom/usage so the
-  #    node's next probe reports claude as out.
+  #    with the device NAME, and mirrors hit_limit into $XDG_STATE_HOME/chartroom/usage with
+  #    local=true so the node's next probe reports claude as out.
   use_fake hc
   export FAKE_HC_DIR="$BATS_TEST_TMPDIR/hc"
   mkdir -p "$FAKE_HC_DIR"
@@ -638,8 +744,9 @@ EOF
 
   CHARTROOM_GUEST=1 CHARTROOM_MACHINE_NAME=mini run cr node usage-look
   [ "$status" -eq 0 ]
-  events "$gid" | grep -q "agent: out-of-usage: claude on mini resets $fut5"
-  [ -f "$XDG_STATE_HOME/chartroom/usage/mini--claude.json" ]
+  events "$gid" | grep -q "agent: out-of-usage: claude on studio-node resets $fut5"
+  [ -f "$XDG_STATE_HOME/chartroom/usage/studio-node--claude.json" ]
+  [ "$(jq -r '.local' "$XDG_STATE_HOME/chartroom/usage/studio-node--claude.json")" = true ]
   CHARTROOM_MACHINE_NAME=mini CHARTROOM_HOME="" run cr node probe --json
   [ "$status" -eq 0 ]
   [ "$(jq -r '.usage.claude.out' <<<"$output")" = true ]

@@ -63,13 +63,22 @@ usage_write_record() { # <agent> <machine> <json> [replace_hit 0|1]
   f="$(usage_file "$agent" "$machine")"
   mkdir -p "$(usage_dir)"
   if [[ "$rep" != 1 && -s "$f" ]]; then prev="$(cat "$f" 2>/dev/null || echo null)"; fi
-  doc="$(jq -c --argjson prev "$prev" --argjson rep "$rep" '
+  doc="$(jq -c --argjson prev "$prev" --argjson rep "$rep" --argjson warn "$CR_USAGE_WARN_PCT" '
+    def ep:
+      if . == null or . == "" then null
+      elif type == "number" then (if . > 0 then floor else null end)
+      else (tostring | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | try fromdateiso8601 catch null) end;
     if $rep == 1 or ($prev | type) != "object" then .
     else
-      # Preserve an existing active hit_limit if the new reading does not carry one,
-      # and if the new reading is unknown (e.g. offline/transient error) while previous
-      # had real windows, keep the previous windows & sampled_at and record last_error.
-      (if (.hit_limit // null) == null and ($prev.hit_limit // null) != null then .hit_limit = $prev.hit_limit else . end)
+      # Preserve an existing hit_limit UNLESS a newer real ok reading (sampled after hit_limit.at)
+      # shows all active windows comfortably below the warning threshold (clearly recovered/false-hit).
+      ((.sampled_at | ep) as $ns
+       | ($prev.hit_limit.at | ep) as $ha
+       | ((.status == "ok") and (((.windows // []) | length) > 0)
+          and ($ns != null and $ha != null and $ns > $ha)
+          and (all((.windows // [])[]; (.used_pct // 100) < $warn)))) as $recovered
+      | (if (.hit_limit // null) == null and ($prev.hit_limit // null) != null and ($recovered | not)
+         then .hit_limit = $prev.hit_limit else . end)
       | if .status == "unknown" and $prev.status == "ok" and ((.windows // []) | length) == 0 and (($prev.windows // []) | length) > 0
            and ((.reason // "") | test("not signed in|not on PATH|not installed|API key"; "i") | not)
         then $prev + {recorded_at: .recorded_at, last_error: .reason, hit_limit: (.hit_limit // $prev.hit_limit)}
@@ -653,9 +662,9 @@ usage_read_one() { # <agent> [machine]
 }
 
 # Refresh one local agent if missing or older than CHARTROOM_USAGE_REFRESH_MINUTES (or force=1).
-usage_refresh_agent() { # <agent> [force 0|1]
-  local a="$1" force="${2:-0}" m f rec age_s now_s max_s doc
-  m="$(usage_machine_name)"; f="$(usage_file "$a" "$m")"
+usage_refresh_agent() { # <agent> [force 0|1] [machine]
+  local a="$1" force="${2:-0}" m="${3:-$(usage_machine_name)}" f rec age_s now_s max_s doc
+  f="$(usage_file "$a" "$m")"
   max_s=$((CR_USAGE_REFRESH_MIN * 60))
   if [[ "$force" != 1 && -s "$f" ]]; then
     if (( CR_USAGE_REFRESH_MIN == 0 )); then return 0; fi
@@ -673,11 +682,11 @@ usage_refresh_agent() { # <agent> [force 0|1]
   usage_write_record "$a" "$m" "$doc" 0
 }
 
-usage_refresh_local() { # [force 0|1]
-  local force="${1:-0}" a
+usage_refresh_local() { # [force 0|1] [machine]
+  local force="${1:-0}" m="${2:-$(usage_machine_name)}" a
   while IFS= read -r a; do
     [[ -n "$a" ]] || continue
-    usage_refresh_agent "$a" "$force"
+    usage_refresh_agent "$a" "$force" "$m"
   done < <(usage_agents_list)
 }
 
@@ -685,14 +694,16 @@ usage_refresh_local() { # [force 0|1]
 # enrolled nodes (which have no CHARTROOM_HOME in launchd) emit live readings in every heartbeat.
 USAGE_DEVICE_NEXT=0
 usage_device_refresh() { # [force 0|1]
-  local force="${1:-0}" now_s
+  local force="${1:-0}" now_s m=""
   (( CR_USAGE_REFRESH_MIN > 0 || force == 1 )) || return 0
   printf -v now_s '%(%s)T' -1
   (( force == 1 || now_s >= USAGE_DEVICE_NEXT )) || return 0
   USAGE_DEVICE_NEXT=$((now_s + (CR_USAGE_REFRESH_MIN > 0 ? CR_USAGE_REFRESH_MIN : 5) * 60))
+  if declare -F device_cfg >/dev/null 2>&1; then m="$(device_cfg NAME 2>/dev/null || true)"; fi
+  [[ -n "$m" ]] || m="$(usage_machine_name)"
   (
     CR_USAGE_DIR_BASE="${XDG_STATE_HOME:-$HOME/.local/state}/chartroom"
-    usage_refresh_local "$force"
+    usage_refresh_local "$force" "$m"
   ) >/dev/null 2>&1 || true
 }
 
@@ -827,23 +838,48 @@ usage_agent_why() { # <agent> [machine]
   return 0
 }
 
+# Count actually dispatched, open, live workers per (machine, agent) — excluding never-dispatched
+# drafts/queued tasks and finished (review/done/failed/closed) tasks.
+usage_live_counts_json() {
+  local here devs='[]' docs doc id st b r a m
+  here="$(usage_machine_name)"
+  task_meta_files
+  (( ${#TASK_METAS[@]} > 0 )) || { echo '{}'; return 0; }
+  if declare -F fleet_devices_json >/dev/null 2>&1; then devs="$(fleet_devices_json 2>/dev/null || echo '[]')"; fi
+  docs="$(jq -c 'select((.closed // "") == "" and (.dispatched // "") != "")' "${TASK_METAS[@]}" 2>/dev/null || true)"
+  [[ -n "$docs" ]] || { echo '{}'; return 0; }
+  while IFS= read -r doc; do
+    [[ -n "$doc" ]] || continue
+    id="$(jq -r .id <<<"$doc")"
+    st="$(state_of "$id" 2>/dev/null || true)"
+    case "$st" in review|done|closed|failed) continue ;; esac
+    b="$(canon_backend "$(jq -r '.backend // ""' <<<"$doc")")"
+    [[ "$b" == *:* ]] || continue
+    r="${b%%:*}"; a="${b#*:}"
+    if [[ "$r" == node ]]; then
+      local nid; nid="$(jq -r '.node // ""' <<<"$doc")"
+      m="$(jq -r --arg id "$nid" 'first(.[] | select(.id == $id or .name == $id) | .name) // $id' <<<"$devs" 2>/dev/null || echo "$nid")"
+      [[ -n "$m" ]] || m="$here"
+    else
+      m="$here"
+    fi
+    printf '%s|%s\n' "$m" "$a"
+  done <<<"$docs" | jq -Rsc 'split("\n") | map(select(length > 0)) | group_by(.) | map({key: .[0], value: length}) | from_entries'
+}
+
 # JSON array of rows for display (CLI and dashboard):
 # - One row per agent, and per machine where machines differ (different plan, account, status,
 #   state, or window percentages). When all machines match for an agent, collapse to one row
 #   (preferring the local machine's row, with `machines: [...]`).
-# - Enriches each row with `live_workers` (count of live non-closed/non-review/non-done/non-failed
-#   tasks on that agent).
-# shellcheck disable=SC2120
-usage_rows_json() { # [spread_summary json]
-  local all live_json here
+# - Enriches each row with `live_workers` counted per (machine, agent) from actually dispatched
+#   live workers (summed across `.machines` when a row is collapsed).
+usage_rows_json() {
+  local all live_map here
   all="$(usage_all_json)"
-  if [[ -n "${1:-}" ]]; then live_json="$1"
-  elif declare -F spread_summary >/dev/null 2>&1; then live_json="$(spread_summary 2>/dev/null || echo '[]')"
-  else live_json='[]'; fi
+  live_map="$(usage_live_counts_json 2>/dev/null || echo '{}')"
   here="$(usage_machine_name)"
-  jq -cn --argjson all "$all" --argjson live "$live_json" --arg here "$here" '
+  jq -cn --argjson all "$all" --argjson lmap "$live_map" --arg here "$here" '
     (["claude", "codex", "agy", "grok"]) as $order
-    | ([$live[]? | {key: .agent, value: (.live // 0)}] | from_entries) as $lmap
     | def rank($a): ($order | index($a)) // 99;
     def sig: [
       .status, .state, (.plan // ""), (.account // ""),
@@ -859,33 +895,64 @@ usage_rows_json() { # [spread_summary json]
           [$g[] | . + {machines: [.machine], per_machine: true}]
         end
     ) | add // [])
-    | map(. + {live_workers: ($lmap[.agent] // 0)})
+    | map(. as $row | . + {live_workers: ([$row.machines[] | ($lmap["\(.)|\($row.agent)"] // 0)] | add // 0)})
     | sort_by([rank(.agent), (if .local then 0 else 1 end), .machine])'
 }
 
-# Available agents (excluding <skip_agent>) formatted for the XO wake message.
-usage_available_agents() { # [exclude_agent]
-  local excl="${1:-}" a bs="" out=() rec left
+# Available agents (excluding <skip_agent> on [skip_machine]) formatted for the XO wake message,
+# including local agents and online enrolled nodes' available agents.
+usage_available_agents() { # [exclude_agent] [exclude_machine]
+  local excl="${1:-}" excl_m="${2:-$(usage_machine_name)}" here a bs="" out=() rec left
+  here="$(usage_machine_name)"
   if declare -F spread_local_backends >/dev/null 2>&1; then bs="$(spread_local_backends 2>/dev/null || true)"; fi
   for a in codex agy claude; do
-    [[ "$a" != "$excl" ]] || continue
+    [[ "$a" != "$excl" || "$here" != "$excl_m" ]] || continue
     [[ "$bs" == *":$a"* ]] || continue
-    usage_agent_out "$a" >/dev/null && continue
-    rec="$(usage_of "$a")"
+    usage_agent_out "$a" "$here" >/dev/null && continue
+    rec="$(usage_of "$a" "$here")"
     left="$(jq -r 'if .status == "ok" and ((.windows // []) | length) > 0 then ([.windows[] | select(.reset_passed != true and .left_pct != null) | "\(.label) \(.left_pct | floor)% left"] | join(", ")) else "" end' <<<"$rec" 2>/dev/null || true)"
     out+=("$a${left:+ ($left)}")
   done
+  # Also list available agents on online enrolled nodes (excluding the same exhausted node+agent).
+  if [[ -z "${CHARTROOM_GUEST:-}" ]] && declare -F fleet_devices_json >/dev/null 2>&1 && declare -F nodes_device_row >/dev/null 2>&1; then
+    local devs n i d r nm na
+    devs="$(fleet_devices_json 2>/dev/null || echo '[]')"
+    n="$(jq length <<<"$devs" 2>/dev/null || echo 0)"
+    for ((i = 0; i < n; i++)); do
+      d="$(jq -c --argjson i "$i" '.[$i]' <<<"$devs")"
+      [[ "$(jq -r '.status // ""' <<<"$d")" == online ]] || continue
+      nm="$(jq -r '.name // ""' <<<"$d")"
+      [[ -n "$nm" ]] || continue
+      nodes_settings 2>/dev/null || true
+      r="$(nodes_device_row "$d" "$(date +%s)" 2>/dev/null || true)"
+      [[ -n "$r" ]] || continue
+      for na in codex agy claude; do
+        [[ "$na" != "$excl" || "$nm" != "$excl_m" ]] || continue
+        jq -e --arg a "$na" '.runner.hc == "up" and .tools[$a].status == "ok" and .logins[$a].status == "ok" and ((.usage[$a].out // false) | not)' <<<"$r" >/dev/null 2>&1 || continue
+        usage_agent_out "$na" "$nm" >/dev/null && continue
+        out+=("$na on $nm")
+      done
+    done
+  fi
   local IFS=', '; printf '%s' "${out[*]-}"
 }
 
 # ---------------------------------------------------------------- worker limit-stop detection (Part 3)
 
 # Extract a human-readable reset time phrase from a usage-limit error line, or empty.
+# Handles: "resets Nov 23 at 3am (America/Denver)", "resets 3pm (America/Los_Angeles)",
+# "try again at 3:05 PM", "Resets in 1 hour 20 minutes.", "Claude AI usage limit reached|1795900000".
 # Note: grep -E operates line-by-line; never put \n inside [...] (that excludes literal 'n').
 usage_extract_reset_text() { # <text>
   local t=""
+  # Pipe-epoch suffix from Claude headless: "Claude AI usage limit reached|1795900000"
+  if [[ "$1" =~ \|([0-9]{10})([^0-9]|$) ]]; then
+    printf '|%s' "${BASH_REMATCH[1]}"
+    return 0
+  fi
   # Match "resets <time>", "reset at <time>", "try again at <time>", "try again in <dur>", "Resets in <dur>"
-  t="$(grep -oiE '(resets? (at |in )?[^.;]+|try again (at |in )[^.;]+)' <<<"$1" | head -1 || true)"
+  # Stop at sentence-ending dot/semicolon or middle-dot separator (· / •) so trailing "· progress saved" is excluded.
+  t="$(grep -oiE '(resets? (at |in )?[^.;·•]+|try again (at |in )[^.;·•]+)' <<<"$1" | head -1 || true)"
   t="$(sed -E 's/^(resets?|try again)[[:space:]]+(at|in)[[:space:]]+//i; s/^resets?[[:space:]]+//i; s/[[:space:]]+$//' <<<"$t")"
   # Keep "in <dur>" marker when it was a relative duration so parser knows it's relative.
   if grep -qiE '(resets?|try again)[[:space:]]+in[[:space:]]+' <<<"$1" && [[ -n "$t" ]]; then
@@ -894,14 +961,21 @@ usage_extract_reset_text() { # <text>
   printf '%s' "${t:0:80}"
 }
 
-# Convert a reset phrase into an ISO-8601 UTC timestamp when unambiguous:
+# Convert a reset phrase into an ISO-8601 UTC timestamp when parseable:
+# - Pipe-epoch ("|1795900000")
 # - ISO-8601 UTC ("2026-11-30T10:00:00Z" or "2026-11-30 10:00 UTC")
-# - Relative duration ("in 1 hour 20 minutes", "in 2 days 3 hours 10 minutes", "in 4h 30m", "in 45m")
-# - Explicit UTC wall-clock ("14:30 UTC", "5pm (UTC)", "5:30pm UTC", "Nov 30, 10am (UTC)", "Nov 30 at 10:00am UTC")
-# Returns empty when ambiguous (caller falls back to matching API window resets_at or cooldown).
+# - Relative duration ("in 1 hour 20 minutes", "in 2 days 3 hours 10 minutes", "in 4h 30m")
+# - Explicit timezone ("Nov 23 at 3am (America/Denver)", "3pm (America/Denver)", "Nov 30, 10am (UTC)")
+# - Local wall-clock time ("3:05 PM", "Nov 30, 10am") resolved in the machine's local timezone
+# Returns empty when unparseable (caller falls back to matching API window resets_at or cooldown).
 usage_parse_reset_iso() { # <reset_text> [now_epoch]
   local txt="$1" now_s="${2:-$(date +%s)}"
   [[ -n "$txt" ]] || return 0
+  # Pipe-epoch ("|1795900000")?
+  if [[ "$txt" =~ ^\|([0-9]{10})$ ]]; then
+    jq -rn --argjson t "${BASH_REMATCH[1]}" '$t | todate'
+    return 0
+  fi
   # Already ISO-8601 UTC?
   if [[ "$txt" =~ ([0-9]{4}-[0-9]{2}-[0-9]{2}[T[:space:]][0-9]{2}:[0-9]{2}(:[0-9]{2})?)[[:space:]]*(Z|UTC) ]]; then
     local iso="${BASH_REMATCH[1]/ /T}"
@@ -921,16 +995,43 @@ usage_parse_reset_iso() { # <reset_text> [now_epoch]
       return 0
     fi
   fi
-  # Explicit UTC wall-clock formats ("5pm (UTC)", "5:30pm UTC", "14:30 UTC", "Nov 30, 10am (UTC)")
+  # Wall-clock formats with optional IANA timezone "(America/Denver)", "UTC", or machine local timezone:
+  # e.g. "Nov 23 at 3am (America/Denver)", "3pm (America/Denver)", "Nov 30, 10am (UTC)", "3:05 PM", "14:30 UTC"
   local py; py="$(cfg PYTHON '' python3)"
-  if command -v "$py" >/dev/null 2>&1 && grep -qi 'UTC' <<<"$txt"; then
+  if command -v "$py" >/dev/null 2>&1; then
     "$py" - "$txt" "$now_s" <<'PY' 2>/dev/null || true
 import datetime, re, sys
-txt, now_s = sys.argv[1], int(sys.argv[2])
-now = datetime.datetime.fromtimestamp(now_s, tz=datetime.timezone.utc)
-t = re.sub(r'\(UTC\)|\bUTC\b', '', txt, flags=re.I).strip(' ,.')
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
+
+txt, now_s = sys.argv[1].strip(), int(sys.argv[2])
+tz = None
+t = txt
+# Check for parenthesized IANA timezone or UTC, e.g. "(America/Denver)" or "(UTC)"
+m_tz = re.search(r'\(([A-Za-z0-9_./+-]+)\)\s*$', t)
+if m_tz:
+    zname = m_tz.group(1)
+    t = t[:m_tz.start()].strip(' ,.')
+    if zname.upper() in ('UTC', 'GMT', 'Z'):
+        tz = datetime.timezone.utc
+    elif ZoneInfo is not None:
+        try:
+            tz = ZoneInfo(zname)
+        except Exception:
+            sys.exit(0)
+elif re.search(r'\b(UTC|GMT)\b', t, re.I):
+    tz = datetime.timezone.utc
+    t = re.sub(r'\b(UTC|GMT)\b', '', t, flags=re.I).strip(' ,.')
+else:
+    # Local timezone of this machine (for Codex's "3:05 PM" etc.)
+    tz = datetime.datetime.now().astimezone().tzinfo
+
+now = datetime.datetime.fromtimestamp(now_s, tz=tz)
 months = {m: i for i, m in enumerate(
     ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'], 1)}
+
 def parse_clock(s):
     m = re.match(r'^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$', s.strip(), re.I)
     if not m: return None
@@ -942,38 +1043,69 @@ def parse_clock(s):
     elif hh > 23:
         return None
     return hh, mm
-# "Nov 30, 10am" or "Nov 30 at 10:30am"
+
+# "Nov 23 at 3am", "Nov 30, 10:30am", "Nov 30 10am"
 m = re.match(r'^([A-Za-z]{3})[a-z]*\s+(\d{1,2})(?:[,\s]+(?:at\s+)?)(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)$', t, re.I)
 if m and m.group(1).lower() in months:
     clk = parse_clock(m.group(3))
     if clk:
         mon, day = months[m.group(1).lower()], int(m.group(2))
         yr = now.year
-        dt = datetime.datetime(yr, mon, day, clk[0], clk[1], tzinfo=datetime.timezone.utc)
+        dt = datetime.datetime(yr, mon, day, clk[0], clk[1], tzinfo=tz)
         if dt < now - datetime.timedelta(hours=12):
-            dt = datetime.datetime(yr + 1, mon, day, clk[0], clk[1], tzinfo=datetime.timezone.utc)
-        print(dt.strftime('%Y-%m-%dT%H:%M:%SZ'))
+            dt = datetime.datetime(yr + 1, mon, day, clk[0], clk[1], tzinfo=tz)
+        print(dt.astimezone(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
         sys.exit(0)
-# Time-only "5pm" or "14:30" (today or tomorrow UTC)
+
+# Time-only "3pm", "3:05 PM", "14:30" (next occurrence in tz)
 clk = parse_clock(t)
 if clk:
     dt = now.replace(hour=clk[0], minute=clk[1], second=0, microsecond=0)
     if dt <= now:
         dt += datetime.timedelta(days=1)
-    print(dt.strftime('%Y-%m-%dT%H:%M:%SZ'))
+    print(dt.astimezone(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
 PY
   fi
   return 0
 }
 
+# Check a Claude worker's structured session transcript for a trailing usage-limit API error.
+# Claude Code records `isApiErrorMessage:true, error:"rate_limit", apiError:"usage_limit_reached"`
+# on the exact message where it stopped. Checking only the last user/assistant message avoids
+# false positives from prose and ignores older limit errors after the worker resumed.
+usage_claude_transcript_limit() { # <session_id>
+  local sid="$1" cfg_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}" f="" txt=""
+  [[ -n "$sid" && "$sid" =~ ^[A-Za-z0-9_-]{8,128}$ ]] || return 1
+  shopt -s nullglob
+  local matches=("$cfg_dir"/projects/*/"$sid.jsonl")
+  if (( ${#matches[@]} == 0 )) && [[ "$cfg_dir" != "$HOME/.claude" ]]; then
+    matches=("$HOME"/.claude/projects/*/"$sid.jsonl")
+  fi
+  shopt -u nullglob
+  (( ${#matches[@]} > 0 )) || return 1
+  f="${matches[0]}"
+  [[ -r "$f" ]] || return 1
+  txt="$(tail -n 30 "$f" 2>/dev/null | jq -rs '
+    [.[] | select(type == "object" and (.type == "assistant" or .type == "user"))]
+    | last // empty
+    | select(.type == "assistant" and .isApiErrorMessage == true
+        and ((.apiError // "") == "usage_limit_reached" or (.error // "") == "rate_limit"))
+    | (.message.content | if type == "array" then ([.[] | select(.type == "text") | .text] | join(" ")) else (. // "") end)
+    | gsub("[\r\n]+"; " ") | gsub("^ +| +$"; "")' 2>/dev/null || true)"
+  [[ -n "$txt" ]] || return 1
+  local rtxt; rtxt="$(usage_extract_reset_text "$txt")"
+  printf '%s\t%s\n' "${txt:0:200}" "$rtxt"
+  return 0
+}
+
 # Detect a real plan/subscription usage-limit stop in a worker's screen tail or headless output.
 # Prints "<matched_line>\t<reset_text>" on match (rc 0), or nothing (rc 1).
-# Strict by design so ordinary prose, diffs, code, or tool output can NEVER trigger a false lockout:
-#   - Inspects only the last 4 non-prompt/non-footer lines (UI position of the actual stop banner).
-#   - Drops any line led by agent prose/tool bullets (●, ⎿, •, │, ├, └), diff/comment/shell prefixes,
-#     numbered code lines ("1180: ..."), or code assignments.
-#   - Matches only whole-line anchored agent limit-stop banners / error lines.
-# Args: <agent> <screen_or_output> [mode: screen|headless (default screen)]
+# Grounded in real strings extracted from the installed binaries (codex-cli 0.160.0, claude 2.1.332,
+# agy 1.5.18, grok) and real Claude transcripts:
+#   - Normalizes curly apostrophe U+2019 (’) to straight ' and strips TUI error markers (■, ⚠, ✖, ✕, ✗, ×, Error:).
+#   - Inspects only the bottom 4 non-prompt/non-footer lines in screen mode.
+#   - Rejects agent prose/tool prefixes (●, ⎿, •, │, ├, └), diffs, comments, numbered code lines.
+#   - Matches only whole-line anchored real agent limit-stop banners / errors.
 usage_screen_limit() { # <agent> <screen_or_output> [screen|headless]
   local agent="$1" scr="$2" mode="${3:-screen}" tail_lines="" line norm hit="" rx=""
   if [[ "$mode" == headless ]]; then
@@ -986,13 +1118,15 @@ usage_screen_limit() { # <agent> <screen_or_output> [screen|headless]
   [[ -n "$tail_lines" ]] || return 1
   case "$agent" in
     claude)
-      rx="^(you've hit your (5-hour |weekly |session |usage )?limit([[:space:]]*[·•—-][[:space:]]*resets .*)?|claude usage limit reached([[:space:].,·•—-].*)?|out of extra usage([[:space:].,·•—-].*)?)$" ;;
+      rx="^(you've hit your (5-hour |weekly |session |usage |monthly spend |channel's monthly spend |fast )?limit([[:space:].,·•—-].*)?|you're out of usage credits([[:space:].,·•—-].*)?|your org is out of usage([[:space:].,·•—-].*)?|claude( ai)? usage limit reached([[:space:].,·•—|-].*)?|out of extra usage([[:space:].,·•—-].*)?|goal paused[[:space:]]*[·•—-][[:space:]]*usage limit reached.*)$" ;;
     codex)
-      rx="^(you've hit your usage limit\.?([[:space:]]+(upgrade to|try again|resets?).*)?|usage_limit_reached([[:space:]:].*)?)$" ;;
+      rx="^(you've hit your usage limit\.([[:space:]].*)?|usage_limit_reached([[:space:]:].*)?)$" ;;
     agy)
-      rx="^((individual|model) quota (limit )?reached|weekly quota (limit )?(reached|exceeded|exhausted)|quota exhausted|spend[- ]cap (reached|exceeded)|prepaid[- ]balance (exhausted|depleted|empty)|resource_exhausted:.*(quota|limit|resets in))([[:space:].,:].*)?$" ;;
+      # Real strings present in the agy 1.5.18 binary (live interactive stop layout unverified).
+      rx="^(usage limit reached|individual quota reached|resource_exhausted:.*(quota|limit|exhausted your capacity)|.*exhausted your capacity)([[:space:].,:].*)?$" ;;
     grok)
-      rx="^(you've hit your usage limit|usage limit reached|credit limit reached|out of credits|insufficient credits)([[:space:].,:].*)?$" ;;
+      # Real strings present in the grok binary.
+      rx="^(you hit your (free usage|weekly) limit\.?|you've hit the credit limit for your plan\.?|you've hit your spending cap\.?)([[:space:]].*)?$" ;;
     *)
       rx="^(you've hit your (usage )?limit|usage limit reached|quota exhausted)([[:space:].,:].*)?$" ;;
   esac
@@ -1003,8 +1137,8 @@ usage_screen_limit() { # <agent> <screen_or_output> [screen|headless]
       grep -qE '^[[:space:]]*(●|⎿|•|│|├|└|\+|-|#|//|/\*|\*[[:space:]]|\$ |> |`|[0-9]+:[[:space:]])' <<<"$line" && continue
       grep -qE '(rx=|usage_screen_limit|\b(grep|echo|printf|case)\b)' <<<"$line" && continue
     fi
-    # Normalize leading/trailing whitespace and optional UI error prefix ("Error: ", "⚠ ", "✖ ", "✕ ", "✗ ", "× ").
-    norm="$(sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/^(Error:[[:space:]]*|(⚠|✖|✕|✗|×)[[:space:]]*)//i' <<<"$line")"
+    # Normalize curly apostrophe (U+2019 -> '), trim whitespace, strip TUI error prefixes (■, ⚠, ✖, ✕, ✗, ×, Error:).
+    norm="$(sed -E "s/’/'/g; s/^[[:space:]]+//; s/[[:space:]]+$//; s/^(Error:[[:space:]]*|(■|⚠|✖|✕|✗|×)[[:space:]]*)//i" <<<"$line")"
     [[ -n "$norm" ]] || continue
     if grep -qiE "$rx" <<<"$norm"; then
       hit="${norm:0:200}"
@@ -1018,28 +1152,30 @@ usage_screen_limit() { # <agent> <screen_or_output> [screen|headless]
 
 # Record a hit-limit event on (machine, agent), keeping existing windows & plan/account metadata.
 # Only locks out that specific (machine, agent) record.
-usage_record_hit_limit() { # <agent> <machine> <resets_iso_or_empty> <resets_text_or_empty> <task_id_or_empty> <message>
-  local a="$1" m="${2:-$(usage_machine_name)}" riso="$3" rtxt="$4" tid="$5" msg="$6" f cur loc=false
-  [[ "$m" == "$(usage_machine_name)" ]] && loc=true
+# Optional 7th arg: force_local=1 (for enrolled nodes where device NAME may differ from hostname).
+usage_record_hit_limit() { # <agent> <machine> <resets_iso_or_empty> <resets_text_or_empty> <task_id_or_empty> <message> [force_local 0|1]
+  local a="$1" m="${2:-$(usage_machine_name)}" riso="$3" rtxt="$4" tid="$5" msg="$6" fl="${7:-0}" f cur loc=false
+  if [[ "$fl" == 1 || "$m" == "$(usage_machine_name)" ]]; then loc=true; fi
   f="$(usage_file "$a" "$m")"
   if [[ -s "$f" ]]; then cur="$(cat "$f" 2>/dev/null || true)"; else cur=""; fi
   if [[ -z "$cur" ]] || ! jq -e 'type == "object"' <<<"$cur" >/dev/null 2>&1; then
     cur="$(usage_unknown_record "$a" "$m" "$loc" worker-limit "worker hit usage limit")"
+  elif [[ "$fl" == 1 ]]; then
+    cur="$(jq -c '.local = true' <<<"$cur")"
   fi
-  # If the error message had no unambiguous ISO reset time, reuse the matching future window reset
-  # from the reading (preferring 7d when the message says weekly/7d, 5h when it says 5-hour/session,
-  # else the highest-used active future window).
+  # If the error message had no parseable ISO reset time, reuse the matching future window reset
+  # from the reading (preferring 7d for weekly/monthly/7d, 5h for 5-hour/session, else longest future window).
   if [[ -z "$riso" ]]; then
     local now_s want_lbl=""
     now_s="$(date +%s)"
-    if grep -qiE 'weekly|7-day|7d' <<<"$msg"; then want_lbl="7d"
+    if grep -qiE 'weekly|7-day|7d|monthly' <<<"$msg"; then want_lbl="7d"
     elif grep -qiE '5-hour|5h|session' <<<"$msg"; then want_lbl="5h"; fi
     riso="$(jq -r --argjson now "$now_s" --arg want "$want_lbl" '
       [(.windows // [])[] | select(.resets_at != null)
        | (.resets_at | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | try fromdateiso8601 catch 0) as $e
        | select($e > $now) | {e: $e, iso: .resets_at, lbl: .label, u: (.used_pct // 0)}] as $futs
       | (if $want != "" then ([$futs[] | select(.lbl == $want)] | first) else null end)
-        // ($futs | sort_by([-.u, .e]) | first)
+        // ($futs | sort_by([-.u, -.e]) | first)
       | .iso // empty' <<<"$cur" 2>/dev/null || true)"
   fi
   cur="$(jq -c --arg at "$(now)" --arg riso "$riso" --arg rtxt "$rtxt" --arg tid "$tid" --arg msg "${msg:0:200}" '
@@ -1054,31 +1190,55 @@ usage_record_hit_limit() { # <agent> <machine> <resets_iso_or_empty> <resets_tex
 }
 
 # Called by watch_look (lib/stuck.sh) for each open task and by `node usage-look` on enrolled nodes.
-# Detects usage-limit stops on screen (when worker is NOT mid-turn) or headless error output,
-# records the agent as out on its own machine only, and logs one `agent: out-of-usage: ...` wake
-# per dispatch/steer telling the XO which agents have room.
+# Detects usage-limit stops via:
+#   1. Structured Claude session transcript API error (zero false positives, works under ⎿)
+#   2. Structured headless error JSONL (claude.jsonl / codex.jsonl, including error.code == usage_limit_reached)
+#   3. Anchored terminal limit-stop banners on idle/stopped session workers (never while mid-turn)
+# Records the agent as out on its own machine only, and logs one `agent: out-of-usage: ...` wake.
 usage_limit_look() { # <id> <runner> <agent> <screen> [live] [machine]
-  local id="$1" r="$2" agent="$3" scr="$4" live="${5:-}" mach="${6:-$(usage_machine_name)}" d text="" mode="screen" match hit rtxt riso when avail f last_sig sig
+  local id="$1" r="$2" agent="$3" scr="$4" live="${5:-}" mach="${6:-$(usage_machine_name)}" d text="" mode="screen" match="" hit rtxt riso when avail f last_sig sig sid
   [[ -n "$agent" ]] || return 0
   d="$(tdir "$id")"
   case "$r" in
     hc|herdr|tmux|cmux)
       # Never trigger while the worker is actively mid-turn (editing/reading code or outputting prose).
       case "$live" in working|listening|parked|not-started) return 0 ;; esac
-      # tmux/cmux report "running" even mid-turn; skip when the active-turn spinner footer is up.
       if grep -qi 'esc to interrupt' <<<"$(tail -n 6 <<<"$scr")"; then return 0; fi
-      text="$scr"; mode="screen" ;;
+      # 1. For Claude workers, prefer the structured transcript signal when session_id is known.
+      if [[ "$agent" == claude ]]; then
+        sid="$(meta "$id" session_id 2>/dev/null || true)"
+        if [[ -n "$sid" ]] && match="$(usage_claude_transcript_limit "$sid")"; then :; else match=""; fi
+      fi
+      if [[ -z "$match" ]]; then
+        text="$scr"; mode="screen"
+      fi ;;
     headless)
       mode="headless"
       if [[ "$agent" == claude ]]; then
-        text="$( { jq -r 'select(.type=="result" and .is_error==true) | .result // empty' "$d/claude.jsonl" 2>/dev/null | tail -n 5; tail -n 10 "$d/claude.err" 2>/dev/null; } || true)"
+        sid="$(meta "$id" session_id 2>/dev/null || true)"
+        if [[ -n "$sid" ]] && match="$(usage_claude_transcript_limit "$sid")"; then :; else match=""; fi
+        if [[ -z "$match" ]]; then
+          text="$( {
+            jq -r 'if .type=="result" and .is_error==true then .result // empty
+                   elif .isApiErrorMessage==true and ((.apiError // "")=="usage_limit_reached" or (.error // "")=="rate_limit") then
+                     (.message.content | if type=="array" then ([.[] | select(.type=="text") | .text] | join(" ")) else (. // "") end)
+                   else empty end' "$d/claude.jsonl" 2>/dev/null | tail -n 5
+            tail -n 10 "$d/claude.err" 2>/dev/null
+          } || true)"
+        fi
       elif [[ "$agent" == codex ]]; then
-        text="$( { jq -r 'select(.type=="error" or .type=="turn.failed") | (.message // .error.message // empty)' "$d/codex.jsonl" 2>/dev/null | tail -n 5; tail -n 10 "$d/codex.err" 2>/dev/null; } || true)"
+        text="$( {
+          jq -r 'select(.type=="error" or .type=="turn.failed")
+            | [(.code // .error.code // empty), (.message // .error.message // empty)] | map(select(length > 0)) | join(": ")' "$d/codex.jsonl" 2>/dev/null | tail -n 5
+          tail -n 10 "$d/codex.err" 2>/dev/null
+        } || true)"
       fi ;;
     *) return 0 ;;
   esac
-  [[ -n "$text" ]] || return 0
-  match="$(usage_screen_limit "$agent" "$text" "$mode")" || return 0
+  if [[ -z "$match" ]]; then
+    [[ -n "$text" ]] || return 0
+    match="$(usage_screen_limit "$agent" "$text" "$mode")" || return 0
+  fi
   hit="${match%%$'\t'*}"; rtxt="${match#*$'\t'}"
   # Deduplicate per dispatch/steer: one wake until the task is steered or re-dispatched.
   f="$d/.usage-limit"
@@ -1090,20 +1250,21 @@ usage_limit_look() { # <id> <runner> <agent> <screen> [live] [machine]
   [[ "$sig" != "$last_sig" ]] || return 0
   printf '%s\n' "$sig" >"$f"
   riso="$(usage_parse_reset_iso "$rtxt")"
-  usage_record_hit_limit "$agent" "$mach" "$riso" "$rtxt" "$id" "$hit"
-  # On a node guest home, mirror hit_limit into $XDG_STATE_HOME/chartroom/usage so the node's
-  # next heartbeat immediately reports this agent out to the brain.
+  usage_record_hit_limit "$agent" "$mach" "$riso" "$rtxt" "$id" "$hit" 0
+  # On a node guest home, mirror hit_limit into $XDG_STATE_HOME/chartroom/usage with force_local=1
+  # so the node's next heartbeat reports this agent out even when device NAME != hostname.
   if [[ -n "${CHARTROOM_GUEST:-}" ]]; then
-    ( CR_USAGE_DIR_BASE="${XDG_STATE_HOME:-$HOME/.local/state}/chartroom"; usage_record_hit_limit "$agent" "$mach" "$riso" "$rtxt" "$id" "$hit" ) >/dev/null 2>&1 || true
+    ( CR_USAGE_DIR_BASE="${XDG_STATE_HOME:-$HOME/.local/state}/chartroom"; usage_record_hit_limit "$agent" "$mach" "$riso" "$rtxt" "$id" "$hit" 1 ) >/dev/null 2>&1 || true
   fi
   # Re-read effective reset time (may have inherited API window reset).
   local rec eff_reset where=""
   rec="$(usage_of "$agent" "$mach")"
   eff_reset="$(jq -r '.out_resets_at // empty' <<<"$rec" 2>/dev/null || true)"
   when="${eff_reset:-${rtxt:-unknown}}"
-  avail="$(usage_available_agents "$agent")"
+  avail="$(usage_available_agents "$agent" "$mach")"
   [[ -z "${CHARTROOM_GUEST:-}" ]] || where=" on $mach"
   log_event "$id" agent "out-of-usage: $agent$where resets $when; available: ${avail:-none} (move with: chartroom move $id)"
+  LOOK_LOGGED=1
 }
 
 # ---------------------------------------------------------------- chartroom move (Part 3)
@@ -1225,10 +1386,25 @@ cmd_move() {
   fi
 
   # 2. Clear runner handles while preserving worktree, worktree_created, branch, base_sha, brief, grants.
-  local k
+  # When switching agents, also clear agent-specific launch settings (model, effort, permission, sandbox)
+  # so a Claude model name is never passed to Codex/agy (and vice versa), and preserve the non-Claude
+  # cold-review requirement whenever work started on codex or agy moves onto claude.
+  local k cleared=()
   for k in hc_terminal hc_launched hc_space hc_tab herdr_pane herdr_tab tmux_session tmux_window tmux_pane cmux_workspace cmux_surface pid session_id thread_id parked brief_pending dispatched; do
     [[ -z "$(meta "$id" "$k")" ]] || meta_set "$id" "$k" ""
   done
+  if [[ "$old_agent" != "$new_agent" ]]; then
+    for k in model effort permission sandbox; do
+      local oldv; oldv="$(meta "$id" "$k")"
+      if [[ -n "$oldv" ]]; then
+        meta_set "$id" "$k" ""
+        cleared+=("$k=$oldv")
+      fi
+    done
+    if [[ "$(meta "$id" kind)" == ship && "$old_agent" =~ ^(codex|agy)$ ]]; then
+      meta_set "$id" review_required 1
+    fi
+  fi
   rm -f "$(tdir "$id")/.usage-limit" "$(tdir "$id")/.stall"
   meta_set "$id" backend "$new_backend"
   meta_set "$id" backend_source explicit
@@ -1247,8 +1423,10 @@ cmd_move() {
     printf 'Inspect `git status` and `git log %s..HEAD`, keep all existing commits and work-in-progress, and finish the brief.\n' "${base_sha:-HEAD}"
   } >>"$d/inbox.md"
 
-  log_event "$id" note "moved from ${old_backend:-auto} to $new_backend (kept worktree, branch ${branch:-detached}, $commits commit(s), $dirty uncommitted change(s))"
-  echo "moved $id: ${old_backend:-auto} -> $new_backend (kept $commits commit(s), $dirty uncommitted change(s))"
+  local cleared_note=""
+  if (( ${#cleared[@]} > 0 )); then local IFS=', '; cleared_note="; cleared ${cleared[*]}"; fi
+  log_event "$id" note "moved from ${old_backend:-auto} to $new_backend (kept worktree, branch ${branch:-detached}, $commits commit(s), $dirty uncommitted change(s)$cleared_note)"
+  echo "moved $id: ${old_backend:-auto} -> $new_backend (kept $commits commit(s), $dirty uncommitted change(s)$cleared_note)"
 
   if [[ "$no_dispatch" -eq 0 ]]; then
     cmd_dispatch "$id"

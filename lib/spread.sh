@@ -103,6 +103,7 @@ spread_select_row() { # <id> <row>, sets SELECTED
 review_owner() { [[ "${CHARTROOM_GUEST:-}" != 1 && ! -f "$CR_HOME/.push/$1.json" ]]; }
 review_eligible() {
   review_owner "$1" && [[ "$(cfg REVIEW_NON_CLAUDE '' opus)" != off && "$(meta "$1" review_gate)" == 1 && "$(meta "$1" kind)" == ship && "$(meta "$1" review_skipped)" != 1 ]] || return 1
+  if [[ "$(meta "$1" review_required)" == 1 ]]; then return 0; fi
   case "$(backend_agent "$1")" in codex|agy) return 0 ;; *) return 1 ;; esac
 }
 review_count() { events_path "$1"; awk '$2=="done:" {n++} END {print n+0}' "$EVENTS_PATH"; }

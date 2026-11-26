@@ -65,18 +65,29 @@ Tokens, cookies, emails, and org IDs are never stored or logged.
   `--backend` for an exhausted agent prints a warning with its reset time. `chartroom doctor` and
   `chartroom nodes` report exhausted agents with their reset times.
 - **Detecting worker limit stops.** `watch_look` (and `guest_usage_look_all` / `node usage-look`
-  on enrolled nodes) invokes `usage_limit_look` only on idle/stopped session workers (never while
-  mid-turn) or headless error output, matching only whole-line anchored limit-stop banners in the
-  terminal tail and ignoring agent prose (`●`, `•`), tool output (`⎿`), diffs, and code. On a
-  real limit stop for `claude`, `codex`, `agy`, or `grok`, chartroom marks only that machine's
-  agent out and raises `agent: out-of-usage: <agent>[ on <node>] resets <time>; available: <agents> (move with: chartroom move <id>)`
+  on enrolled nodes) checks for usage-limit stops only on idle/stopped session workers (never
+  while mid-turn) or headless error output. For Claude workers with a recorded `session_id`, it
+  first checks the worker's structured session transcript for a trailing `isApiErrorMessage`
+  (`apiError: "usage_limit_reached"` or `error: "rate_limit"`), which works regardless of TUI
+  gutter layout and cannot match prose. Otherwise it matches whole-line anchored limit banners
+  in the bottom 4 non-footer lines (normalizing curly apostrophes and TUI error prefixes like
+  Codex's `■ `, and rejecting prose/tool/diff/code lines like `●`, `⎿`, `•`). agy's screen
+  patterns use real strings from the `agy` binary (`Usage limit reached`, `individual quota
+  reached`, `RESOURCE_EXHAUSTED` / `exhausted your capacity`), though agy's live interactive
+  limit-stop screen layout has not been observed live yet. On a match, chartroom marks only that
+  machine's agent out (and clears a stale lockout automatically once a newer real reading is
+  comfortably below warning) and raises
+  `agent: out-of-usage: <agent>[ on <node>] resets <time>; available: <agents> (move with: chartroom move <id>)`
   once per dispatch/steer.
-- **Moving work (`chartroom move <id>`).** Stops the old worker safely, clears runner handles,
-  records handoff notes in `tasks/<id>/inbox.md`, and re-dispatches onto another available agent
-  (`--agent` or `--backend` to choose explicitly; `--dry-run` to preview; `--force` to override
-  exhaustion). Tasks with Claude-only needs (`mcp`/`browser`/`claude`) refuse automatic moves off
-  Claude unless `--agent` or `--force` is given. The task's brief, branch, worktree, commits, and
-  uncommitted changes are kept intact — unlanded work is never discarded.
+- **Moving work (`chartroom move <id>`).** Stops the old worker safely, clears runner handles
+  (plus agent-specific `model`/`effort`/`permission`/`sandbox` when switching agents), preserves
+  the non-Claude cold-review requirement (`review_required=1`) whenever a Codex or agy ship task
+  moves to Claude, records handoff notes in `tasks/<id>/inbox.md`, and re-dispatches onto
+  another available agent (`--agent` or `--backend` to choose explicitly; `--dry-run` to
+  preview; `--force` to override exhaustion). Tasks with Claude-only needs (`mcp`/`browser`/
+  `claude`) refuse automatic moves off Claude unless `--agent` or `--force` is given. The task's
+  brief, branch, worktree, commits, and uncommitted changes are kept intact — unlanded work is
+  never discarded.
 
 ## Common to all
 
