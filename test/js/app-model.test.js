@@ -476,15 +476,17 @@ test("usageRows: the same reading in several homes is shown once, the newest; a 
   assert.strictEqual(M.usageRows({ homes: [uhome("a", [over]), uhome("b", [fresh])] }, NOW)[0].state, "ok");
 });
 
-test("usageRows: live workers are counted over every home's open dispatched tasks, by agent and machine; the CLI's order", () => {
-  const task = (id, backend, o) => Object.assign({ id, backend, dispatched: iso(-600), state: "working", closed: null }, o || {});
+test("usageRows: live workers are every home's dispatched tasks with a session open, by agent and machine; the CLI's order", () => {
+  const task = (id, backend, o) => Object.assign({ id, backend, dispatched: iso(-600), state: "working", live: "working", closed: null }, o || {});
   const rows = M.usageRows({ homes: [
     uhome("a", [urow("codex", "desk"), urow("claude", "desk"), urow("claude", "mini", { local: false, plan: "pro" })],
       [task("t1", "hc:claude"), task("t2", "hc:claude", { machine: "mini" }), task("t3", "herdr-codex"), task("t4", "hc:claude", { state: "review" }),
-       task("t5", "hc:claude", { closed: iso(-5) }), task("t6", "hc:claude", { dispatched: null }), task("t7", "headless")]),
+       task("t5", "hc:claude", { closed: iso(-5) }), task("t6", "hc:claude", { dispatched: null }), task("t7", "headless"),
+       task("t9", "hc:claude", { live: "parked" }), task("t10", "hc:claude", { live: "gone", state: "stopped-silent" }), task("t11", "hc:claude", { live: "blocked", state: "decision" })]),
     uhome("b", [urow("claude", "desk")], [task("t8", "node:claude")]),
   ] }, NOW);
-  assert.deepStrictEqual(rows.map((r) => [r.agent, r.machine, r.live_workers]), [["claude", "desk", 2], ["claude", "mini", 1], ["codex", "desk", 1]]);
+  // (t9 parked and t10 gone use nothing; t11 waits on its open session at a decision)
+  assert.deepStrictEqual(rows.map((r) => [r.agent, r.machine, r.live_workers]), [["claude", "desk", 3], ["claude", "mini", 1], ["codex", "desk", 1]]);
 });
 
 test("usageView: used, left and the reset per window; out and near marked; a model-only window is information, never out", () => {

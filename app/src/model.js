@@ -815,7 +815,8 @@ var AppModel = (function () {
   // on one machine may be read in several homes: a live limit hit wins (a fresher "ok" elsewhere never
   // hides it), then the newest sample. The readings are then grouped as the CLI groups them: one row
   // per agent, split by machine only where the readings differ. Live workers are counted over every
-  // home's open tasks, by the CLI's rule (dispatched, not closed, not review/done/failed).
+  // home's tasks: dispatched, not closed, not review/done/failed (the CLI's rule), and with a session
+  // still open (Fleet's OPEN_LIVE), so a parked or gone worker, which uses nothing, is not counted.
   const USAGE_AGENTS = ["claude", "codex", "agy", "grok"];
   const USAGE_SKIP = ["review", "done", "closed", "failed"];
   function usageHit(r, now) { return !!r.hit_active && !(r.out_resets_at && Date.parse(r.out_resets_at) <= now); }
@@ -837,7 +838,7 @@ var AppModel = (function () {
         }
       }
       for (const t of s.tasks || []) {
-        if (t.closed || !t.dispatched || USAGE_SKIP.includes(t.state)) continue;
+        if (t.closed || !t.dispatched || USAGE_SKIP.includes(t.state) || (t.live && !OPEN_LIVE.includes(t.live))) continue;
         const b = String(t.backend || "").replace(/^herdr-/, "herdr:");
         if (!b.includes(":")) continue;
         const k = b.split(":").pop() + "|" + (t.machine || s.machine);
