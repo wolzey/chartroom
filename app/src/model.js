@@ -906,7 +906,7 @@ var AppModel = (function () {
         : w.resets_at ? "resets " + untilText(w.resets_at, now)
         : w.active === false ? "not started" : "reset not known";
       return { id: w.id || w.label, label: w.label || w.id || "limit", scoped, used, usedText: pctText(w.used_pct) + " used", leftText: pctText(w.left_pct) + " left",
-        level: scoped ? "info" : ["out", "near"].includes(w.state) ? w.state : "ok", reset, resetsAt: w.resets_at || null };
+        level: scoped ? "info" : ["out", "near"].includes(w.state) ? w.state : "ok", reset, passed: !!w.reset_passed, resetsAt: w.resets_at || null };
     });
     let note = null;
     if (r.hit_active && usageHit(r, now)) note = "A worker hit the limit" + (r.out_resets_at ? "; it resets " + untilText(r.out_resets_at, now) : "");

@@ -58,14 +58,15 @@ export function UsagePage({ data }) {
   </main>`;
 }
 
-// On Fleet, above the machines: one line per agent and a way to the page.
+// On Fleet, above the machines: one line per agent and a way to the page. A chip shows the most-used
+// window that has not reset since it was read (a reset one's old numbers mean nothing now).
 export function UsageStrip({ data }) {
   useMinute();
   const rows = M.usageRows(data);
   if (!rows.length) return null;
   const now = Date.now(), sum = M.usageSummary(rows);
   const chips = rows.map((r) => M.usageView(r, now)).map((v) => {
-    const w = v.windows.filter((x) => !x.scoped).sort((a, b) => (b.used || 0) - (a.used || 0))[0];
+    const w = v.windows.filter((x) => !x.scoped && !x.passed).sort((a, b) => (b.used || 0) - (a.used || 0))[0];
     return { key: v.key, v, text: w ? w.leftText + " of " + w.label : v.stateText };
   });
   return html`<a class=${"u-strip u-sum-" + sum.level} href="#/usage" aria-label=${"Usage: " + sum.text + ". Open the usage page"}>

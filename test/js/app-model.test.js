@@ -512,6 +512,7 @@ test("usageView: used, left and the reset per window; out and near marked; a mod
 test("usageView: a reset that passed, an unknown reset, a window not started, a limit hit, a spend cap, an unknown agent, a stale reading", () => {
   const w = M.usageView(urow("codex", "desk", { windows: [win("5h", 20, { reset_passed: true }), win("7d", 5, { resets_at: null }), win("1d", 0, { resets_at: null, active: false })] }), NOW);
   assert.deepStrictEqual(w.windows.map((x) => x.reset), ["reset; waiting for a new reading", "reset not known", "not started"]);
+  assert.deepStrictEqual(w.windows.map((x) => x.passed), [true, false, false]);
   assert.strictEqual(M.usageView(urow("claude", "desk", { state: "out", hit_active: true, out_resets_at: iso(5400) }), NOW).note, "A worker hit the limit; it resets in 1h 30m");
   assert.strictEqual(M.usageView(urow("codex", "desk", { state: "out", limit_reached: true }), NOW).note, "codex allows no more use for now");
   const u = M.usageView(urow("agy", "desk", { status: "unknown", state: "unknown", windows: [], reason: "agy not on PATH", plan: null, account: null, sampled_at: null }), NOW);
