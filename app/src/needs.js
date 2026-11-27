@@ -3,6 +3,7 @@
 // (never navigates); the full page opens only from Open details, o or Shift+Enter.
 import { html, useState, useRef, useEffect } from "./html.js";
 import { Pill, Glyph, HomeTag, Tabs, Empty, Options, Why, Menu, Linked, PrCard, PrBadges } from "./ui.js";
+import { ArtifactList, DraftText } from "./pages.js";
 
 const M = window.AppModel;
 const EF = window.EventFmt;
@@ -232,6 +233,8 @@ export function AskBody({ it, picks, setPick, note, setNote, busy, onAct, onDeta
     body = html`
       ${it.view ? html`<${ViewBody} v=${it.view} lead=${true} />` : html`<p class="a-detail-sum qv-ask"><${Linked} text=${it.summary || "The worker reported done."} /></p>`}
       ${it.view && it.view.asks ? html`<p class="qv-asks">The report still asks you something: read it before you accept.</p>` : null}
+      ${(it.artifacts || []).length && !hidePrs ? html`<div class="q-prs"><div class="d-h">Pages and drafts <span class="count">${it.artifacts.length}</span></div>
+        <${ArtifactList} home=${it.home} items=${it.artifacts} /></div>` : null}
       ${(it.prs || []).length && !hidePrs ? html`<div class="q-prs"><div class="d-h">Pull requests <span class="count">${it.prs.length}</span></div>
         ${it.prs.map((u) => html`<${PrCard} key=${u} url=${u} pr=${(prs || {})[u]} compact=${true} />`)}</div>` : null}
       <div class="a-detail-actions">
@@ -259,6 +262,7 @@ export function AskBody({ it, picks, setPick, note, setNote, busy, onAct, onDeta
   } else if (it.kind === "artifact") {
     body = html`
       <p class="a-detail-sum">A ${it.sub || "draft"} for you to send or run, kept with ${it.owner}.</p>
+      ${it.slug ? html`<${DraftText} home=${it.home} a=${{ owner_type: it.owner_type, owner: it.owner, slug: it.slug, kind: it.sub, updated: it.at }} />` : null}
       <div class="a-detail-actions"><button class="btn primary" disabled=${busy} onClick=${() => onAct(it, { type: "done" })}>Mark done <kbd>a</kbd></button>${snoozeBtn}</div>`;
   } else if (it.kind === "approve") {
     body = html`

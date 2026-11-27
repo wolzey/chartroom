@@ -123,7 +123,7 @@ def askline: sub("^[^ ]+ [a-z-]+: ?"; "");
   + $permits
   + [$arts[] | select(.kind == "message" or .kind == "runbook")
      | {id: .ref, type: "artifact", kind: "artifact", group: "read", sub: .kind, ref: .ref, title, project: null,
-        owner_type, owner, at: .updated, breaking: false, held: false}]
+        owner_type, owner, slug, at: .updated, breaking: false, held: false}]
   ) as $all
 | ($all | map(. + {sent: (if .card then sent(.card) else null end),
                    snoozed_until: (if .ref and $snoozes[.ref] then $snoozes[.ref] else null end)})) as $all

@@ -13,6 +13,7 @@ import { Composer } from "./composer.js";
 import { InitiativesList, InitiativePage, NewInitiative } from "./initiatives.js";
 import { FleetPage, MachineDetail } from "./fleet.js";
 import { UsagePage } from "./usage.js";
+import { PageViewer, pageHash } from "./pages.js";
 import * as N from "./notify.js";
 
 const M = window.AppModel;
@@ -29,6 +30,7 @@ function parseRoute() {
   if (p[0] === "i" && p.length >= 3) return { name: "initiative", home: p[1], id: p[2] };
   if (p[0] === "i") return { name: "initiatives" };
   if (p[0] === "usage") return { name: "usage" };
+  if (p[0] === "p" && p.length >= 5 && ["task", "inbox"].includes(p[2])) return { name: "page", home: p[1], type: p[2], owner: p[3], slug: p[4] };
   if (p[0] === "fleet") return { name: "fleet", machine: p[1] || null };
   if (p[0] === "n" && p[1]) return { name: "needs", select: p[1] }; // a notification's link: Needs me on that item
   return { name: "needs" };
@@ -483,6 +485,7 @@ function App() {
       { id: "c-newi", group: "Commands", label: "New initiative", run: () => setNewInit(true) },
       { id: "c-inits", group: "Go to", label: "Initiatives", run: () => go("#/i") },
       { id: "c-fleet", group: "Go to", label: "Fleet", sub: "machines, sign-ins, workers", run: () => go("#/fleet") },
+      ...M.openPages(data).map((p) => ({ id: "p-" + p.home + "-" + p.owner + "-" + p.slug, group: "Pages", label: p.title, sub: p.home + " · " + p.owner, run: () => go(pageHash(p.home, p)) })),
       { id: "c-usage", group: "Go to", label: "Usage", sub: "what each subscription has left, and when it resets", run: () => go("#/usage") },
       { id: "c-notify", group: "Commands", label: "Turn on notifications", sub: "this device", run: () => onNotify() },
       { id: "c-theme", group: "Commands", label: "Switch to " + (theme === "dark" ? "light" : "dark") + " mode", run: toggleTheme },
@@ -502,7 +505,7 @@ function App() {
     for (const i of inits) e.push({ id: "n-" + i.key, group: "Initiatives", label: i.name, sub: i.home + " · " + i.progress.done + "/" + i.progress.total,
       run: () => go("#/i/" + encodeURIComponent(i.home) + "/" + encodeURIComponent(i.id)) });
     return e;
-  }, [all, homes, theme, boardAll, inits]);
+  }, [all, homes, theme, boardAll, inits, data]);
 
   // Notices above the list: homes not read yet, or that failed; items focus mode holds.
   const notices = [];
@@ -590,6 +593,12 @@ function App() {
     aside = fleetTask && (wide() || qvOpen) ? quickOf(fleetTask, clear) : html`<${MachineDetail} m=${m} workers=${workers} names=${ms.map((x) => x.name)} />`;
   } else if (route.name === "usage") {
     main = html`<${UsagePage} data=${data} />`;
+  } else if (route.name === "page") {
+    // a page a worker wrote (pages.js): what the snapshot knows of it, else its name alone
+    const a = M.artifactOf(data, route.home, route.type, route.owner, route.slug) || { owner_type: route.type, owner: route.owner, slug: route.slug, title: route.slug, kind: "page" };
+    const t = route.type === "task" ? boardAll.find((x) => x.home === route.home && x.task === route.owner) : null;
+    main = html`<${PageViewer} home=${route.home} a=${a} toast=${toast}
+      back=${route.type === "task" ? { href: "#/t/" + encodeURIComponent(route.home) + "/" + encodeURIComponent(route.owner), label: t ? t.short_id || t.title : route.owner } : { href: "#/", label: "Needs me" }} />`;
   } else if (route.name === "initiatives") {
     main = html`<${InitiativesList} list=${inits} onNew=${() => setNewInit(true)}
       onOpen=${(i) => go("#/i/" + encodeURIComponent(i.home) + "/" + encodeURIComponent(i.id))} />`;

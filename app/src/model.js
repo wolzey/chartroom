@@ -858,6 +858,27 @@ var AppModel = (function () {
     }
     return out.sort((a, b) => rank(a.agent) - rank(b.agent) || order(a, b));
   }
+  // Open artifacts in every home's snapshot (a task's, an inbox item's), each once, newest first, with
+  // its home: {home, ref, owner_type, owner, slug, title, kind, updated}.
+  function artifactsAll(state) {
+    const out = [], seen = {};
+    for (const h of (state && state.homes) || []) {
+      const s = h.snapshot;
+      if (!s) continue;
+      for (const x of (s.tasks || []).concat(s.needs || [])) for (const a of x.artifacts || []) {
+        const k = h.name + "|" + a.owner_type + "|" + a.owner + "|" + a.slug;
+        if (seen[k] || !a.slug) continue;
+        seen[k] = true;
+        out.push(Object.assign({ home: h.name }, a));
+      }
+    }
+    return out.sort((a, b) => String(b.updated || "").localeCompare(String(a.updated || "")));
+  }
+  function openPages(state) { return artifactsAll(state).filter((a) => a.kind === "page"); }
+  function artifactOf(state, home, type, owner, slug) {
+    return artifactsAll(state).find((a) => a.home === home && a.owner_type === type && a.owner === owner && a.slug === slug) || null;
+  }
+
   // "in 3d 4h", "in 2h 5m", "in 12m": how long until <iso>; "now" once it has passed.
   function untilText(iso, nowMs) {
     const t = Date.parse(iso || "");
@@ -914,6 +935,6 @@ var AppModel = (function () {
     primary, answerBody, answered, move, ago, agoText, snoozes, search, askText, headline, bulkPlan, range, promote, linkParts, BOARD, boardItems, boardFilter, boardColumns, initiatives, milestones,
     freshItems, notice, noticeTarget, permitLeft, pageStale,
     FLEET_STATES, REST_DAYS, SIGN_IN, fleetState, fleetMap, fleetMeters, fleetProblems, fullness, crewOf, agentLabel, ageText,
-    usageRows, usageView, usageSummary, untilText };
+    usageRows, usageView, usageSummary, untilText, openPages, artifactOf };
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = AppModel;

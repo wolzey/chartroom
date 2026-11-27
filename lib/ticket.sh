@@ -295,6 +295,7 @@ ticket_json() { # <id>
     --argjson attachments "$(attachments_json "$id")" --argjson links "$(links_json "$id")" \
     --argjson tells "$(tells_json --all | jq -c --arg id "$id" 'map(select(.re == $id))')" \
     --argjson decisions "$(decisions_json "$id")" \
+    --argjson artifacts "$(artifacts_json --owner task "$id" | jq -c 'map(del(.path))')" \
     --rawfile events "$EVENTS_PATH" --arg plan "$(cat "$d/plan.md" 2>/dev/null || true)" \
     --arg home "$(home_name_of "$CR_HOME")" '
     ($row.state) as $s
@@ -312,6 +313,6 @@ ticket_json() { # <id>
        plan_gate: (($meta.plan_gate // "") | tostring == "1"),
        sections: $sections, ask: (if $ask == null or ($s | test("^(decision|blocked|failed)$") | not) then null else $ask end),
        answer: $answer, plan: (if $plan == "" then null else $plan end), files: $extra.files,
-       attachments: $attachments, links: $links, tells: $tells, decisions: $decisions,
+       attachments: $attachments, artifacts: $artifacts, links: $links, tells: $tells, decisions: $decisions,
        events: ($events | split("\n") | map(select(length > 0)) | .[-400:])}'
 }

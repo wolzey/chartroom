@@ -9,6 +9,7 @@ import { HomeTag, Status, Linked, linkifyDom, PrCard, PrBadges, Menu, DecisionLi
 import { AskBody } from "./needs.js";
 import { taskFile } from "./api.js";
 import { useRead } from "./read.js";
+import { ArtifactList } from "./pages.js";
 
 const M = window.AppModel;
 const EF = window.EventFmt;
@@ -37,6 +38,27 @@ function attKind(type) {
   if (/csv|json/.test(type)) return "data";
   if (/^text\//.test(type)) return "text";
   return "file";
+}
+
+// The worker's terminal, read-only (`chartroom peek`): read when unfolded, again every 10 s while it is.
+function Pane({ base, live }) {
+  const [open, setOpen] = useState(false), [text, setText] = useState(null), [err, setErr] = useState(null), [at, setAt] = useState(null);
+  useEffect(() => {
+    if (!open) return;
+    let alive = true, timer = null;
+    const read = () => fetch(base + "/pane", { credentials: "same-origin" })
+      .then((r) => r.text().then((t) => (r.ok ? t : Promise.reject(new Error(t.trim() || "could not read it (" + r.status + ")")))))
+      .then((t) => { if (alive) { setText(t); setErr(null); setAt(new Date().toISOString()); } }, (e) => alive && setErr(e.message))
+      .finally(() => { if (alive) timer = setTimeout(read, 10e3); });
+    read();
+    return () => { alive = false; clearTimeout(timer); };
+  }, [open, base]);
+  return html`<section class="t-sec"><div class="sec-h"><h2 class="i-h">Terminal</h2><span class="grow"></span>
+      ${open && at ? html`<span class="faint">read ${M.agoText(at)}</span>` : null}
+      <button class="btn ghost sm" aria-expanded=${open} onClick=${() => setOpen(!open)}>${open ? "Hide" : "Show the worker's terminal"}</button></div>
+    ${open ? (err ? html`<p class="err-t">${err}</p>` : text == null ? html`<p class="faint">Reading${live ? " the " + live + " worker" : ""}…</p>`
+      : html`<pre class="pane-t" aria-label="The worker's recent events and terminal, read-only">${text}</pre>`) : null}
+  </section>`;
 }
 
 function Attachment({ a, base }) {
@@ -219,6 +241,9 @@ export function TicketPage({ home, hue, id, version, prs, item, machine, askProp
       ${o.plan ? html`<section class="t-sec"><div class="sec-h"><h2 class="i-h">Plan</h2></div><${Doc} text=${o.plan} /></section>` : null}
       ${report ? html`<section class="t-sec"><div class="sec-h"><h2 class="i-h">Report</h2></div><${Doc} text=${report.replace(/^\s*#\s+Report\s*\n/i, "")} /></section>` : null}
 
+      ${(t.artifacts || []).length ? html`<section class="t-sec"><div class="sec-h"><h2 class="i-h">Pages and drafts <span class="count">${t.artifacts.length}</span></h2></div>
+        <${ArtifactList} home=${home} items=${t.artifacts} toast=${toast} /></section>` : null}
+
       <section class="t-sec"
           onDragOver=${(e) => { e.preventDefault(); }} onDrop=${(e) => { e.preventDefault(); attach([...(e.dataTransfer.files || [])], "drop"); }}>
         <div class="sec-h"><h2 class="i-h">Attachments <span class="count">${(o.attachments || []).length + others.length}</span></h2><span class="grow"></span>
@@ -240,6 +265,8 @@ export function TicketPage({ home, hue, id, version, prs, item, machine, askProp
         <div class="drop">Drop files here or paste a screenshot: images, screen recordings, PDFs, logs, CSV or JSON, up to 25 MB each. Bigger files go as a link.</div>
         <p class="faint att-note">Kept in the task's folder on the brain, and shared only if you share them.</p>
       </section>
+
+      ${o.dispatched ? html`<${Pane} base=${base} live=${o.live} />` : null}
 
       <hr class="dt-rule" />
       <section class="t-sec"><h2 class="i-h">Activity</h2>
