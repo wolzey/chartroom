@@ -71,7 +71,7 @@ export function UsageStrip({ data }) {
   return html`<a class=${"u-strip u-sum-" + sum.level} href="#/usage" aria-label=${"Usage: " + sum.text + ". Open the usage page"}>
     <span class="u-strip-h"><b>Usage</b><span class="faint">${sum.text}</span><span class="grow"></span><span class="faint">Details →</span></span>
     <span class="u-chips">${chips.map((c) => html`<span key=${c.key} class=${"u-chip u-s-" + c.v.state}>
-      <b>${c.v.agent}</b>${c.v.where && c.v.where.indexOf(",") < 0 && !/ machines$/.test(c.v.where) && rows.filter((r) => r.agent === c.v.agent).length > 1 ? html`<span class="faint">${c.v.where}</span>` : null}
+      <b>${c.v.agent}</b>${c.v.where && rows.filter((r) => r.agent === c.v.agent).length > 1 ? html`<span class="faint">${c.v.where}</span>` : null}
       <span>${c.text}</span></span>`)}</span>
   </a>`;
 }
