@@ -464,6 +464,15 @@ test("usageRows: one agent read the same on two machines is one row; readings th
   assert.deepStrictEqual(split.map((r) => [r.machine, r.per_machine, r.state]), [["desk", true, "ok"], ["mini", true, "near"]]);
 });
 
+test("usageRows: machines that read the same share a row even when another machine reads differently", () => {
+  const near = { windows: [win("5h", 90, { state: "near" })], state: "near" };
+  const rows = M.usageRows({ homes: [uhome("a", [urow("claude", "desk", near), urow("claude", "laptop"), urow("claude", "mini", near)])] }, NOW);
+  assert.deepStrictEqual(rows.map((r) => [r.machines, r.per_machine, r.state]), [[["desk", "mini"], true, "near"], [["laptop"], true, "ok"]]);
+  assert.strictEqual(M.usageView(rows[0], NOW).where, "desk, mini");
+  assert.notStrictEqual(M.usageView(rows[0], NOW).key, M.usageView(rows[1], NOW).key);
+  assert.strictEqual(M.usageSummary(rows).text, "claude on desk and mini near the limit");
+});
+
 test("usageRows: the same reading in several homes is shown once, the newest; a live limit hit is never hidden by a fresher ok", () => {
   const old = urow("codex", "desk", { sampled_at: iso(-3600), windows: [win("5h", 10)] }), fresh = urow("codex", "desk", { sampled_at: iso(-60), windows: [win("5h", 55)] });
   const rows = M.usageRows({ homes: [uhome("a", [old]), uhome("b", [fresh]), uhome("c", null), { name: "d", snapshot: null }] }, NOW);

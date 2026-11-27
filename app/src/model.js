@@ -813,8 +813,9 @@ var AppModel = (function () {
   // Subscription usage (usage.js), from each home's snapshot `usage` (lib/usage.sh usage_rows_json:
   // that home's own readings, its own live workers). Every home keeps its own readings, so one agent
   // on one machine may be read in several homes: a live limit hit wins (a fresher "ok" elsewhere never
-  // hides it), then the newest sample. The readings are then grouped as the CLI groups them: one row
-  // per agent, split by machine only where the readings differ. Live workers are counted over every
+  // hides it), then the newest sample. The readings are then grouped: one row per agent, and where its
+  // machines read differently, one row per reading, the machines that read the same sharing it (the
+  // CLI's table splits every machine instead). Live workers are counted over every
   // home's tasks: dispatched, not closed, not review/done/failed (the CLI's rule), and with a session
   // still open (Fleet's OPEN_LIVE), so a parked or gone worker, which uses nothing, is not counted.
   const USAGE_AGENTS = ["claude", "codex", "agy", "grok"];
@@ -852,9 +853,11 @@ var AppModel = (function () {
     const out = [];
     for (const agent of Object.keys(by)) {
       const g = by[agent].sort(order);
-      const split = new Set(g.map(usageSig)).size > 1;
-      const rows = split ? g.map((r) => Object.assign({}, r, { machines: [r.machine], per_machine: true }))
-        : [Object.assign({}, g[0], { machines: g.map((r) => r.machine), per_machine: false })];
+      // machines that read the same share a row; per_machine says the agent's readings differ elsewhere
+      const groups = {}, sigs = [];
+      for (const r of g) { const sg = usageSig(r); if (!groups[sg]) { groups[sg] = []; sigs.push(sg); } groups[sg].push(r); }
+      const split = sigs.length > 1;
+      const rows = sigs.map((sg) => Object.assign({}, groups[sg][0], { machines: groups[sg].map((r) => r.machine), per_machine: split }));
       for (const r of rows) out.push(Object.assign(r, { live_workers: r.machines.reduce((n, m) => n + (live[agent + "|" + m] || 0), 0) }));
     }
     return out.sort((a, b) => rank(a.agent) - rank(b.agent) || order(a, b));
@@ -896,7 +899,7 @@ var AppModel = (function () {
   const USAGE_STATE = { out: "Out", near: "Near its limit", ok: "Within limits", unknown: "Not known" };
   function usageView(r, nowMs) {
     const now = nowMs == null ? Date.now() : nowMs, st = USAGE_STATE[r.state] ? r.state : "unknown";
-    const where = r.per_machine ? r.machine : r.machines && r.machines.length > 1 ? (r.machines.length > 3 ? r.machines.length + " machines" : r.machines.join(", ")) : r.machine || "";
+    const where = r.machines && r.machines.length > 1 ? (r.machines.length > 3 ? r.machines.length + " machines" : r.machines.join(", ")) : r.machine || "";
     const windows = (r.windows || []).map((w) => {
       const scoped = !!w.scoped, used = w.used_pct == null ? null : Math.max(0, Math.min(100, w.used_pct));
       const reset = w.reset_passed ? "reset; waiting for a new reading"
@@ -911,13 +914,13 @@ var AppModel = (function () {
     else if (st === "unknown") note = r.reason || "no usage reading yet";
     const sampled = Date.parse(r.sampled_at || "");
     const age = isFinite(sampled) ? ageText(Math.max(0, Math.round((now - sampled) / 1000))) : null;
-    return { key: r.agent + "|" + (r.per_machine ? r.machine : (r.machines || []).join(",")), agent: r.agent, state: st, stateText: USAGE_STATE[st], where,
+    return { key: r.agent + "|" + (r.machines && r.machines.length ? r.machines : [r.machine]).join(","), agent: r.agent, state: st, stateText: USAGE_STATE[st], where,
       plan: [r.plan, r.account].filter(Boolean).join(" · "), windows, note, live: r.live_workers || 0,
       age: age == null ? "no reading yet" : "read " + age + " ago", stale: !!r.stale, sampledAt: r.sampled_at || null };
   }
   // Fleet's line about usage: which agents are out or near, else that all are within their limits.
   function usageSummary(rows) {
-    const name = (r) => (r.per_machine ? r.agent + " on " + r.machine : r.agent);
+    const name = (r) => (r.per_machine ? r.agent + " on " + (r.machines && r.machines.length ? r.machines : [r.machine]).join(" and ") : r.agent);
     const out = rows.filter((r) => r.state === "out").map(name), near = rows.filter((r) => r.state === "near").map(name);
     const parts = [];
     if (out.length) parts.push(out.join(", ") + " out");
