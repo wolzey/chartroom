@@ -407,9 +407,11 @@ agy_trust() {
   run cr dispatch "$id"
   [ "$status" -eq 0 ]
   [[ "$output" == *"hc grok worker running"* ]]
-  # grok's own argv: model, effort, mode, --trust (its own worktree), the task folder by its real path, then the brief
+  # grok's own argv: model, effort, mode, --trust (its own worktree), then the brief
   l="$CHARTROOM_HOME/tasks/$id/launch.sh"
-  grep -qF -- "--no-auto-update -m grok-fake --reasoning-effort high --permission-mode acceptEdits --trust --add-dir $(cd "$CHARTROOM_HOME/tasks/$id" && pwd -P) \"\$@\"" "$l"
+  grep -qF -- "--no-auto-update -m grok-fake --reasoning-effort high --permission-mode acceptEdits --trust \"\$@\"" "$l"
+  # no --add-dir: grok 1.0.92 refuses it and the session never starts
+  ! grep -q -- '--add-dir' "$l"
   refute grep -q -- "--settings\|notify=\|--no-daemon\| -i " "$l"
   [ "$(term t1 '.argv[2]')" = "Read the brief at $CHARTROOM_HOME/tasks/$id/brief.md and follow it exactly. Your task id is $id." ]
   events "$id" | grep -q "note: the agent took a prompt, but its text could not be checked (grok has no prompt hook)"

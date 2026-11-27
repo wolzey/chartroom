@@ -393,11 +393,12 @@ with a signed-in grok (a throwaway scout).
 - **Start.** hc runs the launcher with the brief's line as grok's first positional argument (its
   initial prompt). Its flags: `-m <model>`, `--reasoning-effort <effort>`, `--permission-mode <mode>`
   (meta `permission`, in grok's words: `default`, `acceptEdits`, `auto`, `dontAsk`,
-  `bypassPermissions`, `plan`; anything else refuses at dispatch; none gives grok's own default, which
-  asks), `--trust` for a worktree chartroom created itself (grok's folder trust, which also gates the
-  hooks; any other folder's dialog is the commander's), `--add-dir <task folder>` by its real
-  path, and `--no-auto-update` (grok checks for an update at each launch; a worker must not stop for
-  one, so updating stays the commander's `grok update`). herdr starts it with `herdr agent start --kind grok` (herdr 0.9.5 knows grok) and the same
+  `bypassPermissions`, `plan`; anything else refuses at dispatch; none gives grok's own default,
+  `auto` in its terminal UI), `--trust` for a worktree chartroom created itself (grok's folder trust, which also gates the
+  hooks; any other folder's dialog is the commander's), and `--no-auto-update` (grok checks for an update at each launch; a worker must not stop for
+  one, so updating stays the commander's `grok update`). No `--add-dir`: grok 1.0.92 refuses one
+  ("additionalDirectories is not supported: a session works only in its cwd") and never starts the
+  session; with its sandbox off by default, the worker reaches its task folder by path. herdr starts it with `herdr agent start --kind grok` (herdr 0.9.5 knows grok) and the same
   flags; chartroom then types the brief.
 - **Sign-in.** `grok models` lists the models, headed `You are not authenticated.` when there is no
   sign-in, exit 0 either way (grok 1.0.92). Doctor shows it (`grok: <version> at <path>, signed in`,

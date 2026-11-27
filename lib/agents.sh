@@ -162,9 +162,12 @@ grok_login_why() {
 
 # grok's flags for a task: its model (-m) and effort (--reasoning-effort), its permission mode (meta
 # permission, in grok's own words: default, acceptEdits, auto, dontAsk, bypassPermissions, plan;
-# empty is grok's own default, which asks), --trust for a worktree chartroom created itself (the
+# empty is grok's own default, auto in its terminal UI), --trust for a worktree chartroom created itself (the
 # folder trust its dialog would ask for, which chartroom answers only for its own worktrees: any
-# other folder's dialog is the commander's), the task's folder by its real path, and no update check:
+# other folder's dialog is the commander's), and no update check. No --add-dir for the task folder:
+# grok 1.0.92 refuses one ("additionalDirectories is not supported: a session works only in its
+# cwd") and the session never starts. Its sandbox is off by default, so the worker reaches its brief,
+# report and event helper by their paths, as its permission mode allows. The update check:
 # grok checks for one at each launch ([cli] auto_update), and a worker must not stop for it, as
 # Codex's would (--no-auto-update is the per-session switch; grok's own sessions still update).
 # A launch asks this first, in its own shell: a die inside grok_args (read through `mapfile < <(...)`)
@@ -182,7 +185,6 @@ grok_args() { # <id>
   if [[ -n "$p" ]]; then grok_mode_check "$1"; printf '%s\n' --permission-mode "$p"; fi
   [[ "$(meta "$1" worktree_created)" == 1 ]] && printf '%s\n' --trust
   grok_guard_hooks
-  printf '%s\n' --add-dir "$(phys_dir "$(tdir "$1")")"
 }
 
 # Codex sandbox per task: meta "sandbox" wins; else scouts get workspace-write (network on,
