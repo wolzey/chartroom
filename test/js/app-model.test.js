@@ -473,6 +473,15 @@ test("usageRows: machines that read the same share a row even when another machi
   assert.strictEqual(M.usageSummary(rows).text, "claude on desk and mini near the limit");
 });
 
+test("usageRows: one account's reset read a second or minutes apart on two machines is still the same reading", () => {
+  const a = urow("claude", "desk", { windows: [win("7d", 70, { resets_at: "2026-03-04T10:00:00Z" })] });
+  const b = urow("claude", "mini", { windows: [win("7d", 70, { resets_at: "2026-03-04T09:59:59Z" })] });
+  const c = urow("agy", "desk", { windows: [win("5h", 0, { resets_at: "2026-03-02T16:57:26Z" })] });
+  const d = urow("agy", "mini", { windows: [win("5h", 0, { resets_at: "2026-03-02T16:53:34Z" })] });
+  const rows = M.usageRows({ homes: [uhome("a", [a, b, c, d])] }, NOW);
+  assert.deepStrictEqual(rows.map((r) => [r.agent, r.machines, r.per_machine]), [["claude", ["desk", "mini"], false], ["agy", ["desk", "mini"], false]]);
+});
+
 test("usageRows: the same reading in several homes is shown once, the newest; a live limit hit is never hidden by a fresher ok", () => {
   const old = urow("codex", "desk", { sampled_at: iso(-3600), windows: [win("5h", 10)] }), fresh = urow("codex", "desk", { sampled_at: iso(-60), windows: [win("5h", 55)] });
   const rows = M.usageRows({ homes: [uhome("a", [old]), uhome("b", [fresh]), uhome("c", null), { name: "d", snapshot: null }] }, NOW);

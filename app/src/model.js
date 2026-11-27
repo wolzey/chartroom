@@ -821,8 +821,11 @@ var AppModel = (function () {
   const USAGE_AGENTS = ["claude", "codex", "agy", "grok"];
   const USAGE_SKIP = ["review", "done", "closed", "failed"];
   function usageHit(r, now) { return !!r.hit_active && !(r.out_resets_at && Date.parse(r.out_resets_at) <= now); }
+  // What makes two machines' readings "the same", as the CLI's table judges it: plan, account, status,
+  // state and each window's percentage. Not the reset times: one account's reset is read a second or,
+  // for an unused window, minutes apart on each machine, and the shared card shows the first's.
   function usageSig(r) {
-    const w = (r.windows || []).map((x) => [x.label, x.used_pct == null ? -1 : x.used_pct, x.resets_at || ""].join("|")).sort();
+    const w = (r.windows || []).map((x) => [x.label, x.used_pct == null ? -1 : x.used_pct].join("|")).sort();
     return JSON.stringify([r.status, r.state, r.plan || "", r.account || "", r.out_resets_at || "", w]);
   }
   function usageRows(state, nowMs) {
