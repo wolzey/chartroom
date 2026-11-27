@@ -36,7 +36,11 @@ with a copy button beside it; a [page](../README.md#pages-reports-to-read-and-pr
 viewer instead. The header's **pages** link lists every page. Approvals given in chat but not yet in a brief are listed under
 Needs you, and so are open [relays from other homes](homes.md#talking-between-homes) (for the XO to
 weigh; they are not cards). Above the lanes, a "Your next steps" strip shows [your todo list](../README.md#your-next-steps-the-todo-list):
-the first five items, each with its short id (a click copies `/continue <id>`).
+the first five items, each with its short id (a click copies `/continue <id>`). When subscription
+usage readings exist (`chartroom usage`), a **Subscription usage** panel above the lanes shows
+one row per agent (split per machine when machines differ): plan/account, percent used and left
+per window with a fill bar, reset countdown, reading age (and stale badge), live worker count,
+and clear out-of-usage or near-limit markers, readable on both phones and desktops.
 
 How it is built, and what it promises:
 

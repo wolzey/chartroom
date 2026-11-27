@@ -301,16 +301,24 @@ watch_look() {
   (( NOW_MS >= ${LOOK_NEXT[$id]:-0} )) || return 0
   LOOK_NEXT[$id]=$((NOW_MS + LOOK_MS))
   live="$(live_of "$id")"
-  case "$live" in not-started|stopped|gone|parked|unknown) return 0 ;; esac
   agent="$(backend_agent "$id")"
+  # A headless worker that just stopped without reporting may have hit a usage limit.
+  if [[ "$r" == headless && "$live" == stopped ]] && ! reported_since_dispatch "$id"; then
+    if declare -F usage_limit_look >/dev/null 2>&1; then usage_limit_look "$id" "$r" "$agent" "" "$live"; fi
+    return 0
+  fi
+  case "$live" in not-started|stopped|gone|parked|unknown) return 0 ;; esac
   case "$r" in
     hc|herdr|tmux|cmux)
       # (No read of its terminal: nothing to compare. A blank screen is still a screen.)
       scr="$("${r}_screen" "$id" 2>/dev/null)" || return 0
       prompt_look "$id" "$r" "$agent" "$live" "$scr"
       brief_pending_look "$id" "$r" "$agent" "$scr"
+      if declare -F usage_limit_look >/dev/null 2>&1; then usage_limit_look "$id" "$r" "$agent" "$scr" "$live"; fi
       # (Its prompt may just have come or gone: the live word above is from before that.)
       if [[ "$r" != herdr ]]; then live="$(live_of "$id")"; fi ;;
+    headless)
+      if declare -F usage_limit_look >/dev/null 2>&1; then usage_limit_look "$id" "$r" "$agent" "" "$live"; fi ;;
   esac
   stall_look "$id" "$r" "$agent" "$live" "$scr"
 }

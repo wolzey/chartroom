@@ -323,6 +323,7 @@ cmd_device_run() {
     if declare -F guest_push_all >/dev/null; then guest_push_all || true; fi
     if (( now_s >= next )); then
       next=$((now_s + every))
+      if declare -F usage_device_refresh >/dev/null; then usage_device_refresh 0 || true; fi
       tok="$(device_token_get)" || tok=""
       if [[ -z "$tok" ]]; then
         device_log "no token here: chartroom device join <brain-url> <code> again; the agent stops"

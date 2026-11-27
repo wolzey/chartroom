@@ -17,8 +17,14 @@ are stable from 0.1.0.
   signed-out grok never starts, because it would open a browser sign-in. Its one hook is the pattern
   kill guard, in `~/.grok/hooks/chartroom-guard.json`, because grok loads no hooks from an added
   folder. The guard acts only when `CHARTROOM_TASK` is set, so the commander's own grok sessions are
-  untouched. grok is never parked. Built against grok 1.0.92 and hc 0.1.21; the live run waits on a
-  sign-in.
+  untouched. grok is never parked. Built against grok 1.0.92 and hc 0.1.21, and run live on the Studio.
+- Subscription usage awareness: `chartroom usage` reads each agent's real quota (Claude's OAuth
+  usage endpoint, Codex's app-server or session files, agy's `/usage`; grok reads unknown) on this
+  machine and, by heartbeat, on enrolled nodes. Automatic dispatch, re-dispatch, placement and
+  fallback skip an agent that is out until its reset; `doctor`, `nodes` and the dashboard's
+  **Subscription usage** panel show what each subscription has left. The watch detects a worker's
+  limit stop, wakes the XO once per stop with the agents that have room, and `chartroom move`
+  re-dispatches the task onto one of them, keeping its branch, worktree and edits.
 - Automatic new work balances signed-in Codex, agy and Claude full sessions by live task count,
   with fixed ties and a local Claude opt-out for MCP/browser needs. Status and dashboards show
   the spread and task-level review outcomes; doctor reports agent usability locally and on nodes.

@@ -694,7 +694,52 @@ brief and current node availability are included.
 returns just those counters. Both support `--all-homes`. The dashboard displays the same counters
 and `dashboard --json --all-homes` (also `board`) includes them for each home.
 `dashboard --all-homes` without JSON prints a board for each home. `doctor` reports local agent sign-ins
-and full-session usability, plus each enrolled node's last reported agent availability.
+and full-session usability, subscription usage and exhaustion, plus each enrolled node's last reported agent availability.
+
+### Subscription usage and moving exhausted work
+
+```bash
+chartroom usage                      # per-agent (and per-machine where they differ) usage table
+chartroom usage --refresh --json     # force fresh reads from each agent's real source
+chartroom move <id>                  # move a stuck task to another agent, keeping branch & edits
+chartroom move <id> --agent codex    # move to a specific agent (--dry-run previews; --force overrides)
+```
+
+- **Real sources only.** chartroom reads actual quota/rate-limit windows from each agent's own
+  mechanism (`claude` OAuth usage endpoint using the active macOS Keychain or `.credentials.json`
+  credential verified against `claude auth status`, plus optional `statusLine` input via
+  `chartroom usage record claude`; `codex` live `codex app-server` `account/rateLimits/read` with
+  fallback to `token_count` `rate_limits` events under `~/.codex/sessions/`; `agy`
+  `agy --output-format json -p=/usage`; `grok` reports `unknown` with the CLI's reason until a
+  real daemon-route capture verifies its JSON shape) and never guesses or estimates numbers. Only
+  active account-wide limiting windows mark an agent out (never model-scoped side buckets or
+  disabled extra-usage spend). Readings refresh automatically during `watch` (and on enrolled
+  nodes during device heartbeats) every `CHARTROOM_USAGE_REFRESH_MINUTES` (5). Where no number
+  exists, it reports `unknown` and why. Readings are stored under `$CHARTROOM_HOME/usage/` with
+  sample time, machine, plan, and a non-identifying account label (an optional
+  `CHARTROOM_USAGE_ACCOUNT_<AGENT>` alias, or `<provider> #<6-hex>` hashed in memory from the
+  account/org ID so distinct subscriptions split cleanly across machines) — never tokens, cookies,
+  emails, or raw org/account IDs. Readings older than `CHARTROOM_USAGE_STALE_MINUTES` (30) are
+  flagged stale with their age. An enrolled node sends its readings in every heartbeat, with
+  model-only windows marked and the agent's own limit flags and worker stops intact, so the brain
+  judges a node's agent exactly as the node does.
+- **Exhausted agents are skipped.** Once any active window reaches `CHARTROOM_USAGE_LIMIT_PCT`
+  (default 95%; warning at `CHARTROOM_USAGE_WARN_PCT`, 80%), the agent itself allows no more use
+  (Codex's spend cap or block), or a worker hits a usage-limit error,
+  automatic dispatch (`spread_pick`), automatic re-dispatch, node placement, and fallback skip
+  that agent until its `resets_at` passes; an explicit `--backend` for an exhausted agent prints a
+  warning with its reset time. `chartroom doctor`, `chartroom nodes`, and the dashboard's
+  **Subscription usage** panel all show exhausted and near-limit agents with their reset times.
+- **Detecting stops and moving work.** During `watch` (and on enrolled nodes via guest checks),
+  chartroom detects anchored usage-limit stop banners on idle/stopped workers (`claude`, `codex`,
+  `agy`, `grok`) — ignoring mid-turn output, prose, and tool output — marks only that machine's
+  agent out, and wakes the XO once per stop with `agent: out-of-usage: <agent> resets <time>; available: ...`
+  (a worker that resumes and stops again raises a new wake).
+  Run `chartroom move <id>` to stop the old worker and re-dispatch onto an available agent while
+  keeping the exact brief, branch, worktree, commits, and uncommitted changes; tasks with
+  Claude-only needs (`mcp`/`browser`/`claude`) refuse automatic moves off Claude unless `--agent`
+  or `--force` is given, and `--node <device>` refuses started tasks with local work so unpushed
+  commits or edits are never stranded (use `--node here` to recall remote node work home).
 
 During the trial, `CHARTROOM_REVIEW_NON_CLAUDE=opus` (default) gates new Codex and agy ship
 tasks. Scouts and tasks created before the gate are exempt. A `done` event marks review pending;
@@ -752,6 +797,7 @@ $CHARTROOM_HOME/                    default ~/.chartroom
   inbox/<i-xxxx>/artifacts/         the same, for an inbox item
   relays/inbox.ndjson               relays from other homes' XOs, and this home's acks, one JSON record per line
   relays/outbox.ndjson              the relays this home sent
+  usage/<machine>--<agent>.json     subscription usage readings (plan, windows, resets_at, sample time; zero secrets)
   .changed                          the change stamp: rewritten after each write of what the board shows (its mtime is what counts)
   .dashboard.pid  .dashboard.log    only while `chartroom dashboard --daemon` runs
   .dashboard.token                  the dashboard's access token (0600), once it has been on the network
@@ -781,7 +827,7 @@ write them:
 | `note` | chartroom (created, dispatched, worktree, fallback, accepted, closed, `waiting overdue`, `stalled`) | no |
 | `steered` | chartroom (`steer`) | no |
 | `exited` | process wrappers (`... (exit N)`) | yes, unless the worker reported first |
-| `agent` | hooks and the watch: `turn-ended`, `awaiting-input: <why>`, `prompt-cleared`, `prompt-received` | `turn-ended` without a report, and `awaiting-input` |
+| `agent` | hooks and the watch: `turn-ended`, `awaiting-input: <why>`, `prompt-cleared`, `prompt-received`, `out-of-usage: <agent> resets <time>; available: ...` | `turn-ended` without a report, `awaiting-input`, and `out-of-usage` |
 
 `watch` waits on a doorbell: whatever chartroom records (`chartroom event`, a hook's line, a
 relay) rings it once the line is on disk, and it wakes within a fraction of a second, reading
@@ -913,6 +959,9 @@ machine), then `~/.config/chartroom/config` (`KEY=VALUE`, no shell evaluation;
 | `CHARTROOM_LOOK_INTERVAL` | `60` | seconds between the watch's looks at one task: its screen or output, for a prompt nothing reports, a brief behind a dialog, and a stall ([Stuck workers wake the XO](#stuck-workers-wake-the-xo)) |
 | `CHARTROOM_STALL_MINUTES` | `10` | a task in flight with no new output or event for this long wakes once as `stalled`; `0` turns it off |
 | `CHARTROOM_STALL_BUSY_MAX_MINUTES` | `60` | a quiet command still using CPU holds the `stalled` wake back for up to this long |
+| `CHARTROOM_USAGE_LIMIT_PCT` / `CHARTROOM_USAGE_WARN_PCT` | `95` / `80` | percent used at which an agent is treated as out of usage (skipped on dispatch) or near limit |
+| `CHARTROOM_USAGE_STALE_MINUTES` / `_REFRESH_MINUTES` / `_COOLDOWN_MINUTES` | `30` / `5` / `60` | age after which a usage reading is marked stale; cache refresh interval; fallback lockout when a limit error has no parseable reset time |
+| `CHARTROOM_USAGE_ACCOUNT_<AGENT>` | *(auto hash)* | optional non-identifying label (e.g. `work`, `personal`) for `CLAUDE`/`CODEX`/`AGY`/`GROK` readings; defaults to `<provider> #<6-hex>` hashed in memory from org/account ID |
 | `CHARTROOM_CODEX_HOOKS_DIALOG` | `ask` | Codex's "Hooks need review" dialog at startup: `ask` wakes the XO; `skip` takes Esc in a worktree chartroom created, so those hooks do not run for that worker. Never trusts a hook |
 | `CHARTROOM_BASH_SEARCH` | see Install | environment only: colon-separated dirs searched for a bash ≥ 4 when started under an older one (PATH is always searched first) |
 | `CHARTROOM_PATH_APPEND` | `/opt/homebrew/bin:/usr/local/bin` on macOS, else empty | environment only: dirs appended to PATH when they exist and are missing; empty turns it off |

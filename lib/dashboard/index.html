@@ -218,6 +218,63 @@
   .todo li.breaking .l { color: var(--needs); font-weight: 600; }
   .todo .more { margin-top: 8px; }
 
+  /* subscription usage panel: one row per agent (and per machine where they differ) */
+  .usage { margin: 14px 20px 0; padding: 11px 14px 13px; border-radius: 9px; border: 1px solid var(--line);
+           background: linear-gradient(180deg, var(--panel), var(--panel2)); box-shadow: var(--shadow); }
+  .usage[hidden] { display: none; }
+  .usage h3 { margin: 0 0 9px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px;
+              font: 600 12px/1.2 var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+  .usage h3 .u-sum { margin-left: auto; font: 600 11.5px/1.2 var(--mono); letter-spacing: .02em; text-transform: none; color: var(--muted); }
+  .usage h3 .u-sum.out { color: var(--needs); }
+  .usage h3 .u-sum.near { color: var(--wait); }
+  .u-list { display: grid; gap: 8px; }
+  .u-row { position: relative; display: grid; grid-template-columns: minmax(175px, 230px) minmax(0, 1fr) auto;
+           gap: 8px 16px; align-items: center; padding: 9px 12px 9px 14px; border-radius: 7px;
+           border: 1px solid var(--line2); background: color-mix(in srgb, var(--panel) 70%, transparent); min-width: 0; }
+  .u-row::before { content: ""; position: absolute; left: -1px; top: 6px; bottom: 6px; width: 3px; border-radius: 3px; background: var(--ready); }
+  .u-row.st-out { border-color: color-mix(in srgb, var(--needs) 55%, transparent);
+                  background: color-mix(in srgb, var(--needs) 8%, var(--panel)); }
+  .u-row.st-out::before { background: var(--needs); }
+  .u-row.st-near { border-color: color-mix(in srgb, var(--wait) 55%, transparent);
+                   background: color-mix(in srgb, var(--wait) 7%, var(--panel)); }
+  .u-row.st-near::before { background: var(--wait); }
+  .u-row.st-unknown { border-style: dashed; }
+  .u-row.st-unknown::before { background: var(--faint); }
+  .u-id { min-width: 0; display: grid; gap: 3px; }
+  .u-id-top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+  .u-agent { font: 700 14px/1.2 var(--body); color: var(--ink); }
+  .u-mach { font: 600 11px/1.3 var(--mono); color: var(--muted); background: var(--chip); border: 1px solid var(--line);
+            border-radius: 4px; padding: 0 5px; }
+  .u-st { font: 700 10.5px/1.4 var(--mono); letter-spacing: .06em; text-transform: uppercase; padding: 0 6px;
+          border-radius: 4px; border: 1px solid var(--line); background: var(--chip); color: var(--muted); }
+  .u-st.out { color: var(--needs); border-color: color-mix(in srgb, var(--needs) 60%, transparent);
+              background: color-mix(in srgb, var(--needs) 12%, transparent); }
+  .u-st.near { color: var(--wait); border-color: color-mix(in srgb, var(--wait) 60%, transparent);
+               background: color-mix(in srgb, var(--wait) 12%, transparent); }
+  .u-st.ok { color: var(--ready); border-color: color-mix(in srgb, var(--ready) 45%, transparent); }
+  .u-plan { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+  .u-wins { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 14px; min-width: 0; }
+  .u-win { display: grid; gap: 4px; min-width: 0; }
+  .u-win-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font: 12px/1.3 var(--mono);
+             font-variant-numeric: tabular-nums; }
+  .u-wlbl { font-weight: 700; color: var(--ink); text-transform: uppercase; }
+  .u-wpct { color: var(--ink); }
+  .u-wpct .u-left { color: var(--muted); }
+  .u-wres { margin-left: auto; font-size: 11.5px; color: var(--muted); }
+  .u-bar { height: 6px; border-radius: 999px; background: var(--chip); border: 1px solid var(--line2); overflow: hidden; }
+  .u-bar i { display: block; height: 100%; border-radius: 999px; background: var(--ready); transition: width .5s ease; }
+  .u-win.w-near .u-bar i { background: var(--wait); }
+  .u-win.w-out .u-bar i { background: var(--needs); }
+  .u-win.w-reset .u-bar i { background: var(--faint); opacity: .5; }
+  .u-hit { grid-column: 1 / -1; font: 600 12px/1.35 var(--mono); color: var(--needs); overflow-wrap: anywhere; }
+  .u-unk { font: italic 12.5px/1.35 var(--body); color: var(--muted); overflow-wrap: anywhere; }
+  .u-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; font: 12px/1.3 var(--mono);
+            font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .u-live { padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); background: var(--chip); color: var(--muted); }
+  .u-live.busy { color: var(--prog); border-color: color-mix(in srgb, var(--prog) 50%, transparent); }
+  .u-age { font-size: 11.5px; color: var(--muted); }
+  .u-age.stale { color: var(--wait); font-weight: 600; }
+
   /* lanes */
   main { position: relative; display: grid; gap: 18px; padding: 16px 20px 48px; grid-template-columns: repeat(auto-fit, minmax(256px, 1fr));
          align-items: start; }
@@ -442,7 +499,9 @@
   [data-theme=hud] .empty { font: 12px var(--mono); text-transform: uppercase; letter-spacing: .06em; }
 
   /* cards: squared off, a hard accent rule, no lift */
-  [data-theme=hud] .card, [data-theme=hud] .todo { border-radius: 2px; background: var(--panel); }
+  [data-theme=hud] .card, [data-theme=hud] .todo, [data-theme=hud] .usage { border-radius: 2px; background: var(--panel); }
+  [data-theme=hud] .u-row, [data-theme=hud] .u-mach, [data-theme=hud] .u-st, [data-theme=hud] .u-bar, [data-theme=hud] .u-bar i, [data-theme=hud] .u-live { border-radius: 2px; }
+  [data-theme=hud] .u-row::before { top: -1px; bottom: -1px; width: 2px; border-radius: 0; }
   [data-theme=hud] .card::before { top: -1px; bottom: -1px; width: 2px; border-radius: 0; }
   [data-theme=hud] .card:hover { transform: none; border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
   [data-theme=hud] .badge { font: 600 10.5px/1.6 var(--mono); text-transform: uppercase; letter-spacing: .06em; padding: 0 5px; }
@@ -493,6 +552,7 @@
     .gauge .lbl { white-space: normal; text-overflow: clip; line-height: 1.25; letter-spacing: .1em; }
     /* nothing under 12px on a phone or tablet */
     .brand h1 small, .gauge .lbl, .badge, .sid, .kind, .clock, .log .t, .card .waiting .until, .att .k,
+    .u-mach, .u-st, .u-wres, .u-age, .usage h3 .u-sum,
     [data-theme=hud] .badge, [data-theme=hud] .lane h2 .alias, [data-theme=hud] .card .links, .reticle .tagline { font-size: 12px; }
   }
   @media (max-width: 760px) {
@@ -500,7 +560,11 @@
     .log { margin: 10px 16px 0; grid-template-columns: 1fr; }
     .log li { grid-template-columns: 8ch minmax(0, 1fr); }
     .log .who { display: none; }
-    .banner, .focusbar, .todo { margin: 10px 16px 0; }
+    .banner, .focusbar, .todo, .usage { margin: 10px 16px 0; }
+    .u-row { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+    .u-wins { grid-template-columns: minmax(0, 1fr); }
+    .u-meta { flex-direction: row; align-items: center; justify-content: space-between; flex-wrap: wrap; white-space: normal; }
+    .u-wres { margin-left: 0; }
     .todo li { flex-wrap: wrap; row-gap: 0; }
     .todo li .l { flex-basis: 100%; white-space: normal; overflow-wrap: anywhere; }
     main { padding: 14px 16px 40px; }
@@ -582,6 +646,10 @@
   <h3>Your next steps <span id="todo-n"></span><span class="focus" id="todo-focus"></span></h3>
   <ol id="todo-list"></ol>
   <button class="more" id="todo-more" type="button" hidden></button>
+</section>
+<section class="usage" id="usage" aria-label="subscription usage" hidden>
+  <h3>Subscription usage <span class="u-sum" id="usage-sum"></span></h3>
+  <div class="u-list" id="usage-list"></div>
 </section>
 <main id="lanes"><div class="reticle off" id="reticle" aria-hidden="true"><i></i><i></i><i></i><i></i><span class="tagline" id="lock-tag"></span></div></main>
 <div id="ghosts"></div>
@@ -1076,6 +1144,7 @@ function render(d) {
     for (const [k] of LANES) for (const m of sections[k].cards.children) enter(m, 120 + Math.min(i++, 24) * 35);
   }
   renderTodo(d);
+  renderUsage(d);
   renderLog(d);
   renderRadar(d);
   relock();
@@ -1110,6 +1179,94 @@ function renderTodo(d) {
   more.textContent = todoAll ? "show the first " + TODO_SHOW : "show all " + items.length;
 }
 document.getElementById("todo-more").addEventListener("click", () => { todoAll = !todoAll; if (last) renderTodo(last); });
+
+// Subscription usage panel: one row per agent (and per machine where machines differ).
+function renderUsage(d) {
+  const rows = d.usage || [], box = document.getElementById("usage");
+  box.hidden = !rows.length;
+  if (!rows.length) return;
+  const outN = rows.filter((u) => u.state === "out").length;
+  const nearN = rows.filter((u) => u.state === "near").length;
+  const sum = document.getElementById("usage-sum");
+  sum.className = "u-sum" + (outN ? " out" : nearN ? " near" : "");
+  const parts = [];
+  if (outN) parts.push(outN + " out");
+  if (nearN) parts.push(nearN + " near limit");
+  if (!parts.length) parts.push("all within limits");
+  sum.textContent = parts.join(" · ");
+
+  const stLabel = { out: "out", near: "near limit", ok: "ok", unknown: "unknown" };
+  const pctStr = (v) => (v == null ? "—" : (Number.isInteger(v) ? String(v) : v.toFixed(1).replace(/\.0$/, "")) + "%");
+  const rowEls = rows.map((u) => {
+    const st = u.state || "unknown";
+    const planParts = [u.plan, u.account].filter(Boolean);
+    const idTop = el("div", { class: "u-id-top" },
+      el("span", { class: "u-agent", text: u.agent }),
+      u.per_machine && u.machine ? el("span", { class: "u-mach", text: u.machine, title: "machine: " + u.machine })
+        : (u.machines && u.machines.length > 1 ? el("span", { class: "u-mach", text: u.machines.length + " machines", title: u.machines.join(", ") }) : null),
+      el("span", { class: "u-st " + st, text: stLabel[st] || st }));
+    const idCol = el("div", { class: "u-id" },
+      idTop,
+      el("div", { class: "u-plan", text: planParts.length ? planParts.join(" · ") : (u.machine || "") }));
+
+    const winsCol = el("div", { class: "u-wins" });
+    const wins = u.windows || [];
+    if (wins.length) {
+      for (const w of wins) {
+        const ws = w.state || "ok";
+        const used = w.used_pct == null ? 0 : Math.max(0, Math.min(100, w.used_pct));
+        const resNode = el("span", { class: "u-wres" });
+        if (w.reset_passed) {
+          resNode.textContent = "reset (awaiting refresh)";
+          if (w.resets_at) resNode.title = "reset at " + w.resets_at;
+        } else if (w.resets_at) {
+          const tk = ticker("until", w.resets_at);
+          if (tk) resNode.append("resets ", tk);
+          else resNode.textContent = "resets " + w.resets_at;
+        } else {
+          resNode.textContent = w.active === false ? "not started" : "reset unknown";
+        }
+        winsCol.append(el("div", { class: "u-win w-" + ws },
+          el("div", { class: "u-win-h" },
+            el("span", { class: "u-wlbl", text: w.label || w.id || "limit" }),
+            el("span", { class: "u-wpct" }, pctStr(w.used_pct) + " used", el("span", { class: "u-left", text: " · " + pctStr(w.left_pct) + " left" })),
+            resNode),
+          el("div", { class: "u-bar", role: "meter", "aria-label": u.agent + " " + (w.label || ""), "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(Math.round(used)) },
+            el("i", { style: "width:" + used.toFixed(1) + "%" }))));
+      }
+    } else {
+      winsCol.append(el("div", { class: "u-unk", text: "unknown — " + (u.reason || "no usage data reported") }));
+    }
+    if (u.hit_active) {
+      const h = el("div", { class: "u-hit" }, "worker hit usage limit");
+      if (u.out_resets_at) {
+        const tk = ticker("until", u.out_resets_at);
+        if (tk) h.append(" · resets ", tk);
+        else h.append(" · resets " + u.out_resets_at);
+      }
+      winsCol.append(h);
+    } else if (st === "out" && u.limit_reached && !wins.some((w) => w.state === "out" && !w.scoped)) {
+      // out with room left in every window: the agent itself allows no more use (Codex's spend cap or block)
+      winsCol.append(el("div", { class: "u-hit" }, "limit reached: " + u.agent + " allows no more use for now"));
+    }
+
+    const liveN = u.live_workers || 0;
+    const ageNode = el("span", { class: "u-age" + (u.stale ? " stale" : ""), title: u.sampled_at || "" });
+    if (u.sampled_at) {
+      const tk = ticker("since", u.sampled_at, u.stale ? " old · stale" : " ago");
+      if (tk) ageNode.append(tk);
+      else ageNode.textContent = ago(u.sampled_at) + (u.stale ? " old · stale" : " ago");
+    } else {
+      ageNode.textContent = "no sample";
+    }
+    const metaCol = el("div", { class: "u-meta" },
+      el("span", { class: "u-live" + (liveN > 0 ? " busy" : ""), text: liveN + " live" }),
+      ageNode);
+
+    return el("div", { class: "u-row st-" + st }, idCol, winsCol, metaCol);
+  });
+  document.getElementById("usage-list").replaceChildren(...rowEls);
+}
 
 function keyOf(c) {
   // inbox ids are positional (inbox-0, inbox-1, ...), so key them by short id or content to keep animations on the right card

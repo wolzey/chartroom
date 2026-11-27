@@ -1,0 +1,4 @@
+You hit your free usage limit.
+You hit your weekly limit.
+You've hit the credit limit for your plan.
+You've hit your spending cap.
