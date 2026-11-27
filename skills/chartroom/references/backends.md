@@ -71,7 +71,7 @@ logged.
   `rateLimitReachedType` or `spendControlReached`: `limit_reached`, while the reading is fresh), or after
   a worker hits a usage-limit stop (`hit_limit`), until `resets_at` (or fallback cooldown
   `CHARTROOM_USAGE_COOLDOWN_MINUTES`, 60). `spread_local_backends`, `spread_node_agents`,
-  re-dispatch of already-dispatched automatic tasks, `place_remote_lacks`, and `$CR_BACKEND_ORDER`
+  re-dispatch of already-dispatched automatic tasks (placed on a node too), `place_remote_lacks`, and `$CR_BACKEND_ORDER`
   fallback all skip out agents; an explicit `--backend` for an exhausted agent prints a warning
   with its reset time. `chartroom doctor` and `chartroom nodes` report exhausted agents with their
   reset times.
@@ -87,7 +87,10 @@ logged.
   patterns use real strings from the `agy` binary (`Usage limit reached`, `individual quota
   reached`, `RESOURCE_EXHAUSTED` / `exhausted your capacity`), though agy's live interactive
   limit-stop screen layout has not been observed live yet. On a match, chartroom marks only that
-  machine's agent out until its reset time (or fallback cooldown / `chartroom usage clear`, never
+  machine's agent out until its reset time (a clock-only one such as "3am" or "3:05 PM", and a
+  relative one, read from the earliest the stop can have happened: its transcript entry, its
+  headless output, or the last look that saw the worker not stopped, never from when it was first
+  noticed) (or fallback cooldown / `chartroom usage clear`, never
   wiped early by routine account-wide readings) and raises
   `agent: out-of-usage: <agent>[ on <node>] resets <time>; available: <agents> (move with: chartroom move <id>)`
   once per stop: again after a re-dispatch or steer, once the worker is seen working again however

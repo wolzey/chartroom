@@ -212,7 +212,8 @@ nodes_json() { # <remote to look for, or ""> [ssh: 1 for the ssh list alone]
         | .usage = ((.usage // {}) as $pu | $pu + ([$um | to_entries[] | select(.key | startswith($mn + "|"))
             | {key: (.key | split("|")[1]), value: .value}
             | select($hb == null or $pu[.key] == null
-                     or (.value.hit_active == true and ((.value.hit_limit.at | epoch) // 0) > ($hb - 60)))] | from_entries))),
+                     or (.value.hit_active == true and ((.value.hit_limit.at | epoch) // 0) > ($hb - 60)
+                         and ((.value.hit_limit.at | epoch) // 0) > (($pu[.key].hit_limit.at | epoch) // 0)))] | from_entries))),
        project: (if $want == "" then null else $want end), settings: {worker_cpu: $c, worker_mem_gb: $mg}}'
   rm -rf "$dir"
 }
@@ -517,7 +518,11 @@ cmd_node() {
         [[ "$b" == hc:* ]] || continue
         a="${b#*:}"
         lv="$(hc_live "$id" 2>/dev/null || echo unknown)"
-        case "$lv" in working|listening|parked|not-started|gone|unknown) continue ;; esac
+        case "$lv" in
+          gone|unknown) continue ;;
+          # (not stopped: usage_limit_look notes it, and re-arms the wake for a worker seen working)
+          working|listening|parked|not-started) usage_limit_look "$id" hc "$a" "" "$lv" "$mach" || true; continue ;;
+        esac
         scr="$(hc_screen "$id" 2>/dev/null)" || continue
         usage_limit_look "$id" hc "$a" "$scr" "$lv" "$mach" || true
       done ;;

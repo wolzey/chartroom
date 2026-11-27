@@ -104,8 +104,9 @@ usage_write_record() { # <agent> <machine> <json> [replace_hit 0|1] [keep_hit_af
   doc="$(jq -c --argjson prev "$prev" --argjson rep "$rep" --arg after "$after" '
     def epoch: if . == null then null else (tostring | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | try fromdateiso8601 catch null) end;
     if $after != "" then
-      (if .hit_limit == null and ($prev | type) == "object" and $prev.hit_limit != null
+      (if ($prev | type) == "object" and $prev.hit_limit != null
           and (($prev.hit_limit.at | epoch) // 0) > ($after | tonumber)
+          and (($prev.hit_limit.at | epoch) // 0) > ((.hit_limit.at | epoch) // 0)
        then .hit_limit = $prev.hit_limit else . end)
     elif $rep == 1 or ($prev | type) != "object" then .
     else
@@ -452,7 +453,8 @@ usage_unknown_record() { # <agent> <machine> <local true|false> <source> <reason
     {schema: $schema, agent: $a, machine: $m, local: $loc,
      account: (if $acct == "" then null else $acct end),
      plan: (if $plan == "" then null else $plan end),
-     status: "unknown", source: $src, reason: $why,
+     status: "unknown", source: $src,
+     reason: ($why | gsub("[^[:space:]]+@[^[:space:]]+\\.[^[:space:]]+"; "<email>")),
      sampled_at: $now, recorded_at: $now, windows: []}'
 }
 
@@ -1028,7 +1030,9 @@ usage_available_agents() { # [exclude_agent] [exclude_machine]
       done
     done
   fi
-  ( IFS=', '; printf '%s' "${out[*]-}" )
+  local one joined=""
+  for one in "${out[@]+"${out[@]}"}"; do joined+="${joined:+, }$one"; done
+  printf '%s' "$joined"
 }
 
 # ---------------------------------------------------------------- worker limit-stop detection (Part 3)
@@ -1062,8 +1066,14 @@ usage_extract_reset_text() { # <text>
 # - Explicit timezone ("Nov 23 at 3am (America/Denver)", "3pm (America/Denver)", "Nov 30, 10am (UTC)")
 # - Local wall-clock time ("3:05 PM", "Nov 30, 10am") resolved in the machine's local timezone
 # Returns empty when unparseable (caller falls back to matching API window resets_at or cooldown).
-usage_parse_reset_iso() { # <reset_text> [now_epoch]
-  local txt="$1" now_s="${2:-$(date +%s)}"
+# With [earliest_stop_epoch], the earliest the stop itself can have happened (its transcript entry,
+# its output file, or the last look that saw the worker not stopped), a clock-only time ("3am",
+# "3:05 PM") is the first such time after that moment, and a relative one ("in 2 hours") counts
+# from it: never from when the stop was first noticed, which can be hours later (a closed watch, a
+# sleeping machine). Without it, a clock-only time is today's unless that passed over 6 hours ago.
+usage_parse_reset_iso() { # <reset_text> [now_epoch] [earliest_stop_epoch]
+  local txt="$1" now_s="${2:-$(date +%s)}" since_s="${3:-}"
+  [[ "$since_s" =~ ^[0-9]+$ ]] || since_s=""
   [[ -n "$txt" ]] || return 0
   # Pipe-epoch ("|1795900000")?
   if [[ "$txt" =~ ^\|([0-9]{10})$ ]]; then
@@ -1084,7 +1094,7 @@ usage_parse_reset_iso() { # <reset_text> [now_epoch]
     if [[ "${txt,,}" =~ ([0-9]+)[[:space:]]*(m|min|mins|minute|minutes)([^a-z]|$) ]]; then m="${BASH_REMATCH[1]}"; any=1; fi
     if [[ "${txt,,}" =~ ([0-9]+)[[:space:]]*(s|sec|secs|second|seconds)([^a-z]|$) ]]; then s="${BASH_REMATCH[1]}"; any=1; fi
     if (( any == 1 )); then
-      local target=$((now_s + 10#$d * 86400 + 10#$h * 3600 + 10#$m * 60 + 10#$s))
+      local target=$((${since_s:-$now_s} + 10#$d * 86400 + 10#$h * 3600 + 10#$m * 60 + 10#$s))
       jq -rn --argjson t "$target" '$t | todate'
       return 0
     fi
@@ -1093,7 +1103,7 @@ usage_parse_reset_iso() { # <reset_text> [now_epoch]
   # e.g. "Nov 23 at 3am (America/Denver)", "3pm (America/Denver)", "Nov 30, 10am (UTC)", "3:05 PM", "14:30 UTC"
   local py; py="$(cfg PYTHON '' python3)"
   if command -v "$py" >/dev/null 2>&1; then
-    "$py" - "$txt" "$now_s" <<'PY' 2>/dev/null || true
+    "$py" - "$txt" "$now_s" "$since_s" <<'PY' 2>/dev/null || true
 import datetime, re, sys
 try:
     from zoneinfo import ZoneInfo
@@ -1101,6 +1111,7 @@ except Exception:
     ZoneInfo = None
 
 txt, now_s = sys.argv[1].strip(), int(sys.argv[2])
+since_s = int(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3].isdigit() else None
 tz = None
 t = txt
 # Check for parenthesized IANA timezone or UTC, e.g. "(America/Denver)" or "(UTC)"
@@ -1159,11 +1170,19 @@ if m and m.group(1).lower() in months:
 # If the clock time already passed within the last 6 hours (e.g. a stale banner first noticed
 # after its reset hour), keep today's past timestamp so it is treated as already reset instead
 # of falsely locking out for ~23 hours. Roll to tomorrow only when > 6h behind (e.g. 11pm -> 3am).
+# With the earliest the stop can have happened, it is the first such time after that: exact for a
+# stop whose time is known, and never a lockout for one first noticed long after its reset.
 clk = parse_clock(t)
-if clk:
+if clk and since_s is not None:
+    since = datetime.datetime.fromtimestamp(since_s, tz=tz)
+    dt = since.replace(hour=clk[0], minute=clk[1], second=0, microsecond=0)
+    if dt <= since:
+        dt += datetime.timedelta(days=1)
+elif clk:
     dt = now.replace(hour=clk[0], minute=clk[1], second=0, microsecond=0)
     if dt <= now and (now - dt) > datetime.timedelta(hours=6):
         dt += datetime.timedelta(days=1)
+if clk:
     print(dt.astimezone(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
 PY
   fi
@@ -1175,7 +1194,7 @@ PY
 # message where it stopped. A generic transient 429 (`error:"rate_limit"` without
 # `apiError:"usage_limit_reached"`) only matches if its text is a real anchored limit banner.
 # Exit codes:
-#   0 = authoritative limit stop found (prints "<text>\t<reset_text>")
+#   0 = authoritative limit stop found (prints "<text>\t<reset_text>\t<the entry's epoch, or empty>")
 #   1 = authoritative transcript file exists and shows NO limit stop (do NOT fall back to screen)
 #   2 = no readable transcript file found for this session_id
 usage_claude_transcript_limit() { # <session_id>
@@ -1195,17 +1214,19 @@ usage_claude_transcript_limit() { # <session_id>
     | last // empty
     | select(.type == "assistant" and .isApiErrorMessage == true
         and ((.apiError // "") == "usage_limit_reached" or (.error // "") == "rate_limit"))
-    | [(.apiError // ""),
+    | [((.timestamp // "") | tostring | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | (try (fromdateiso8601 | tostring) catch "")),
+       (.apiError // ""),
        ((.message.content | if type == "array" then ([.[] | select(.type == "text") | .text] | join(" ")) else (. // "") end)
         | gsub("[\r\n\t]+"; " ") | gsub("^ +| +$"; ""))] | @tsv' 2>/dev/null || true)"
   [[ -n "$row" ]] || return 1
+  local at="${row%%$'\t'*}"; row="${row#*$'\t'}"
   api_err="${row%%$'\t'*}"; txt="${row#*$'\t'}"
   [[ -n "$txt" ]] || return 1
   if [[ "$api_err" != usage_limit_reached ]]; then
     usage_screen_limit claude "$txt" headless >/dev/null || return 1
   fi
   local rtxt; rtxt="$(usage_extract_reset_text "$txt")"
-  printf '%s\t%s\n' "${txt:0:200}" "$rtxt"
+  printf '%s\t%s\t%s\n' "${txt:0:200}" "$rtxt" "$at"
   return 0
 }
 
@@ -1352,14 +1373,20 @@ usage_record_hit_limit() { # <agent> <machine> <resets_iso_or_empty> <resets_tex
   usage_write_record "$a" "$m" "$cur" 1
 }
 
+usage_mtime() { local m; m="$(stat -c %Y "$1" 2>/dev/null)" || m="$(stat -f %m "$1" 2>/dev/null)"; [[ "$m" =~ ^[0-9]+$ ]] && printf '%s' "$m"; }
+usage_seen_clear() { : >"$1/.usage-clear" 2>/dev/null || true; }
+
 # Called by watch_look (lib/stuck.sh) for each open task and by `node usage-look` on enrolled nodes.
 # Detects usage-limit stops via:
 #   1. Structured Claude session transcript API error (zero false positives, works under ⎿)
 #   2. Structured headless error JSONL (claude.jsonl / codex.jsonl, including error.code == usage_limit_reached)
 #   3. Anchored terminal limit-stop banners on idle/stopped session workers (never while mid-turn)
 # Records the agent as out on its own machine only, and logs one `agent: out-of-usage: ...` wake.
+# A look that finds no stop leaves <task>/.usage-clear (its mtime: the last time the worker was seen
+# not stopped), the earliest a stop seen later can have happened, which a clock-only reset is read
+# from (usage_parse_reset_iso).
 usage_limit_look() { # <id> <runner> <agent> <screen> [live] [machine]
-  local id="$1" r="$2" agent="$3" scr="$4" live="${5:-}" mach="${6:-$(usage_machine_name)}" d text="" mode="screen" match="" hit rtxt riso when avail f last_sig sig sid
+  local id="$1" r="$2" agent="$3" scr="$4" live="${5:-}" mach="${6:-$(usage_machine_name)}" d text="" mode="screen" match="" hit rtxt riso when avail f last_sig sig sid since="" m
   [[ -n "$agent" ]] || return 0
   d="$(tdir "$id")"
   case "$r" in
@@ -1368,10 +1395,10 @@ usage_limit_look() { # <id> <runner> <agent> <screen> [live] [machine]
       # A worker seen working again has resumed, however it was resumed (a steer, hc keys, attach, a
       # person's answer), so its next limit stop is a new one and raises its own wake.
       case "$live" in
-        working) rm -f "$d/.usage-limit"; return 0 ;;
-        listening|parked|not-started) return 0 ;;
+        working) rm -f "$d/.usage-limit"; usage_seen_clear "$d"; return 0 ;;
+        listening|parked|not-started) usage_seen_clear "$d"; return 0 ;;
       esac
-      if grep -qi 'esc to interrupt' <<<"$(tail -n 6 <<<"$scr")"; then rm -f "$d/.usage-limit"; return 0; fi
+      if grep -qi 'esc to interrupt' <<<"$(tail -n 6 <<<"$scr")"; then rm -f "$d/.usage-limit"; usage_seen_clear "$d"; return 0; fi
       # 1. For Claude workers, prefer the structured transcript signal when session_id is known.
       # When a readable transcript exists and shows no limit stop (rc 1), trust it and NEVER fall
       # back to screen scraping (prevents false lockouts when a reply quotes a limit banner).
@@ -1380,7 +1407,7 @@ usage_limit_look() { # <id> <runner> <agent> <screen> [live] [machine]
         if [[ -n "$sid" ]]; then
           local tr_rc=0
           match="$(usage_claude_transcript_limit "$sid")" || tr_rc=$?
-          if [[ $tr_rc -eq 1 ]]; then return 0; fi
+          if [[ $tr_rc -eq 1 ]]; then usage_seen_clear "$d"; return 0; fi
           [[ $tr_rc -eq 0 ]] || match=""
         fi
       fi
@@ -1407,14 +1434,31 @@ usage_limit_look() { # <id> <runner> <agent> <screen> [live] [machine]
             | [(.code // .error.code // empty), (.message // .error.message // empty)] | map(select(length > 0)) | join(": ")' "$d/codex.jsonl" 2>/dev/null | tail -n 5
           tail -n 10 "$d/codex.err" 2>/dev/null
         } || true)"
-      fi ;;
+      fi
+      # (a headless stop is the last thing its output files took: their newest mtime is its time)
+      for f in "$d/claude.jsonl" "$d/claude.err" "$d/codex.jsonl" "$d/codex.err"; do
+        m="$(usage_mtime "$f")" || continue
+        [[ -n "$since" ]] && (( since >= m )) || since="$m"
+      done ;;
     *) return 0 ;;
   esac
   if [[ -z "$match" ]]; then
-    [[ -n "$text" ]] || return 0
-    match="$(usage_screen_limit "$agent" "$text" "$mode")" || return 0
+    [[ -n "$text" ]] || { usage_seen_clear "$d"; return 0; }
+    match="$(usage_screen_limit "$agent" "$text" "$mode")" || { usage_seen_clear "$d"; return 0; }
   fi
   hit="${match%%$'\t'*}"; rtxt="${match#*$'\t'}"
+  # The earliest the stop can have happened: the transcript entry's own time when there is one, the
+  # headless output's (above), else the last look that saw the worker not stopped, or its dispatch.
+  if [[ "$rtxt" == *$'\t'* ]]; then
+    m="${rtxt#*$'\t'}"; rtxt="${rtxt%%$'\t'*}"
+    [[ ! "$m" =~ ^[0-9]+$ ]] || since="$m"
+  fi
+  if [[ -z "$since" && "$mode" == screen ]]; then
+    since="$(usage_mtime "$d/.usage-clear" || true)"
+    m="$(meta "$id" dispatched 2>/dev/null || true)"
+    m="$(jq -rn --arg t "$m" '$t | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | (try fromdateiso8601 catch empty)' 2>/dev/null || true)"
+    if [[ "$m" =~ ^[0-9]+$ ]] && { [[ -z "$since" ]] || (( m > since )); }; then since="$m"; fi
+  fi
   # One wake per stop: the same stop stays on screen across looks, so it is raised again only
   # after a re-dispatch, a steer, the worker seen working (above), or a stop with another reset.
   f="$d/.usage-limit"
@@ -1425,7 +1469,7 @@ usage_limit_look() { # <id> <runner> <agent> <screen> [live] [machine]
   last_sig="$(cat "$f" 2>/dev/null || true)"
   [[ "$sig" != "$last_sig" ]] || return 0
   printf '%s\n' "$sig" >"$f"
-  riso="$(usage_parse_reset_iso "$rtxt")"
+  riso="$(usage_parse_reset_iso "$rtxt" "" "$since")"
   usage_record_hit_limit "$agent" "$mach" "$riso" "$rtxt" "$id" "$hit" 0
   # On a node guest home, mirror hit_limit into $XDG_STATE_HOME/chartroom/usage with force_local=1
   # so the node's next heartbeat reports this agent out even when device NAME != hostname.
@@ -1711,7 +1755,9 @@ cmd_move() {
 
   local cleared_note=""
   if (( ${#cleared[@]} > 0 )); then
-    cleared_note="; cleared $(IFS=', '; printf '%s' "${cleared[*]}")"
+    local one joined=""
+    for one in "${cleared[@]}"; do joined+="${joined:+, }$one"; done
+    cleared_note="; cleared $joined"
   fi
   log_event "$id" note "moved from ${old_backend:-auto} to $new_backend (kept worktree, branch ${branch:-detached}, $commits commit(s), $dirty uncommitted change(s)$cleared_note)"
   echo "moved $id: ${old_backend:-auto} -> $new_backend (kept $commits commit(s), $dirty uncommitted change(s)$cleared_note)"

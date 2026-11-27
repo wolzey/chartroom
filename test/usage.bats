@@ -1293,3 +1293,103 @@ EOF
   [ "$status" -eq 0 ]
   [ "$output" = guarded ]
 }
+
+@test "a clock-only reset is read from when the stop can have happened, so a stop first seen hours late never locks a healthy agent out" {
+  use_fake hc
+  export FAKE_HC_DIR="$BATS_TEST_TMPDIR/hc" TZ=UTC
+  mkdir -p "$FAKE_HC_DIR/terms"
+  core_up
+  local now clk today tomorrow late live
+  now="$(date +%s)"
+  # Codex prints a clock-only reset in local time ("try again at 3:05 AM"): one 8 hours ago, today.
+  clk="$(jq -rn --argjson e "$((now - 28800))" '$e | strftime("%I:%M %p")')"
+  today="$(jq -rn --argjson e "$((now - 28800))" '$e | strftime("%Y-%m-%dT%H:%M:00Z")')"
+  tomorrow="$(jq -rn --argjson e "$((now - 28800 + 86400))" '$e | strftime("%Y-%m-%dT%H:%M:00Z")')"
+  worker() { # <id> <address> <state>
+    jq -cn --arg id "$1" --arg l "$CHARTROOM_HOME/tasks/$1/launch.sh" --arg a "$2" --arg st "$3" \
+      '{address:$a,name:$id,state:"live",argv:["bash",$l],status:{app:"codex",state:$st}}' >"$FAKE_HC_DIR/terms/$2.json"
+  }
+  banner() { printf "■ You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro) or try again at %s.\n› \n" "$clk" >"$FAKE_HC_DIR/screen.$1"; }
+
+  # 1. Dispatched 12 hours ago and not looked at since (the watch was closed, the machine asleep): the
+  #    stop can have come before that reset, so it is not read as tomorrow's.
+  late="$(new_task --backend hc:codex)"
+  set_meta "$late" ".dispatched=\"$(jq -rn --argjson e "$((now - 43200))" '$e | todate')\" | .hc_terminal=\"t-late\" | .hc_launched=\"1\""
+  worker "$late" t-late idle; banner t-late
+  cr watch --once --timeout 1 >/dev/null 2>&1 || true
+  events "$late" | grep -q 'agent: out-of-usage: codex'
+  [ "$(jq -r '.hit_limit.resets_at' "$CHARTROOM_HOME/usage/desk--codex.json")" = "$today" ]
+  [ "$(local_verdict "$CHARTROOM_HOME/usage/desk--codex.json" | jq -r .out)" = false ]
+  cr close "$late" >/dev/null
+
+  # 2. Seen working a minute ago and stopped since: that same time is tomorrow's, and codex is out.
+  live="$(new_task --backend hc:codex)"
+  set_meta "$live" ".dispatched=\"$(jq -rn --argjson e "$((now - 43200))" '$e | todate')\" | .hc_terminal=\"t-live\" | .hc_launched=\"1\""
+  worker "$live" t-live working; printf 'working...\n' >"$FAKE_HC_DIR/screen.t-live"
+  cr watch --once --timeout 1 >/dev/null 2>&1 || true
+  worker "$live" t-live idle; banner t-live
+  cr watch --once --timeout 1 >/dev/null 2>&1 || true
+  events "$live" | grep -q 'agent: out-of-usage: codex'
+  [ "$(jq -r '.hit_limit.resets_at' "$CHARTROOM_HOME/usage/desk--codex.json")" = "$tomorrow" ]
+  [ "$(local_verdict "$CHARTROOM_HOME/usage/desk--codex.json" | jq -r .out)" = true ]
+
+  # 3. A stop whose time is known (a Claude transcript entry) is read from that time exactly.
+  run bash -c '
+    source "'"$REPO_ROOT/lib/core.sh"'"
+    source "'"$REPO_ROOT/lib/usage.sh"'"
+    # 1795759200 = 23:00 Denver; read at 09:30 Denver the next day (1795797000)
+    printf "%s|%s\n" "$(usage_parse_reset_iso "3am (America/Denver)" 1795797000 1795759200)" \
+      "$(usage_parse_reset_iso "in 2 hours" 1795797000 1795759200)"'
+  [ "$output" = "2026-11-27T10:00:00Z|2026-11-27T08:00:00Z" ]
+}
+
+@test "re-dispatching an automatic task placed on a node never goes back onto that node's exhausted agent" {
+  export CHARTROOM_NODES=none CHARTROOM_NODE_CONFIG="$BATS_TEST_TMPDIR/nodecfg/node"
+  local id fut a
+  id="$(new_task)"
+  cr homes add test "$CHARTROOM_HOME" >/dev/null
+  printf 'runner\thc\tup\n' >"$BATS_TEST_TMPDIR/probe.out"
+  for a in claude codex; do printf 'tool\t%s\tok\t1.0\nlogin\t%s\tok\t-\n' "$a" "$a" >>"$BATS_TEST_TMPDIR/probe.out"; done
+  heartbeat_from_mini "$BATS_TEST_TMPDIR/probe.out"
+  fut="$(iso_offset 7200)"
+  # As placement leaves it (lib/place.sh): the node's agent marked explicit, the task's own choice kept.
+  set_meta "$id" '.backend="node:claude" | .backend_source="explicit" | .node_source="auto" | .node_placed="1"
+    | .node="n-222222222222" | .node_name="mini" | .node_backend="hc:claude" | .dispatched="2026-11-26T00:00:00Z"'
+  cr usage record claude --machine mini --hit-limit --resets-at "$fut" --message "You've hit your usage limit"
+
+  run cr dispatch "$id" --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"switching to node:codex"* ]]
+  [[ "$output" != *"chosen explicitly"* ]]
+
+  cr usage record codex --machine mini --hit-limit --resets-at "$fut" --message "You've hit your usage limit"
+  run cr dispatch "$id" --dry-run
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"cannot re-dispatch $id on node:claude (mini)"* ]]
+
+  # A node backend the commander chose is still theirs: it warns and goes ahead.
+  set_meta "$id" '.node_source="explicit"'
+  run cr dispatch "$id" --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"proceeding because --backend was chosen explicitly"* ]]
+}
+
+@test "an agent's own error text never keeps an email, and an older stop on a heartbeat never replaces a newer one the brain heard" {
+  run bash -c '
+    source "'"$REPO_ROOT/lib/core.sh"'"
+    source "'"$REPO_ROOT/lib/usage.sh"'"
+    usage_unknown_record agy mini true agy-usage "Print mode: authenticated as someone@example.com" | jq -r .reason'
+  [ "$output" = "Print mode: authenticated as <email>" ]
+
+  run bash -c '
+    source "'"$REPO_ROOT/lib/core.sh"'"
+    source "'"$REPO_ROOT/lib/usage.sh"'"
+    CR_HOME="'"$CHARTROOM_HOME"'"; stamp_changed() { :; }
+    now_s="$(date +%s)"; at() { jq -rn --argjson e "$1" "\$e | todate"; }
+    # the brain heard a stop 10 s ago; the heartbeat (heard 30 s ago) still carries an expired one from yesterday
+    usage_write_record codex mini "$(jq -cn --arg at "$(at "$((now_s - 10))")" "{agent:\"codex\",machine:\"mini\",status:\"ok\",windows:[],hit_limit:{at:\$at,resets_at:null}}")" 1
+    usage_write_record codex mini "$(jq -cn --arg at "$(at "$((now_s - 86400))")" "{agent:\"codex\",machine:\"mini\",status:\"ok\",windows:[],hit_limit:{at:\$at,resets_at:null}}")" 1 "$((now_s - 90))"
+    jq -r ".hit_limit.at" "$CR_HOME/usage/mini--codex.json"; at "$((now_s - 10))"'
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "${lines[1]}" ]
+}

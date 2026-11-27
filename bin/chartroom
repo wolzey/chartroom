@@ -211,6 +211,10 @@ select_backend() { # <id> -> sets SELECTED
   local id="$1" want src b why
   SELECTED_NODE_BACKEND=""
   want="$(meta "$id" backend)"; src="$(meta "$id" backend_source)"; src="${src:-explicit}"
+  # Placement (lib/place.sh) marks the node's agent explicit and keeps the task's own choice in
+  # node_source: an automatic task placed on a node is still automatic on re-dispatch, so an agent
+  # out of usage there is switched or refused below, never silently used again.
+  if [[ "$src" == explicit && "$(meta "$id" node_placed)" == 1 && "$(meta "$id" node_source)" == auto ]]; then src=auto; fi
   CR_TASK_COMMAND="$(meta "$id" command)"
   if [[ -n "$want" && "$src" == explicit ]]; then
     if why="$(probe_backend "$want")"; then
@@ -1643,7 +1647,8 @@ watch_scan_lines() { # <id> <from-offset> <to-offset>
               na="$(backend_agent "$id")"; nm="$(node_name_of "$id")"
               if [[ -n "$na" && -n "$nm" ]]; then
                 nrtxt="$(usage_extract_reset_text "$line")"
-                nriso="$(usage_parse_reset_iso "$nrtxt")"
+                # (read as of the event, not of this scan; the node's next heartbeat carries its own verdict)
+                nriso="$(usage_parse_reset_iso "$nrtxt" "$(jq -rn --arg t "${line%% *}" '$t | try fromdateiso8601 catch empty' 2>/dev/null || true)")"
                 usage_record_hit_limit "$na" "$nm" "$nriso" "$nrtxt" "$id" "$line" >/dev/null 2>&1 || true
                 navail="$(usage_available_agents "$na" "$nm")"
                 if [[ "$wake_line" == *"; available: "*" (move with:"* ]]; then
