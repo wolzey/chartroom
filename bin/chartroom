@@ -188,6 +188,10 @@ probe_backend() { # <backend>
       agent_runs_on agy "$r" || { echo "chartroom runs agy only as a full session (${AGY_RUNNERS//|/, })"; return 1; }
       "$(agent_bin agy)" --version >/dev/null 2>&1 </dev/null || { echo "agy --version failed at $(agent_bin agy)"; return 1; }
     fi
+    if [[ "$a" == grok ]]; then
+      agent_runs_on grok "$r" || { echo "chartroom runs grok only as a full session (${GROK_RUNNERS//|/, })"; return 1; }
+      "$(agent_bin grok)" --version >/dev/null 2>&1 </dev/null || { echo "grok --version failed at $(agent_bin grok)"; return 1; }
+    fi
   fi
   return 0
 }
@@ -200,6 +204,7 @@ auto_ok() { # <backend> -> prints why not
   b="$(canon_backend "$1")"
   [[ "$b" == *:* ]] && a="${b#*:}"
   if [[ "$b" == *:agy ]]; then agy_login_why || return 1; fi
+  if [[ "$b" == *:grok ]]; then grok_login_why || return 1; fi
   if [[ -n "$a" ]]; then usage_agent_why "$a" || return 1; fi
   return 0
 }
@@ -411,6 +416,7 @@ cmd_new() {
   if [[ -z "$backend" || "$backend" == auto ]]; then backend=""; source=auto
   else
     [[ "$backend" != *:agy ]] || agent_runs_on agy "${backend%%:*}" || die "agy runs only as a full session: --backend hc:agy or herdr:agy (or --node DEVICE on a device where agy is signed in), never ${backend%%:*}:agy"
+    [[ "$backend" != *:grok ]] || agent_runs_on grok "${backend%%:*}" || die "grok runs only as a full session: --backend hc:grok or herdr:grok (or --node DEVICE on a device where grok is signed in), never ${backend%%:*}:grok"
     valid_backend "$backend" || die "unknown backend '$backend' (runners: ${RUNNERS//|/, }; agents: ${KNOWN_AGENTS//|/, }; e.g. tmux:claude)"; backend="$(canon_backend "$backend")"
   fi
   [[ "$backend" != command || -n "$command" || -n "$CR_COMMAND" ]] || die "the command backend needs --command TEMPLATE or CHARTROOM_COMMAND"
@@ -897,12 +903,14 @@ cmd_hook() {
   # that could fail. pre-bash is its name in settings written before the permission broker; guard
   # is the guard alone. Claude and Codex send tool_name Bash and tool_input.command, and take
   # hookSpecificOutput; agy sends toolCall {name: run_command, args.CommandLine} and takes
-  # {decision, reason}. An allowed call gets no answer at all: agy's "allow" would skip its own
-  # approval, and an empty JSON object would deny.
+  # {decision, reason}; grok sends toolName run_terminal_command and toolInput.command and takes
+  # Claude's hookSpecificOutput too (grok_guard_hooks). An allowed call gets no answer at all:
+  # agy's "allow" would skip its own approval, and an empty JSON object would deny.
   if [[ "$what" =~ ^(pre-bash|pre-tool|guard)$ ]]; then
     [[ -n "$payload" ]] || payload="$(cat 2>/dev/null || true)"
     msg="$(jq -r 'if .toolCall then (select(.toolCall.name == "run_command") | .toolCall.args.CommandLine // empty)
-      else (select(.tool_name == null or .tool_name == "Bash") | .tool_input.command // empty) end' <<<"$payload" 2>/dev/null || true)"
+      elif .toolName then (select(.toolName == "run_terminal_command") | .toolInput.command // empty)
+      else (select(.tool_name == null or .tool_name == "Bash" or .tool_name == "run_terminal_command") | .tool_input.command // empty) end' <<<"$payload" 2>/dev/null || true)"
     if [[ -n "$msg" ]] && pattern_kill "$msg"; then
       if [[ "$(jq -r 'has("toolCall")' <<<"$payload" 2>/dev/null)" == true ]]; then
         jq -n --arg r "$PATTERN_KILL_ADVICE" '{decision:"deny",reason:$r}'
@@ -1954,9 +1962,10 @@ cmd_doctor() {
   jqv="$(command -v jq >/dev/null && jq --version 2>/dev/null || echo missing)"
   gitv="$(command -v git >/dev/null && git --version 2>/dev/null | awk '{print $3}' || echo missing)"
   [[ "$jqv" == missing || "$gitv" == missing ]] && ok=0
-  local all="hc:claude hc:codex hc:agy herdr:claude herdr:codex herdr:agy cmux:claude cmux:codex tmux:claude tmux:codex headless:claude headless:codex command subagent"
+  local all="hc:claude hc:codex hc:agy hc:grok herdr:claude herdr:codex herdr:agy herdr:grok cmux:claude cmux:codex tmux:claude tmux:codex headless:claude headless:codex command subagent"
   # (asked once, here, not in each backend's own subshell below)
   [[ -z "$(agent_bin agy)" ]] || agy_login_why >/dev/null || true
+  [[ -z "$(agent_bin grok)" ]] || grok_login_why >/dev/null || true
   for b in $all; do
     if why="$(auto_ok "$b")"; then avail=yes; why=""; else avail=no; fi
     [[ -z "$first_ok" && "$avail" == yes && " $CR_BACKEND_ORDER " == *" $b "* ]] && first_ok="$b"
@@ -1979,12 +1988,12 @@ cmd_doctor() {
       --arg bv "$BASH_VERSION" --arg bp "$BASH" --arg bf "$CR_BASH_FROM" --arg added "$added" \
       --argjson app "$(app_doctor_brief_json)" --argjson pdf "$(page_doctor_json)" --arg hname "$hname" --arg hcfg "$hcfg" --arg ws "$CR_WORKSPACE" \
       --argjson agy "$(agy_doctor_json)" --argjson agents "$(spread_doctor_json)" --argjson agent_nodes "$(spread_doctor_nodes)" \
-      --argjson usage "$(usage_rows_json)" \
+      --argjson usage "$(usage_rows_json)" --argjson grok "$(grok_doctor_json)" \
       '{version:$v,home:$h,home_source:$hs,home_name:(if $hname=="" then null else $hname end),
         home_config:(if $hcfg=="" then null else $hcfg end),workspace:$ws,harness:$harness,
         bash:{version:$bv,path:$bp,rerun_from:(if $bf=="" then null else $bf end)},
         path:{thin:($added!=""),added:($added|split(" ")|map(select(.!="")))},
-        order:($o|split(" ")),auto:(if $auto=="" then null else $auto end),app:$app,pdf:$pdf,agents:($agents + {agy:($agents.agy + $agy)}),agent_nodes:$agent_nodes,usage:$usage,backends:.}'
+        order:($o|split(" ")),auto:(if $auto=="" then null else $auto end),app:$app,pdf:$pdf,agents:($agents + {agy:($agents.agy + $agy), grok:$grok}),agent_nodes:$agent_nodes,usage:$usage,backends:.}'
   else
     echo "chartroom $CR_VERSION"
     [[ "$CR_HOME_SOURCE" == "registered home"* ]] && hname=""
@@ -2005,6 +2014,7 @@ cmd_doctor() {
     app_doctor_brief_json | jq -r '"app:      " + (if .url then .url else (.why // "not running") end) + (if .old_dashboard then "; an old web dashboard still runs (pid \(.old_dashboard)): chartroom dashboard stop" else "" end)'
     page_doctor_json | jq -r 'if .chrome then "pdf:      \(.chrome) (chartroom artifact pdf)" else "pdf:      - \(.why)" end'
     agy_doctor_json | jq -r '"agy:      " + (if .path == null then "- not on PATH" else "\(.version // "?") at \(.path), \(if .signed_in then "signed in" else (.why // "not signed in") end)" end) + "; runs as \(.runners | join(", ")) only; \(.limits)"'
+    grok_doctor_json | jq -r '"grok:     " + (if .path == null then "- not on PATH" else "\(.version // "?") at \(.path), \(if .signed_in then "signed in" else (.why // "not signed in") end)" end) + "; runs as \(.runners | join(", ")) only, and only when a task names it (never picked automatically); \(.limits)"'
     spread_doctor_json | jq -r 'to_entries[] | "agent:    \(.key): signed in=\(.value.signed_in), usable full session=\(.value.usable)\(if .value.reason != "" then " (\(.value.reason))" else "" end)"'
     spread_doctor_nodes | jq -r '.[] | .node as $n | .agents | to_entries[] | "agent:    \($n) / \(.key): signed in=\(.value.signed_in), usable=\(.value.usable)\(if .value.reason != "" then " (\(.value.reason))" else "" end)"'
     usage_doctor_lines
@@ -2030,6 +2040,20 @@ agy_doctor_json() {
   jq -cn --arg p "$b" --arg v "$v" --arg w "$why" --argjson s "$signed" --arg r "$AGY_RUNNERS" --arg l "$AGY_LIMITS" \
     '{path:(if $p=="" then null else $p end),version:(if $v=="" then null else $v end),signed_in:$s,
       why:(if $w=="" then null else $w end),runners:($r|split("|")|map(if . == "node" then "node (a device where agy is signed in)" else . + ":agy" end)),limits:$l}'
+}
+
+# grok as doctor sees it, as agy_doctor_json (lib/agents.sh, grok section).
+grok_doctor_json() {
+  local b v="" why="" signed=false
+  b="$(agent_bin grok)"
+  if [[ -n "$b" ]]; then
+    v="$("$b" --version 2>/dev/null </dev/null | head -1 | sed -E 's/^grok //' || true)"
+    if why="$(grok_login_why)"; then signed=true; why=""; fi
+  fi
+  jq -cn --arg p "$b" --arg v "$v" --arg w "$why" --argjson s "$signed" --arg r "$GROK_RUNNERS" --arg l "$GROK_LIMITS" \
+    '{path:(if $p=="" then null else $p end),version:(if $v=="" then null else $v end),signed_in:$s,
+      why:(if $w=="" then null else $w end),runners:($r|split("|")|map(if . == "node" then "node (a device where grok is signed in)" else . + ":grok" end)),
+      automatic:false,limits:$l}'
 }
 
 cmd_version() { echo "chartroom $CR_VERSION (state schema $CR_SCHEMA)"; }
@@ -2101,13 +2125,14 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                 [--node DEVICE|here] [--needs TOOLS]
                                           create a task record + brief scaffold. B is
                                           <runner>:<agent> (runners: hc herdr cmux tmux headless;
-                                          agents: claude codex agy; agy runs in hc and herdr
-                                          only), command, subagent, or auto
+                                          agents: claude codex agy grok; agy and grok run in
+                                          hc and herdr only, and grok only when named here),
+                                          command, subagent, or auto
                                           (omit --backend: balance codex, agy, claude in hc/herdr).
                                           --grant (repeatable): push-branch, open-pr, merge-auto,
                                           comment-pr, prod-read, enforced by the permission hooks
                                           --node: pin it to an enrolled device (hc:claude,
-                                          hc:codex or hc:agy there), or here; unpinned, dispatch
+                                          hc:codex, hc:agy or hc:grok there), or here; unpinned, dispatch
                                           places it.
                                           --needs docker,ruby,...: only a node where those work
                                           --needs mcp or browser: use Claude (unless B is explicit)

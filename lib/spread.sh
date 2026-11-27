@@ -47,9 +47,11 @@ spread_summary() {
 spread_line() {
   jq -r '"agents: " + (map("\(.agent) \(.live) live, reviews \(.clean) clean / \(.rework) rework") | join("; "))' <<<"$1"
 }
+# grok is never a candidate, whatever the counts or the available list hold: it runs only when
+# a task's --backend names it. Every automatic path (local, node rows, doctor) goes through here.
 spread_pick() { # <counts json> <available agents json> <claude-only 0|1>
   jq -er --argjson available "$2" --arg only "$3" '
-    [to_entries[] | select(.value.agent as $a | $available | index($a))
+    [to_entries[] | select(.value.agent != "grok") | select(.value.agent as $a | $available | index($a))
       | select($only != "1" or .value.agent == "claude")]
     | sort_by([.value.live,.key]) | .[0].value.agent // empty' <<<"$1"
 }

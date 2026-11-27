@@ -9,7 +9,7 @@
 # meta.node_placed is 1 and node_source is the backend_source it had).
 #   chartroom new ... --node <name|id|here>   pins at birth; chartroom set <id> node=<name|id>|here|any
 #   meta.node          the device's id (names are display only); meta.node_name its name then
-#   meta.node_backend  what it runs there: hc:claude, hc:codex or hc:agy (meta.backend reads node:<agent>)
+#   meta.node_backend  what it runs there: hc:claude, hc:codex, hc:agy or hc:grok (meta.backend reads node:<agent>)
 #   meta.node_attempt  which attempt the device is on; meta.node_off the lines of its log taken
 #   fleet/tasks/<home>/<id>.json   the pin the server checks each push against (device, attempt)
 #
@@ -21,8 +21,10 @@
 
 # What may run on a device (CHARTROOM_NODE_BACKENDS; the tests add command).
 # (hc:agy needs the device's chartroom to know agy: an older one reports no agy in its probe, so
-# placement never picks it, and a task pinned to it fails there; chartroom node update brings it.)
-node_backends() { cfg NODE_BACKENDS '' 'hc:claude|hc:codex|hc:agy'; }
+# placement never picks it, and a task pinned to it fails there; chartroom node update brings it.
+# hc:grok the same. Placement only moves a task whose --backend names one, so grok goes to a node
+# only when the commander asked for grok, and only to one that reports grok signed in.)
+node_backends() { cfg NODE_BACKENDS '' 'hc:claude|hc:codex|hc:agy|hc:grok'; }
 
 node_probe() { return 0; } # (whether the device can take it is decided at launch: away, it waits)
 node_steer_mode() { echo live; }

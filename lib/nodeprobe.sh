@@ -86,11 +86,15 @@ checks() {
     local s="$1"; shift
     if command -v perl >/dev/null 2>&1; then perl -e 'alarm shift; exec @ARGV or exit 127' "$s" "$@"; else "$@"; fi
   }
-  for t in git jq bash claude codex agy gh go docker ruby node herdr tmux chartroom mise; do
+  for t in git jq bash claude codex agy grok gh go docker ruby node herdr tmux chartroom mise; do
     b="$(command -v "$t" 2>/dev/null || true)"
     if [[ -z "$b" && "$t" == mise ]]; then continue; fi # (optional: what installs the tools a project pins)
     # (agy installs itself in ~/.local/bin, which a non-login PATH may lack)
     if [[ -z "$b" && "$t" == agy && -x "$HOME/.local/bin/agy" ]]; then b="$HOME/.local/bin/agy"; fi
+    # (grok's installer puts it in ~/.grok/bin, linked from ~/.local/bin where that is on PATH)
+    if [[ -z "$b" && "$t" == grok ]]; then
+      if [[ -x "$HOME/.local/bin/grok" ]]; then b="$HOME/.local/bin/grok"; elif [[ -x "$HOME/.grok/bin/grok" ]]; then b="$HOME/.grok/bin/grok"; fi
+    fi
     if [[ -z "$b" ]]; then ck_kv tool "$t" missing -; continue; fi
     case "$t" in
       bash)
@@ -110,9 +114,12 @@ checks() {
         if [[ $rc -eq 0 && -n "$v" ]]; then ck_kv tool "$t" ok "$v"; else ck_kv tool "$t" error "$(ck_why "$b" "$out" "$rc")"; fi ;;
     esac
   done
-  for t in claude codex agy gh; do
+  for t in claude codex agy grok gh; do
     b="$(command -v "$t" 2>/dev/null || true)"
     if [[ -z "$b" && "$t" == agy && -x "$HOME/.local/bin/agy" ]]; then b="$HOME/.local/bin/agy"; fi
+    if [[ -z "$b" && "$t" == grok ]]; then
+      if [[ -x "$HOME/.local/bin/grok" ]]; then b="$HOME/.local/bin/grok"; elif [[ -x "$HOME/.grok/bin/grok" ]]; then b="$HOME/.grok/bin/grok"; fi
+    fi
     if [[ -z "$b" ]]; then ck_kv login "$t" missing -; continue; fi
     if [[ "$logins" != 1 ]]; then ck_kv login "$t" unknown "no runner core, and an ssh session cannot read the login keychain"; continue; fi
     rc=0
@@ -129,6 +136,12 @@ checks() {
         if [[ $rc -eq 0 ]]; then ck_kv login agy ok -
         elif grep -qi 'sign in' <<<"$out"; then ck_kv login agy no "not signed in (run agy once in a terminal)"
         else ck_kv login agy unknown "agy models gave no answer (exit $rc)"; fi ;;
+      # (`grok models` lists the models, headed "You are not authenticated." with no sign-in, exit 0)
+      grok)
+        out="$(cd / && ck_run 20 "$b" models </dev/null 2>&1)" || rc=$?
+        if grep -qi 'not authenticated' <<<"$out"; then ck_kv login grok no "not signed in (run grok login there)"
+        elif [[ $rc -eq 0 ]]; then ck_kv login grok ok -
+        else ck_kv login grok unknown "grok models gave no answer (exit $rc)"; fi ;;
       gh) if ck_run 20 "$b" auth status >/dev/null 2>&1; then ck_kv login gh ok -; else ck_kv login gh no "gh auth status failed"; fi ;;
     esac
   done

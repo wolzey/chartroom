@@ -121,6 +121,11 @@ prompt_look() { # <id> <runner> <agent> <live> <screen>
 steer_guard() { # <runner> <id>
   local r="$1" id="$2" what agent
   agent="$(backend_agent "$id")"
+  # grok says it is blocked itself (OSC 7501, to hc and herdr alike): its dialogs are never typed into.
+  if [[ "$agent" == grok ]]; then
+    [[ "$("${r}_live" "$id" 2>/dev/null)" != blocked ]] || die "the agent is blocked at a dialog (grok is waiting on an approval or a question); answer it first (chartroom attach $id), then steer again"
+    return 0
+  fi
   [[ "$agent" =~ ^(codex|agy)$ ]] || return 0
   what="$(screen_prompt "$id" "$agent" "$("${r}_screen" "$id" 2>/dev/null || true)")"
   if [[ -z "$what" && "$r" == tmux ]] && codex_title_prompt "$(tmux_title "$id")"; then what="$CODEX_TITLE_WHAT"; fi

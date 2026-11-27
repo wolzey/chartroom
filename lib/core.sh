@@ -212,6 +212,8 @@ load_config() {
   cfg_set CR_WATCH_HC_INTERVAL WATCH_HC_INTERVAL '' 60
   # Diagnostic order for explicit-backend alternatives. Automatic selection is full-session
   # balancing in lib/spread.sh; this order cannot enable a headless fallback.
+  # grok is in no order and never picked automatically: it runs only when a task's --backend
+  # names it (the commander picks when).
   cfg_set CR_BACKEND_ORDER BACKEND_ORDER '' 'hc:claude hc:codex hc:agy herdr:claude herdr:codex herdr:agy cmux:claude cmux:codex tmux:claude tmux:codex headless:codex headless:claude command'
   CR_BACKEND_ORDER="${CR_BACKEND_ORDER//,/ }"
   cfg_set CR_HARNESS HARNESS '' generic

@@ -208,3 +208,38 @@ review_runner() {
   check_verdict 'Verdict: Not clean: P1 x' rework
   check_verdict 'Verdict: Rework: clean once P1 is fixed' rework
 }
+
+@test "grok is never picked automatically: not by spread_pick, the automatic dispatch, doctor or the default order" {
+  # The picker itself: grok has the fewest live tasks and is listed available, and still loses.
+  counts='[{"agent":"grok","live":0},{"agent":"codex","live":5},{"agent":"claude","live":9}]'
+  run bash -c 'source "$1/lib/spread.sh"; spread_pick "$2" "$3" 0' _ "$REPO_ROOT" "$counts" '["grok","codex","claude"]'
+  [ "$status" -eq 0 ]; [ "$output" = codex ]
+  run bash -c 'source "$1/lib/spread.sh"; spread_pick "$2" "$3" 0' _ "$REPO_ROOT" "$counts" '["grok"]'
+  [ "$status" -ne 0 ]; [ -z "$output" ]
+  # A machine where grok is the only signed-in, usable agent: automatic work finds nothing.
+  use_fake hc grok
+  export FAKE_HC_DIR="$BATS_TEST_TMPDIR/hc"
+  mkdir -p "$FAKE_HC_DIR"
+  core_up
+  run cr doctor --json
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.backends[]|select(.backend=="hc:grok").available' <<<"$output")" = true ]
+  [ "$(jq -r '.auto' <<<"$output")" = null ]
+  [ "$(jq -r '.order | map(select(endswith(":grok"))) | length' <<<"$output")" = 0 ]
+  id="$(new_task)"
+  run cr dispatch "$id" --dry-run
+  [ "$status" -ne 0 ]; [[ "$output" == *"no backend available"* ]]; [[ "$output" != *"hc:grok"* ]]
+  # Named, it is usable: the refusal above is the picker's, not a broken grok.
+  named="$(new_task --backend hc:grok)"
+  run cr dispatch "$named" --dry-run
+  [ "$status" -eq 0 ]; [[ "$output" == *"hc:grok"* ]]
+  # With every agent signed in and grok the least busy, the pick is still not grok.
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$BIN/codex"
+  printf '#!/usr/bin/env bash\necho '\''{"loggedIn":true}'\''\n' >"$BIN/claude"
+  chmod +x "$BIN/codex" "$BIN/claude"
+  new_task --backend hc:codex >/dev/null; new_task --backend hc:claude >/dev/null
+  run cr dispatch "$id" --dry-run
+  [ "$status" -eq 0 ]; [[ "$output" == *"hc:c"* ]]; [[ "$output" != *"hc:grok"* ]]
+  run cr doctor --json
+  [[ "$(jq -r '.auto' <<<"$output")" != *grok* ]]
+}

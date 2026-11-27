@@ -1,23 +1,35 @@
 # shellcheck shell=bash
 # agents.sh - how to start each agent CLI, independent of where it runs.
 #
-# Agents: claude (Claude Code), codex (Codex CLI), agy (Antigravity CLI). Every function here
-# prints arguments one per line so callers can `mapfile` them without word-splitting.
+# Agents: claude (Claude Code), codex (Codex CLI), agy (Antigravity CLI), grok (xAI's Grok Build).
+# Every function here prints arguments one per line so callers can `mapfile` them without
+# word-splitting.
 
-KNOWN_AGENTS='claude|codex|agy'
+KNOWN_AGENTS='claude|codex|agy|grok'
 
 # agy runs only as a full session: in hc, in herdr, or on a node's hc. Its headless mode (-p) is
 # not a worker (the commander's rule: workers run as full sessions), and the generic tmux/cmux
 # path reads Claude's and Codex's screens, not agy's.
 AGY_RUNNERS='hc|herdr|node'
+# grok likewise (lib/agents.sh, grok section): full sessions only, never headless.
+GROK_RUNNERS='hc|herdr|node'
 agent_runs_on() { # <agent> <runner>: 0 when chartroom runs that agent on that runner
-  [[ "$1" != agy || "$2" =~ ^($AGY_RUNNERS)$ ]]
+  case "$1" in
+    agy) [[ "$2" =~ ^($AGY_RUNNERS)$ ]] ;;
+    grok) [[ "$2" =~ ^($GROK_RUNNERS)$ ]] ;;
+    *) return 0 ;;
+  esac
 }
 
-# (agy installs itself in ~/.local/bin, which a GUI launcher's PATH may lack)
+# (agy installs itself in ~/.local/bin, which a GUI launcher's PATH may lack; grok's installer
+# puts it in ~/.grok/bin and links it from ~/.local/bin when that is on PATH)
 agent_bin() {
   local b; b="$(bin_of "$1")"
   [[ -z "$b" && "$1" == agy && -x "$HOME/.local/bin/agy" ]] && b="$HOME/.local/bin/agy"
+  if [[ -z "$b" && "$1" == grok ]]; then
+    if [[ -x "$HOME/.local/bin/grok" ]]; then b="$HOME/.local/bin/grok"
+    elif [[ -x "$HOME/.grok/bin/grok" ]]; then b="$HOME/.grok/bin/grok"; fi
+  fi
   printf '%s' "$b"
 }
 
@@ -92,6 +104,89 @@ agy_args() { # <id>
   fi
   agy_guard_hooks "$1"
   printf '%s\n' --add-dir "$(phys_dir "$(tdir "$1")")"
+}
+
+# ---------------------------------------------------------------- grok (xAI's Grok Build)
+#
+# Built against grok 1.0.92 and its own docs (~/.grok/docs/user-guide; references/backends.md).
+# grok reports its state over OSC 7501 to Herdr 2, which hc is (verified in hc 0.1.21: a grok
+# at its sign-in screen reads `blocked`, kind auth, "Sign in to Grok"; its docs: working, waiting
+# on an approval, a question or a sign-in, done, failed). So, as for agy, hc sees its prompts and
+# counts its turns, and herdr starts it itself (`--kind grok`, herdr 0.9.5). It is a crew agent
+# only when a task's --backend names it: grok is in no default order (the commander picks it).
+# What chartroom does not give it: no permission cards, grants or holds (its own approvals come up
+# as `agent: awaiting-input`), its prompts are not checked against their text (no prompt hook), and
+# it is never parked (grok can resume a session by id, but chartroom's park is Claude's only).
+GROK_LIMITS="only the pattern-kill guard hook: its own approvals wake the XO as awaiting-input, but no permission cards or grants; steers are taken but not checked against their text; never parked (chartroom does not resume grok sessions); it also runs your own Claude hooks (grok reads ~/.claude/settings.json)"
+
+# The pattern kill guard for grok. grok loads hooks only from user-wide places (~/.grok/hooks/*.json,
+# ~/.grok/hooks-paths, config.toml, the Claude and Cursor files) and from the project itself, never
+# from an --add-dir folder, and a GROK_CONFIG overlay may not add hooks. So chartroom keeps one file of
+# its own in ~/.grok/hooks, rewritten at every grok launch, whose command does nothing unless the
+# launcher's CHARTROOM_TASK is set: the commander's own grok sessions are untouched, and nothing
+# goes in the worktree. grok sends PreToolUse {toolName: run_terminal_command, toolInput.command}
+# and takes {hookSpecificOutput.permissionDecision: deny} (its docs, 10-hooks.md); it runs a user
+# hook only in a folder it trusts, which a chartroom worktree is (--trust, grok_args). One side effect
+# on a machine that had no user hook for grok before (no ~/.grok/hooks, no hooks in ~/.claude/settings.json):
+# grok's docs say that while any user hook exists, its folder trust asks in every new folder, the
+# commander's own sessions there included.
+grok_guard_file() { printf '%s/hooks/chartroom-guard.json' "${GROK_HOME:-$HOME/.grok}"; }
+grok_guard_hooks() {
+  local f c
+  f="$(grok_guard_file)"; mkdir -p "${f%/*}"
+  c="[ -n \"\${CHARTROOM_TASK:-}\" ] || exit 0; exec $(printf '%q' "$CR_BIN") hook - guard"
+  jq -n --arg c "$c" '{hooks: {PreToolUse: [{matcher: "run_terminal_command", hooks: [{type: "command", command: $c, timeout: 30}]}]}}' >"$f.tmp.$$" && mv -f "$f.tmp.$$" "$f"
+}
+
+# Signed in? `grok models` lists the models, headed "You are not authenticated." when there is no
+# sign-in (exit 0 either way; grok 1.0.92). It never opens a browser: a grok session started signed
+# out does (its sign-in screen), which is why a launch asks first. grok keeps its sign-in in
+# ~/.grok/auth.json, a file (its docs, 02-authentication.md), not the macOS keychain, so unlike agy
+# an ssh session reads it as the login session does. Asked once per process. Empty: signed in.
+GROK_SIGN_IN="grok login in a terminal on this machine and finish the browser sign-in, or grok login --device-auth over ssh"
+GROK_LOGIN_WHY="" GROK_LOGIN_ASKED=""
+grok_login_why() {
+  if [[ -z "$GROK_LOGIN_ASKED" ]]; then
+    local b out rc=0
+    GROK_LOGIN_ASKED=1; b="$(agent_bin grok)"
+    if [[ -z "$b" ]]; then GROK_LOGIN_WHY="grok not on PATH"
+    else
+      if command -v perl >/dev/null 2>&1; then out="$(cd / && perl -e 'alarm shift; exec @ARGV or exit 127' 20 "$b" models </dev/null 2>&1)" || rc=$?
+      else out="$(cd / && "$b" models </dev/null 2>&1)" || rc=$?; fi
+      if grep -qi 'not authenticated' <<<"$out"; then GROK_LOGIN_WHY="grok is not signed in here (run $GROK_SIGN_IN)"
+      elif [[ $rc -ne 0 ]]; then GROK_LOGIN_WHY="grok models failed (exit $rc): $(grep -v '^[[:space:]]*$' <<<"$out" | head -1 | cut -c1-120)"; fi
+    fi
+  fi
+  [[ -z "$GROK_LOGIN_WHY" ]] || { printf '%s' "$GROK_LOGIN_WHY"; return 1; }
+}
+
+# grok's flags for a task: its model (-m) and effort (--reasoning-effort), its permission mode (meta
+# permission, in grok's own words: default, acceptEdits, auto, dontAsk, bypassPermissions, plan;
+# empty is grok's own default, auto in its terminal UI), --trust for a worktree chartroom created itself (the
+# folder trust its dialog would ask for, which chartroom answers only for its own worktrees: any
+# other folder's dialog is the commander's; grok records the trust for the repository's main
+# checkout, seen live, so the commander's own grok sessions there skip the dialog too), and no
+# update check. No --add-dir for the task folder:
+# grok 1.0.92 refuses one ("additionalDirectories is not supported: a session works only in its
+# cwd") and the session never starts. Its sandbox is off by default, so the worker reaches its brief,
+# report and event helper by their paths, as its permission mode allows. The update check:
+# grok checks for one at each launch ([cli] auto_update), and a worker must not stop for it, as
+# Codex's would (--no-auto-update is the per-session switch; grok's own sessions still update).
+# A launch asks this first, in its own shell: a die inside grok_args (read through `mapfile < <(...)`)
+# would not stop it.
+grok_mode_check() { # <id>
+  local p; p="$(meta "$1" permission)"
+  [[ -z "$p" || "$p" =~ ^(default|acceptEdits|auto|dontAsk|bypassPermissions|plan)$ ]] || die "grok has no permission mode '$p' (its modes: default, acceptEdits, auto, dontAsk, bypassPermissions, plan)"
+}
+grok_args() { # <id>
+  local m e p
+  printf '%s\n' --no-auto-update
+  m="$(task_model "$1" grok)"; e="$(meta "$1" effort)"; p="$(meta "$1" permission)"
+  [[ -n "$m" ]] && printf '%s\n' -m "$m"
+  [[ -n "$e" ]] && printf '%s\n' --reasoning-effort "$e"
+  if [[ -n "$p" ]]; then grok_mode_check "$1"; printf '%s\n' --permission-mode "$p"; fi
+  [[ "$(meta "$1" worktree_created)" == 1 ]] && printf '%s\n' --trust
+  grok_guard_hooks
 }
 
 # Codex sandbox per task: meta "sandbox" wins; else scouts get workspace-write (network on,
@@ -247,6 +342,7 @@ interactive_argv() { # <id> <agent> <hooks> [session|resume]
       [[ "$hooks" == 1 ]] && codex_notify_args "$id"
       ;;
     agy) agy_args "$id" ;; # (only the guard hook: hc and herdr read its state themselves)
+    grok) grok_args "$id" ;; # (likewise: hc and herdr read its state; its one hook is the guard)
     *) die "unknown agent '$agent'" ;;
   esac
   return 0

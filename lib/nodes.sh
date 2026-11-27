@@ -491,7 +491,7 @@ cmd_node() {
     update) cmd_node_update "$@" ;;
     ping) cmd_node_ping "$@" ;;
     prepare) cmd_node_prepare "$@" ;;
-    # (internal: the device agent's look at its guest agy workers, lib/guest.sh guest_agy_look_all)
+    # (internal: the device agent's look at its guest agy and grok workers, lib/guest.sh guest_agy_look_all)
     agy-look)
       [[ -n "${CHARTROOM_GUEST:-}" ]] || die "node agy-look runs only in a guest home on a device (the brain's watch looks at its own)"
       local m id
@@ -499,7 +499,7 @@ cmd_node() {
       for m in "${TASK_METAS[@]+"${TASK_METAS[@]}"}"; do
         id="${m%/meta.json}"; id="${id##*/}"
         is_closed "$id" && continue
-        [[ "$(meta "$id" backend)" == hc:agy && -n "$(meta "$id" dispatched)" ]] || continue
+        [[ "$(meta "$id" backend)" =~ ^hc:(agy|grok)$ && -n "$(meta "$id" dispatched)" ]] || continue
         hc_agy_look "$id"
       done ;;
     # (internal: the device agent's usage refresh & limit-stop check on guest workers)
