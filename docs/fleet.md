@@ -11,7 +11,7 @@ commands and settings may still change in a minor release. Start with the
 ```
   laptop (client home)          ── ssh ──▶  brain: an always-on Mac
     XO session, a copy of the                 homes (~/chartroom/<name>), the workers,
-    records, the dashboard tunnel             the app on 127.0.0.1:4516
+    records                                   the app on 127.0.0.1:4516
                                                    ▲            ▲
   phone ── HTTPS (Tailscale Serve, your login) ─────┘            │ HTTPS heartbeats,
                                                                  │ every 15 s
@@ -78,7 +78,6 @@ on the laptop too.
 |---|---|
 | Brain, homes, workers | Work. Nothing on one machine needs a network. |
 | Client home on a laptop | Works over any ssh you can reach with no prompt (a LAN, a VPN, a jump host). |
-| Dashboard from another device | Works on a LAN, bound to one address of the machine and opened with its access token. See [docs/dashboard.md](dashboard.md#on-the-network-other-devices). |
 | The app off the brain | Does not work. The app trusts only Tailscale Serve's login header. `--no-auth` serves this machine's own browser at 127.0.0.1 and nothing else. |
 | Devices | `device join` takes only an `https://` brain URL, or `http://127.0.0.1` on the brain itself. Another HTTPS reverse proxy in front of the app could carry the device routes, which a device token alone opens, but nobody has tried it. |
 | Phone push | Needs the app, so needs Tailscale. |
@@ -99,7 +98,7 @@ Make a home for each company or client you work for (or keep the one `~/.chartro
 installer made):
 
 ```bash
-CHARTROOM_HOME=~/chartroom/acme chartroom init --name acme   # its own workspace and dashboard port
+CHARTROOM_HOME=~/chartroom/acme chartroom init --name acme   # its own workspace
 chartroom homes                                               # every home on this machine
 cd ~/chartroom/acme && claude                                 # that home's XO, here on the brain
 ```
@@ -160,7 +159,8 @@ cd ~/chartroom/acme && claude                                # the XO, on the la
 - `brain link` refuses a home that already has tasks: moving records is not built yet. Link a
   new, empty home.
 - The brain finds the home by its registered name (`--as <name>` when it differs there).
-- `chartroom dashboard open` on the laptop opens the brain's dashboard through an ssh tunnel.
+- `chartroom dashboard open` on the laptop opens the brain's app at its tailnet address
+  (step 3), so the laptop must be on the tailnet. Nothing is tunnelled.
 - `chartroom brain unlink` makes the home local again. The copy stays, as a snapshot.
 
 [docs/client-homes.md](client-homes.md) has the wire, the copy, and what runs where.
@@ -309,14 +309,142 @@ each one to the brain's commit, and `chartroom node ping mini` checks the round 
 | What | Where |
 |---|---|
 | A task: its events, and a headless or command worker's output | `<home>/tasks/<id>/events.log`, `<home>/tasks/<id>/output.log` |
-| The dashboard | `<home>/.dashboard.log` |
 | The app server (and push) | `~/.config/chartroom/app.log`, beside the config file |
 | A device's agent | `~/.local/state/chartroom/device/agent.log` on the device (`$XDG_STATE_HOME`) |
 | What a client home last heard from the brain | `chartroom brain status` |
 
+## Several machines: nodes
+
+A **node** is a machine that can take crew work: this one, any device that reports to the brain,
+and any other you reach over ssh. `chartroom nodes` reads what each has room for and what it can
+run; `dispatch` places work by it ([placement](multi-machine.md#5-placement)).
+
+```bash
+chartroom nodes                      # every node, this machine first
+chartroom nodes --project ~/src/shop # ... and which of them have a checkout of that project
+chartroom nodes --json
+chartroom node init --cpu 100 --battery allow   # on a machine: make it a node, with its own limits
+chartroom node probe [--json]        # this machine's facts, as `nodes` reads them
+```
+
+```
+NODE         CONTACT    ROLE  CPU USED    MEM USED    SIZE          DISK      POWER              IDLE  CREW        LOGINS                    TOOLS                      CHECKOUTS  UTIL
+desk (here)  ok         node  31% of 80%  64% of 75%  28 cores 96G  22% free  AC                 2m    4 +3 other  claude:ok codex:ok gh:ok  13 ok                      42         0.88
+mini         online 4s  node  6% of 90%   22% of 75%  16 cores 48G  26% free  AC (battery 100%)  1h    0           claude:ok codex:ok gh:ok  11 ok error:node down:docker  131      0.34
+mini: node is broken: /opt/homebrew/bin/node: dyld[812]: Library not loaded: /opt/homebrew/opt/simdjson/lib/libsimdjson.34.dylib
+a node at either limit (the % after "of") takes no new task; chartroom node limits <name|here> 80/70 sets its CPU/memory limits. UTIL: how full it would be with one more worker
+```
+
+- **Which machines.** An enrolled device's row is its last heartbeat (below). Machines not
+  enrolled come from `CHARTROOM_NODES` (`label[=ssh-target] ...`, or `none`), else the radar's
+  list: `CHARTROOM_RADAR_MACHINES`, else herdr's enabled saved machines. This machine is always
+  first. `--ssh` reads the ssh list alone.
+- **A node opts in.** `chartroom node init`, run on that machine, writes its limits to
+  `~/.config/chartroom/node` (`CHARTROOM_NODE_CONFIG` moves it): the share of its CPU and memory that may
+  be in use, whether it may work on battery, the priority its workers will get, and where
+  its project checkouts are. It makes no home: a node has no XO. Without that file a machine is
+  listed as "not a node" and will never be given work. `CHARTROOM_NODE_ACCEPT=off` in it
+  withdraws the machine at once.
+- **Read-only, over ssh.** For a machine read over ssh, the only thing that runs there is the
+  probe itself, `lib/nodeprobe.sh`, sent over `ssh -o BatchMode=yes <target> 'bash -s'`: it needs
+  nothing installed there (not even chartroom), writes nothing, and runs on a Mac's own bash 3.2.
+  Each machine is probed side by side, and one that does not answer within
+  `CHARTROOM_NODES_TIMEOUT` seconds (45) reads `timeout` (its ssh is ended; the probe there stops
+  by its own bounds, at most about 90 seconds). ssh's own failures read `unreachable`, or `auth`
+  when ssh would need you (a key, a host key, a Tailscale check).
+- **Tools and logins are checked where a worker would run.** A tool counts when it works, not
+  when its binary is there (`docker` needs its daemon to answer), and a broken one is named with
+  its binary and the first line it printed. Tools are looked up on the PATH of your interactive
+  login shell (`$SHELL -lic`: version managers such as mise set theirs up only there), the one a
+  worker launched there gets, not the thin PATH of an ssh session; `path_source` says which was
+  used (`CHARTROOM_LOGIN_SHELL` names another shell, or `none`). On a Mac, an ssh session cannot
+  read the login keychain, so claude, codex and gh would all read logged out: the probe runs those
+  checks inside the machine's hc core (`hc exec`), which runs in the login session, and only when
+  that core already answers (it never starts one). With no core, logins read `unknown` over ssh.
+- **CPU USED and MEM USED** are measured, against the node's two limits (`64% of 80%`): the busy share of
+  all cores over the last minute, and Activity Monitor's Memory Used. A node at or over either
+  takes no new task. `chartroom node limits` shows them, and `chartroom node limits <name|here> 80/70`
+  sets a node's ([how they are measured](multi-machine.md#5-placement)).
+- **CREW** is chartroom's own workers there (hc terminals carrying a task), for information. An XO or
+  your own agent session is shown apart (`+3 other`).
+- **UTIL** is how full the node would be with one more worker, against its own limits: the larger of
+  (CPU used + `CHARTROOM_WORKER_CPU` cores) / CPU limit and (memory used + `CHARTROOM_WORKER_MEM_GB`) /
+  memory limit. `dispatch` sends each new task where it is lowest.
+- **On macOS, limits are admission control,** not hard caps: there are no cgroups. A worker's own
+  builds can still push a node past its share; placement then sends new work elsewhere.
+
+## Devices: machines that report to the brain
+
+A device runs chartroom's device agent, which sends its probe to the brain's app server every 15
+seconds (setting one up: [step 5](#5-other-macs-as-devices)). The brain never reaches out to it,
+holds no key to it, and asks it to open no port. Its row in `nodes` and Fleet is its last
+heartbeat.
+
+- **Its own revocable token.** Only the token's sha256 is kept on the brain. On macOS the agent is a
+  LaunchAgent in the login session, and the token is in the login keychain; elsewhere a 0600
+  file. A token opens that device's routes only, never the app.
+- **Commands** reach a device by long-poll: its agent holds one request open to the brain's app
+  server and runs what comes, one at a time; the brain still opens nothing to it. That carries
+  pinned work ([Work on your devices](#work-on-your-devices)), steer, stop, peek and close, and
+  `node update`, which fast-forwards the device's chartroom to the brain's commit (only along its
+  own `origin/main`) and restarts its agent onto it.
+- **Status:** `online`, `stale` (no heartbeat for 45 s), `lost` (10 minutes, counted only while
+  the brain's app server is up), `new`, `revoked`. `chartroom doctor` lists the devices on the
+  brain, and the join and the agent on a device.
+
+The protocol is in [docs/multi-machine.md §12](multi-machine.md#12-devices-the-brain-never-reaches-out).
+
+## The fleet radar
+
+`chartroom radar` lists every open task on every home of one machine, in six sectors by state,
+plus each home's XO (from herdr, marked "untracked: no events"). It is a terminal view, and the
+Herdr app's Tasks panel reads its JSON. The app's Fleet shows every session on every machine.
+
+```bash
+chartroom radar                             # this machine: each sector, then its tasks
+chartroom radar --json                      # one machine's records
+chartroom radar --machine mini --ssh mini   # another machine's, read-only over ssh
+chartroom radar machines                    # the machines it reads, and how they were found
+```
+
+| Sector | States | |
+|---|---|---|
+| **Decision** | `decision` | asked for your call |
+| **Blocked** | `blocked`, `awaiting-input` | the worker said it cannot proceed, or the agent is stopped at a permission or question prompt |
+| **Adrift** | `overdue`, `stopped-silent`, `lost` | waited past its window; stopped without reporting; its session is gone |
+| **Under way** | `working` | working (marked uncertain when its backend could not be checked) |
+| **Holding** | `waiting` | its own `waiting` report, inside its window; or, marked *inferred*, a last message that says it waits on someone |
+| **Docked** | `review`, `done`, `failed` | a report to read (`review`: a worker's done, awaiting your accept or close); a failure |
+
+Telling *blocked* from *waiting* is the point: a worker waiting inside its own window needs
+nothing, and one that is blocked needs someone.
+
+**Machines.** Every record names its machine.
+
+- **This machine.** Its label is `CHARTROOM_MACHINE_NAME`, set in the environment, the home's
+  config or the config file. Without it, the label is the host name. This machine's homes are
+  read with the same `status --json` the CLI uses.
+- **Other machines.** `radar machines` lists them: `CHARTROOM_RADAR_MACHINES`
+  (`label[=ssh-target] ...`, or `none`), else herdr's enabled saved machines (`herdr machine
+  list`). One is read over `ssh -o BatchMode=yes` with `chartroom status --json --all-homes`, and
+  its XOs come from `herdr --machine <m> agent list`.
+- **Read-only, always.** Nothing ever runs on another machine except that status call, its
+  `chartroom peek <id>`, and `cat` of one of the task files (`brief.md`, `report.md`, `plan.md`,
+  `final.md`, `events.log`). Each is built only from ids and home paths that machine reported.
+  (`chartroom nodes` adds one more, also read-only: its probe script, [above](#several-machines-nodes).)
+- **An older chartroom** ignores `--all-homes` and answers for its default home only. The radar
+  tells this from the shape of the answer, since the version string may not have changed, and
+  says so.
+- **An unreachable machine** reads `unreachable`, with ssh's own message.
+
+A state the table does not know lands in Adrift, never hidden. `drafting` and closed tasks are not
+listed.
+
 ## How this guide was checked
 
-Each command above was run before it went in, except those named at the end of this section. Most ran in throwaway homes on one Mac: a brain,
+Each command in steps 1 to 7 was run before it went in, except those named at the end of this
+section. The reference sections after Day two (nodes, devices, the fleet radar) moved here from
+the retired dashboard's page and were not run again for this guide. Most ran in throwaway homes on one Mac: a brain,
 a device and a laptop home, each with its own empty `HOME`. The app server ran on a spare port.
 The device kept its token in a 0600 file and loaded no LaunchAgent (`CHARTROOM_KEYCHAIN=none`,
 `CHARTROOM_LAUNCHCTL=none`, then `chartroom device run --once`). The laptop reached the brain
@@ -324,7 +452,8 @@ through the test suite's loopback ssh. The keychain, LaunchAgent and Tailscale S
 checked, read-only, on a real fleet: a brain whose app is on Tailscale Serve with push on, and
 two Macs joined as devices, each running its agent with its token in the keychain. The
 admin-console steps, the phone's own steps and the access-rule example were not run. Neither
-were `chartroom dashboard open` from a client home (its ssh tunnel) or turning push on: push was
+were `chartroom dashboard open` from a client home (which now opens the brain's app at its
+tailnet address) or turning push on: push was
 only read, already on, on the real fleet. Pinning (`node init --force --project-roots` on a joined
 device, `new --node`, `set node=here`) was run in the throwaway homes. `dispatch` to a device,
 `node update` and `node ping` need the device's agent running as a service with hc signed in, so

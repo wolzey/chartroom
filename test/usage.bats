@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # Subscription usage awareness (lib/usage.sh): real sample parsing, exhaustion skipping,
-# doctor/nodes reporting, worker limit-stop detection, chartroom move, and dashboard usage data.
+# doctor/nodes reporting, worker limit-stop detection, chartroom move, and the usage the board and the app show.
 
 load test_helper
 
@@ -643,7 +643,7 @@ JSON
   [ "$status" -ne 0 ]
 }
 
-@test "dashboard JSON and HTML expose subscription usage with per-machine dispatched live worker counts" {
+@test "the board and the app's snapshot expose subscription usage with per-machine dispatched live worker counts" {
   local ep5; ep5="$(jq -rn '(now | floor) + 5400')"
   jq --argjson e5 "$ep5" '.rate_limits.five_hour.used_percentage = 82.0 | .rate_limits.five_hour.resets_at = $e5 | .rate_limits.seven_day.used_percentage = 44.0 | .rate_limits.seven_day.resets_at = ($e5 + 86400)' \
     "$REPO_ROOT/test/fixtures/usage/claude-statusline.json" | cr usage record claude --machine desk --plan max_20x
@@ -664,9 +664,13 @@ JSON
   [ "$(jq -r '.usage[] | select(.agent=="claude" and .machine=="mini") | .live_workers' <<<"$output")" = 0 ]
   [ "$(jq -r '.usage[] | select(.agent=="claude" and .machine=="desk") | .plan' <<<"$output")" = max_20x ]
 
-  # Dashboard HTML contains the usage panel markup and renderer.
-  grep -q 'id="usage"' "$REPO_ROOT/lib/dashboard/index.html"
-  grep -q 'function renderUsage' "$REPO_ROOT/lib/dashboard/index.html"
+  # The app reads the same rows from each home's snapshot, and shows them on its usage page
+  # (app/src/usage.js; the merge across homes and what each row says: test/js/app-model.test.js).
+  local board="$output"
+  run cr app snapshot --json
+  [ "$status" -eq 0 ]
+  [ "$(jq -c '[.usage[] | [.agent, .machine, .state, .live_workers, .plan]]' <<<"$output")" = "$(jq -c '[.usage[] | [.agent, .machine, .state, .live_workers, .plan]]' <<<"$board")" ]
+  grep -q 'if (p\[0\] === "usage") return { name: "usage" }' "$REPO_ROOT/app/src/main.js"
 }
 
 @test "real redacted Claude and Codex response shapes ignore scoped buckets, extra_usage, and mismatched credentials" {

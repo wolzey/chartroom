@@ -57,7 +57,7 @@ core_up() {
   [ "$status" -eq 0 ]; [ "$(jq '.[0].result | map(.live) | add' <<<"$output")" -eq 6 ]
   run cr dashboard --json --all-homes
   [ "$status" -eq 0 ]; [ "$(jq '.[0].result.agents | length' <<<"$output")" -eq 3 ]
-  run cr dashboard --all-homes
+  run cr board --all-homes
   [ "$status" -eq 0 ]; [[ "$output" == *"agents:"* ]]
 }
 

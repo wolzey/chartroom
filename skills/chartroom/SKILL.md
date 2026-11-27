@@ -68,7 +68,7 @@ Run this once at the start of every session, before taking new work:
    - `decision`, `blocked`: the commander still owes an answer, or you do. Queue it.
    - `review`: the worker reported `done` and the work waits on the commander's look. Read
      `report.md` and check the evidence (see Verify). Queue the outcome. It stays in `review`
-     (on the board, the dashboard and the panel) until the commander's word: never accept or
+     (on the board, in the app's Needs me and on the panel) until the commander's word: never accept or
      close it on your own.
    - `done`: the commander accepted it (`chartroom accept`) but it is not closed yet: close it
      once it has landed.
@@ -88,8 +88,8 @@ Run this once at the start of every session, before taking new work:
    Relay its one summary line; queue its "needs a human" lines with the other decisions.
 4. Start waiting for wakes (see Supervision) whenever any task is in flight.
 5. If anything needs the commander, open with a short digest (the `bearings` format).
-   `/continue <id>` (the `continue` skill) jumps to one item by the short id the dashboard
-   shows; `chartroom resolve <id>` maps it back.
+   `/continue <id>` (the `continue` skill) jumps to one item by the short id the board and the
+   app show; `chartroom resolve <id>` maps it back.
    Otherwise say you're ready, in one line.
 
 A restart is a non-event. If you lose context mid-session (including a compaction), do the
@@ -325,17 +325,19 @@ finish, rollback, reap) needs the commander's word, and the triage's `decisions.
 fill. While a home is frozen (`.migrating` in it), `new`, `dispatch`, `steer` and `attach` refuse
 there: say so, and wait for the move to finish or roll back, rather than working around it.
 
-The dashboard shows the same fleet in a browser: `waiting` tasks under In progress, overdue
-ones under On hold. `chartroom dashboard open` (or the `dashboard` skill, `/dashboard`) opens
-it, starting it if needed; `chartroom board` prints the same lanes in the terminal, short id
-first. Every task has a page of its own there, `/task/<home>/<id>`: the commander's intent, the
-latest decision or blocker, every event as a timeline, `report.md` rendered, and its pane. Point
-the commander at it rather than pasting a long event.
+The app shows the same fleet in a browser and on the commander's phone, every home at once (the
+old web dashboard is retired): **Needs me** for what waits on them, the board, **Fleet** for every
+machine and session, and **Usage** for what each subscription has left. `chartroom dashboard
+open` (or the `dashboard` skill, `/dashboard`) opens it; `chartroom board` prints the lanes in
+the terminal, short id first (`waiting` tasks under In progress, overdue ones under On hold).
+Every task opens as a ticket in the app: its question, PRs, the brief, plan and report, its pages
+and drafts, the worker's terminal and the activity. Point the commander at the ticket rather than
+pasting a long event.
 
 **How an event should read** (the brief's protocol asks workers for it; hold your own steers to
-it too, since the timeline shows them as "XO → worker"): a headline first, at most ~140
-characters, saying what happened and what is needed. Details follow under labels the dashboard
-shows as blocks: `Cause:`, `Options: (1) ... (2) ...` with one marked RECOMMENDED, `Need:`,
+it too, since the ticket's activity shows them): a headline first, at most ~140
+characters, saying what happened and what is needed. Details follow under labels the app
+reads as blocks: `Cause:`, `Options: (1) ... (2) ...` with one marked RECOMMENDED, `Need:`,
 `Report:`. A worker whose events are walls of text gets one steer asking for the headline and
 labels, with the long part in report.md.
 
@@ -390,7 +392,7 @@ others read between steps. `close` only marks it closed; its directory is never 
 - **Inbox.** Chat does not survive compaction; `inbox.md` in the home does. When you ask the
   commander a question you are waiting on, add it with
   `chartroom inbox add --project <project> "<question>"` (a dated line under "Waiting on the
-  commander", labelled `[<project>]`, with a stable short id the dashboard shows; after
+  commander", labelled `[<project>]`, with a stable short id the board shows; after
   hand-editing that section, run `chartroom inbox tag`, and `chartroom inbox project <i-id>
   <project>` labels an item that has none). When the commander approves something in chat that is not yet written into a
   task brief, add a dated line under "Approvals given in chat, not yet in a brief". Remove the
@@ -469,11 +471,11 @@ others read between steps. `close` only marks it closed; its directory is never 
   `chartroom artifact add <task-or-inbox-id> --kind message|runbook|note --title "<one line>" <file|->`.
   Attach it to the inbox item when the commander must act on it, else to its task. It prints a
   ref (`21ba/reply-to-review`): give that and a one-line summary (the text too, if short); the
-  dashboard card shows it as a chip that opens and copies it, and `chartroom artifact copy <ref>`
-  copies it. A runbook is the commands themselves, ready to paste. To revise, `add` the same
+  app shows it on the item and its ticket under "Pages and drafts", with a Copy button, and
+  `chartroom artifact copy <ref>` copies it. A runbook is the commands themselves, ready to paste. To revise, `add` the same
   title again. Once the commander says it went out or ran, `chartroom artifact done <ref>`.
 - **Pages.** A report the commander will read (findings, a review, an audit, a comparison) is
-  also a page, not a Claude artifact or a wall of chat: HTML they open in the dashboard's
+  also a page, not a Claude artifact or a wall of chat: HTML they read in the app's page
   viewer and print to PDF. `report.md` stays your record; the page is its readable view. The
   brief tells workers to make one (`chartroom artifact add <id> --kind page --title "<one line>"
   --description "<one line>" <file>`) and to name its ref in their `done` event; make one
@@ -483,16 +485,16 @@ others read between steps. `close` only marks it closed; its directory is never 
   written. No scripts and nothing loaded from elsewhere (neither would run or load); images as
   files beside it, which `add` inlines. Never put a secret in a page: `add` refuses one that
   looks like it holds one (`--no-secret-check` only for a false alarm). Give the commander the
-  ref and a line: `chartroom artifact open <ref>` shows it, `chartroom artifact pdf <ref> --out
-  <file>` prints it (headless Chrome; `doctor` says whether there is one), and the dashboard's
-  Pages list has every page with a Download PDF button. `chartroom artifact publish` is the
+  ref and a line: `chartroom artifact open <ref>` shows it in the app, `chartroom artifact pdf
+  <ref> --out <file>` prints it (headless Chrome; `doctor` says whether there is one), and in the
+  app the task's ticket lists it under "Pages and drafts" (⌘K lists every open page), its viewer
+  with a Download PDF button. `chartroom artifact publish` is the
   hook for hosting a page later and refuses for now: nothing is uploaded. Once the commander
   has read a page, `chartroom artifact done <ref>`.
 - **The commander's todo list.** `chartroom todo` is the commander's own list of next steps,
   made from your records: the open Waiting inbox items, the open message and runbook artifacts,
   and the tasks in `decision`, `blocked` or `ready`. It shows under the crew view's band in
-  Claude Code and pi (`/todo`; in Claude Code `/crew todo` too) and atop the
-  dashboard, so keep it true: every question you wait on goes in the inbox, every draft to send
+  Claude Code and pi (`/todo`; in Claude Code `/crew todo` too), so keep it true: every question you wait on goes in the inbox, every draft to send
   or run in an artifact, and what is answered or sent comes off. When the commander asks you to
   remember something for them ("remind me to…", "add to my list"), `chartroom todo add --project
   <project> "<text>"`; a date in the text orders it (`renew the cert by 2026-10-22`). The

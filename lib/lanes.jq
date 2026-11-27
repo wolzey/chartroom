@@ -1,5 +1,5 @@
-# lanes.jq - classify status rows into dashboard lanes. Input: the array of task rows built
-# by dashboard_json (status_rows + dashboard_task_extra). Arguments:
+# lanes.jq - classify status rows into the board's lanes. Input: the array of task rows built
+# by board_json (status_rows + task_extra_json). Arguments:
 #   $inbox    {waiting:[{short_id,date,project,text}], approvals:[...]} from inbox.md, and
 #             relays:[{id,from,at,text,re,project,...}], the open relays from other homes
 #             (lib/relay.sh): not cards, since they are the XO's to weigh, not the commander's
@@ -11,7 +11,7 @@
 #   $home_name  the home's name in the list of homes (lib/homes.sh), "" when it has none
 #   $focus    focus mode's {projects, since, until}, or null (lib/focus.sh)
 #
-# Rules (docs/dashboard.md, "Dashboard", documents the same table):
+# Rules (docs/dashboard.md, "The board", documents the same table):
 #   needs_you    decision, blocked, failed, awaiting-input, review (a worker reported done; it
 #                waits on the commander's accept or close); plus inbox "Waiting ..." items
 #   in_progress  working, drafting, or waiting (a stopped worker inside its `waiting` window;

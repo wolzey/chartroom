@@ -1,7 +1,7 @@
 // chartroom-panel: the commander's live Chartroom board, in a pane beside the chat.
 //
-// It mirrors `chartroom board` and the dashboard: it reads `chartroom board --json` (the board's
-// own lane logic, lib/dashboard/lanes.jq) and draws the same five lanes, in the same order, under
+// It mirrors `chartroom board`: it reads `chartroom board --json` (the board's
+// own lane logic, lib/lanes.jq) and draws the same five lanes, in the same order, under
 // the same names, each card with the board's reason: Needs you (yellow; a worker's finished work
 // awaiting review is there), In progress (green), On hold, Ready for you, Recently finished. It
 // polls on a timer with no model call and keeps the last board visibly STALE on a failure. It
@@ -334,7 +334,7 @@ async function disarm($: EngineInterface) {
   await update($, notice, n => (n && n.endsWith('again to confirm') ? null : n)).catch(() => {})
 }
 
-/** The two state-changing keys: each runs the CLI the XO and the dashboard's commander use. */
+/** The two state-changing keys: each runs the CLI the XO and the app's commander use. */
 const ACTIONS = {
   close: { key: 'c', ask: (sid: string) => `Close ${sid}? press c again to confirm`, argv: (id: string) => ['close', id] },
   complete: { key: 'a', ask: (sid: string) => `Complete ${sid} (accept it as done)? press a again to confirm`, argv: (id: string) => ['accept', id] },

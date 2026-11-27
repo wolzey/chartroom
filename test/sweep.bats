@@ -205,17 +205,18 @@ closed_record() { # <id> [extra-json]
   alive "$stray"; alive "$live"
 }
 
-@test "sweep: a second dashboard for the home is killed, the tracked one kept" {
+@test "sweep: the retired web dashboard's server for this home is stopped, tracked or not; another home's is left alone" {
   a="$(spawn "$BATS_TEST_TMPDIR" bash "$TOOLS/dashboard/server.py" --port 1 --pidfile "$CHARTROOM_HOME/.dashboard.pid")"
   b="$(spawn "$BATS_TEST_TMPDIR" bash "$TOOLS/dashboard/server.py" --port 2 --pidfile "$CHARTROOM_HOME/.dashboard.pid")"
   other="$(spawn "$BATS_TEST_TMPDIR" bash "$TOOLS/dashboard/server.py" --port 3 --pidfile "$BATS_TEST_TMPDIR/elsewhere/.dashboard.pid")"
   echo "$a 1 127.0.0.1" >"$CHARTROOM_HOME/.dashboard.pid"
   json="$(sweep_json)"
-  [ -z "$(item_for "$json" "$a")" ]; [ -z "$(item_for "$json" "$other")" ]
-  [ "$(item_for "$json" "$b" | jq -r '.action + ": " + .reason')" = "apply: a second dashboard for this home (the tracked one is pid $a)" ]
+  [ -z "$(item_for "$json" "$other")" ]
+  [ "$(item_for "$json" "$a" | jq -r '.action + ": " + .reason')" = "apply: the retired web dashboard, still running from before: the app replaces it" ]
+  [ "$(item_for "$json" "$b" | jq -r '.action')" = apply ]
   cr sweep --apply >/dev/null
-  gone "$b"
-  alive "$a"; alive "$other"
+  gone "$a"; gone "$b"
+  alive "$other"
 }
 
 @test "sweep stops a closed task's leftover session; a joined session's directory and a mere mention of a task are never targets" {

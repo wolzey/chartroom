@@ -1,5 +1,5 @@
 # radar.jq - one machine's `chartroom status --json --all-homes` output, normalized into the fleet
-# radar's records (lib/radar.sh runs it; the page is lib/dashboard/radar.html). Run with -n.
+# radar's records (lib/radar.sh runs it for `chartroom radar`). Run with -n.
 # Arguments:
 #   $st       [the status output] (--slurpfile), in one of three shapes:
 #               [{home, path, current, result: [rows]} | {home, path, current, error}]
@@ -14,7 +14,7 @@
 #   $via      how the machine was found ("this machine", "herdr", "config")
 #   $contact  ok | unreachable | no-chartroom | error, from the call itself; $error its message
 #
-# Output: {machine: {...}, agents: [...], flagships: [...]}. The state table (docs/dashboard.md's
+# Output: {machine: {...}, agents: [...], flagships: [...]}. The state table (docs/fleet.md's
 # "The fleet radar" section documents the same):
 #   status state            live                       radar state      sector
 #   decision                any                        decision         decision
@@ -34,7 +34,7 @@
 #   drafting, closed        -                          not drawn (drafting is counted on its machine)
 #   anything else           -                          unknown          adrift (never hidden)
 
-# The board's rule for "its last line says it waits on a person" (lib/dashboard/lanes.jq
+# The board's rule for "its last line says it waits on a person" (lib/lanes.jq
 # waits_on_person): kept identical, test/radar.bats checks it, so the two views agree.
 def waits_on_person:
   (. // "") | test("waiting (on|for)|awaiting (review|approval|response|reply|feedback|merge|sign-?off)|pending (review|approval)|on hold|blocked on (a |the )?(review|approval|person|human)"; "i");
@@ -96,7 +96,7 @@ def radar($home; $is_local):
                   since: (if $inferred then $t.last_at else $t.waiting_since end), until: $t.waiting_until}
                else null end),
      last_event: $ev, last_activity_at: $t.last_at,
-     # what the page's stacks relate tasks by (lib/dashboard/stacks.js); an older chartroom sends
+     # what related tasks are told apart by; an older chartroom sends
      # no base or mentions, and then only titles, ids and branches relate its tasks
      branch: ($t.branch // null), base: ($t.base // null), mentions: ($t.mentions // []),
      created: $t.created, dispatched: $t.dispatched,

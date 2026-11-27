@@ -3,7 +3,7 @@
 // $.state survives a hot reload; the module's own variables reset. So the panel's on/off choice,
 // its last-known board, the page and the selection live here, and a reload picks up where it was.
 
-/** A lane of the board (`chartroom board --json`, lib/dashboard/lanes.jq), in its order. */
+/** A lane of the board (`chartroom board --json`, lib/lanes.jq), in its order. */
 export type LaneKey = 'needs_you' | 'in_progress' | 'on_hold' | 'ready' | 'recent'
 
 /** One card of `chartroom board --json`, trimmed to the fields the panel reads. */

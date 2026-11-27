@@ -12,7 +12,7 @@ import { findXo, continueLine, sendRefusal } from "./xo.js";
 import { QUIET_MS, due, onScreen, taskDirs, touches, workerSig } from "./schedule.js";
 
 const MOD = "chartroom";
-// Radar's own order (lib/dashboard/radar.jq), most urgent first.
+// Radar's own order (lib/radar.jq), most urgent first.
 const SECTORS = [
   { id: "decision", label: "Decision", color: "blocked" },
   { id: "blocked", label: "Blocked", color: "blocked" },

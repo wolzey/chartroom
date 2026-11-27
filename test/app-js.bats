@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
-# The dashboard's shared page scripts (lib/dashboard/*.js), unit-tested under node: the event
-# formatter and the feed's threads (eventfmt.js), the report renderer (markdown.js) and the
-# radar's stacks and archive (stacks.js); and the Herdr app Tasks panel's XO lookup and refresh
+# The app's scripts, unit-tested under node: the shared event formatter and the feed's threads
+# (app/shared/eventfmt.js), the report renderer (app/shared/markdown.js), the app's model, outbox,
+# contrast, push, reads and service worker; and the Herdr app Tasks panel's XO lookup and refresh
 # schedule (mods/herdr-chartroom/xo.js, schedule.js). Each suite is a plain node script
 # (test/js/); node is only a test dependency, so without it these skip.
 
@@ -22,7 +22,6 @@ js() { # <suite>
 
 @test "eventfmt: the parser, inline tokens, threads and runs, and the render" { js eventfmt; }
 @test "markdown: report.md blocks, tables, nested lists, sanitized render" { js markdown; }
-@test "stacks: related tasks stack deterministically; the archive cutoffs" { js stacks; }
 @test "herdr-xo: the Tasks panel finds a home's XO and what to type into it" { js herdr-xo; }
 @test "herdr-schedule: the Tasks panel reads the radar only while shown, after a change" { js herdr-schedule; }
 @test "app-model: the app's Needs me across homes, a card's questions, Enter, an answer's body" { js app-model; }

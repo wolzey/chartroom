@@ -5,8 +5,8 @@
 # to send or run, and tasks waiting on the commander's word (a decision, a blocker, finished work
 # to land).
 #
-# lib/todo.jq computes the list from the board, and dashboard_json carries it as .todo, so the
-# terminal, the crew views (one `board --json` poll) and the dashboard read the same list.
+# lib/todo.jq computes the list from the board, and board_json carries it as .todo, so the
+# terminal, the crew views (one `board --json` poll) and the app's Needs me read the same items.
 # Ticking an item off changes the record it came from: `todo done` removes an inbox line or marks
 # an artifact done. A task's decision is never ticked here; it clears when the XO relays the
 # answer.
@@ -113,7 +113,7 @@ cmd_todo() {
       *) die "todo: unknown arg $a (usage: chartroom todo [--all] [--json] | done <ref> | add [--project P] <text>)" ;;
     esac
   done
-  todo="$(dashboard_json | jq -c '.todo')"
+  todo="$(board_json | jq -c '.todo')"
   if [[ $json -eq 1 ]]; then jq . <<<"$todo"; return; fi
   todo_print "$todo" "$all" "$color"
 }

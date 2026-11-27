@@ -22,7 +22,7 @@ moves records, places work, or works offline.
    ~/chartroom/acme/ (a copy at the same paths) ◀── rsync (pull only) ───  tasks/, inbox.md, ...
    edits to the copy ──── put (applied by the brain if unchanged) ──▶
    watch --once ◀── wakes, then "end"; the client acks; the cursor moves ──
-   dashboard: http://127.0.0.1:<port> ──ssh -L tunnel──▶ the brain's loopback dashboard
+   dashboard open ── asks the brain for its app's address ──▶ opens https://<brain>.<tailnet>.ts.net/ here
 ```
 
 ## Making a home a client
@@ -30,7 +30,9 @@ moves records, places work, or works offline.
 ```bash
 cd ~/chartroom/acme           # an empty home here; the brain has a registered home "acme"
 chartroom brain link desk   # ssh target of the brain; --as NAME if it is named differently there
-chartroom brain status        # contact, the copy, pending edits, attach and the tunnel
+chartroom brain status        # contact, the copy, pending edits, attach
+chartroom brain fetch tasks/<id>/pane.log          # one file the copy leaves out
+chartroom brain git <id> log --oneline main..HEAD  # read-only git in a task's worktree there
 chartroom brain unlink        # local again (the copy stays, as a snapshot)
 ```
 
@@ -55,7 +57,6 @@ chartroom brain unlink        # local again (the copy stays, as a snapshot)
 | `CHARTROOM_BRAIN_HC_MACHINE` | the brain's name in this machine's `hc machine ls` | the one whose target is `CHARTROOM_BRAIN` |
 | `CHARTROOM_BRAIN_CONNECT_TIMEOUT` | ssh's ConnectTimeout, seconds | 5 |
 | `CHARTROOM_BRAIN_OUTAGE_SECONDS` | how long `watch` waits before it says the brain is away | 60 |
-| `CHARTROOM_BRAIN_TUNNEL_WAIT` | seconds to wait for the dashboard tunnel to answer | 5 |
 
 ## What runs where
 
@@ -212,11 +213,18 @@ at the end of each log.
      - for tmux: `ssh -t … tmux attach`;
      - cmux is not shown from here.
 - **`dashboard open` and `artifact open`:**
-  - The brain starts its dashboard on its own loopback port, with no browser opened there.
-  - The client keeps one `ssh -N -L` tunnel per home (`.brain/tunnel`) and opens
-    `http://127.0.0.1:<local port>` here. The local port is the brain's port, or the next free one.
-  - `dashboard stop` stops the tunnel only.
-  - Nothing new listens on the network.
+  - The brain prints its app's address (its Tailscale Serve URL, with `#/p/...` for a page),
+    and opens no browser there. The client opens that address here, so this machine must be on
+    the tailnet. Nothing is tunnelled, and nothing new listens on this machine.
+  - The brain's app must be running and on Tailscale Serve; otherwise the brain says why
+    (`chartroom app doctor` there says what it needs).
+  - A brain that answers with its own loopback address (`http://127.0.0.1:...`) gets a clear
+    error, because only its own browser could open that: it runs an older chartroom (the retired
+    web dashboard), or its app runs without Tailscale Serve. Update chartroom there, then run
+    `chartroom app doctor` there.
+  - `dashboard url` and `dashboard status` print the brain's app address, or why there is none.
+  - `dashboard stop` ends only a tunnel an older chartroom kept here for the retired dashboard
+    (`.brain/tunnel`); `brain status` and `sweep` say when one still runs.
 - **`artifact copy`** copies to this machine's clipboard.
 - **`artifact export`/`pdf`** are made on the brain and written here.
 - **`artifact add <file>`** uploads the file, with the images beside it that it names.
@@ -229,13 +237,14 @@ at the end of each log.
 - **To contain it, pin a dedicated key** (`CHARTROOM_BRAIN_KEY`) in the brain's `authorized_keys`:
 
   ```
-  command="chartroom brain gate",no-pty,no-agent-forwarding,no-X11-forwarding,permitopen="127.0.0.1:4517-4530" ssh-ed25519 AAAA... client
+  command="chartroom brain gate",no-pty,no-agent-forwarding,no-X11-forwarding,no-port-forwarding ssh-ed25519 AAAA... client
   ```
 
-  The gate then reads `SSH_ORIGINAL_COMMAND` (the rsync pulls come through it too). The tunnel
-  uses that key. The hc machine link keeps its own, since `attach` through hc needs a pty.
-- **Data.** Credentials never move. The copy holds records and artifacts only: no worktrees and
-  no dashboard token.
+  The gate then reads `SSH_ORIGINAL_COMMAND` (the rsync pulls come through it too). The client
+  no longer forwards a port, so the key needs no `permitopen` (`no-port-forwarding` here is not
+  tried). The hc machine link keeps its own key, since `attach` through hc needs a pty.
+- **Data.** Credentials never move. The copy holds records and artifacts only: no worktrees,
+  `config` or dotfiles.
 
 ## Not built here
 

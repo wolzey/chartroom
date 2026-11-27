@@ -10,7 +10,7 @@
 #   inbox/<i-xxxx>/artifacts/<slug>.*    the same for an inbox item, under its stable tag, so it
 #                                        outlives the item's line in inbox.md
 #
-# A ref is <owner>/<slug>, the owner as the dashboard shows it (a task's short id, or the
+# A ref is <owner>/<slug>, the owner as the board shows it (a task's short id, or the
 # inbox tag): 21ba/reply-to-review, i-7f3a/release-checklist. A bare owner works when it has
 # exactly one open artifact. Adding the same slug again overwrites the text and opens it
 # again; `done` (sent, or run) stops it showing as open. There are no versions.
@@ -67,7 +67,7 @@ artifact_ours() { artifact_text_of "$1" >/dev/null; } # <sidecar>
 # Artifacts as a JSON array, newest first: {ref, owner_type, owner, slug, title, kind, description,
 # project, created, updated, done, path}. The owner comes from where the files are; ref uses the owner's
 # current short id. Files that are not artifacts (see the top) are skipped, one by one, so a
-# stray or unreadable file never takes status, board or the dashboard down with it.
+# stray or unreadable file never takes status, the board or the app down with it.
 artifacts_json() { # [--open] [--owner task|inbox <id>]
   local open=0 t="" o="" files=() f od
   while [[ $# -gt 0 ]]; do
@@ -175,7 +175,7 @@ artifact_add() { # <task-or-inbox-id> --kind K --title T [--description D] [--sl
   o="$(artifact_owner "${pos[0]}" --open)" || exit 1
   type="${o%% *}"; owner="${o#* }"
   if [[ "$type" == task ]]; then project="$(project_label "$owner")"
-  else project="$(dashboard_inbox | jq -r --arg t "$owner" '.waiting[] | select(.short_id == $t) | .project // empty' | head -1)"; fi
+  else project="$(inbox_items_json | jq -r --arg t "$owner" '.waiting[] | select(.short_id == $t) | .project // empty' | head -1)"; fi
   d="$(artifact_dir "$type" "$owner")"; f="$d/$slug.$(artifact_ext "$kind")"; m="$d/$slug.json"
   # Ours to replace: the sidecar `add` wrote and its own text (a page that was a note keeps no .md).
   mine="$(artifact_text_of "$m" || true)"

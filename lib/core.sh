@@ -71,7 +71,7 @@ bin_of() { type -P "$1" 2>/dev/null || true; }
 # The config file is KEY=VALUE lines (no shell evaluation), at
 # ${XDG_CONFIG_HOME:-~/.config}/chartroom/config or $CHARTROOM_CONFIG. A home may hold its
 # own `config` in the same format (several homes on one machine: each its own workspace,
-# dashboard port, project roots); it can set any key but CHARTROOM_HOME, which is read before
+# project roots); it can set any key but CHARTROOM_HOME, which is read before
 # the home is known.
 
 CR_CONFIG_FILE="${CHARTROOM_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/chartroom/config}"
@@ -351,7 +351,7 @@ run_bounded() { # <seconds> <cmd...>
   perl -e 'alarm shift; exec @ARGV or exit 127' "$s" "$@"
 }
 
-# gh as CHARTROOM_GH names it (as the dashboard reads it), else the one on PATH; nothing when absent.
+# gh as CHARTROOM_GH names it (as the app reads it), else the one on PATH; nothing when absent.
 gh_bin() { bin_of "$(cfg GH '' gh)"; }
 
 declare -gA LANDED_SEEN=() LANDED_HEADS=() LANDED_PRS=()

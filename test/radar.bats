@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
-# `chartroom radar` and the dashboard's /radar: one record per open task on every home of this
-# machine and of other machines (a fake ssh), the state table (blocked vs waiting above all), an
-# unreachable machine, an older chartroom, the XOs from herdr, and the server's routes. No
+# `chartroom radar`: one record per open task on every home of this machine and of other machines
+# (a fake ssh), the state table (blocked vs waiting above all), an unreachable machine, an older
+# chartroom, and the XOs from herdr. (The web dashboard's /radar page is retired.) No
 # network, no real ssh or herdr: other machines are only ever read, and the fake ssh logs every
 # command that would have run there.
 
@@ -13,11 +13,6 @@ setup() {
   use_fake ssh
   export CHARTROOM_MACHINE_NAME="Test Mac"
   SSHD="$BATS_TEST_TMPDIR/ssh"; mkdir -p "$SSHD"
-  PY="$(type -P python3 || true)"
-}
-
-teardown() {
-  cr dashboard stop >/dev/null 2>&1 || true
 }
 
 ago() { jq -rn --argjson s "$1" 'now - $s | floor | todate'; }
@@ -330,8 +325,8 @@ r-old-2 working underway" ]
 
 @test "the inferred-wait rule is the board's own (lanes.jq), word for word" {
   local a b
-  a="$(grep -A1 '^def waits_on_person:' "$REPO_ROOT/lib/dashboard/lanes.jq")"
-  b="$(grep -A1 '^def waits_on_person:' "$REPO_ROOT/lib/dashboard/radar.jq")"
+  a="$(grep -A1 '^def waits_on_person:' "$REPO_ROOT/lib/lanes.jq")"
+  b="$(grep -A1 '^def waits_on_person:' "$REPO_ROOT/lib/radar.jq")"
   [ -n "$a" ] && [ "$a" = "$b" ]
 }
 
@@ -343,165 +338,4 @@ r-old-2 working underway" ]
   [[ "$output" == "== Test Mac (this machine): ok"*"BLOCKED (1)"*"t-blocked"*"UNDERWAY (1)"*"t-working"* ]]
   run cr radar --machine box
   [ "$status" -ne 0 ]; [[ "$output" == *"--machine and --ssh go together"* ]]
-}
-
-# ---------------------------------------------------------------- the server
-
-need_python() { [[ -n "$PY" ]] || skip "python3 not available"; link_tool "$PY" python3; }
-CURL_MAX=10
-get() { curl -s --max-time "$CURL_MAX" "$@"; }
-code() { curl -s -o /dev/null --max-time "$CURL_MAX" -w '%{http_code}' "$@"; }
-# Poll /api/radar (curl args, then a jq condition) until the condition holds: ~40s at most.
-RADAR_POLLS=80
-radar_until() {
-  local cond="${*: -1}" i out
-  for i in $(seq 1 "$RADAR_POLLS"); do
-    out="$(get "${@:1:$#-1}" 2>/dev/null || true)"
-    jq -e "$cond" <<<"$out" >/dev/null 2>&1 && { RADAR="$out"; return 0; }
-    sleep 0.5
-  done
-  echo "timed out waiting for $cond; last: $out" >&2; return 1
-}
-# The ssh calls the requests made: every call but the collector's own status reads, which go on
-# in the background while a page watches, so a count of every call can move between two requests.
-request_ssh() { grep -vc ' chartroom status --json --all-homes$' "$SSHD/calls.log" || true; }
-
-@test "server: /radar and /api/radar merge every machine; peek and file serve only what the radar shows" {
-  need_python
-  A="$BATS_TEST_TMPDIR/acme"
-  CHARTROOM_HOME="$A" cr init --name acme >/dev/null
-  FIX_HOME="$A" fixture t-blocked subagent <<<"600 blocked: need staging credentials"
-  acme "$(row r-1 waiting stopped '{"waiting_on":"CI","waiting_until":"2030-01-01T00:00:00Z"}')" | box
-  printf '== events\n2026-10-29T10:00:00Z waiting: CI\n' >"$SSHD/box/peek.txt"
-  mkdir -p "$SSHD/box/files"; echo "# Box report" >"$SSHD/box/files/report.md"
-  export FAKE_SSH_DIR="$SSHD" CHARTROOM_RADAR_MACHINES=box CHARTROOM_RADAR_REMOTE_SECONDS=1 CHARTROOM_RADAR_LOCAL_MIN_SECONDS=1 CHARTROOM_RADAR_LOCAL_MAX_SECONDS=1
-  export CHARTROOM_HOME="$A"
-  run cr dashboard --daemon --port 0 --no-gh
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
-  read -r _ PORT <"$A/.dashboard.pid"
-  URL="http://127.0.0.1:$PORT"
-  # the page: self-contained, with the server's theme, linked from the board and back
-  local page; page="$(get "$URL/radar")"
-  [[ "$page" == *"<title>radar · chartroom</title>"* && "$page" == *'href="/"'* ]]
-  [ -z "$(grep -Ei '(src|href)=["'"'"']?(https?:)?//|@import|url\(https?:' <<<"$page" || true)" ]
-  [[ "$(curl -sI "$URL/radar" | tr -d '\r')" == *"Content-Security-Policy: default-src 'none'"* ]]
-  [[ "$(get "$URL/")" == *'href="/radar"'* ]]
-  # nothing is collected until a page asks; then both machines report
-  sleep 1; [ ! -e "$SSHD/calls.log" ]
-  radar_until "$URL/api/radar" '[.machines[] | select(.contact == "ok")] | length == 2'
-  [ "$(jq -r '[.machines[] | .machine] | join(",")' <<<"$RADAR")" = "Test Mac,box" ]
-  [ "$(jq -r '[.agents[] | .key] | sort | join(" ")' <<<"$RADAR")" = "Test Mac/acme/t-blocked box/acme/r-1" ]
-  [ "$(jq -r '[.agents[] | .stale] | unique | join(",")' <<<"$RADAR")" = false ]
-  # peek: this machine's task through its own chartroom peek; the other's over ssh
-  local tm="m=Test%20Mac&h=acme&id=t-blocked"
-  [[ "$(get "$URL/api/radar/peek?$tm&n=5" | jq -r .text)" == "== events"*"blocked: need staging credentials"* ]]
-  [ "$(get "$URL/api/radar/peek?m=box&h=acme&id=r-1" | jq -c '[.machine, .text, .error]')" = '["box","== events\n2026-10-29T10:00:00Z waiting: CI\n",null]' ]
-  grep -q "^box PATH=.* CHARTROOM_HOME='/srv/acme' chartroom peek 'r-1' 15$" "$SSHD/calls.log"
-  # files: this machine's read directly, the other's over ssh; only the task files
-  [[ "$(get "$URL/api/radar/file?$tm&f=events.log")" == *"blocked: need staging credentials"* ]]
-  [ "$(get "$URL/api/radar/file?m=box&h=acme&id=r-1&f=report.md")" = "# Box report" ]
-  # what the radar does not show is refused before ssh: no call beyond the peek and file above
-  local n; n="$(request_ssh)"; [ "$n" -eq 2 ]
-  [ "$(code "$URL/api/radar/file?$tm&f=meta.json")" = 404 ]
-  [ "$(code "$URL/api/radar/file?m=box&h=acme&id=r-1&f=meta.json")" = 404 ]
-  [ "$(code "$URL/api/radar/peek?m=box&h=acme&id=r-2")" = 404 ]
-  [ "$(code "$URL/api/radar/peek?m=box&h=other&id=r-1")" = 404 ]
-  [ "$(code "$URL/api/radar/peek?m=nowhere&h=acme&id=r-1")" = 404 ]
-  [ "$(code "$URL/api/radar/peek?m=box&h=acme&id=..%2Fr-1")" = 400 ]
-  [ "$(code "$URL/api/radar/peek?m=box&h=acme")" = 400 ]
-  [ "$(code "$URL/api/radar/peek?m=box&h=acme&pane=w1:p1;x")" = 400 ]
-  [ "$(code -X POST "$URL/api/radar")" = 405 ]
-  [ "$(request_ssh)" -eq "$n" ]
-  # the page carries the archive's cutoffs
-  [ "$(get "$URL/api/radar" | jq -c .settings)" = '{"done_hours":24,"stale_days":3}' ]
-  # the other machine stops answering: its agents stay, marked stale, and the machine says why
-  rm "$SSHD/box/status.json"; echo 255 >"$SSHD/box/exit"; echo "ssh: connect to host box port 22: Operation timed out" >"$SSHD/box/stderr"
-  radar_until "$URL/api/radar" '.machines[] | select(.machine == "box") | .contact == "unreachable"'
-  [ "$(jq -c '.machines[] | select(.machine == "box") | [.stale, .error, (.ok_at != null)]' <<<"$RADAR")" = '[true,"ssh: connect to host box port 22: Operation timed out",true]' ]
-  [ "$(jq -c '[.agents[] | select(.machine == "box") | [.id, .state, .stale]]' <<<"$RADAR")" = '[["r-1","waiting",true]]' ]
-  [ "$(jq -c '[.agents[] | select(.machine == "Test Mac") | .stale]' <<<"$RADAR")" = '[false]' ]
-  # back again: fresh
-  rm "$SSHD/box/exit"; acme "$(row r-1 blocked stopped)" >"$SSHD/box/status.json"
-  radar_until "$URL/api/radar" '[.agents[] | select(.machine == "box")][0] | .state == "blocked" and .stale == false'
-}
-
-@test "server: /task/<home>/<id> is a task's page, self-contained, its shared scripts spliced in; a malformed one is a 404" {
-  need_python
-  export CHARTROOM_RADAR_MACHINES=none
-  fixture t-blocked subagent <<<"600 blocked: need staging credentials"
-  echo "# Report" >"$CHARTROOM_HOME/tasks/t-blocked/report.md"
-  run cr dashboard --daemon --port 0 --no-gh --theme hud
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
-  read -r _ PORT <"$CHARTROOM_HOME/.dashboard.pid"
-  URL="http://127.0.0.1:$PORT"
-  local page; page="$(get "$URL/task/acme/t-blocked")"
-  [[ "$page" == *"<title>task · chartroom</title>"* && "$page" == *'<html lang="en" data-theme="hud">'* ]]
-  [[ "$page" == *"var EventFmt = "* && "$page" == *"var Markdown = "* && "$page" == *".evx {"* ]]
-  [[ "$page" != *"<!--@include"* ]]
-  [ -z "$(grep -Ei '(src|href)=["'"'"']?(https?:)?//|@import|url\(https?:|<script[^>]* src=' <<<"$page" || true)" ]
-  [[ "$(curl -sI "$URL/task/acme/t-blocked" | tr -d '\r')" == *"Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'"* ]]
-  # the radar has them spliced in too, and a stack's script
-  local radar; radar="$(get "$URL/radar")"
-  [[ "$radar" == *"var EventFmt = "* && "$radar" == *"var Stacks = "* && "$radar" != *"<!--@include"* ]]
-  # any well-formed home and id is the page (it asks the radar or the board for the task); an
-  # unregistered home is "(this home)"; anything else is a 404
-  [ "$(code "$URL/task/%28this%20home%29/t-blocked")" = 200 ]
-  [ "$(code "$URL/task/acme/t-blocked?m=Test%20Mac")" = 200 ]
-  [ "$(code "$URL/task/Acme/t-blocked")" = 404 ]
-  [ "$(code "$URL/task/acme/..%2Ft-blocked")" = 404 ]
-  [ "$(code --path-as-is "$URL/task/acme/../t-blocked")" = 404 ]
-  [ "$(code "$URL/task/acme/t-blocked/extra")" = 404 ]
-  [ "$(code "$URL/task/acme%3Bx/t-blocked")" = 404 ]
-  [ "$(code -X POST "$URL/task/acme/t-blocked")" = 405 ]
-  # a task file's own route still wins: /task/<id>/<file>; any other file name is no task's page
-  [ "$(get "$URL/task/t-blocked/report.md")" = "# Report" ]
-  [ "$(code "$URL/task/acme/report.md")" = 404 ]
-  [ "$(code "$URL/task/t-blocked/meta.json")" = 404 ]
-  [ "$(code "$URL/task/t-blocked/report.pdf")" = 404 ]
-}
-
-@test "server: a shared script that is missing, or would end its <script> early, keeps the last good page" {
-  need_python
-  export CHARTROOM_RADAR_MACHINES=none
-  local root="$BATS_TEST_TMPDIR/install"
-  mkdir -p "$root"
-  cp -R "$REPO_ROOT/bin" "$REPO_ROOT/lib" "$REPO_ROOT/templates" "$REPO_ROOT/VERSION" "$root/"
-  CHARTROOM="$root/bin/chartroom"
-  run cr dashboard --daemon --port 0 --no-gh
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
-  read -r _ PORT <"$CHARTROOM_HOME/.dashboard.pid"
-  URL="http://127.0.0.1:$PORT"
-  [[ "$(get "$URL/task/acme/t-x")" == *"var EventFmt = "* ]]
-  # an update writes a newer page; then a script that holds "<!--" or "</script>"; then none
-  sed 's|<title>task · chartroom</title>|<title>task · updated</title>|' "$REPO_ROOT/lib/dashboard/task.html" >"$root/lib/dashboard/task.html"
-  [[ "$(get "$URL/task/acme/t-x")" == *"<title>task · updated</title>"* ]]
-  printf '// </script><script>alert(1)\n' >>"$root/lib/dashboard/eventfmt.js"
-  local p; p="$(get "$URL/task/acme/t-x")"
-  [[ "$p" == *"<title>task · updated</title>"* && "$p" != *"alert(1)"* ]]
-  rm "$root/lib/dashboard/markdown.js"
-  [ "$(code "$URL/task/acme/t-x")" = 200 ]
-  [[ "$(get "$URL/task/acme/t-x")" != *"alert(1)"* ]]
-}
-
-@test "server: an exposed dashboard puts the radar behind the same token" {
-  need_python
-  export CHARTROOM_RADAR_MACHINES=none
-  run cr dashboard --daemon --port 0 --no-gh --expose
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
-  read -r _ PORT _ <"$CHARTROOM_HOME/.dashboard.pid"
-  URL="http://127.0.0.1:$PORT"
-  local t; t="$(cat "$CHARTROOM_HOME/.dashboard.token")"
-  [ "$(code "$URL/radar")" = 401 ]
-  [ "$(code "$URL/api/radar")" = 401 ]
-  [ "$(code "$URL/api/radar/peek?m=x&h=y&id=z")" = 401 ]
-  [ "$(code "$URL/api/radar/file?m=x&h=y&id=z&f=report.md")" = 401 ]
-  [ "$(code "$URL/task/acme/t-1")" = 401 ]
-  [ "$(code "$URL/task/acme/t-1?m=studio")" = 401 ]
-  [ "$(code -b "chartroom_dashboard_$PORT=wrong" "$URL/task/acme/t-1")" = 401 ]
-  [ "$(code -b "chartroom_dashboard_$PORT=$t" "$URL/radar")" = 200 ]
-  [ "$(code -b "chartroom_dashboard_$PORT=$t" "$URL/task/acme/t-1")" = 200 ]
-  [ "$(code -b "chartroom_dashboard_$PORT=$t" "$URL/task/BAD/t-1")" = 404 ]
-  # ?token= on a task's page: the cookie, then the same page (its machine kept)
-  [[ "$(curl -s -D - -o /dev/null "$URL/task/acme/t-1?m=studio&token=$t" | tr -d '\r')" == *$'\nLocation: /task/acme/t-1?m=studio\n'* ]]
-  radar_until -b "chartroom_dashboard_$PORT=$t" "$URL/api/radar" '.machines | length == 1 and .[0].contact == "ok"'
 }

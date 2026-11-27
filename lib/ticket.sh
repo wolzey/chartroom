@@ -12,7 +12,7 @@
 #     {"schema":1,"url":"...","kind":"pr"|"url","title":"..."|null,"by":"...","at":"<UTC>"}
 #     {"schema":1,"url":"...","removed":true,"at":"<UTC>"}
 #   meta.json: priority (urgent|high|medium|low), labels ([...]), initiative, milestone: all optional
-# A PR is also every PR URL a worker wrote in events.log or report.md, as the dashboard has
+# A PR is also every PR URL a worker wrote in events.log or report.md, as the board has
 # always found them; a link record adds to those, never replaces them.
 #
 # What the commander attaches or edits reaches the worker as a steer (attach --silent: not), in
@@ -290,7 +290,7 @@ ticket_json() { # <id>
   fi
   local answer=null
   if [[ "$ask" != null ]]; then answer="$(ask_answer_get "ev-$id-$off")"; [[ -n "$answer" ]] || answer=null; fi
-  jq -n -c --argjson row "$row" --argjson extra "$(dashboard_task_extra "$id")" --argjson meta "$(cat "$META_PATH")" \
+  jq -n -c --argjson row "$row" --argjson extra "$(task_extra_json "$id")" --argjson meta "$(cat "$META_PATH")" \
     --argjson sections "$(brief_sections_json "$id")" --argjson ask "$ask" --argjson answer "$answer" \
     --argjson attachments "$(attachments_json "$id")" --argjson links "$(links_json "$id")" \
     --argjson tells "$(tells_json --all | jq -c --arg id "$id" 'map(select(.re == $id))')" \

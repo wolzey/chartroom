@@ -71,7 +71,7 @@ trust_prompt_text() { # <id>
 
 # Bring the log in line with what is on screen: <what> is up (a new one wakes, through the event
 # scan, once) or, with "", nothing is. The log is the memory, so a restarted or --once watch does
-# not repeat a prompt, and status and the dashboard read it as every other prompt.
+# not repeat a prompt, and status and the app read it as every other prompt.
 prompt_sync() { # <id> <what or "">
   local id="$1" what="$2" st last
   st="$(hook_state "$id")"

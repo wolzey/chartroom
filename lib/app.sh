@@ -83,7 +83,7 @@ app_snapshot_json() {
   while IFS= read -r row; do
     [[ -n "$row" ]] || continue
     IFS=$'\t' read -r id st < <(jq -r '[.id, .state] | @tsv' <<<"$row")
-    if [[ "$row" == *'"_extra":'* ]]; then extra='{}'; else extra="$(dashboard_task_extra "$id")"; fi
+    if [[ "$row" == *'"_extra":'* ]]; then extra='{}'; else extra="$(task_extra_json "$id")"; fi
     ask=null intent=""
     case "$st" in
       decision|blocked|failed|awaiting-input|review)
@@ -107,7 +107,7 @@ app_snapshot_json() {
   printf '%s\n' "${rows[@]+"${rows[@]}"}" | jq -s -c \
     --arg home "$CR_HOME" --arg home_name "$(home_name_of "$CR_HOME")" --arg version "$CR_VERSION" \
     --arg machine "$(cfg MACHINE_NAME '' "$(hostname -s 2>/dev/null || echo this)")" \
-    --argjson inbox "$(dashboard_inbox)" --argjson artifacts "$(artifacts_json --open)" \
+    --argjson inbox "$(inbox_items_json)" --argjson artifacts "$(artifacts_json --open)" \
     --argjson cards "$(asks_json --all)" --argjson answers "$answers" --argjson tells "$(tells_json --all)" \
     --argjson snoozes "$(snoozes_json)" --argjson focus "$(focus_json)" --argjson requests "$(requests_json)" --argjson initiatives "$(initiatives_json)" \
     --argjson permits "$(app_permits_json)" \

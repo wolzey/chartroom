@@ -170,7 +170,7 @@ ask_card_json() { # <id>
         '{id: $id, kind: "event", task: $task, event_kind: $k, line: $line,
           text: ($line | sub("^[^ ]+ [a-z-]+: ?"; "")), at: ($line[0:20])}' ;;
     inbox)
-      local row; row="$(dashboard_inbox | jq -c --arg id "$id" '.waiting[] | select(.short_id == $id)' | head -n 1)"
+      local row; row="$(inbox_items_json | jq -c --arg id "$id" '.waiting[] | select(.short_id == $id)' | head -n 1)"
       [[ -n "$row" ]] || return 1
       jq -c --arg id "$id" '{id: $id, kind: "inbox", text, date, project}' <<<"$row" ;;
     *) return 1 ;;

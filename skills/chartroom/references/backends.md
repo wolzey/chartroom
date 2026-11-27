@@ -212,7 +212,7 @@ stall watchdog.
 | Wedged process | `stalled` | `stalled` | `stalled` | `stalled` | `stalled` |
 
 - **Prompts** log `agent: awaiting-input: <what>`, which wakes through the event scan, and
-  `agent: prompt-cleared` once gone, so status, the dashboard and a restarted or `--once` watch all
+  `agent: prompt-cleared` once gone, so status, the board, the app and a restarted or `--once` watch all
   read the same record. Codex sets its terminal title to `[ . ] Action Required | ...` and
   `[ ! ] ...` in turn while an approval is up (verified on codex-cli 0.158.0). `hc events` carries each
   title change, many a second under its spinner, so the stream's jq reduces them to the one fact

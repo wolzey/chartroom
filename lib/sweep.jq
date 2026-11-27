@@ -9,7 +9,6 @@
 #   $self    the sweep's own pid; it and its ancestors are never touched
 #   $idle    seconds a finished-but-open task must be idle before its leftovers are raised
 #   $failed  task ids whose close failed in this run: nothing of theirs is safe
-#   $dash    the pid of the dashboard .dashboard.pid tracks ("" when none runs)
 #   $parkable  the ids of workers at rest that --apply parks (lib/park.sh): their sessions are kept
 #   $others  the other registered homes: {homes: their dirs, ids: their task ids, wts: the
 #            worktrees their tasks record}
@@ -31,8 +30,8 @@
 #            or holding processes -> human.
 #   orphan   `chartroom watch` run from this home whose session is gone (nearest real parent
 #            is init) -> apply; from an unknown home -> human. `listen <id>` of this home's
-#            task: orphaned or its task closed -> apply. A second dashboard for this home
-#            (not the one .dashboard.pid tracks) -> apply; an untracked one -> human.
+#            task: orphaned or its task closed -> apply. The retired web dashboard's server
+#            for this home, still running from before -> apply (the app replaces it).
 #   daemon   in a closed task's worktree, or one that closes in this sweep -> apply; in a
 #            dir under this home's worktrees/ that no longer exists -> apply; in any other
 #            chartroom worktree dir no task of this home records -> human; in a review/done/failed/stopped-silent task's worktree, running
@@ -232,9 +231,7 @@ def wrapper: (.args | words) as $w | (($w[0] // "") | base) as $b
       else
         (($l.arg // "") | sub("/[^/]*$"; "")) as $h
         | if any($homes[]; . == $h) | not then empty
-          elif ($dash != "" and ($p.pid | tostring) != $dash) then . + {what: "chartroom dashboard", action: "apply", reason: "a second dashboard for this home (the tracked one is pid \($dash))"}
-          elif $dash == "" then . + {what: "chartroom dashboard", action: "human", reason: "a dashboard for this home that .dashboard.pid does not track"}
-          else empty end
+          else . + {what: "chartroom dashboard", action: "apply", reason: "the retired web dashboard, still running from before: the app replaces it"} end
       end]) as $orphans
 
 # dev processes: everything else attributed to a task's worktree, one item per process tree

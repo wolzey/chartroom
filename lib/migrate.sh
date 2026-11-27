@@ -5,7 +5,7 @@
 #   triage    read-only: every open task of the client home in a bucket, a decisions.tsv prefilled
 #   snapshot  a tar.gz of the home on both machines (--all: every registered home)
 #   freeze    client: the .migrating marker (new, dispatch, steer and attach refuse there), the
-#             dashboard stopped, every live worker parked once at rest
+#             an old web dashboard stopped, every live worker parked once at rest
 #   settle    the commander's decisions: close and accept on the client; bundle: the branch and its
 #             uncommitted changes fetched here and packed into a git bundle, then closed there
 #   move      every record (closed ones too, records only), the open tasks' conversations, their
@@ -42,7 +42,7 @@
 #   inbox/, artifacts, other top-level files  union; the same path with other bytes keeps B's and
 #                    adds C's beside it as <name>.from-<from><.ext>
 #   relays           union by record; the watch cursor moves past it
-#   config           B's keys win (its own dashboard port); C's other keys are added
+#   config           B's keys win (its own workspace); C's other keys are added
 #   projects.md      union of lines, C's first; focus.json B's unless only C has one
 #   the XO's Claude project dir  sessions unioned, memory files unioned (a clash: <name>.from-<from>.md)
 

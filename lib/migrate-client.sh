@@ -23,7 +23,7 @@
 #   ignored <wt>                  a tar of the worktree's small ignored files (.env.local and the like)
 # Subcommands that write (each prints "+ <command>" before it runs it; DRY=1 prints only):
 #   snapshot <home> <dir>         tar.gz of the home without worktrees/ or node_modules
-#   freeze <home> <bin> <to>      the .migrating marker, the dashboard stopped
+#   freeze <home> <bin> <to>      the .migrating marker, an old web dashboard stopped
 #   park <home> <bin> <id>...     `chartroom park` each (a worker not at rest is reported)
 #   settle <home> <bin> <action> <id>  accept+close, or close
 #   finish <home> <bin> <name> <stamp> <brain> <wt>...  lock worktrees, rename, fresh stub

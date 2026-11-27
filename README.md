@@ -9,11 +9,11 @@ You don't juggle tabs.
 
 chartroom has two parts: a small bash CLI (`chartroom`) that does the exact work (task
 records, worktrees, launching, steering, liveness, a wake stream), and Agent Skills
-(`chartroom`, `bearings`, `dashboard` to open the board, `continue` to jump to one item by its
+(`chartroom`, `bearings`, `dashboard` to open the app, `continue` to jump to one item by its
 short id, `captain`, the chartroom skill under its older name, `join`, which lets an
 agent session you started yourself join the crew, and `sweep`, which frees what finished work
-left running) that tell your agent how to be the XO. State is plain files under `~/.chartroom`. There is no daemon (an optional local
-dashboard can show the fleet in a browser).
+left running) that tell your agent how to be the XO. State is plain files under `~/.chartroom`. There is no daemon (the optional
+[app](docs/app.md) shows every home in a browser and on your phone).
 
 ```
             you (commander)
@@ -56,10 +56,13 @@ to a worker in its own git worktree, and goes quiet until something needs you. A
 yourself:
 
 ```bash
-chartroom dashboard --daemon --open   # the board in your browser (http://127.0.0.1:4517)
-chartroom status                      # the same, in the terminal
+chartroom board                       # the lanes: needs you, in progress, on hold, ready, finished
+chartroom status                      # every task, one row each
 chartroom attach <id>                 # a worker's own terminal (tmux, herdr, cmux, hc)
 ```
+
+For a browser or your phone, [the chartroom app](#the-chartroom-app) shows every home once it is
+set up; `chartroom dashboard` then opens it.
 
 When a worker is done, the XO reviews it and closes the task. `chartroom close <id>` removes
 the worktree, refuses while it holds uncommitted work, and deletes the branch only once its
@@ -71,8 +74,8 @@ work has landed (merged, or on origin at that commit).
   `~/.config/chartroom/config`) names the directories that hold your checkouts. Until then,
   give the XO a path.
 
-**What a clean account has run.** The steps above, then a first task on the `command` backend
-(a stub worker) through dispatch, commit and close, and the dashboard, were run in an empty
+**What a clean account has run.** The four steps above, then a first task on the `command` backend
+(a stub worker) through dispatch, commit and close, were run in an empty
 `HOME` that had only bash, jq, git, tmux, python3, curl and the claude CLI on its PATH (chartroom
 0.2.0). A Claude XO and a real Claude worker have **not** been run from such a pristine home,
 because Claude Code needs its own sign-in there. Both run every day on machines that have
@@ -98,16 +101,18 @@ change in a minor release. The full list is in [CHANGELOG.md](CHANGELOG.md).
 ## Documentation
 
 - [docs/fleet.md](docs/fleet.md): build your own fleet: an always-on brain, a laptop, other
-  Macs, the app on your phone, and permission cards, with Tailscale as the recommended network.
-- [docs/dashboard.md](docs/dashboard.md): the local dashboard, the fleet radar, `chartroom nodes`,
-  and reaching the board from other devices.
+  Macs, the app on your phone, and permission cards, with Tailscale as the recommended network;
+  and `chartroom nodes`, devices and the fleet radar.
+- [docs/dashboard.md](docs/dashboard.md): the board in the terminal, short ids, and what
+  `chartroom dashboard` does now that the app replaces the web dashboard.
 - [docs/app.md](docs/app.md), [docs/permits.md](docs/permits.md),
   [docs/client-homes.md](docs/client-homes.md), [docs/multi-machine.md](docs/multi-machine.md):
   the app, permission cards, client homes and devices in depth.
 - [docs/homes.md](docs/homes.md): several homes (and XOs) on one machine, and how they talk.
 - [docs/crew-view.md](docs/crew-view.md): the crew inside Claude Code or pi, and the Herdr panel.
 - [docs/store.md](docs/store.md): the SQLite store.
-- [docs/upgrading.md](docs/upgrading.md): a home from chartroom's predecessor.
+- [docs/upgrading.md](docs/upgrading.md): a home from chartroom's predecessor, and what to run
+  after the upgrade that retired the web dashboard.
 - [skills/chartroom/references/backends.md](skills/chartroom/references/backends.md): every
   backend, and how each confirms delivery.
 
@@ -121,7 +126,7 @@ change in a minor release. The full list is in [CHANGELOG.md](CHANGELOG.md).
 - **Agent-native signals instead of screen scraping.** Turn ends, approval prompts and prompt
   receipt come from Claude Code hooks and Codex `notify`, not from pattern-matching the TUI.
 - **Small surface.** Bash with `jq` and `git` (about 13,000 lines across `bin/` and `lib/`), plus
-  Python's standard library for the dashboard and app servers. No `gh` required, no worktree
+  Python's standard library for the app server. No `gh` required, no worktree
   manager, no Node (only the app's optional phone push uses it).
 - **The contract is files.** Briefs, an append-only event log with a documented line format, and
   reports. Any worker in any language can take part with `printf >>`.
@@ -132,7 +137,7 @@ chartroom runs on macOS and Linux only.
 
 Requirements: bash ≥ 4 (macOS: `brew install bash`), `jq`, `git`. Optional, per backend:
 the Herdr app (herdr-core, `hc`), herdr, cmux (macOS), tmux ≥ 3.0, the `claude` and/or `codex` CLIs.
-`python3` for the dashboard and the app, `curl` on a device that joins a brain.
+`python3` for the app, `curl` on a device that joins a brain.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/wolzey/chartroom/main/install.sh | bash
@@ -183,8 +188,8 @@ chartroom doctor
   workspace name, branch prefix, harness) and your standing preferences (`commander.md`,
   `rulings.log`, `projects.md`) are safe to keep in your dotfiles. Everything else in the home is per machine:
   `tasks/` records hold local worktree paths, process ids and session handles, and `worktrees/`
-  holds the checkouts themselves. Never sync `tasks/`, `worktrees/`, `inbox.md`, `inbox/`, `.watch-cursor`
-  or `.dashboard.*` between machines.
+  holds the checkouts themselves. Never sync `tasks/`, `worktrees/`, `inbox.md`, `inbox/` or
+  `.watch-cursor` between machines.
 - **Write the config before installing.** `install.sh` runs `chartroom init` on whichever home
   the config names, and `init` never overwrites an existing file.
 
@@ -198,20 +203,21 @@ says what to set so that new tasks look like the old ones.
 One app for every home on a machine (experimental). It opens on **Needs me**, one inbox of
 every decision, plan to approve, blocker and report across every home, answered in place. It is
 a PWA served on 127.0.0.1 by `chartroom app serve`, and Tailscale Serve puts it on your phone
-over HTTPS for your own Tailscale login only. See [docs/app.md](docs/app.md), and
-[docs/fleet.md](docs/fleet.md) for the setup.
+over HTTPS for your own Tailscale login only. A task opens as a ticket, with its pages, drafts
+and the worker's terminal; Fleet shows every machine, and Usage what each subscription has left.
+See [docs/app.md](docs/app.md), and [docs/fleet.md](docs/fleet.md) for the setup.
 
-## Dashboard
+## The board, and the retired dashboard
 
 ```bash
-chartroom dashboard                  # http://127.0.0.1:4517, Ctrl-C to stop
-chartroom dashboard --daemon --open  # in the background, and open the browser
-chartroom dashboard stop
+chartroom board                      # the lanes in the terminal, one line per item
+chartroom show 21ba                  # one item in detail
+chartroom dashboard                  # opens the app (as chartroom app open)
 ```
 
-A read-only web view of the home: what needs you, what is in progress, on hold, ready, and
-recently finished, with a page per task. It also has the fleet radar (every agent on every
-machine) and `chartroom nodes`. It binds 127.0.0.1 unless you ask for more. See
+The old web dashboard is retired, and the app replaces it. `chartroom dashboard` opens the app,
+`dashboard url` prints its address, and `dashboard stop` ends an old dashboard still running from
+before the upgrade. `chartroom board` and `chartroom radar` stay in the terminal. See
 [docs/dashboard.md](docs/dashboard.md).
 
 ## Focus mode: one project at a time
@@ -228,7 +234,7 @@ chartroom focus off             # ends it and lists what was held
 - **What is held.** While a focus is on, an item of a project out of focus is held when it would
   ask something of you: a task in `decision`, `blocked`, `failed`, `awaiting-input` or `review`, or
   a "Waiting on the commander" inbox item. The count is exactly that, read from disk, so
-  `status`, `board`, the dashboard and the crew views always agree. Workers in other projects
+  `status`, `board`, the app and the crew views always agree. Workers in other projects
   keep working: focus changes what reaches you, not what runs.
 - **Which projects.** The names `status` prints, comma-separated. A project is in focus when it
   equals a name or starts with `<name>-` (case-insensitive), so `webapp` covers `webapp-api` but
@@ -241,10 +247,8 @@ chartroom focus off             # ends it and lists what was held
   inbox add --project webapp "INC-42: confirm the backlog is clear"`). Everything else in the
   project is held like any other project's.
 - **Hard to miss.** `status` and `board` lead with `🎯 focus: webapp · 7 held (since 2h)`, and
-  `board` marks each held item `[<state> · held]` and each lane's held count. The dashboard
-  shows a focus strip with the held count, counts only what is in focus in its gauges and tab
-  title (which adds `🎯 7 held`), and dims other projects' cards (the strip's button hides them
-  instead, remembered in that browser). The crew views' band leads with `🎯 webapp · 7 held` and
+  `board` marks each held item `[<state> · held]` and each lane's held count. The app says how
+  many items focus mode holds in each home. The crew views' band leads with `🎯 webapp · 7 held` and
   counts only what is in focus; their pane adds the focus line and dims the rest.
 - **The XO.** `watch` still wakes the XO for other projects, as `[<id>] [<project>] [held]
   <event>`, so it does the routine work silently (verifying, nudging, technical answers within
@@ -287,11 +291,12 @@ chartroom artifact done 21ba/reply-to-the-review   # sent: it stops showing as o
 - **Kinds.** `message` is text to send, `runbook` is commands to run (written ready to paste),
   `note` is anything else worth keeping, and `page` is a report to read, as HTML ([below](#pages-reports-to-read-and-print)).
 - **Refs** are `<id>/<slug>`: the task's short id or the inbox item's `i-xxxx` tag, as the
-  dashboard shows them (a full task id works too), and a slug of the title (`--slug` picks
+  board shows them (a full task id works too), and a slug of the title (`--slug` picks
   another). The id alone works when it has one open artifact. Adding the same slug again
   replaces the text and opens it again; there are no older versions.
-- **Where they show.** A chip on the card in the dashboard (one click copies and opens it), the
-  refs on the item's line in `chartroom board`, a count at the end of `board` and `status`, and
+- **Where they show.** Under "Pages and drafts" on the item in the app (a draft unfolds with
+  its text and a Copy button), the refs on the item's line in `chartroom board`, a count at the
+  end of `board` and `status`, and
   the `bearings` digest, which lists open messages and runbooks under Needs you.
 - **Clipboard.** `copy` uses `CHARTROOM_CLIPBOARD` if set (a command that reads the text on
   stdin; `-` prints instead), else `pbcopy` (macOS), `wl-copy` (Wayland), `xclip` or `xsel`
@@ -309,12 +314,12 @@ before showing it, and give you the ref, never the text in chat alone.
 ### Pages: reports to read and print
 
 A long report (findings, a review, an audit) reads badly in a terminal. A page is that report as
-one HTML file, kept with its task, that you read in the dashboard and print to PDF, instead of
+one HTML file, kept with its task, that you read in the app and print to PDF, instead of
 a Claude artifact:
 
 ```bash
 chartroom artifact add 21ba --kind page --title "Login audit" --description "What we found" audit.html
-chartroom artifact open 21ba/login-audit        # the dashboard's viewer, in the browser
+chartroom artifact open 21ba/login-audit        # the app's page viewer, in the browser
 chartroom artifact pdf 21ba/login-audit --out ~/Desktop/login-audit.pdf   # --paper a4, --landscape
 chartroom artifact export 21ba/login-audit --out ~/Desktop   # the .html itself
 chartroom artifact template --body              # the sample body: the classes the default page styles
@@ -338,10 +343,10 @@ chartroom artifact template --body              # the sample body: the classes t
   result yourself, and to name its ref in its `done` event; `report.md` stays the record the XO
   reads, the page its readable view. The XO makes one the same way when it writes something
   long for you.
-- **In the dashboard.** The header's **pages** link lists every page (newest first; read ones,
-  marked `done`, on request), and a card's page chip opens it in the viewer: the page in a
-  sandboxed frame, with **Download PDF** and **open alone**. See [the dashboard](docs/dashboard.md#dashboard)
-  for how it is served.
+- **In the app.** A ticket's "Pages and drafts" (and ⌘K, under "Pages") opens a page in the
+  viewer, `#/p/<home>/<task|inbox>/<owner>/<slug>`: the page in a sandboxed frame, with
+  **Download PDF** and **Open alone**. `artifact open` opens the same address (the home must be
+  registered). See [the app](docs/app.md#pages-drafts-and-the-terminal) for how it is served.
 - **PDF.** `pdf` prints with headless Chrome, Chromium or Edge: `CHARTROOM_CHROME` if set (a path
   or a command name), else the first on `PATH`, else the usual app locations (`chartroom doctor`
   says which, or why there is none). It prints a copy of the page with the policy first and
@@ -391,16 +396,16 @@ chartroom todo add --project shop "renew the cert by 2026-10-22"   # your own it
   hold, and the focus line says how many items it holds (`--all` shows them). Focus mode alone
   decides what is held: urgency only orders the list. An artifact follows its owner's card. The
   list counts its own items, artifacts included, so its held count can differ from `status`'s.
-- **Where it shows.** `board --json` (and the dashboard's JSON) carries it as `todo`, so the
+- **Where it shows.** `board --json` carries it as `todo`, so the
   [crew views](docs/crew-view.md#a-live-crew-view-in-claude-code-and-pi) draw it under their band with no second
-  poll, and the dashboard shows a "Your next steps" strip above the lanes.
+  poll.
 
 ## Several XOs on one machine
 
 One home is one XO with one crew. Give each company or client a home of its own:
 
 ```bash
-CHARTROOM_HOME=~/chartroom/acme chartroom init --name acme   # its own workspace and dashboard port
+CHARTROOM_HOME=~/chartroom/acme chartroom init --name acme   # its own workspace
 chartroom homes                                               # the list, and anything that would collide
 cd ~/chartroom/acme && claude                                 # that home's XO
 ```
@@ -466,7 +471,7 @@ chartroom migrate-home rollback --from laptop --home acme   # undoes move (and f
   | `rulings.log` | union, by timestamp, so the newest ruling per topic wins |
   | `commander.md` | the client's is the base; the brain's extra lines are appended for review |
   | `inbox.md`, `inbox/`, artifacts and relays | unioned; a clashing id is renamed on the brain's side |
-  | `config` | the brain's keys win (its own dashboard port), plus the client's other keys |
+  | `config` | the brain's keys win (its own workspace), plus the client's other keys |
   | the XO's Claude project dir | sessions and memory unioned |
 
   Every brain file a merge replaces is backed up under the state dir first.
@@ -524,7 +529,8 @@ either. herdr's agent and pane lists add the sessions it hosts. All the rules li
 - stops the sessions of closed tasks (a herdr tab or pane only when herdr places it in the task's
   own tab or worktree; otherwise the processes);
 - kills orphaned chartroom loops: a `watch` run from this home whose session is gone (its nearest
-  real parent is init), a `listen` of a closed task, a second dashboard for the home;
+  real parent is init), a `listen` of a closed task, and the retired web dashboard's server for
+  the home, still running from before the upgrade (the app replaces it);
 - kills processes left in a closed task's worktree, or in a chartroom worktree path that no
   longer exists;
 - deletes the branches of closed tasks whose work has landed since they closed (a pull request
@@ -615,7 +621,7 @@ with its whole conversation.
 - **Never** a worker mid-turn, one blocked at a dialog, a joined session, one running a tool
   command (a dev server, a monitor, a background wait: it would die with the agent), or one with
   no recorded session or transcript. A refusal says why, once, as a `note: not parked: ...`.
-- **Seeing it.** `status`, the board, the dashboard and the panel show `live: parked`, and the
+- **Seeing it.** `status`, the board and the panel show `live: parked`, and the
   task keeps its state (a parked `waiting` task is still `waiting`). `peek` shows the screen saved
   when it parked. Its Herdr tab goes while it is parked.
 - **Wakes.** A parked worker costs the watch nothing: it is not probed. A resume that fails
@@ -642,8 +648,8 @@ that is recognised from Claude Code's own session record when its transcript is 
   in `commander.md` with the live set, so a preference that changed three times reads as one
   line, and `rule list --all` still shows the whole chain. Text outside the block stays yours.
 - **Review, done, closed.** A worker's `done` report never marks the task done: it puts it in
-  `review` (finished, awaiting your look), and it stays on `status`, the dashboard's Needs you
-  lane and the panel until you say so. `chartroom close <id>` closes it (removing a clean
+  `review` (finished, awaiting your look), and it stays on `status`, the board's Needs you
+  lane, the app's Needs me and the panel until you say so. `chartroom close <id>` closes it (removing a clean
   worktree); `chartroom accept <id>` marks it `done` and keeps everything (a `note: accepted`
   event). A task from before `review` existed reads the same way: its `done` event is `review`
   until accepted. The state is derived from the log; nothing is rewritten.
@@ -688,9 +694,9 @@ automatic agent selection on that machine. The agent choice occurs at dispatch s
 brief and current node availability are included.
 
 `chartroom status` prints live counts and review outcomes per agent; `status --spread --json`
-returns just those counters. Both support `--all-homes`. The dashboard displays the same counters
-and `dashboard --json --all-homes` (also `board`) includes them for each home.
-`dashboard --all-homes` without JSON prints a board for each home. `doctor` reports local agent sign-ins
+returns just those counters. Both support `--all-homes`. `board --json --all-homes` (also
+`dashboard --json --all-homes`) includes them for each home, and `board --all-homes` without JSON
+prints a board for each home. `doctor` reports local agent sign-ins
 and full-session usability, subscription usage and exhaustion, plus each enrolled node's last reported agent availability.
 
 ### Subscription usage and moving exhausted work
@@ -725,8 +731,9 @@ chartroom move <id> --agent codex    # move to a specific agent (--dry-run previ
   (Codex's spend cap or block), or a worker hits a usage-limit error,
   automatic dispatch (`spread_pick`), automatic re-dispatch, node placement, and fallback skip
   that agent until its `resets_at` passes; an explicit `--backend` for an exhausted agent prints a
-  warning with its reset time. `chartroom doctor`, `chartroom nodes`, and the dashboard's
-  **Subscription usage** panel all show exhausted and near-limit agents with their reset times.
+  warning with its reset time. `chartroom doctor`, `chartroom nodes`, and the app's **Usage**
+  page (Fleet → Usage, `#/usage`, or ⌘K "Usage"; [docs/app.md](docs/app.md#what-it-does)) all show
+  exhausted and near-limit agents with their reset times.
 - **Detecting stops and moving work.** During `watch` (and on enrolled nodes via guest checks),
   chartroom detects anchored usage-limit stop banners on idle/stopped workers (`claude`, `codex`,
   `agy`, `grok`) — ignoring mid-turn output, prose, and tool output — marks only that machine's
@@ -796,8 +803,6 @@ $CHARTROOM_HOME/                    default ~/.chartroom
   relays/outbox.ndjson              the relays this home sent
   usage/<machine>--<agent>.json     subscription usage readings (plan, windows, resets_at, sample time; zero secrets)
   .changed                          the change stamp: rewritten after each write of what the board shows (its mtime is what counts)
-  .dashboard.pid  .dashboard.log    only while `chartroom dashboard --daemon` runs
-  .dashboard.token                  the dashboard's access token (0600), once it has been on the network
   sweep.log                         what `chartroom sweep --apply` closed, stopped and killed, one line each
   worktrees/<repo>/<id>/            task worktrees (unless the repo ignores .worktrees/)
 ```
@@ -840,7 +845,7 @@ outside the home, in `/tmp/chartroom-<uid>/bells/` (`CHARTROOM_RUNTIME_DIR` move
 Bash, or where no FIFO can be made, `watch` and `listen` poll as before.
 
 `.changed`, the home's change stamp, is for views that poll the board (crew-view's band; the
-radar and the Herdr panel may use it too): chartroom rewrites it after each write of what the
+app's server watches it too): chartroom rewrites it after each write of what the
 board shows, once that write is on disk. That covers a task's `events.log` (`chartroom event`, a
 hook's line, a steer, chartroom's notes) and `meta.json` (`new`, `dispatch`, `accept`, `close`, a
 runner's handles), `inbox.md` (`inbox add|project|tag`, `todo done`), `focus.json`, an artifact
@@ -887,7 +892,7 @@ contract above still holds for every other file. See [docs/store.md](docs/store.
 - A relay from another home is delivered, never acted on: chartroom runs nothing because one
   arrived, and the XO treats its text as data to weigh.
 - A page is crew-written HTML, so it is treated as untrusted everywhere: kept with a policy that
-  runs no scripts and fetches nothing, served sandboxed and framed only by the dashboard, and
+  runs no scripts and fetches nothing, served sandboxed and framed only by the app, and
   printed with scripts blocked in a throwaway browser profile. `add` refuses one that looks like
   it holds a secret, and nothing uploads a page (`publish` refuses until hosting is built).
 
@@ -916,20 +921,17 @@ machine), then `~/.config/chartroom/config` (`KEY=VALUE`, no shell evaluation;
 | `CHARTROOM_CLAUDE_ALLOWED_TOOLS` | `Bash Read Edit Write Glob Grep WebFetch WebSearch` | headless Claude |
 | `CHARTROOM_WATCH_INTERVAL` | `3` | seconds between `watch`'s looks at what does not ring its doorbell, and between its full rounds (every task, backend state, overdue waits) while a worker's state must be polled |
 | `CHARTROOM_WATCH_HC_INTERVAL` | `60` | seconds between `watch`'s full rounds while hc's event stream carries every open task: how late a terminal that vanishes with no event at all can wake |
-| `CHARTROOM_DASHBOARD_PORT` | `4517` | the port `dashboard` and `dashboard open` use (`--port` overrides); each home on a machine needs its own |
-| `CHARTROOM_DASHBOARD_RECENT_HOURS` | `48` | how far back the dashboard's Recently finished lane reaches |
-| `CHARTROOM_DASHBOARD_THEME` | `chartroom` | the dashboard's default theme: `chartroom` or `hud` (`--theme` overrides) |
-| `CHARTROOM_DASHBOARD_HOST` | `127.0.0.1` | the IPv4 address the dashboard binds; `0.0.0.0` is every interface (`--host` / `--expose` override). Beyond loopback it needs the access token |
+| `CHARTROOM_DASHBOARD_RECENT_HOURS` | `48` | how far back the board's Recently finished lane reaches (the name is from the retired dashboard) |
 | `CHARTROOM_APP_PORT` | `4516` | the port the [app](docs/app.md#the-chartroom-app) listens on, on 127.0.0.1 only (`--port` overrides) |
 | `CHARTROOM_APP_USER` | *(none)* | the one Tailscale login the app lets in; `app serve` refuses to start without it, unless `--no-auth` |
 | `CHARTROOM_APP_PUSH` | `off` | `on`: the app sends new Needs me items by Web Push (through the browser maker's push service, encrypted end to end) to the devices that turned it on; needs node on the brain |
 | `CHARTROOM_APP_PUSH_SUBJECT` | `mailto:chartroom@example.com` | the VAPID contact the push services see (a `mailto:` or `https:` URL) |
-| `CHARTROOM_GH` | `gh` | the gh binary the dashboard uses for PR states |
-| `CHARTROOM_MACHINE_NAME` | the host name | this machine's label on the [fleet radar](docs/dashboard.md#the-fleet-radar-every-agent-on-every-machine) |
+| `CHARTROOM_GH` | `gh` | the gh binary for PR states: the app's tickets, and whether a branch's work has landed |
+| `CHARTROOM_MACHINE_NAME` | the host name | this machine's label on the [fleet radar](docs/fleet.md#the-fleet-radar) |
 | `CHARTROOM_RADAR_MACHINES` | herdr's saved machines | the other machines the radar reads, read-only over ssh: `label[=ssh-target] ...`, or `none` |
-| `CHARTROOM_NODES` | the radar's list | the other machines `chartroom nodes` reads: `label[=ssh-target] ...`, or `none` ([nodes](docs/dashboard.md#several-machines-nodes)) |
+| `CHARTROOM_NODES` | the radar's list | the other machines `chartroom nodes` reads: `label[=ssh-target] ...`, or `none` ([nodes](docs/fleet.md#several-machines-nodes)) |
 | `CHARTROOM_NODES_TIMEOUT` | `45` | seconds `chartroom nodes` waits for a machine's probe |
-| `CHARTROOM_BRAIN_URL` | the app's Tailscale Serve URL | the URL `chartroom node add` tells a device to join ([devices](docs/dashboard.md#devices-machines-that-report-to-the-brain)) |
+| `CHARTROOM_BRAIN_URL` | the app's Tailscale Serve URL | the URL `chartroom node add` tells a device to join ([devices](docs/fleet.md#devices-machines-that-report-to-the-brain)) |
 | `CHARTROOM_NODE_STALE_SECONDS` / `CHARTROOM_NODE_LOST_MINUTES` | `45` / `10` | a device's heartbeat older than this is `stale`; silent this long while the brain's app server is up, `lost` |
 | `CHARTROOM_DEVICE_HEARTBEAT` | `15` | on a device: seconds between its agent's heartbeats |
 | `CHARTROOM_KEYCHAIN` / `CHARTROOM_LAUNCHCTL` | `/usr/bin/security` / `/bin/launchctl` on macOS | on a device: where its token is kept and how its agent is run; `none` for a 0600 file and an agent you run yourself (`chartroom device run`) |
@@ -941,9 +943,8 @@ machine), then `~/.config/chartroom/config` (`KEY=VALUE`, no shell evaluation;
 | `CHARTROOM_CPU_SAMPLER` | `on` | `off`: the app server and a device's agent do not keep the minute's CPU use |
 | `CHARTROOM_NODE_CONFIG` | `~/.config/chartroom/node` | environment only: this machine's node file (`chartroom node init`), with `CHARTROOM_NODE_CPU_BUDGET`, `_MEM_BUDGET` (its limits, percent in use: `chartroom node limits`), `_ON_BATTERY` (`pause`/`allow`), `_PRIORITY` (`normal`/`nice`/`background`), `_PROJECT_ROOTS`, `_ACCEPT` (`on`/`off`) and `_CLONE` (`on`: it may clone a project it has no checkout of; off at first) |
 | `CHARTROOM_RADAR_REMOTE_PATH` | `$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin` | put first on PATH on another machine (its non-interactive ssh shell lacks them) |
-| `CHARTROOM_RADAR_LOCAL_MIN_SECONDS` / `_LOCAL_MAX_SECONDS` / `_REMOTE_SECONDS` | `15` / `60` / `60` | while the radar is open: this machine is re-read on a change at most this often, and at least this often; another machine this often |
-| `CHARTROOM_RADAR_DONE_HOURS` / `_STALE_DAYS` | `24` / `3` | the radar's "active only" view archives a docked task quiet this many hours, and a task whose session is gone and quiet this many days |
-| `CHARTROOM_OPENER` | `open` / `xdg-open` | command `dashboard open` runs with the URL |
+| `CHARTROOM_RADAR_LOCAL_MIN_SECONDS` / `_LOCAL_MAX_SECONDS` / `_REMOTE_SECONDS` / `_DONE_HOURS` / `_STALE_DAYS` | `15` / `60` / `60` / `24` / `3` | how often the retired web radar re-read, and what its archive folded away; `radar machines` still lists and checks them, and nothing else reads them |
+| `CHARTROOM_OPENER` | `open` / `xdg-open` | command `dashboard open`, `app open` and `artifact open` run with the URL |
 | `CHARTROOM_CLIPBOARD` | `pbcopy` / `wl-copy` / `xclip` / `xsel`, whichever is there | command `artifact copy` pipes the text into (split on spaces); `-` prints it instead |
 | `CHARTROOM_CHROME` | the first of `google-chrome`, `chromium`, `chrome`, `msedge` (and kin) on PATH, else the usual app locations | the Chrome or Chromium `artifact pdf` prints with: a path or a command name; when set, nothing else is tried |
 | `CHARTROOM_PDF_PAPER` | `letter` | the paper `artifact pdf` prints on: `letter`, `legal`, `ledger`, `tabloid`, `a3`, `a4`, `a5`, `b4`, `b5` (`--paper` overrides) |

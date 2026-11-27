@@ -26,7 +26,7 @@ setup() {
 }
 
 teardown() {
-  brain_cr dashboard stop >/dev/null 2>&1 || true
+  brain_cr app stop >/dev/null 2>&1 || true
   [[ -f "$CHARTROOM_HOME/.brain/tunnel" ]] && kill "$(cut -d' ' -f1 "$CHARTROOM_HOME/.brain/tunnel")" 2>/dev/null
   return 0
 }
@@ -385,25 +385,46 @@ new_remote() { # a task made through the client; prints its id
   [ "$status" -ne 0 ]; [[ "$output" == *"ssh -t studio hc attach t9"* ]]
 }
 
-@test "dashboard open: the brain's dashboard through a tunnel, opened here; stop leaves the brain's up" {
+@test "dashboard open: the brain's app at its tailnet address, opened here with no tunnel; artifact open lands on the page" {
   command -v python3 >/dev/null 2>&1 || skip "python3 is not installed"
-  local bp
-  bp="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
-  echo "CHARTROOM_DASHBOARD_PORT=$bp" >>"$BRAIN/config"
   printf '#!/usr/bin/env bash\necho "$1" >>%q\n' "$BATS_TEST_TMPDIR/opened" >"$BIN/opener"; chmod +x "$BIN/opener"
-  export CHARTROOM_OPENER="$BIN/opener" CHARTROOM_BRAIN_TUNNEL_WAIT=0
+  export CHARTROOM_OPENER="$BIN/opener"
+  local cfg="$BH/.config/chartroom/config" port url
+  # no app on the brain: says so, and how to start it there
   run cr dashboard open
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"the brain's dashboard, through a tunnel"* ]]
-  # the brain's port is taken on this (shared) test machine, so the tunnel takes the next free one
-  grep -q "studio tunnel $((bp + 1)):127.0.0.1:$bp" "$FAKE_SSH_DIR/calls.log"
-  grep -q "^http://127.0.0.1:$((bp + 1))/" "$BATS_TEST_TMPDIR/opened"
-  run brain_cr dashboard status
-  [ "$status" -eq 0 ]
+  [ "$status" -ne 0 ]; [[ "$output" == *"the app is not running"* ]]
+  # an app only the brain's own browser may open (--no-auth): its loopback address is refused here
+  echo "CHARTROOM_TAILSCALE=none" >>"$cfg"
+  brain_cr app serve --daemon --port 0 --no-auth >/dev/null
+  run cr dashboard open
+  [ "$status" -ne 0 ]; [[ "$output" == *"its own loopback address"* ]]
+  [ ! -e "$BATS_TEST_TMPDIR/opened" ]
+  brain_cr app stop >/dev/null
+  # the app on the tailnet (Tailscale Serve, faked): its https address is opened here
+  printf 'CHARTROOM_APP_USER=owner@example.com\n' >>"$cfg"
+  brain_cr app serve --daemon --port 0 >/dev/null
+  port="$(brain_cr app status | sed -nE 's#^app running: http://127\.0\.0\.1:([0-9]+).*#\1#p')"
+  printf '#!/usr/bin/env bash\n[[ "$1 $2" == "serve status" ]] || exit 1\nprintf "https://studio.example.ts.net (tailnet only)\\n|-- / proxy http://127.0.0.1:%s\\n"\n' "$port" >"$BIN/tailscale"; chmod +x "$BIN/tailscale"
+  sed -i.bak "s#^CHARTROOM_TAILSCALE=none\$#CHARTROOM_TAILSCALE=$BIN/tailscale#" "$cfg"
+  url="https://studio.example.ts.net/"
+  run cr dashboard open
+  [ "$status" -eq 0 ]; [ "$output" = "app open: $url (the brain's app)" ]
+  [ "$(cat "$BATS_TEST_TMPDIR/opened")" = "$url" ]
+  ! grep -q ' tunnel ' "$FAKE_SSH_DIR/calls.log"
+  run cr dashboard
+  [ "$status" -eq 0 ]; [ "$output" = "app open: $url (the brain's app)" ]
+  [ "$(cr dashboard url)" = "$url" ]
+  # a page: on its own page in the brain's app
+  local id ref; id="$(new_remote)"
+  ref="$(cr artifact add "$id" --kind page --title "Weekly" - <<<"<p>hi</p>")"
+  run cr artifact open "$ref"
+  [ "$status" -eq 0 ]; [ "$output" = "app open: ${url}#/p/acme/task/$id/weekly (the brain's app)" ]
+  # a tunnel an older chartroom left for the old dashboard: dashboard stop ends it
+  sleep 300 &
+  printf '%s 4600 4517\n' "$!" >"$CHARTROOM_HOME/.brain/tunnel"
   run cr dashboard stop
-  [[ "$output" == *"stopped the tunnel"* ]]
-  run brain_cr dashboard status
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 0 ]; [[ "$output" == *"stopped the old dashboard tunnel"* ]]
+  [ ! -e "$CHARTROOM_HOME/.brain/tunnel" ]
 }
 
 @test "artifacts: copy to this clipboard, export here, add a local page with its image" {

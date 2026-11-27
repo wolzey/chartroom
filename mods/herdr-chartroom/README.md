@@ -112,7 +112,7 @@ A hidden panel still notes changes, and reads once it is shown again if anything
 | File | What it is |
 |---|---|
 | `main.js` | the panel |
-| `xo.js` | which terminal is a home's XO and what to type into it: pure, unit-tested by `test/js/herdr-xo.test.js` (`bats test/dashboard-js.bats`) |
+| `xo.js` | which terminal is a home's XO and what to type into it: pure, unit-tested by `test/js/herdr-xo.test.js` (`bats test/app-js.bats`) |
 | `schedule.js` | when to read the radar: on screen or not, which watched paths matter, the workers' state, the floor and the fallback: pure, unit-tested by `test/js/herdr-schedule.test.js` |
 | `mod.json` | `place: none`, the title |
 | `refresh.svg`, `compass.svg` | the refresh button; the tab bar button's icon |

@@ -610,7 +610,7 @@ def mentions(home, tid, lines, pool):
     return sorted(found)
 
 
-# dashboard_task_extra's facts (lib/dashboard.sh), for the board: PR/MR links in the events and
+# task_extra_json's facts (lib/board.sh), for the board: PR/MR links in the events and
 # report.md, which task files there are, the newest worker-meaningful event.
 PR_URL = re.compile(r"https?://[^\]\[ <>()\"'`]+/(?:pull|pulls|merge_requests|pullrequest)/[0-9]+")
 TASK_FILES = ("brief.md", "report.md", "plan.md", "final.md")
@@ -766,7 +766,7 @@ def marks_doc(conn, hid):
 
 # ------------------------------------------------------------------ inbox items and focus
 # An inbox item born in the store: {id, section (waiting), created (date), project, text}, read
-# beside inbox.md's lines (lib/dashboard.sh dashboard_inbox). Its id is unique across both.
+# beside inbox.md's lines (lib/board.sh inbox_items_json). Its id is unique across both.
 # They are listed in the order they were added (rowid), as inbox.md's lines are.
 
 INBOX_TAG = re.compile(r"^- \[(i-[0-9a-f]{4,})\] ", re.M)

@@ -2,7 +2,7 @@
 # Pages: artifacts of kind page, a report as one self-contained HTML file. How `add` keeps them
 # (the default page around a fragment, the page policy, inlined images, refused secrets), export,
 # pdf (a fake Chrome for the plumbing, a real one when there is one), publish's refusal, and how
-# the dashboard serves them: sandboxed, under their own policy, behind the token when exposed.
+# the app serves them: sandboxed, under their own policy, to its owner alone.
 
 load test_helper
 
@@ -14,7 +14,7 @@ setup() {
   CSP="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; base-uri 'none'; form-action 'none'"
 }
 
-teardown() { cr dashboard stop >/dev/null 2>&1 || true; }
+teardown() { cr app stop >/dev/null 2>&1 || true; }
 
 # A task with one page from a small fragment; sets ID, SID, D (its artifacts dir), REF and PAGE.
 page_task() {
@@ -295,7 +295,7 @@ EOF
   [ "$(cr artifact template --body)" = "$(cat "$REPO_ROOT/templates/page-sample.html")" ]
 }
 
-# ---------------------------------------------------------------- the dashboard
+# ---------------------------------------------------------------- the app
 
 need_python() { [[ -n "$PY" ]] || skip "python3 not available"; link_tool "$PY" python3; }
 CURL_MAX=10
@@ -303,122 +303,124 @@ get() { curl -s --max-time "$CURL_MAX" "$@"; }
 code() { curl -s -o /dev/null --max-time "$CURL_MAX" -w '%{http_code}' "$@"; }
 # (an "end" line after them, so the last header keeps its newline through $(...))
 headers() { curl -s -D - -o /dev/null --max-time "$CURL_MAX" "$@" | tr -d '\r'; echo end; }
-start_daemon() {
-  run cr dashboard --daemon --port 0 --no-gh "$@"
-  [ "$status" -eq 0 ] || { echo "$output"; cat "$CHARTROOM_HOME/.dashboard.log" 2>/dev/null; false; }
-  read -r _ PORT _ <"$CHARTROOM_HOME/.dashboard.pid"
-  URL="http://127.0.0.1:$PORT"
+# The app, for this machine's browser alone (--no-auth), with this home registered as acme; sets
+# URL (the app) and A (this home's artifacts in it).
+start_app() {
+  export CHARTROOM_TAILSCALE=none
+  cr homes add acme >/dev/null
+  run cr app serve --daemon --port 0 --no-auth
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  PORT="$(cr app status | sed -nE 's#^app running: http://127\.0\.0\.1:([0-9]+).*#\1#p')"
+  URL="http://127.0.0.1:$PORT"; A="$URL/api/v1/homes/acme/artifacts"
 }
 
-@test "server: a page is served sandboxed under its own policy, only into this dashboard's frames; nothing else as HTML" {
+@test "app: a page is served sandboxed under its own policy, only into the app's frames; nothing else as HTML" {
   need_python
   page_task
   local note; note="$(cr artifact add "$ID" --kind note --title "Plain" - <<<"plain")"
   echo '<p>worker</p>' >"$D/own.html"
   echo '<p>worker</p>' >"$D/plain.html"
-  start_daemon
-  local h; h="$(headers "$URL/task/$ID/artifacts/weekly-report.html")"
+  start_app
+  local h; h="$(headers "$A/task/$ID/weekly-report.html")"
   [[ "$h" == "HTTP/1."*" 200 "* ]]
   [[ "$h" == *$'\nContent-Type: text/html; charset=utf-8\n'* ]]
   [[ "$h" == *$'\nContent-Security-Policy: sandbox allow-popups allow-popups-to-escape-sandbox; '"$CSP; frame-ancestors 'self'"$'\n'* ]]
   [[ "$h" == *$'\nX-Frame-Options: SAMEORIGIN\n'* && "$h" == *$'\nX-Content-Type-Options: nosniff\n'* && "$h" == *$'\nReferrer-Policy: no-referrer\n'* ]]
-  get "$URL/task/$ID/artifacts/weekly-report.html" >"$BATS_TEST_TMPDIR/served"; cmp "$BATS_TEST_TMPDIR/served" "$PAGE"
+  # (one policy only: the app's own, which no frame may hold, is not sent beside it)
+  [ "$(grep -c '^Content-Security-Policy:' <<<"$h")" -eq 1 ]
+  get "$A/task/$ID/weekly-report.html" >"$BATS_TEST_TMPDIR/served"; cmp "$BATS_TEST_TMPDIR/served" "$PAGE"
   # only a page's own .html: not a worker's file, not one beside a note, not a sidecar
-  [ "$(code "$URL/task/$ID/artifacts/own.html")" = 404 ]
-  [ "$(code "$URL/task/$ID/artifacts/plain.html")" = 404 ]
-  [ "$(code "$URL/task/$ID/artifacts/weekly-report.json")" = 404 ]
-  [ "$(code --path-as-is "$URL/task/$ID/artifacts/../brief.html")" = 404 ]
-  [ "$(code -X POST "$URL/task/$ID/artifacts/weekly-report.html")" = 405 ]
-  # the other kinds stay plain text that no frame may hold
-  h="$(headers "$URL/task/$ID/artifacts/plain.md")"
-  [[ "$h" == *$'\nContent-Type: text/plain; charset=utf-8\n'* && "$h" == *$'\nX-Frame-Options: DENY\n'* ]]
-  # the list and the viewer: one page that frames only this server; the frame is sandboxed too
-  local p
-  for p in /pages /pages/ "/pages/task/$ID/weekly-report" "/pages/task/$ID/plain"; do
-    h="$(headers "$URL$p")"
-    [[ "$h" == "HTTP/1."*" 200 "* && "$h" == *$'\nX-Frame-Options: DENY\n'* ]]
-    [[ "$h" == *$'\nContent-Security-Policy: default-src \'none\'; script-src \'unsafe-inline\'; '*"; frame-src 'self'"$'\n'* ]]
-  done
-  [[ "$(get "$URL/pages")" == *'sandbox: "allow-popups allow-popups-to-escape-sandbox"'* ]]
-  [ "$(code "$URL/pages/task/$ID/Bad%20Slug")" = 404 ]
-  [ "$(code "$URL/pages/other/$ID/weekly-report")" = 404 ]
-  # /api/pages: every artifact, done ones too
+  [ "$(code "$A/task/$ID/own.html")" = 404 ]
+  [ "$(code "$A/task/$ID/plain.html")" = 404 ]
+  [ "$(code "$A/task/$ID/weekly-report.json")" = 404 ]
+  [ "$(code --path-as-is "$A/task/$ID/../brief.html")" = 404 ]
+  [ "$(code "$A/task/..%2F$ID/weekly-report.html")" = 404 ]
+  [ "$(code "$A/other/$ID/weekly-report.html")" = 404 ]
+  [ "$(code "$URL/api/v1/homes/nope/artifacts/task/$ID/weekly-report.html")" = 404 ]
+  # the other kinds stay plain text under the app's own policy, which no frame may hold
+  h="$(headers "$A/task/$ID/plain.md")"
+  [[ "$h" == *$'\nContent-Type: text/plain; charset=utf-8\n'* && "$h" == *"frame-ancestors 'none'"* ]]
+  [ "$(get "$A/task/$ID/plain.md")" = plain ]
+  # the snapshot names the page on its task, and the viewer is the app's own route
+  [ "$(curl -s "$URL/api/v1/state" | jq -r --arg id "$ID" '[.homes[0].snapshot.tasks[] | select(.id == $id) | .artifacts[] | select(.kind == "page") | .slug] | first')" = weekly-report ]
+  grep -q 'sandbox="allow-popups allow-popups-to-escape-sandbox"' "$REPO_ROOT/app/src/pages.js"
+  # the ticket lists every artifact of its task, done ones too
   cr artifact done "$note" >/dev/null
-  [ "$(get "$URL/api/pages" | jq -c '.artifacts | map([.ref, .kind, (.done != null)]) | sort')" = "[[\"$note\",\"note\",true],[\"$REF\",\"page\",false]]" ]
-  # the board links to the list, and a page's chip to its viewer
-  local page; page="$(get "$URL/")"
-  [[ "$page" == *'href="/pages"'* && "$page" == *'if (a.kind === "page")'* ]]
-  # no external requests from the viewer either
-  [ -z "$(get "$URL/pages" | grep -Ei '(src|href)=["'"'"']?(https?:)?//|@import|url\(https?:' || true)" ]
+  [ "$(get "$URL/api/v1/homes/acme/tasks/$ID" | jq -c '.artifacts | map([.slug, .kind, (.done != null)]) | sort')" = '[["plain","note",true],["weekly-report","page",false]]' ]
 }
 
-@test "server: a page's PDF is printed on request by the CLI, as a download; failures say why" {
+@test "app: a page's PDF is printed on request by the CLI, as a download; never for another site; failures say why" {
   need_python
   use_fake chrome
   export CHARTROOM_CHROME=chrome FAKE_CHROME_FAIL="$BATS_TEST_TMPDIR/fail-now"
   page_task
   local note; note="$(cr artifact add "$ID" --kind note --title "Plain" - <<<"plain")"
-  start_daemon
-  local h; h="$(curl -s -D - -o "$BATS_TEST_TMPDIR/dl.pdf" --max-time "$CURL_MAX" "$URL/task/$ID/artifacts/weekly-report.pdf" | tr -d '\r'; echo end)"
+  start_app
+  local h; h="$(curl -s -D - -o "$BATS_TEST_TMPDIR/dl.pdf" --max-time "$CURL_MAX" "$A/task/$ID/weekly-report.pdf" | tr -d '\r'; echo end)"
   [[ "$h" == "HTTP/1."*" 200 "* ]]
   [[ "$h" == *$'\nContent-Type: application/pdf\n'* && "$h" == *$'\nContent-Disposition: attachment; filename="weekly-report.pdf"\n'* ]]
   [ "$(sed -n 1p "$BATS_TEST_TMPDIR/dl.pdf")" = "%PDF-1.4" ]
   grep -qF '<h2>Findings</h2>' "$BATS_TEST_TMPDIR/dl.pdf"
   grep -q '^chrome --headless=new ' "$FAKE_LOG"
-  # the viewer's own fetch says same-origin, a typed URL none; another site's page (an <img> to
-  # this URL, which needs no token on loopback) never starts a print
-  [ "$(code -H 'Sec-Fetch-Site: same-origin' "$URL/task/$ID/artifacts/weekly-report.pdf")" = 200 ]
-  [ "$(code -H 'Sec-Fetch-Site: none' "$URL/task/$ID/artifacts/weekly-report.pdf")" = 200 ]
+  # the app's own link says same-origin, a typed URL none; another site's page never starts a print
+  [ "$(code -H 'Sec-Fetch-Site: same-origin' "$A/task/$ID/weekly-report.pdf")" = 200 ]
+  [ "$(code -H 'Sec-Fetch-Site: none' "$A/task/$ID/weekly-report.pdf")" = 200 ]
   local n; n="$(grep -c '^chrome ' "$FAKE_LOG")"
-  [ "$(code -H 'Sec-Fetch-Site: cross-site' "$URL/task/$ID/artifacts/weekly-report.pdf")" = 403 ]
-  [ "$(code -H 'Sec-Fetch-Site: same-site' "$URL/task/$ID/artifacts/weekly-report.pdf")" = 403 ]
-  [[ "$(get -H 'Sec-Fetch-Site: cross-site' "$URL/task/$ID/artifacts/weekly-report.pdf")" == "a PDF is printed only from this dashboard" ]]
+  [ "$(code -H 'Sec-Fetch-Site: cross-site' "$A/task/$ID/weekly-report.pdf")" = 403 ]
+  [ "$(code -H 'Sec-Fetch-Site: same-site' "$A/task/$ID/weekly-report.pdf")" = 403 ]
+  [[ "$(get -H 'Sec-Fetch-Site: cross-site' "$A/task/$ID/weekly-report.pdf")" == "a PDF is printed only from the app" ]]
   # not a page, or no page at all: 404; and none of these printed anything
-  [ "$(code "$URL/task/$ID/artifacts/plain.pdf")" = 404 ]
-  [ "$(code "$URL/task/$ID/artifacts/nope.pdf")" = 404 ]
+  [ "$(code "$A/task/$ID/plain.pdf")" = 404 ]
+  [ "$(code "$A/task/$ID/nope.pdf")" = 404 ]
   [ "$(grep -c '^chrome ' "$FAKE_LOG")" -eq "$n" ]
   # a print that fails: 500 with the CLI's reason
   touch "$FAKE_CHROME_FAIL"
-  [ "$(code "$URL/task/$ID/artifacts/weekly-report.pdf")" = 500 ]
-  [[ "$(get "$URL/task/$ID/artifacts/weekly-report.pdf")" == "could not print the PDF: Chrome printed no PDF"* ]]
+  [ "$(code "$A/task/$ID/weekly-report.pdf")" = 500 ]
+  [[ "$(get "$A/task/$ID/weekly-report.pdf")" == "could not print the PDF: Chrome printed no PDF"* ]]
 }
 
-@test "server: exposed, the pages, the viewer, a page and its PDF need the token like the rest" {
+@test "app: only its owner reaches a page or its PDF, as every other route" {
   need_python
-  use_fake chrome
-  export CHARTROOM_CHROME=chrome
   page_task
-  start_daemon --expose
-  local t p jar="$BATS_TEST_TMPDIR/jar"
-  t="$(cat "$CHARTROOM_HOME/.dashboard.token")"
-  for p in /pages "/pages/task/$ID/weekly-report" /api/pages "/task/$ID/artifacts/weekly-report.html" "/task/$ID/artifacts/weekly-report.pdf"; do
-    [ "$(code "$URL$p")" = 401 ]
+  export CHARTROOM_TAILSCALE=none
+  cr homes add acme >/dev/null
+  echo "CHARTROOM_APP_USER=owner@example.com" >"$CHARTROOM_CONFIG"
+  run cr app serve --daemon --port 0
+  [ "$status" -eq 0 ]
+  PORT="$(cr app status | sed -nE 's#^app running: http://127\.0\.0\.1:([0-9]+).*#\1#p')"
+  local p A="http://127.0.0.1:$PORT/api/v1/homes/acme/artifacts"
+  for p in "task/$ID/weekly-report.html" "task/$ID/weekly-report.pdf"; do
+    [ "$(code "$A/$p")" = 403 ]
+    [ "$(code -H 'Tailscale-User-Login: someone@example.com' "$A/$p")" = 403 ]
   done
-  # the token once, then the cookie: the viewer keeps its path through the redirect
-  local h; h="$(headers "$URL/pages/task/$ID/weekly-report?token=$t")"
-  [[ "$h" == *$'\nLocation: /pages/task/'"$ID"$'/weekly-report\n'* ]]
-  [ "$(code -L -c "$jar" -b "$jar" "$URL/pages?token=$t")" = 200 ]
-  for p in /pages "/pages/task/$ID/weekly-report" /api/pages "/task/$ID/artifacts/weekly-report.html" "/task/$ID/artifacts/weekly-report.pdf"; do
-    [ "$(code -b "$jar" "$URL$p")" = 200 ]
-  done
+  [ "$(code -H 'Tailscale-User-Login: owner@example.com' "$A/task/$ID/weekly-report.html")" = 200 ]
 }
 
-@test "open: shows the artifact in the dashboard's viewer, starting the dashboard when it is not up" {
+@test "open: shows the artifact on its page in the app, in this machine's browser; a client gets the address" {
   need_python
-  export CHARTROOM_OPENER="$BATS_TEST_TMPDIR/opener" CHARTROOM_DASHBOARD_PORT=0
+  export CHARTROOM_OPENER="$BATS_TEST_TMPDIR/opener"
   printf '#!/bin/sh\necho "$@" >>"%s"\n' "$BATS_TEST_TMPDIR/opened" >"$CHARTROOM_OPENER"; chmod +x "$CHARTROOM_OPENER"
   page_task
+  # no app yet: says so, and what works without it
+  cr homes add acme >/dev/null
+  run cr artifact open "$REF"
+  [ "$status" -ne 0 ]; [[ "$output" == *"the app is not running"*"chartroom artifact export $REF"* ]]
+  start_app
   run cr artifact open "$REF"
   [ "$status" -eq 0 ]
-  read -r _ PORT _ <"$CHARTROOM_HOME/.dashboard.pid"
-  [[ "$output" == *"dashboard open: http://127.0.0.1:$PORT/pages/task/$ID/weekly-report" ]]
-  [ "$(tail -1 "$BATS_TEST_TMPDIR/opened")" = "http://127.0.0.1:$PORT/pages/task/$ID/weekly-report" ]
-  [ "$(code "http://127.0.0.1:$PORT/pages/task/$ID/weekly-report")" = 200 ]
-  # an inbox item's, through the same running dashboard
+  [ "$output" = "app open: $URL/#/p/acme/task/$ID/weekly-report" ]
+  [ "$(tail -1 "$BATS_TEST_TMPDIR/opened")" = "$URL/#/p/acme/task/$ID/weekly-report" ]
+  # an inbox item's
   local tag ref; tag="$(cr inbox add --project webapp "read this?")"
   ref="$(cr artifact add "$tag" --kind page --title "For you" - <<<"<p>hi</p>")"
   run cr artifact open "$ref"
-  [ "$status" -eq 0 ]; [[ "$output" == *"/pages/inbox/$tag/for-you" ]]
+  [ "$status" -eq 0 ]; [[ "$output" == *"/#/p/acme/inbox/$tag/for-you" ]]
+  [ "$(code "$A/inbox/$tag/for-you.html")" = 200 ]
+  # through the brain's gate: the address only, nothing opened there
+  local before; before="$(wc -l <"$BATS_TEST_TMPDIR/opened")"
+  run env CHARTROOM_GATE=1 "$CHARTROOM" artifact open "$REF"
+  [ "$status" -eq 0 ]; [ "$output" = "dashboard running: $URL/#/p/acme/task/$ID/weekly-report" ]
+  [ "$(wc -l <"$BATS_TEST_TMPDIR/opened")" -eq "$before" ]
   run cr artifact open
   [ "$status" -ne 0 ]; [[ "$output" == *"usage: chartroom artifact open <ref>"* ]]
 }

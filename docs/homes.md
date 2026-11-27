@@ -6,21 +6,21 @@ One machine can carry several homes, each with its own XO and crew. This page co
 
 One home is one XO with one crew. When your work splits cleanly, say one home per company or
 client, give each its own home: its own projects, preferences and rulings, inbox, tasks and
-crew, dashboard and agent memory, and its own XO session. Nothing of one home's leaks into
+crew and agent memory, and its own XO session. Nothing of one home's leaks into
 another's digest, and a question is never answered in the wrong company's terms.
 
 ```bash
-CHARTROOM_HOME=~/chartroom/acme   chartroom init --name acme     # workspace acme-crew, dashboard port 4518
-CHARTROOM_HOME=~/chartroom/globex chartroom init --name globex   # workspace globex-crew, dashboard port 4519
+CHARTROOM_HOME=~/chartroom/acme   chartroom init --name acme     # workspace acme-crew
+CHARTROOM_HOME=~/chartroom/globex chartroom init --name globex   # workspace globex-crew
 chartroom homes                                                   # the list, and anything that would collide
 ```
 
 `init --name` writes the home's own settings to `<home>/config` (the same `KEY=VALUE` format as
 `~/.config/chartroom/config`, and it wins over it), only for keys it does not set yet: a
 workspace of its own (`CHARTROOM_WORKSPACE`), so its workers' tabs never mix with another
-home's, and a dashboard port of its own (`CHARTROOM_DASHBOARD_PORT`, the next free one from
-4518). Add anything else that should differ, such as `CHARTROOM_PROJECT_ROOTS` narrowed to that
-client's repositories, so `chartroom project` only finds theirs. It also adds the home to
+home's. A home no longer gets a port: the [app](app.md) serves every registered home on one
+port, and `init --dashboard-port` is ignored, with a warning. Add anything else that should
+differ, such as `CHARTROOM_PROJECT_ROOTS` narrowed to that client's repositories, so `chartroom project` only finds theirs. It also adds the home to
 `~/.config/chartroom/homes`, one `name=path` line each. `chartroom homes add <name> <path>`
 registers an existing home without writing anything in it, and `homes rm` unregisters one
 without touching it.
@@ -46,10 +46,9 @@ in, and stops if it does not, so a session never drives another home by mistake.
 
 | Per home | Shared by every home on the machine |
 |---|---|
-| `tasks/`, `worktrees/`, `inbox.md`, `commander.md`, `rulings.log`, `projects.md`, `focus.json`, `relays/` | the install, the skills and the crew view |
+| `tasks/`, `worktrees/`, `inbox.md`, `commander.md`, `rulings.log`, `projects.md`, `focus.json`, `relays/` | the install, the skills, the crew view, and the [app](app.md), which shows every registered home |
 | the workspace its workers' tabs open in | `~/.config/chartroom/config` (harness, branch prefix, backend order), under each home's own `config` |
-| the dashboard (`.dashboard.*`, its port, its page title) and its access cookie | the list of homes |
-| the `watch` cursor and wake stream | herdr agent names (task ids, unique per machine) |
+| the `watch` cursor and wake stream | the list of homes; herdr agent names (task ids, unique per machine) |
 | what `sweep` frees: another registered home's workers, loops and listeners are neither freed nor listed | a project two homes both work in (its `.worktrees/` holds both homes' worktrees, by task id) |
 
 **Reading across homes.** `status`, `board`, `todo`, `inbox list` and `relay list` take `--all-homes`: the
@@ -86,8 +85,8 @@ so its XO session gets a wake at once, the same way it hears from its workers:
 
 The `watch --once` cursor covers the mailbox, so each relay wakes once. One that arrives while
 no watch runs is still in view: `chartroom status` says `relays: 1 open from other homes`,
-`chartroom inbox list` lists it with its id under "Relays from other homes", the dashboard lists
-it under Needs you (a list, never a card or a todo item: it is for the XO, not for you), and
+`chartroom inbox list` lists it with its id under "Relays from other homes", the board's lanes
+JSON carries it (never as a card or a todo item: it is for the XO, not for you), and
 every `--all-homes` view shows each home's, so a home that oversees the others sees them all.
 
 The other XO answers with `--re`, which goes back the same way, and acks the relay once it has

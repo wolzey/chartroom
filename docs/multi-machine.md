@@ -31,7 +31,7 @@ laptop they are on. Workers should spread over every machine that has room, with
   login-session runner (hc or herdr), as it does locally.
 
 ```
-  laptop ──ssh/herdr/dashboard──▶ desk: origin home + XO + watch
+  laptop ──ssh/herdr/the app────▶ desk: origin home + XO + watch
                                      │  ssh -o BatchMode=yes (fixed verbs only)
                     ┌────────────────┼─────────────────────────┐
                     ▼                ▼                         ▼
@@ -366,7 +366,7 @@ are hard requirements; what keeps a task on this machine whatever the others off
 - **Tailscale is assumed, not required.**
   - All machines are on one tailnet, with MagicDNS names as ssh targets.
   - Tailscale ACLs allow ssh only between the commander's devices, and WireGuard encrypts the hop.
-  - No new listening port and no daemon. The dashboard's token rules are unchanged.
+  - No new listening port and no daemon. The app's access rules are unchanged.
   - Tailscale SSH "check" mode shows up as auth expiry (section 7).
 
 ## 9. How a remote task is shown
@@ -374,9 +374,9 @@ are hard requirements; what keeps a task on this machine whatever the others off
 - **`status`.** Rows gain `machine` (`null` when local) and `node_contact`. The table gets a `MACHINE` column **only when
   some open task runs elsewhere**. LIVE comes from the cached `node.json` (`working`, `unreachable 4m`). `status` never
   opens ssh, so it stays fast and works offline.
-- **board / dashboard.** Cards carry an "on mini" chip. The task page gets a machine row. Its live pane is the proxied
-  `node peek` (bounded at 25 s, like the radar's).
-- **radar.** The origin's record is drawn under the node's machine (`m` splits by machine), labelled with its home and
+- **board / the app.** A task names its machine (the app's board filters by it, and Fleet shows its session on
+  that machine). Its live pane is the proxied `node peek` (bounded at 25 s, like the radar's).
+- **radar.** The origin's record is listed under the node's machine, labelled with its home and
   "from <origin machine>". The node's own `status --all-homes` never lists guests, so a task is never drawn twice.
 - **Herdr.** hc workers appear in the node's Herdr app. Where the viewer's hc core links that node (hc's machine link),
   they also appear on the viewer's machine.

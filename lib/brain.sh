@@ -11,7 +11,7 @@
 # Two halves live here:
 #   the client   brain_route (called by bin/chartroom right after load_config), the synced copy
 #                of the records at the same paths (pull with rsync, local edits proposed to the
-#                brain as puts), watch's acked rounds, attach, the dashboard tunnel, `chartroom brain`
+#                brain as puts), watch's acked rounds, attach, the app's address, `chartroom brain`
 #   the gate     `chartroom brain gate` on the brain: the one remote entry point. Its ssh command
 #                line is constant; what to run comes on stdin as one JSON header line, then the
 #                command's own stdin. Nothing a person typed ever reaches a remote shell.
@@ -519,7 +519,7 @@ gate_allows() { # <argv...>
   case "$c" in
     init) [[ $# -eq 1 ]] || { echo "init takes no arguments from a client (homes are made on the brain itself)"; return; } ;;
     attach) [[ " $* " == *" --prepare "* ]] || echo "attach from a client is attach <id> --prepare (the client shows the terminal)" ;;
-    dashboard) [[ "${2:-}" =~ ^(open|status|--json)$ ]] || echo "dashboard from a client is open, status or --json" ;;
+    dashboard) [[ "${2:-}" =~ ^(open|url|status|--json)$ ]] || echo "dashboard from a client is open, url, status or --json" ;;
     watch) echo "watch from a client goes through the gate's acked rounds" ;;
     *) case "$(brain_class "$c")" in forward|hybrid) ;; *) echo "$c is not run for a client" ;; esac ;;
   esac
@@ -943,80 +943,50 @@ brain_show_hc() { # <id> <terminal>
   die "this machine's hc does not link the brain (hc machine add $BRAIN_TARGET, or set CHARTROOM_BRAIN_HC_MACHINE): in a terminal, run ssh -t $BRAIN_TARGET hc attach $t"
 }
 
-# The dashboard is the brain's. It runs there on loopback, on its own port, and is reached here
-# through one ssh tunnel per home (.brain/tunnel: "pid local-port brain-port"), so nothing new
-# listens on the network.
+# The app is the brain's: it serves every home there, on the tailnet (Tailscale Serve), so a client
+# opens the brain's own address and nothing is tunnelled or listens here. The brain says where (its
+# gate prints the address and never opens a browser there). A tunnel an older chartroom kept for the
+# retired web dashboard (.brain/tunnel) is ended by `dashboard stop`.
 brain_dashboard() {
-  case "${1:-}" in
+  case "${1:-open}" in
     stop) brain_tunnel_stop; exit 0 ;;
-    status) brain_exec -- dashboard status; brain_tunnel_line; exit "$BRAIN_RC" ;;
+    status) brain_exec -- dashboard status; brain_tunnel_note; exit "$BRAIN_RC" ;;
     --json) brain_forward_plain dashboard --json ;;
-    open) shift; [[ $# -eq 0 ]] || warn "on a client the dashboard is the brain's: ignoring $*"; brain_open_page dashboard ;;
-    *) [[ $# -eq 0 ]] || warn "on a client the dashboard is the brain's, so it is opened there through a tunnel (ignoring $*)"; brain_open_page dashboard ;;
+    url) brain_forward_plain dashboard url ;;
+    open) [[ $# -le 1 ]] || die "dashboard open takes no flags: it opens the brain's app"; brain_open_page dashboard ;;
+    *) die "the web dashboard is retired and the brain's app replaces it: chartroom dashboard [open] opens it here; dashboard url | status" ;;
   esac
   exit "${BRAIN_RC:-0}"
 }
 brain_open_page() { # dashboard | artifact <ref>
-  local f="$BRAIN_TMP/open" url bport rest lport lurl opener
+  local f="$BRAIN_TMP/open" url opener
   if [[ "$1" == artifact ]]; then brain_exec --out "$f" -- artifact open "$2"; else brain_exec --out "$f" -- dashboard open; fi
   [[ $BRAIN_RC -eq 0 ]] || { cat "$f"; exit "$BRAIN_RC"; }
   url="$(sed -nE 's/^dashboard (open|running): ([^ ]+).*$/\2/p' "$f" | tail -1)"
-  [[ -n "$url" ]] || { cat "$f"; die "the brain's dashboard gave no address"; }
-  if [[ "$url" =~ ^http://127\.0\.0\.1:([0-9]+)(/.*)?$ ]]; then
-    bport="${BASH_REMATCH[1]}"; rest="${BASH_REMATCH[2]}"
-    lport="$(brain_tunnel_ensure "$bport")" || exit $?
-    lurl="http://127.0.0.1:$lport$rest"
-  else lurl="$url"; fi
+  [[ -n "$url" ]] || { cat "$f"; die "the brain gave no address for its app"; }
+  if [[ "$url" =~ ^http://(127\.[0-9.]+|localhost)(:|/|$) ]]; then
+    die "the brain answered with its own loopback address ($url), which only its own browser can open: it runs an older chartroom (the retired web dashboard) or its app without Tailscale Serve. Update chartroom there, then run chartroom app doctor there to put the app on the tailnet"
+  fi
   opener="$(cfg OPENER '' '')"
   if [[ -z "$opener" ]]; then
     if [[ "$(uname -s)" == Darwin && -n "$(bin_of open)" ]]; then opener=open
     elif [[ -n "$(bin_of xdg-open)" ]]; then opener=xdg-open; fi
   fi
-  if [[ -n "$opener" ]] && $opener "$lurl" >/dev/null 2>&1; then echo "dashboard open: $lurl (the brain's dashboard, through a tunnel)"
-  else echo "dashboard running: $lurl (the brain's, through a tunnel; no browser opener found, open it yourself)"; fi
+  if [[ -n "$opener" ]] && $opener "$url" >/dev/null 2>&1; then echo "app open: $url (the brain's app)"
+  else echo "app: $url (the brain's app; no browser opener found, open it yourself)"; fi
 }
-brain_port_busy() { ( exec {x}<>"/dev/tcp/127.0.0.1/$1" ) 2>/dev/null; } # <port>
-brain_tunnel_ensure() { # <brain port> -> prints the local port
-  local bp="$1" f="$BRAIN_SD/tunnel" pid lp obp o=() i w
-  if read -r pid lp obp  2>/dev/null <"$f" && pid_alive "$pid" && [[ "$obp" == "$bp" ]]; then printf '%s' "$lp"; return 0; fi
-  [[ -n "${pid:-}" ]] && pid_alive "$pid" && kill "$pid" 2>/dev/null
-  lp="$bp"; i=0
-  while brain_port_busy "$lp"; do lp=$((lp + 1)); i=$((i + 1)); (( i < 50 )) || die "no free local port for the dashboard tunnel from $bp up"; done
-  for w in "${BRAIN_SSH_O[@]}"; do [[ "$w" == Control* ]] || o+=("$w"); done
-  # (o still holds the -o before each dropped Control* value: drop those orphans)
-  local clean=() k
-  for ((k = 0; k < ${#o[@]}; k++)); do
-    if [[ "${o[k]}" == -o && ( $((k + 1)) -ge ${#o[@]} || "${o[k+1]}" == -* ) ]]; then continue; fi
-    clean+=("${o[k]}")
-  done
-  nohup ssh "${clean[@]}" -o ControlMaster=no -o ControlPath=none -o ExitOnForwardFailure=yes -N -L "$lp:127.0.0.1:$bp" -- "$BRAIN_TARGET" \
-    </dev/null >/dev/null 2>"$BRAIN_SD/tunnel.err" 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- &
-  pid=$!
-  printf '%s %s %s\n' "$pid" "$lp" "$bp" >"$f"
-  w="$(cfg BRAIN_TUNNEL_WAIT '' 5)"; [[ "$w" =~ ^[0-9]+$ ]] || w=5
-  for ((i = 0; i < w * 10; i++)); do
-    brain_port_busy "$lp" && break
-    pid_alive "$pid" || die "the tunnel to the brain's dashboard did not start: $(tail -1 "$BRAIN_SD/tunnel.err" 2>/dev/null)"
-    sleep 0.1
-  done
-  printf '%s' "$lp"
-}
+# A tunnel an older chartroom started for the retired web dashboard: "pid local-port brain-port".
 brain_tunnel_stop() {
   local pid lp bp
-  if read -r pid lp bp  2>/dev/null <"$BRAIN_SD/tunnel" && pid_alive "$pid"; then
+  if read -r pid lp bp 2>/dev/null <"$BRAIN_SD/tunnel" && pid_alive "$pid"; then
     kill "$pid" 2>/dev/null || true; rm -f "$BRAIN_SD/tunnel"
-    echo "stopped the tunnel to the brain's dashboard (local port $lp; the brain's dashboard keeps running)"
-  else rm -f "$BRAIN_SD/tunnel"; echo "no dashboard tunnel runs (the brain's dashboard is not stopped from a client)"; fi
-}
-brain_tunnel_line() {
-  local pid lp bp
-  if read -r pid lp bp  2>/dev/null <"$BRAIN_SD/tunnel" && pid_alive "$pid"; then echo "tunnel: http://127.0.0.1:$lp here is the brain's port $bp (pid $pid)"
-  else echo "tunnel: none (chartroom dashboard open starts one)"; fi
+    echo "stopped the old dashboard tunnel to the brain (local port $lp); the brain's app needs none"
+  else rm -f "$BRAIN_SD/tunnel"; echo "no old dashboard tunnel runs here; the brain's app needs none (chartroom dashboard opens it)"; fi
 }
 brain_tunnel_note() {
   local pid lp bp
-  if read -r pid lp bp  2>/dev/null <"$BRAIN_SD/tunnel" && pid_alive "$pid"; then
-    echo "this client: a dashboard tunnel to the brain runs (pid $pid, port $lp); chartroom dashboard stop ends it"
+  if read -r pid lp bp 2>/dev/null <"$BRAIN_SD/tunnel" && pid_alive "$pid"; then
+    echo "this client: an old dashboard tunnel to the brain still runs (pid $pid, port $lp); chartroom dashboard stop ends it"
   fi
   return 0
 }
@@ -1234,7 +1204,7 @@ brain_verb_status() {
   local m; m="$(brain_hc_machine)"
   if [[ -n "$m" ]]; then echo "attach:   through this machine's hc link to the brain (machine $m)"
   else echo "attach:   no hc machine link to the brain here (attach falls back to ssh -t in a terminal)"; fi
-  brain_tunnel_line
+  brain_tunnel_note
   [[ "$reach" == true ]] || exit "$BRAIN_EX_UNREACHABLE"
 }
 brain_verb_pull() {

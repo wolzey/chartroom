@@ -2,7 +2,7 @@
 # show.sh - `chartroom show <id>`: one item in detail, for the crew views (the Claude Code mod
 # and the pi extension) and the terminal.
 #
-# The item's card comes from dashboard_json, narrowed to that one task (CR_BOARD_ID), so its
+# The item's card comes from board_json, narrowed to that one task (CR_BOARD_ID), so its
 # lane, reason, PR links and artifacts are exactly the board's. The detail adds what only the
 # task's files say: the commander's intent, the last events, the outcome, the report's summary,
 # and where the worker runs. Read-only: it starts no process of a backend's.
@@ -59,7 +59,7 @@ show_where() { # <id>
 # (the card's, [] where the board has none).
 show_json() { # <task|inbox> <id>
   local type="$1" id="$2" card
-  card="$(CR_BOARD_ID="$id" dashboard_json | jq -c --arg t "$type" --arg id "$id" \
+  card="$(CR_BOARD_ID="$id" board_json | jq -c --arg t "$type" --arg id "$id" \
     '[.lanes[][] | select(.type == $t and (if $t == "task" then .id else .short_id end) == $id)] | first // empty')"
   if [[ "$type" == inbox ]]; then
     [[ -n "$card" ]] || die "inbox item $id is not on the board"
@@ -71,7 +71,7 @@ show_json() { # <task|inbox> <id>
   d="$(tdir "$id")"
   # A closed task past the recent window is on no lane: its status row stands in for the card.
   if [[ -z "$card" ]]; then
-    card="$(status_rows --id "$id" | jq -c --argjson x "$(dashboard_task_extra "$id")" \
+    card="$(status_rows --id "$id" | jq -c --argjson x "$(task_extra_json "$id")" \
       '{type: "task"} + . + $x + {lane: null, reason: .state, prs: ($x.prs | map({url: ., state: "UNKNOWN"}))}')"
   fi
   where="$(show_where "$id")"

@@ -133,7 +133,7 @@ usage_write_record() { # <agent> <machine> <json> [replace_hit 0|1] [keep_hit_af
 
 # ---------------------------------------------------------------- shared evaluation (jq)
 # Evaluates a raw reading against the current clock and thresholds so CLI, picker, doctor,
-# nodes, and dashboard always agree. Never estimates or invents numbers after reset: a window
+# nodes, and the app always agree. Never estimates or invents numbers after reset: a window
 # whose resets_at has passed is marked reset (awaiting a fresh reading) and never locks out.
 # shellcheck disable=SC2016
 USAGE_EVAL_JQ='
@@ -937,7 +937,7 @@ usage_live_counts_json() {
   done <<<"$docs" | jq -Rsc 'split("\n") | map(select(length > 0)) | group_by(.) | map({key: .[0], value: length}) | from_entries'
 }
 
-# JSON array of rows for display (CLI and dashboard):
+# JSON array of rows for display (the CLI and the app, lib/app.sh):
 # - One row per agent, and per machine where machines differ (different plan, account, status,
 #   state, or window percentages). When all machines match for an agent, collapse to one row
 #   (preferring the local machine's row, with `machines: [...]`).

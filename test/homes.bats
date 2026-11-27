@@ -26,16 +26,16 @@ setup() {
   [[ "$output" == *"workspace: from-home"* ]]
 }
 
-@test "init --name writes the home's workspace and port, registers it, and picks the next free port" {
+@test "init --name writes the home's workspace, registers it; no dashboard port any more" {
   run env CHARTROOM_HOME="$A" "$CHARTROOM" init --name acme
   [ "$status" -eq 0 ]
-  [[ "$output" == *"workspace acme-crew, dashboard port 4518"*"registered home acme"* ]]
+  [[ "$output" == *"workspace acme-crew)"*"registered home acme"* ]]
   grep -qx 'CHARTROOM_WORKSPACE=acme-crew' "$A/config"
-  grep -qx 'CHARTROOM_DASHBOARD_PORT=4518' "$A/config"
+  ! grep -q DASHBOARD_PORT "$A/config"
   [ "$(grep -v '^#' "$HOMES")" = "acme=$A" ]
   CHARTROOM_HOME="$B" cr init --name globex --workspace gx >/dev/null
   grep -qx 'CHARTROOM_WORKSPACE=gx' "$B/config"
-  grep -qx 'CHARTROOM_DASHBOARD_PORT=4519' "$B/config"
+  ! grep -q DASHBOARD_PORT "$B/config"
   # again: idempotent, the config is not rewritten
   cp "$A/config" "$BATS_TEST_TMPDIR/cfg-before"
   run env CHARTROOM_HOME="$A" "$CHARTROOM" init --name acme
@@ -75,15 +75,15 @@ setup() {
   # the list, from acme: acme is the current one; legacy has the defaults and one open task
   run env CHARTROOM_HOME="$A" "$CHARTROOM" homes --json
   [ "$status" -eq 0 ]
-  [ "$(jq -c '[.[] | [.name, .current, .workspace, .port, .open, .dashboard]]' <<<"$output")" = '[["acme",true,"acme-crew",4518,0,null],["legacy",false,"chartroom-crew",4517,1,null]]' ]
+  [ "$(jq -c '[.[] | [.name, .current, .workspace, .open, .brain]]' <<<"$output")" = '[["acme",true,"acme-crew",0,null],["legacy",false,"chartroom-crew",1,null]]' ]
   run env CHARTROOM_HOME="$A" "$CHARTROOM" homes
-  [[ "${lines[0]}" == NAME* ]]; [[ "$output" == *"*acme"*"acme-crew"*"4518"* ]]
+  [[ "${lines[0]}" =~ ^NAME\ +PATH\ +WORKSPACE\ +OPEN$ ]]; [[ "$output" == *"*acme"*"acme-crew"* ]]
   [[ "$output" != *warning* ]]
   # this home, when it is not registered, is listed and said to be
   run cr homes
   [[ "$output" == *"(this home)"* && "$output" == *"this home ($CHARTROOM_HOME) is not registered"* ]]
   # a shared workspace and a missing path are warned about
-  printf 'CHARTROOM_WORKSPACE=acme-crew\nCHARTROOM_DASHBOARD_PORT=4520\n' >"$BATS_TEST_TMPDIR/legacy/config"
+  printf 'CHARTROOM_WORKSPACE=acme-crew\n' >"$BATS_TEST_TMPDIR/legacy/config"
   echo "gone=$BATS_TEST_TMPDIR/nowhere" >>"$HOMES"
   run env CHARTROOM_HOME="$A" "$CHARTROOM" homes
   [[ "$output" == *"warning: homes acme, legacy share the workspace acme-crew"* ]]

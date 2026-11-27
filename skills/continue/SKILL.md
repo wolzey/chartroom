@@ -1,6 +1,6 @@
 ---
 name: continue
-description: Jump the commander straight to one crew item by its short id from the dashboard (a task like 21ba, or an inbox item like i-7f3a) and bring them to the point - ask the pending decision, report the outcome, or give a one-line status. Use when the user invokes /continue <id> or $continue <id>, or says "continue <id>" / "pick up <id>". Runs in the XO session.
+description: Jump the commander straight to one crew item by its short id from the board or the app (a task like 21ba, or an inbox item like i-7f3a) and bring them to the point - ask the pending decision, report the outcome, or give a one-line status. Use when the user invokes /continue <id> or $continue <id>, or says "continue <id>" / "pick up <id>". Runs in the XO session.
 ---
 
 # Continue
@@ -22,7 +22,7 @@ not on PATH, use `../../bin/chartroom` relative to this skill's directory.)
    - Either: its open drafts, `chartroom artifact list <id>`. Give each one's ref and title in
      your answer (`chartroom artifact copy <ref>` copies it), and `chartroom artifact done
      <ref>` once the commander says it went out or ran. A `page` is a report to read: offer
-     `chartroom artifact open <ref>` (the dashboard's viewer) or `chartroom artifact pdf <ref>`.
+     `chartroom artifact open <ref>` (the app's page viewer) or `chartroom artifact pdf <ref>`.
 3. **Bring the commander to the point**, by state:
    - `decision`, `blocked`, `awaiting-input`, or an inbox item: ask that one question, in plain
      terms, with your agent's question tool (AskUserQuestion in Claude Code, its `header` the
