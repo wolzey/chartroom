@@ -1,5 +1,5 @@
 // sw.js - the app's service worker (slice 6), served at /sw.js so it controls the whole app.
-// - The shell (/, /app/, /shared/, the manifest): network first, so a new version shows at once;
+// - The shell (/, /app/, the manifest): network first, so a new version shows at once;
 //   the last copy when the network is gone (an offline shell).
 // - GET /api/v1/state: network first; when the network is gone, the last state read, marked with
 //   X-Chartroom-Offline so the page says how old it is. Never served instead of a refusal.
@@ -15,7 +15,7 @@ self.addEventListener("activate", (e) => {
 });
 
 function shell(path) {
-  return path === "/" || path === "/index.html" || path === "/manifest.webmanifest" || path.startsWith("/app/") || path.startsWith("/shared/");
+  return path === "/" || path === "/index.html" || path === "/manifest.webmanifest" || path.startsWith("/app/");
 }
 
 async function networkFirst(req, key, offline) {

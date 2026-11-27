@@ -1,9 +1,9 @@
-// lib/dashboard/markdown.js: a report.md as page nodes, tables included, and sanitized.
+// app/shared/markdown.js: a report.md as page nodes, tables included, and sanitized.
 "use strict";
 const assert = require("assert");
 const { test, run } = require("./harness");
 require("./dom");
-const M = require("../../lib/dashboard/markdown.js");
+const M = require("../../app/shared/markdown.js");
 
 const REPORT = [
   "# Report: DOL outage",

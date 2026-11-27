@@ -1,6 +1,6 @@
-// markdown.js - a task's report.md (and its brief's intent) as a readable page section, on the
-// task page (task.html) and in the radar's file viewer. Spliced into those pages by the server
-// like eventfmt.js; test/js/markdown.test.js runs it under node.
+// markdown.js - a task's report.md, plan and brief as a readable page section, in the app's
+// ticket (app/src/ui.js, Doc). The app loads it as a plain script (app/index.html), like
+// eventfmt.js; test/js/markdown.test.js runs it under node.
 //
 // The CommonMark most reports use: headings, paragraphs, nested lists (task boxes too), fenced
 // code, block quotes, rules and GFM tables; inline code, emphasis, strikethrough and links.

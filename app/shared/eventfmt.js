@@ -1,7 +1,6 @@
-// eventfmt.js - a crew event as a readable status note, and a task's events as a timeline. Shared
-// by the radar's side panel (radar.html) and the task page (task.html): the server splices this
-// file into each page at its include marker (lib/dashboard/server.py, Page), so the pages stay
-// self-contained under their CSP. test/js/eventfmt.test.js runs the same file under node.
+// eventfmt.js - a crew event as a readable status note, and a task's events as a timeline. The app
+// loads it as a plain script (app/index.html) before model.js, which reads a worker's ask with it;
+// test/js/eventfmt.test.js runs the same file under node.
 //
 // The parser is pure and tolerant. It finds light structure in what workers write: a [breaking]
 // mark and shouted flags (URGENT:) as tags, a headline (the first sentence or clause, up to the

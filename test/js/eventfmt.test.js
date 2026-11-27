@@ -1,11 +1,11 @@
-// lib/dashboard/eventfmt.js: the event parser, the inline tokens, the feed's threads and runs,
+// app/shared/eventfmt.js: the event parser, the inline tokens, the feed's threads and runs,
 // and the render, against fixtures. The DOL decision is the radar screenshot's case, word for
 // word but for the service name and the home path.
 "use strict";
 const assert = require("assert");
 const { test, run, words } = require("./harness");
 const { document } = require("./dom");
-const E = require("../../lib/dashboard/eventfmt.js");
+const E = require("../../app/shared/eventfmt.js");
 
 const DOL = "2026-10-20T17:01:15Z decision: [breaking] DOL outage cause found: since the API swaps (AU 18 Oct 19:05Z, UK 19 Oct 03:22Z) acme-web returns 400 to guards opening or exporting a DOL (getpagedDetail/export; UK 89/103 companies, 735 users; AU 50/55 companies). Mobile shows an endless spinner. Submits and uploads are healthy. Cause: GH-8414 (PR 17439, unflagged) treats every Employee-role caller as a portal user. No flag/config switch; trunk still has it. Options: (1) RECOMMENDED hotfix PR to trunk: apply portal gates only to portal accounts (CustomerAccountId==1 OR has customer-site grants), guards get the pre-GH-8414 read (scope a; tighter site scope as a follow-up), fix the GH-9391 list pins in the same PR, then the normal RC/promote/swap chain in both regions; (2) swap production-green back (AU 3f31b3a5f, UK 52073a295): fastest, but reopens the V2 cross-tenant PDF leak, V5/V6 and GH-9391, and drops the release. Need: pick 1 or 2, and the guard scope (a/b/c). Report: ~/.chartroom/tasks/customers-can-t-upload-d-3da1/report.md";
 

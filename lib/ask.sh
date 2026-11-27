@@ -8,7 +8,7 @@
 #   ev-<task>-<offset>
 #            a worker's ask: the decision/blocked/failed (or agent awaiting-input) event at that byte
 #            offset of the task's events.log. Its options are the event's own words; the app parses
-#            them (lib/dashboard/eventfmt.js), so there is no record to write and no migration.
+#            them (app/shared/eventfmt.js), so there is no record to write and no migration.
 #   i-xxxx   an open "Waiting on the commander" inbox item.
 # An answer is questions/<id>.answer.json, created only if absent (noclobber): the first answer
 # wins, from the app or the terminal, and a second is refused with who answered and when.

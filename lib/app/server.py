@@ -14,7 +14,6 @@ stdin), so the CLI stays the one writer of the records and a client home's rules
 
   /                         app/index.html
   /app/<path>               app/ files (styles, src, vendor)
-  /shared/<file>.js         lib/dashboard's shared scripts (eventfmt.js, markdown.js)
   /healthz                  "ok" (no identity needed)
   GET  /api/v1/state        {api, version, user, homes: [{name, path, ok, error, refreshed_at, snapshot}]}
   GET  /api/v1/stream       server-sent events: "version" when any home's snapshot changes
@@ -86,7 +85,6 @@ TICKET_CACHE = 2.0
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
                 ".svg": "image/svg+xml", ".png": "image/png", ".json": "application/json", ".webmanifest": "application/manifest+json",
                 ".txt": "text/plain; charset=utf-8", ".woff2": "font/woff2", ".ico": "image/x-icon"}
-SHARED = ("eventfmt.js", "markdown.js")
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
        "connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
 
@@ -1130,17 +1128,17 @@ def verb_for(action, body):
 
 
 class Page:
-    """What the page is made of (app/, and lib/dashboard's shared scripts), as one short hash. "/" carries
+    """What the page is made of (app/, its shared scripts included), as one short hash. "/" carries
     it, and so does the state: an open page whose own differs runs older code than is installed, and
     says so (app/src/main.js). Files are read again only when one's size or time moves."""
 
-    def __init__(self, app_dir, shared_dir):
-        self.app_dir, self.shared_dir = app_dir, shared_dir
+    def __init__(self, app_dir):
+        self.app_dir = app_dir
         self.lock = threading.Lock()
         self.stamp = self.value = None
 
     def rev(self):
-        files = [os.path.join(self.shared_dir, f) for f in SHARED]
+        files = []
         for d, dirs, names in os.walk(self.app_dir):
             dirs.sort()
             files += [os.path.join(d, f) for f in sorted(names) if os.path.splitext(f)[1].lower() in STATIC_TYPES]
@@ -1160,8 +1158,7 @@ class Page:
 
 def make_handler(hub, args, root, actions, prs, fleet, pusher, devices=None):
     app_dir = os.path.join(root, "app")
-    shared_dir = os.path.join(root, "lib", "dashboard")
-    page = Page(app_dir, shared_dir)
+    page = Page(app_dir)
     user = (args.user or "").strip().lower()
     tickets = {}  # (home, task) -> (time, hub version, body): a ticket asked for twice in a row is read once
 
@@ -1236,8 +1233,6 @@ def make_handler(hub, args, root, actions, prs, fleet, pusher, devices=None):
                 return self.json(200, pusher.info())
             if path.startswith("/app/"):
                 return self.static(self.inside(app_dir, path[len("/app/"):]))
-            if path.startswith("/shared/") and path[len("/shared/"):] in SHARED:
-                return self.static(os.path.join(shared_dir, path[len("/shared/"):]))
             if path == "/api/v1/state":
                 hub.looked()
                 return self.json(200, dict(hub.state(), user=self.who(), actions=actions.recent(), prs=prs.states, gh_error=prs.error,

@@ -12,6 +12,7 @@ import { BoardPage, BoardSummary, TaskQuick } from "./board.js";
 import { Composer } from "./composer.js";
 import { InitiativesList, InitiativePage, NewInitiative } from "./initiatives.js";
 import { FleetPage, MachineDetail } from "./fleet.js";
+import { UsagePage } from "./usage.js";
 import * as N from "./notify.js";
 
 const M = window.AppModel;
@@ -27,6 +28,7 @@ function parseRoute() {
   if (p[0] === "board") return { name: "board" };
   if (p[0] === "i" && p.length >= 3) return { name: "initiative", home: p[1], id: p[2] };
   if (p[0] === "i") return { name: "initiatives" };
+  if (p[0] === "usage") return { name: "usage" };
   if (p[0] === "fleet") return { name: "fleet", machine: p[1] || null };
   if (p[0] === "n" && p[1]) return { name: "needs", select: p[1] }; // a notification's link: Needs me on that item
   return { name: "needs" };
@@ -56,12 +58,12 @@ function NotifyButton({ notif, onEnable }) {
 // The phone's tab bar (below 860 px, where the sidebar is hidden).
 function TabBar({ route, count, fleetBad }) {
   const tabs = [["needs", "#/", "Needs me", count], ["board", "#/board", "Board"], ["initiatives", "#/i", "Initiatives"], ["fleet", "#/fleet", "Fleet", fleetBad ? "!" : null]];
-  const on = (id) => route.name === id || (id === "initiatives" && route.name === "initiative") || (id === "needs" && ["round", "task"].includes(route.name));
+  const on = (id) => route.name === id || (id === "initiatives" && route.name === "initiative") || (id === "fleet" && route.name === "usage") || (id === "needs" && ["round", "task"].includes(route.name));
   return html`<nav class="a-tabbar" aria-label="Sections">${tabs.map(([id, href, label, badge]) => html`<a key=${id} href=${href} class=${on(id) ? "on" : ""}>
     <span class=${"nav-ic " + id} aria-hidden="true"></span><span>${label}</span>${badge ? html`<span class="tb-badge">${badge}</span>` : null}</a>`)}</nav>`;
 }
 
-function Sidebar({ homes, filters, setFilters, counts, onPalette, link, updated, theme, toggleTheme, route, inits, onNewInit, fleetBad, notif, onNotify }) {
+function Sidebar({ homes, filters, setFilters, counts, onPalette, link, updated, theme, toggleTheme, route, inits, onNewInit, fleetBad, usageOut, notif, onNotify }) {
   return html`<aside class="a-side">
     <div class="a-brand"><span class="a-logo" aria-hidden="true"></span><span class="grow">Chartroom</span>
       <button class="btn ghost icon" title=${"Switch to " + (theme === "dark" ? "light" : "dark") + " mode"} aria-label="Toggle dark mode" onClick=${toggleTheme}>${theme === "dark" ? "☀" : "☾"}</button></div>
@@ -72,6 +74,8 @@ function Sidebar({ homes, filters, setFilters, counts, onPalette, link, updated,
       <a class=${"nav-i" + (route.name === "initiatives" || route.name === "initiative" ? " on" : "")} href="#/i"><span class="nav-ic initiatives" aria-hidden="true"></span><span class="grow">Initiatives</span></a>
       <a class=${"nav-i" + (route.name === "fleet" ? " on" : "")} href="#/fleet"><span class="nav-ic fleet" aria-hidden="true"></span><span class="grow">Fleet</span>
         ${fleetBad ? html`<span class="home-err" title=${fleetBad + (fleetBad === 1 ? " machine needs" : " machines need") + " a look"} aria-label="a machine needs a look"></span>` : null}</a>
+      <a class=${"nav-i" + (route.name === "usage" ? " on" : "")} href="#/usage"><span class="nav-ic usage" aria-hidden="true"></span><span class="grow">Usage</span>
+        ${usageOut ? html`<span class="home-err" title=${usageOut} aria-label=${usageOut}></span>` : null}</a>
     </nav>
     ${inits.length ? html`<div class="a-sec row-flex"><span class="grow">Initiatives</span><button class="a-sec-add" title="New initiative" aria-label="New initiative" onClick=${onNewInit}>+</button></div>
       <div class="a-nav">${inits.map((i) => html`<a key=${i.key} class=${"nav-i" + (route.name === "initiative" && route.id === i.id ? " on" : "")}
@@ -345,6 +349,7 @@ function App() {
       if (e.key === "/") { e.preventDefault(); setPalette(true); return; }
       if (e.key === "c" && !e.shiftKey) { e.preventDefault(); setComposer(true); return; }
       if (s.route.name === "initiative" || s.route.name === "initiatives") { if (e.key === "Escape") go(s.route.name === "initiative" ? "#/i" : "#/"); return; }
+      if (s.route.name === "usage") { if (e.key === "Escape") go("#/fleet"); return; }
       if (s.route.name === "fleet") { if (e.key === "Escape") { if (s.fleetTask) { setFleetSel(null); setQvOpen(false); } else go("#/"); } return; }
       if (s.route.name === "board") {
         const order = s.boardOrder, i = order.findIndex((t) => t.key === s.boardSel);
@@ -409,6 +414,8 @@ function App() {
   // Fleet: the machines (the server checks them every 5 minutes while the app is open)
   const fleet = data && data.fleet;
   const fleetBad = fleet ? (fleet.machines || []).filter((m) => m.state !== "healthy").length : 0;
+  // an agent out of usage, for the sidebar's mark (the page itself says the rest)
+  const usageOut = useMemo(() => { const u = M.usageSummary(M.usageRows(data)); return u.level === "out" ? u.text : null; }, [data]);
   const workers = useMemo(() => boardAll.filter((t) => t.type === "task" && t.status === "working"), [boardAll]);
   useEffect(() => { if (route.name === "fleet" && data && !data.fleet) checkFleet(); }, [route.name, !!data, !!(data && data.fleet)]);
 
@@ -476,6 +483,7 @@ function App() {
       { id: "c-newi", group: "Commands", label: "New initiative", run: () => setNewInit(true) },
       { id: "c-inits", group: "Go to", label: "Initiatives", run: () => go("#/i") },
       { id: "c-fleet", group: "Go to", label: "Fleet", sub: "machines, sign-ins, workers", run: () => go("#/fleet") },
+      { id: "c-usage", group: "Go to", label: "Usage", sub: "what each subscription has left, and when it resets", run: () => go("#/usage") },
       { id: "c-notify", group: "Commands", label: "Turn on notifications", sub: "this device", run: () => onNotify() },
       { id: "c-theme", group: "Commands", label: "Switch to " + (theme === "dark" ? "light" : "dark") + " mode", run: toggleTheme },
       { id: "c-clear", group: "Commands", label: "Clear filters", run: () => setFilters({}) },
@@ -576,10 +584,12 @@ function App() {
       const it = openFor(t.home, t.task);
       return it ? (it.kind === "review" ? "Review" : "Answer") : t.column === "done" ? null : "Steer";
     };
-    main = html`<${FleetPage} fleet=${fleet} workers=${workers} tasks=${boardAll} sel=${m && m.name} setSel=${(name) => { clear(); go("#/fleet/" + encodeURIComponent(name)); }}
+    main = html`<${FleetPage} fleet=${fleet} data=${data} workers=${workers} tasks=${boardAll} sel=${m && m.name} setSel=${(name) => { clear(); go("#/fleet/" + encodeURIComponent(name)); }}
       onSession=${onSession} actionFor=${actionFor} toast=${toast}
       onRefresh=${() => { checkFleet(); toast("Checking every machine; it takes up to a minute"); }} />`;
     aside = fleetTask && (wide() || qvOpen) ? quickOf(fleetTask, clear) : html`<${MachineDetail} m=${m} workers=${workers} names=${ms.map((x) => x.name)} />`;
+  } else if (route.name === "usage") {
+    main = html`<${UsagePage} data=${data} />`;
   } else if (route.name === "initiatives") {
     main = html`<${InitiativesList} list=${inits} onNew=${() => setNewInit(true)}
       onOpen=${(i) => go("#/i/" + encodeURIComponent(i.home) + "/" + encodeURIComponent(i.id))} />`;
@@ -615,7 +625,7 @@ function App() {
       onAct=${perform} onDetails=${openDetails} snoozeAnchorRef=${snoozeAnchor} snoozeOpen=${snoozeOpen} setSnoozeOpen=${setSnoozeOpen} prs=${(data && data.prs) || {}} />`;
   }
   return html`<div class="a-app">
-    <${Sidebar} homes=${homes} filters=${filters} setFilters=${setFilters} counts=${counts} onPalette=${() => setPalette(true)} fleetBad=${fleetBad} notif=${notif} onNotify=${onNotify}
+    <${Sidebar} homes=${homes} filters=${filters} setFilters=${setFilters} counts=${counts} onPalette=${() => setPalette(true)} fleetBad=${fleetBad} usageOut=${usageOut} notif=${notif} onNotify=${onNotify}
       link=${link} updated=${updated} theme=${theme} toggleTheme=${toggleTheme} route=${route} inits=${inits} onNewInit=${() => setNewInit(true)} />
     ${main}${aside}
     <${TabBar} route=${route} count=${counts.all} fleetBad=${fleetBad} />
