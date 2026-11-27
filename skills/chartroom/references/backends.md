@@ -466,7 +466,9 @@ with a signed-in grok (a throwaway scout).
   (meta `permission`, in grok's words: `default`, `acceptEdits`, `auto`, `dontAsk`,
   `bypassPermissions`, `plan`; anything else refuses at dispatch; none gives grok's own default,
   `auto` in its terminal UI), `--trust` for a worktree chartroom created itself (grok's folder trust, which also gates the
-  hooks; any other folder's dialog is the commander's), and `--no-auto-update` (grok checks for an update at each launch; a worker must not stop for
+  hooks; any other folder's dialog is the commander's. grok records the trust for the repository's
+  main checkout, not the worktree, so the commander's own grok sessions in that checkout skip the
+  dialog too), and `--no-auto-update` (grok checks for an update at each launch; a worker must not stop for
   one, so updating stays the commander's `grok update`). No `--add-dir`: grok 1.0.92 refuses one
   ("additionalDirectories is not supported: a session works only in its cwd") and never starts the
   session; with its sandbox off by default, the worker reaches its task folder by path. herdr starts it with `herdr agent start --kind grok` (herdr 0.9.5 knows grok) and the same

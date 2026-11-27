@@ -164,7 +164,9 @@ grok_login_why() {
 # permission, in grok's own words: default, acceptEdits, auto, dontAsk, bypassPermissions, plan;
 # empty is grok's own default, auto in its terminal UI), --trust for a worktree chartroom created itself (the
 # folder trust its dialog would ask for, which chartroom answers only for its own worktrees: any
-# other folder's dialog is the commander's), and no update check. No --add-dir for the task folder:
+# other folder's dialog is the commander's; grok records the trust for the repository's main
+# checkout, seen live, so the commander's own grok sessions there skip the dialog too), and no
+# update check. No --add-dir for the task folder:
 # grok 1.0.92 refuses one ("additionalDirectories is not supported: a session works only in its
 # cwd") and the session never starts. Its sandbox is off by default, so the worker reaches its brief,
 # report and event helper by their paths, as its permission mode allows. The update check:
