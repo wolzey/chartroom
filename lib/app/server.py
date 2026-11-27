@@ -84,7 +84,7 @@ ARTIFACT_FILE = re.compile(r"^([a-z0-9][a-z0-9-]{0,63})\.(md|html|pdf)$")
 PAGE_CSP = ("sandbox allow-popups allow-popups-to-escape-sandbox; default-src 'none'; style-src 'unsafe-inline'; "
             "img-src data:; font-src data:; media-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'")
 PDF_SECONDS = 120  # a print (the CLI's own timeout is CHARTROOM_PDF_TIMEOUT, 60s) and the wait for the one before it
-PANE_SECONDS = 25
+PANE_SECONDS = 40
 PDF_LOCK = threading.Lock()  # one print at a time: each runs a Chrome
 ATT_ID = re.compile(r"^att-[0-9a-f]{4,}$")
 ATTACH_MAX = 25 * 1024 * 1024
