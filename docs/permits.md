@@ -1,6 +1,6 @@
 # Permission cards: a worker's prompts come to chartroom
 
-A Claude worker that needs a permission no longer waits at a prompt only its terminal can answer.
+A Claude or agy worker that needs a permission no longer waits at a prompt only its terminal can answer.
 Each call ends one of two ways:
 - **The policy answers it**, by the commander's rulings. This covers routine work inside the
   worker's worktree and whatever its brief explicitly grants.
@@ -19,6 +19,20 @@ Every Claude worker chartroom launches has three hooks in its per-task settings
 | `PreToolUse` → `hook <id> pre-tool` | before every tool call, before Claude's own permission check | **Guards** deny (the pattern-kill guard; touching the permit store; answering a permit; rewriting the task's control files). **Grants** and "always" rules allow: an allow here comes before auto mode's classifier. A call that is the **commander's** is sent to a prompt (`ask`) so the next hook makes it a card. A headless worker has no prompt, so the hook holds that call on the card itself. Anything else gets no opinion. |
 | `PermissionRequest` → `hook <id> permission` | when Claude would show a permission dialog | The policy answers it, or it becomes a card that the hook waits on. |
 | `PermissionDenied` → `hook <id> denied` | when auto mode's classifier refuses a call | Records the refusal, and raises a card offering the commander to allow a retry. |
+
+agy uses a catch-all `PreToolUse` hook in the task's `.agents/hooks.json`. It normalizes
+native and legacy file-tool arguments, then applies the same policy's guards, grants, local
+rules and commander classes. The hook holds the call until a card is answered or expires;
+it does not rely on an approval callback. Unknown tools, including MCP, browser and background
+input, require cards. agy defaults to bypass mode; `CHARTROOM_AGY_PERMISSION` or task
+`permission` can select `auto`, `accept-edits` or `plan` to retain agy's approvals. In those
+modes an allowed hook returns no opinion, so agy still decides whether to prompt.
+
+The agy hook timeout is the card wait plus 60 seconds; the wait is pinned at launch. Invalid
+payloads, unavailable task records and broker errors deny. Its launcher refuses to start if
+hook creation fails. The [backend notes](../skills/chartroom/references/backends.md#agy-antigravity-cli-hcagy-herdragy-nodeagy)
+cover tool names and limits. The later discussion of Claude's classifier, transcripts and
+fail-open hook behavior describes Claude only.
 
 ### Answering a card
 

@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# permit.sh - the permission broker: a Claude worker's permission prompts become chartroom cards.
+# permit.sh - the permission broker: Claude approvals and agy pre-tool calls become cards.
 #
 # Every Claude worker chartroom launches carries three hooks (claude_settings_file):
 #   PreToolUse        `hook <id> pre-tool`    guards (deny), grants and always rules (allow); a call
@@ -10,6 +10,8 @@
 #                                             seconds, 900), then denies
 #   PermissionDenied  `hook <id> denied`      auto mode's classifier refused a call: recorded, and a
 #                                             card offers the commander to allow a retry
+# agy uses one catch-all PreToolUse (agy_permit_hooks): it normalizes the payload and
+# holds commander calls here directly; it has no PermissionRequest callback.
 # The policy is lib/permit.jq, the one place its rules live. Its record sits under
 # $CR_HOME/permits/<task>/, outside every directory the worker is given:
 #   grants.json          the task's grants (push-branch, open-pr, merge-auto, comment-pr, prod-read)
@@ -129,7 +131,7 @@ permit_query() { # <id> <event> <payload>
     --arg bprefix "$bprefix" --arg bbase "$base" --arg repo "${repo,,}" --arg prs "$prs" \
     --argjson always "$(permit_always_json "$id")" --arg pre "$pre" '
     {event: $ev, tool: .tool_name, input: (.tool_input // {}), sig: $sig, cwd: (.cwd // $wt),
-     roots: {worktree: $wt, task_dir: $td, scratch: (.scratchpad_dir // ""), permits: $permits, user_home: $uh, db: $db},
+     roots: {agy: (.chartroom_agent == "agy"), worktree: $wt, task_dir: $td, scratch: (.scratchpad_dir // ""), permits: $permits, user_home: $uh, db: $db},
      branch: $branch, current_branch: $cur, grants: $grants, always: $always, pre: (if $pre == "" then null else $pre end),
      branch_prefix: $bprefix, base_branch: $bbase, repo: $repo, prs: ($prs | split(",") | map(select(length > 0)))}' <<<"$payload"
 }
@@ -139,6 +141,7 @@ permit_decide() { jq -c -f "$CR_ROOT/lib/permit.jq" <<<"$1"; } # <query json> ->
 # What a hook prints for its event: allow, deny <message>, or ask <reason> (PreToolUse only).
 permit_reply() { # <event> <allow|deny|ask> [message]
   case "$1" in
+    agy-pre-tool) jq -cn --arg d "$2" --arg r "${3:-}" '{decision: $d, reason: $r}' ;;
     pre-tool) jq -cn --arg d "$2" --arg r "${3:-}" '{hookSpecificOutput: ({hookEventName: "PreToolUse", permissionDecision: $d} + (if $r != "" then {permissionDecisionReason: $r} else {} end))}' ;;
     permission)
       if [[ "$2" == allow ]]; then jq -cn '{hookSpecificOutput: {hookEventName: "PermissionRequest", decision: {behavior: "allow"}}}'
@@ -256,6 +259,7 @@ permit_hook() { # <event> <id> <payload>
   [[ -n "$q" ]] || return 0
   v="$(permit_decide "$q" 2>/dev/null)" || return 0
   IFS=$'\t' read -r verdict rule why < <(jq -r '[.verdict // "none", .rule // "", .why // ""] | @tsv' <<<"$v")
+  if [[ "$ev" == agy-pre-tool && "$verdict" == none && "$rule" == question ]]; then permit_reply "$ev" allow; return 0; fi
   [[ "$verdict" == none && "$ev" != denied ]] && return 0 # the common case: nothing to say or log
   tool="$(jq -r '.tool' <<<"$q")"; input="$(jq -c '.input' <<<"$q")"; desc="$(permit_desc "$tool" "$input")"
   if [[ "$ev" == denied ]]; then permit_denied "$id" "$payload" "$q" "$desc"; return 0; fi
@@ -287,6 +291,25 @@ permit_hook() { # <event> <id> <payload>
       esac ;;
   esac
   return 0
+}
+
+# agy has no PermissionRequest callback: its catch-all PreToolUse must both classify and
+# wait. A separate event selects the policy's local/unlisted rules and agy's reply protocol,
+# leaving Claude's and Codex's flows unchanged. Bad payloads/records/policy results deny.
+agy_permit_hook() { # <id> <agy payload>
+  local payload reply=""
+  if [[ -n "$1" ]] && task_exists "$1" && [[ -z "$(meta "$1" closed 2>/dev/null)" ]]; then
+    payload="$(jq -ce -f "$CR_ROOT/lib/agy-permit.jq" <<<"$2" 2>/dev/null)" || payload=""
+    if [[ -n "$payload" ]]; then reply="$(permit_hook agy-pre-tool "$1" "$payload")" || reply=""; fi
+  fi
+  if jq -e 'type == "object" and (.decision == "allow" or .decision == "deny")' >/dev/null 2>&1 <<<"$reply"; then
+    # Empty output delegates to agy's own approvals in opt-out modes (older versions'
+    # "allow" skipped those approvals). A deny is always explicit, in every mode.
+    if [[ "$(jq -r .decision <<<"$reply")" == allow && "$(agy_permission "$1")" != bypass ]]; then return 0; fi
+    printf '%s\n' "$reply"
+  else
+    permit_reply agy-pre-tool deny "chartroom could not evaluate this call (invalid payload, unavailable task or broker error). It did not run; report the failure to the XO."
+  fi
 }
 
 # Auto mode refused a call: record it, say so when a chartroom allow should have covered it (then

@@ -24,7 +24,7 @@
 # approval prompts come from the terminal title it sets, which hc carries (below, lib/stuck.sh).
 # agy reports its state over OSC 7501 as Claude does (verified on agy 1.5.17, hc 0.1.21): working,
 # idle, done, blocked with the dialog's kind and words, and hc counts its turns; it gets no reporting hooks
-# (only the pattern kill guard), and its brief goes in as `agy -i <brief>` (lib/agents.sh).
+# (its permission broker runs before tools), and its brief goes in as `agy -i <brief>` (lib/agents.sh).
 # The terminal's address is recorded and every later call checks it still carries the task's name.
 
 declare -A HC_TURNS=() # watch: each task's hc turn count at the last look
@@ -220,6 +220,10 @@ hc_launch() { # <id> <wt> <agent>
   if [[ "$agent" == claude ]]; then
     meta_set "$id" session_id "$(new_uuid)"
     mapfile -t argv < <(interactive_argv "$id" "$agent" prompt session)
+  elif [[ "$agent" == agy ]]; then
+    # Process substitution hides a failed hook write/invalid mode. Never start bypass without it.
+    local args; args="$(interactive_argv "$id" "$agent" 1)" || die "agy permission setup failed; no worker started"
+    mapfile -t argv <<<"$args"
   else
     mapfile -t argv < <(interactive_argv "$id" "$agent" 1)
   fi

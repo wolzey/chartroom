@@ -222,6 +222,7 @@ load_config() {
   # agent's own default. Usually set in a home's config, for that home's crew.
   cfg_set CR_CODEX_MODEL CODEX_MODEL '' ''
   cfg_set CR_AGY_MODEL AGY_MODEL '' ''
+  cfg_set CR_AGY_PERMISSION AGY_PERMISSION '' bypass
   cfg_set CR_CLAUDE_PERMISSION CLAUDE_PERMISSION '' ''
   cfg_set CR_CLAUDE_HEADLESS_PERMISSION CLAUDE_HEADLESS_PERMISSION '' acceptEdits
   cfg_set CR_CLAUDE_ALLOWED_TOOLS CLAUDE_ALLOWED_TOOLS '' 'Bash Read Edit Write Glob Grep WebFetch WebSearch'

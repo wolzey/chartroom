@@ -383,7 +383,7 @@ herdr_trust_screen() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"herdr agy worker running"* ]]
   grep -qF "agent start $id --kind agy --pane " "$FAKE_HERDR_DIR/calls.log"
-  grep -qF -- "-- --add-dir $(cd "$CHARTROOM_HOME/tasks/$id" && pwd -P)" "$FAKE_HERDR_DIR/calls.log"
+  grep -qF -- "-- --dangerously-skip-permissions --add-dir $(cd "$CHARTROOM_HOME/tasks/$id" && pwd -P)" "$FAKE_HERDR_DIR/calls.log"
   grep -q "^agent send-keys $id enter$" "$FAKE_HERDR_DIR/calls.log"
   refute() { if "$@"; then return 1; fi; }
   refute grep -q "^agent send-keys $id down$" "$FAKE_HERDR_DIR/calls.log"

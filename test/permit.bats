@@ -680,3 +680,73 @@ SH
   run env CLAUDE_CODE_SESSION_ID=$sid CHARTROOM_XO_HANDOFF_TOKENS=300000 "$CHARTROOM" watch --once --timeout 2; [[ "$output" != *"[xo] context"* ]]
   run env CLAUDE_CODE_SESSION_ID=$sid CHARTROOM_TASK="$id" "$CHARTROOM" watch --once --timeout 2; [[ "$output" != *"[xo] context"* ]]
 }
+
+# The native 1.5.18 payload (captured from a real interactive session) differs from the
+# older tool names in Google's docs. Feed both through the actual CLI hook entrypoint.
+agy_payload() { jq -cn --arg t "$1" --argjson a "$2" '{conversationId:"agy-test", workspacePaths:["/task-first"], toolCall:{name:$t,args:$a}}'; }
+agy_hook() { agy_payload "$1" "$2" | cr hook "$id" agy-pre-tool; }
+
+@test "agy broker: real tool shapes, grants, guarded calls, blocking cards, deny and expiry" {
+  task_with_worktree --backend hc:agy
+  local t input pid c out="$BATS_TEST_TMPDIR/agy.out"
+  # Local file tools and commands pass, including the legacy contract. Worktree cwd comes
+  # from the record, never the first additional workspace path.
+  for t in read_file write_file edit_file write_to_file replace_file_content multi_replace_file_content; do
+    if [[ "$t" =~ ^(read_file|write_file|edit_file)$ ]]; then
+      input="$(jq -cn --arg p "$WT/local.txt" '{Path:$p,Content:"test"}')"
+    else
+      input="$(jq -cn --arg p "$WT/local.txt" '{TargetFile:$p,CodeContent:"test"}')"
+    fi
+    [ "$(agy_hook "$t" "$input" | jq -r .decision)" = allow ]
+  done
+  [ "$(agy_hook run_command '{"CommandLine":"echo test","WaitMsBeforeAsync":5000}' | jq -r .decision)" = allow ]
+  [ "$(agy_hook ask_question '{"questions":[]}' | jq -r .decision)" = allow ]
+  cr set "$id" permission=auto
+  [ -z "$(agy_hook run_command '{"CommandLine":"echo test"}')" ]
+  [ "$(agy_hook run_command '{"CommandLine":"killall -l"}' | jq -r .decision)" = deny ]
+  cr set "$id" permission=bypass
+  [ "$(agy_hook run_command '{"CommandLine":"killall -l"}' | jq -r .decision)" = deny ]
+  [ "$(agy_hook run_command '{"CommandLine":"chartroom permit answer p-1234 once"}' | jq -r .decision)" = deny ]
+  input="$(jq -cn --arg p "$CHARTROOM_HOME/tasks/$id/.agents/hooks.json" '{Path:$p,Content:"{}"}')"
+  [ "$(agy_hook write_file "$input" | jq -r .decision)" = deny ]
+  [ "$(agy_hook write_file '{}' | jq -r .decision)" = deny ]
+  [ "$(echo '{}' | cr hook no-such-task agy-pre-tool | jq -r .decision)" = deny ]
+  as_commander permit grant "$id" push-branch
+  input="$(jq -cn --arg c "git push origin $(jq -r .branch "$CHARTROOM_HOME/tasks/$id/meta.json")" '{CommandLine:$c}')"
+  [ "$(agy_hook run_command "$input" | jq -r .decision)" = allow ]
+  # Every path that can escape local work waits on the same broker. No immediate "ask"
+  # reply: the hook stays alive until the commander denies it, including unknown tools.
+  while IFS='|' read -r t input; do
+    agy_hook "$t" "$input" >"$out" & pid=$!
+    wait_card
+    kill -0 "$pid"
+    [ ! -s "$out" ]
+    c="$(card_id)"
+    [ "$(jq -r .blocking "$(card_file)")" = true ]
+    answer "$c" deny --note 'test refusal'
+    wait "$pid"
+    [ "$(jq -r .decision "$out")" = deny ]
+    [[ "$(jq -r .reason "$out")" == *"test refusal"* ]]
+    rm -f "$CHARTROOM_HOME/permits/$id"/p-*.json
+  done <<'EOF'
+run_command|{"CommandLine":"git push origin main"}
+write_file|{"Path":"/elsewhere/test.txt","Content":"test"}
+edit_file|{"Path":"/elsewhere/test.txt","Target":"old","Replacement":"new"}
+write_to_file|{"Path":"/tmp/decoy","TargetFile":"/elsewhere/test.txt","CodeContent":"test"}
+edit_file|{"Path":"/elsewhere/test.txt","TargetFile":"/tmp/decoy","Target":"old","Replacement":"new"}
+read_url_content|{"Url":"https://example.invalid"}
+mcp_example_send_message|{"message":"test"}
+manage_task|{"Action":"send_input","TaskId":"other","Input":"git push"}
+future_tool|{}
+EOF
+  # A once answer releases exactly the held call using agy's allow reply.
+  agy_hook future_tool '{"value":"once"}' >"$out" & pid=$!
+  wait_card
+  answer "$(card_id)" once
+  wait "$pid"
+  [ "$(jq -r .decision "$out")" = allow ]
+  rm -f "$CHARTROOM_HOME/permits/$id"/p-*.json
+  export CHARTROOM_PERMIT_WAIT_SECONDS=1
+  [ "$(agy_hook future_tool '{}' | jq -r .decision)" = deny ]
+  [ "$(jq -r .answer "$CHARTROOM_HOME/permits/$id/$(card_id).answer.json")" = expired ]
+}

@@ -111,13 +111,15 @@ node_to_clone() { # <id> <repos json>
 }
 
 node_payload() { # <id> <attempt> <over 0|1> <repos json>
-  local id="$1" carry f
+  local id="$1" carry f permission
+  permission="$(meta "$id" permission)"
+  if [[ "$(meta "$id" node_backend)" == *:agy ]]; then permission="$(agy_permission "$id")" || return 1; fi
   f="$(mktemp)"; place_carry_json "$id" >"$f"
   carry="$(jq -r '.missing // empty' "$f")"
   [[ -z "$carry" ]] || log_event "$id" note "its brief on $(node_name_of "$id"): $carry" # (a pin goes all the same)
   jq -cn --arg home "$(node_home)" --arg id "$id" --arg title "$(meta "$id" title)" --arg kind "$(meta "$id" kind)" \
     --arg project "$(node_project_on "$(meta "$id" node)" "$(meta "$id" project)")" --arg base "$(meta "$id" base_sha)" --arg branch "$(meta "$id" branch)" \
-    --arg backend "$(meta "$id" node_backend)" --arg plan_gate "$(meta "$id" plan_gate)" --arg permission "$(meta "$id" permission)" \
+    --arg backend "$(meta "$id" node_backend)" --arg plan_gate "$(meta "$id" plan_gate)" --arg permission "$permission" \
     --arg model "$(task_model "$id" "$(meta "$id" node_backend | cut -d: -f2)")" --rawfile brief "$(tdir "$id")/brief.md" --arg brain_home "$CR_HOME" --arg tilde "${CR_HOME/#"$HOME"/\~}" \
     --argjson grants "$(permit_grants_json "$id")" --argjson attempt "$2" --arg ws "$CR_WORKSPACE" --arg over "${3:-0}" \
     --arg tools "$(place_tools "$id")" --slurpfile c "$f" --argjson r "$4" --arg setup "$(place_setup "$id")" --arg pins "$(place_pins "$id")" --arg bin "$CR_BIN" \
@@ -138,6 +140,13 @@ node_launch() { # <id> <wt (none here)> <agent> [over 0|1]
   local id="$1" did home attempt cid res name st rc repos clone wait=150
   NODE_REFUSED=""
   did="$(meta "$id" node)"; home="$(node_home)"; name="$(node_name_of "$id")"
+  # Older launchers reject "bypass" but can lose that failure in process substitution. Do
+  # not send any agy task until the running device advertises the broker, even in opt-out modes.
+  if [[ "$3" == agy ]]; then agy_permission "$id" >/dev/null || return 1; fi
+  if [[ "$3" == agy ]] && ! jq -e '(.caps // []) | index("agy-permit")' >/dev/null <<<"$(fleet_device_json "$did")"; then
+    NODE_REFUSED="agy permission cards need an updated device agent (chartroom node update $name)"
+    return 0
+  fi
   attempt="$(meta "$id" node_attempt)"; attempt=$(( ${attempt:-0} + 1 ))
   fleet_write "$(node_map "$home" "$id")" "$(jq -cn --arg d "$did" --argjson a "$attempt" --arg h "$CR_HOME" --arg b "$(meta "$id" branch)" \
     --arg p "$(meta "$id" project)" '{device: $d, attempt: $a, home_path: $h, branch: $b, project: $p}')"

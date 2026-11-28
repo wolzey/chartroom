@@ -27,22 +27,30 @@ agent_bin() {
 # state over OSC 7501, which hc reads as Claude's: working, idle, done, and blocked (kind
 # permission or question) at a trust dialog, an approval or a question; hc counts its turns and
 # refuses to type into a blocked agy (exit 9). So an agy worker needs no hooks for chartroom to see
-# it. Its one chartroom hook is the pattern kill guard (agy_guard_hooks). What chartroom does not
-# give it: no permission cards, grants or holds (its own approvals come up as
-# `agent: awaiting-input`), its prompts are not checked against their text (no prompt hook), and
-# it is never parked (no session id chartroom picks to resume).
-AGY_LIMITS="only the pattern-kill guard hook: its own approvals wake the XO as awaiting-input, but no permission cards or grants; steers are taken but not checked against their text; never parked (no resume)"
+# it. Its PreToolUse hook gates every tool through chartroom's permission broker. There is
+# no prompt receipt hook, and no session id chartroom picks to resume.
+AGY_LIMITS="bypass by default; the broker gates all tools and cards hold calls needing an answer; no sandbox or verified plugin/subagent inheritance; steers are taken but not checked against their text; never parked (no resume)"
 
-# The pattern kill guard for agy: agy loads hooks.json from the .agents folder of each workspace
-# folder, and the task's folder is one (agy_args --add-dir), so chartroom writes it there, never in
-# the worktree. Rewritten at every launch. Verified on agy 1.5.18: a hook there runs with no trust
-# prompt, gets toolCall {name: run_command, args.CommandLine}, and {decision: deny, reason} blocks
-# the command ("tool call denied by pre-tool hook: <reason>"); no output lets it run as before.
-agy_guard_hooks() { # <id>
-  local d; d="$(tdir "$1")/.agents"
+# agy discovers hooks in every workspace folder, including the task's --add-dir. A catch-all
+# also gates MCP, browser, background input and future tools: unrecognized tools need a card.
+# Its hook timeout must outlast the broker's wait; the broker answers in agy's own protocol.
+agy_permit_hooks() { # <id>
+  local d c; d="$(tdir "$1")/.agents"
   mkdir -p "$d"
-  jq -n --arg c "CHARTROOM_HOME=$(printf '%q' "$CR_HOME") $(printf '%q' "$CR_BIN") hook $1 guard" \
-    '{"chartroom-guard": {PreToolUse: [{matcher: "run_command", hooks: [{type: "command", command: $c, timeout: 30}]}]}}' >"$d/hooks.json"
+  c="CHARTROOM_HOME=$(printf '%q' "$CR_HOME") CHARTROOM_PERMIT_WAIT_SECONDS=$CR_PERMIT_WAIT $(printf '%q' "$CR_BIN") hook $1 agy-pre-tool"
+  # Pin the wait to this launch's timeout even if the home setting changes mid-session.
+  # A missing/broken chartroom must deny too, before its shell can return a hook error.
+  c+=" || printf '%s\\n' '{\"decision\":\"deny\",\"reason\":\"chartroom permission hook failed; this call is refused\"}'"
+  jq -n --arg c "$c" \
+    --argjson wait "$((CR_PERMIT_WAIT + 60))" \
+    '{"chartroom-permit": {PreToolUse: [{matcher: ".*", hooks: [{type: "command", command: $c, timeout: $wait}]}]}}' >"$d/hooks.json"
+}
+
+# The task wins over the home's default, including on a node (node_payload carries this value).
+agy_permission() { # <id>
+  local p; p="$(meta "$1" permission)"; p="${p:-$CR_AGY_PERMISSION}"
+  [[ "$p" =~ ^(bypass|auto|accept-edits|plan)$ ]] || die "agy has no permission mode '$p' (its modes: bypass, auto, accept-edits, plan)"
+  printf '%s' "$p"
 }
 
 # Signed in? `agy models` lists the account's models, or says "Please sign in" and exits 1 at once
@@ -77,20 +85,16 @@ agy_login_why() {
   [[ -z "$AGY_LOGIN_WHY" ]] || { printf '%s' "$AGY_LOGIN_WHY"; return 1; }
 }
 
-# agy's flags for a task: its model (task_model) and effort, its mode (meta permission: auto, accept-edits or
-# plan; empty is agy's own default: auto on the Macs seen; on a Linux one it asked even with auto), and the task's folder as a workspace directory, by its
-# real path (agy compares resolved paths: a folder given through a symlink, as macOS's /tmp is,
-# reads as outside the workspace, and each write there asks).
+# agy's flags, shared by hc, herdr and nodes. Resolve the task folder because agy compares real
+# paths (a symlink such as macOS /tmp otherwise reads as outside the workspace).
 agy_args() { # <id>
   local m e p
-  m="$(task_model "$1" agy)"; e="$(meta "$1" effort)"; p="$(meta "$1" permission)"
+  m="$(task_model "$1" agy)"; e="$(meta "$1" effort)"; p="$(agy_permission "$1")" || return 1
   [[ -n "$m" ]] && printf '%s\n' --model "$m"
   [[ -n "$e" ]] && printf '%s\n' --effort "$e"
-  if [[ -n "$p" ]]; then
-    [[ "$p" =~ ^(auto|accept-edits|plan)$ ]] || die "agy has no permission mode '$p' (its modes: auto, accept-edits, plan)"
-    printf '%s\n' --mode "$p"
-  fi
-  agy_guard_hooks "$1"
+  if [[ "$p" == bypass ]]; then printf '%s\n' --dangerously-skip-permissions
+  else printf '%s\n' --mode "$p"; fi
+  agy_permit_hooks "$1" || return 1
   printf '%s\n' --add-dir "$(phys_dir "$(tdir "$1")")"
 }
 
@@ -246,7 +250,7 @@ interactive_argv() { # <id> <agent> <hooks> [session|resume]
       codex_sandbox_args "$id"; codex_model_args "$id"; codex_guard_args
       [[ "$hooks" == 1 ]] && codex_notify_args "$id"
       ;;
-    agy) agy_args "$id" ;; # (only the guard hook: hc and herdr read its state themselves)
+    agy) agy_args "$id" || return 1 ;; # (hc and herdr read its turn state themselves)
     *) die "unknown agent '$agent'" ;;
   esac
   return 0

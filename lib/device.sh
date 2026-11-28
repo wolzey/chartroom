@@ -157,7 +157,7 @@ device_do_join() {
 }
 
 # What this agent can be asked to do over the connection (the brain refuses a pin without it).
-CR_DEVICE_CAPS="commands update dispatch limits place clone env prepare"
+CR_DEVICE_CAPS="commands update dispatch limits place clone env prepare agy-permit"
 device_rev() { git -C "$CR_ROOT" rev-parse HEAD 2>/dev/null || true; }
 
 device_heartbeat_body() { # <file> <started>

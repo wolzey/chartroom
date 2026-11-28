@@ -238,11 +238,16 @@ agy_trust() {
   [[ "$output" == *"hc agy worker running"* ]]
   # agy's own argv: its model, the task folder by its real path, and -i before the brief's line
   l="$CHARTROOM_HOME/tasks/$id/launch.sh"
-  grep -qF -- "--model gemini-fake-high --add-dir $(cd "$CHARTROOM_HOME/tasks/$id" && pwd -P) -i \"\$@\"" "$l"
+  grep -qF -- "--model gemini-fake-high --dangerously-skip-permissions --add-dir $(cd "$CHARTROOM_HOME/tasks/$id" && pwd -P) -i \"\$@\"" "$l"
   refute grep -q -- "--settings\|notify=\|--no-daemon" "$l"
-  # its one chartroom hook, the pattern kill guard, in the task folder's .agents (never the worktree)
-  jq -e --arg c "hook $id guard" '."chartroom-guard".PreToolUse[0] | .matcher == "run_command" and (.hooks[0].command | endswith($c))' \
+  # its catch-all broker hook, in the task folder (never the worktree), outlasts the card
+  jq -e --arg c "hook $id agy-pre-tool" '."chartroom-permit".PreToolUse[0] | .matcher == ".*" and .hooks[0].timeout == 960 and (.hooks[0].command | contains($c))' \
     "$CHARTROOM_HOME/tasks/$id/.agents/hooks.json"
+  # Execute the generated command with a missing executable: shell errors must deny too.
+  local hook_cmd
+  hook_cmd="$(jq -r '."chartroom-permit".PreToolUse[0].hooks[0].command' "$CHARTROOM_HOME/tasks/$id/.agents/hooks.json")"
+  hook_cmd="${hook_cmd//"$CHARTROOM"/"$BATS_TEST_TMPDIR/missing-chartroom"}"
+  [ "$(bash -c "$hook_cmd" 2>/dev/null | jq -r .decision)" = deny ]
   [ "$(term t1 '.argv[2]')" = "Read the brief at $CHARTROOM_HOME/tasks/$id/brief.md and follow it exactly. Your task id is $id." ]
   # the trust dialog of its own worktree: Enter on "> Yes, I trust this folder", never Down
   hc_calls | grep -qx "keys t1 enter"
@@ -338,7 +343,7 @@ agy_trust() {
   [ "$(jq -r '.backends[]|select(.backend=="herdr:agy").reason' <<<"$output")" = "herdr not on PATH" ]
   [ "$(jq -r '.agents.agy.version' <<<"$output")" = "1.5.17-fake" ]
   [ "$(jq -r '.agents.agy.signed_in' <<<"$output")" = true ]
-  [[ "$(jq -r '.agents.agy.limits' <<<"$output")" == *"no permission cards"*"never parked"* ]]
+  [[ "$(jq -r '.agents.agy.limits' <<<"$output")" == *"the broker gates all tools"*"never parked"* ]]
   run cr doctor
   [[ "$output" == *"agy:      1.5.17-fake at $BIN/agy, signed in; runs as hc:agy, herdr:agy, node"* ]]
   # signed out: doctor says so, and a dispatch refuses before it starts a terminal
@@ -680,4 +685,35 @@ wakes() { grep -c . "$BATS_TEST_TMPDIR/wake" || true; }
   # the stream carries t1, so hc was asked only about t2, once, and never again
   [ "$(grep -c '^get' "$FAKE_HC_DIR/calls.log")" -eq 1 ]
   grep -qx 'get t2 --json' "$FAKE_HC_DIR/calls.log"
+}
+
+@test "agy permission: home default and task overrides use the shared launcher" {
+  use_fake agy
+  id="$(new_task --backend hc:agy)"
+  # agy_args is the shared hc/herdr path. Read the home's setting through production config.
+  printf 'CHARTROOM_AGY_PERMISSION=accept-edits\n' >"$CHARTROOM_HOME/config"
+  run bash -c 'source "$1/lib/core.sh"; source "$1/lib/agents.sh"; source "$1/lib/store.sh"; load_config; agy_args "$2"' _ "$REPO_ROOT" "$id"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *$'--mode\naccept-edits'* ]]
+  for p in bypass auto plan; do
+    cr set "$id" permission="$p"
+    run bash -c 'source "$1/lib/core.sh"; source "$1/lib/agents.sh"; source "$1/lib/store.sh"; load_config; agy_args "$2"' _ "$REPO_ROOT" "$id"
+    [ "$status" -eq 0 ]
+    if [[ "$p" == bypass ]]; then [[ "$output" == *--dangerously-skip-permissions* ]]
+    else [[ "$output" == *$'--mode\n'"$p"* ]]; fi
+  done
+  cr set "$id" permission=invalid
+  run bash -c 'source "$1/lib/core.sh"; source "$1/lib/agents.sh"; source "$1/lib/store.sh"; load_config; agy_args "$2"' _ "$REPO_ROOT" "$id"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"agy has no permission mode"* ]]
+  core_up
+  run cr dispatch "$id"
+  [ "$status" -ne 0 ]
+  refute grep -q '^run ' "$FAKE_HC_DIR/calls.log"
+  cr set "$id" permission=bypass
+  rm -rf "$CHARTROOM_HOME/tasks/$id/.agents"
+  touch "$CHARTROOM_HOME/tasks/$id/.agents"
+  run cr dispatch "$id"
+  [ "$status" -ne 0 ]
+  refute grep -q '^run ' "$FAKE_HC_DIR/calls.log"
 }

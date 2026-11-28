@@ -812,14 +812,14 @@ cmd_hook() {
   # "-" is the task the launcher exported (CHARTROOM_TASK): a hook whose text names no task, so an
   # agent that trusts hooks by their text (Codex: codex_guard_args) trusts it once for every task.
   [[ "$id" == - ]] && id="${CHARTROOM_TASK:-}"
-  # The tool guard (claude_settings_file, codex_guard_args, agy_guard_hooks): it refuses a pattern
+  # The tool guard (claude_settings_file, codex_guard_args, agy_permit_hooks): it refuses a pattern
   # kill whatever the task's record says, answering on stdout, and the deny goes out before anything
   # that could fail. pre-bash is its name in settings written before the permission broker; guard
   # is the guard alone. Claude and Codex send tool_name Bash and tool_input.command, and take
   # hookSpecificOutput; agy sends toolCall {name: run_command, args.CommandLine} and takes
   # {decision, reason}. An allowed call gets no answer at all: agy's "allow" would skip its own
   # approval, and an empty JSON object would deny.
-  if [[ "$what" =~ ^(pre-bash|pre-tool|guard)$ ]]; then
+  if [[ "$what" =~ ^(pre-bash|pre-tool|guard|agy-pre-tool)$ ]]; then
     [[ -n "$payload" ]] || payload="$(cat 2>/dev/null || true)"
     msg="$(jq -r 'if .toolCall then (select(.toolCall.name == "run_command") | .toolCall.args.CommandLine // empty)
       else (select(.tool_name == null or .tool_name == "Bash") | .tool_input.command // empty) end' <<<"$payload" 2>/dev/null || true)"
@@ -834,6 +834,7 @@ cmd_hook() {
     fi
     [[ "$what" != guard ]] || exit 0
   fi
+  if [[ "$what" == agy-pre-tool ]]; then agy_permit_hook "$id" "$payload"; exit 0; fi
   # The permission broker (lib/permit.sh): the policy's answer, or a card for the commander.
   if [[ "$what" =~ ^(pre-bash|pre-tool|permission|denied)$ ]]; then
     [[ -n "$payload" ]] || payload="$(cat 2>/dev/null || true)"

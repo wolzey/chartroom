@@ -1,7 +1,7 @@
-# permit.jq - the permission policy for chartroom's Claude workers: the one place its rules live.
+# permit.jq - the permission policy for chartroom's Claude and agy workers: the one place its rules live.
 #
 # lib/permit.sh feeds it one request and acts on the verdict. Input:
-#   {event: "pre-tool"|"permission"|"denied", tool, input (the tool's input object), sig, cwd,
+#   {event: "pre-tool"|"permission"|"denied"|"agy-pre-tool", tool, input (the tool's input object), sig, cwd,
 #    roots: {worktree, task_dir, scratch, permits, user_home, db},
 #    branch (the task's branch), current_branch (the worktree's; "" when not looked up),
 #    grants: [name], always: [{tool, pattern, from}], pre: <p-id of a one-time pre-approval> | null}
@@ -21,7 +21,8 @@
 #   5. local:*      allow  only for "permission" (a prompt Claude would show): reads anywhere, a
 #                          web search, and writes, tests, installs, local git, a dev server,
 #                          scratch files inside the worktree, the task dir, the scratchpad and /tmp
-#   6. otherwise    card for "permission"; none for "pre-tool" (Claude's own flow decides)
+#   6. otherwise    card for "permission" and "agy-pre-tool"; none for "pre-tool"
+#                   (Claude's own flow decides). agy uses the same local rules as permission.
 #
 # Bash is read as quoted words split into commands at ; & | ( ) { } backticks and newlines, with
 # $(...) and `...` (not inside '...', where the shell runs nothing), `sh -c '...'` and `eval` read
@@ -49,7 +50,7 @@ def dev_roots: ["/dev/null", "/dev/stdout", "/dev/stderr", "/dev/stdin", "/dev/t
 
 def control_files($R): [$R.task_dir + "/meta.json", $R.task_dir + "/claude-settings.json", $R.task_dir + "/launch.sh"]
   + (if ($R.db // "") != "" then [$R.db, $R.db + "-wal", $R.db + "-journal"] else [] end);
-def control_tree($R): [$R.worktree + "/.claude", $R.worktree + "/.mcp.json", $R.worktree + "/.git/config", $R.worktree + "/.git/hooks"];
+def control_tree($R): (if $R.agy then [$R.worktree + "/.agents", $R.worktree + "/.gemini"] else [] end) + [$R.worktree + "/.claude", $R.worktree + "/.mcp.json", $R.worktree + "/.git/config", $R.worktree + "/.git/hooks"];
 
 # ---------------------------------------------------------------- reading Bash
 
@@ -565,7 +566,9 @@ def decide:
   | ($tool == "Bash" and ($segs | any(.head | test("^(python3?|node|ruby|perl|bash|sh|zsh|jq)$")))) as $interp
   | ((($q.grants // []) | index("prod-read")) != null) as $prodread
   # 1. guards
-  | if ($R.permits // "") != "" and (($cmd | contains($R.permits)) or ($paths | any(under($R.permits))) or (($tool | startswith("mcp__")) and ($text | contains($R.permits))))
+  | if $R.agy and (($cmd | contains($R.task_dir + "/.agents")) or ($paths | any(under($R.task_dir + "/.agents"))) or ($wpaths | any(under($R.task_dir + "/.agents"))))
+      then {verdict: "deny", rule: "guard:controls", why: "touches the task's agy permission hooks"}
+    elif ($R.permits // "") != "" and (($cmd | contains($R.permits)) or ($paths | any(under($R.permits))) or (($tool | startswith("mcp__")) and ($text | contains($R.permits))))
       then {verdict: "deny", rule: "guard:store", why: "touches chartroom's permit store"}
     elif $segs | any(.args as $a | ([.head] + $a) as $w | any(range(0; ($w | length) - 1); $w[.] == "permit" and ($w[. + 1] | IN("answer", "grant", "revoke"))))
       then {verdict: "deny", rule: "guard:self-answer", why: "answers or grants a chartroom permission"}

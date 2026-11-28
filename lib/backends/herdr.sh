@@ -135,7 +135,12 @@ herdr_launch() { # <id> <wt> <agent>
 
   local start=(agent start "$id" --kind "$agent" --pane "$pane" --timeout 60000) extra=() out i blocked=0
   # herdr starts the agent binary itself; pass the same flags chartroom uses elsewhere.
-  mapfile -t extra < <(interactive_argv "$id" "$agent" "$([[ "$agent" == claude ]] && echo prompt || echo 0)" | tail -n +2)
+  if [[ "$agent" == agy ]]; then
+    local args; args="$(interactive_argv "$id" "$agent" 0)" || die "agy permission setup failed; no worker started"
+    mapfile -t extra < <(printf '%s\n' "$args" | tail -n +2)
+  else
+    mapfile -t extra < <(interactive_argv "$id" "$agent" "$([[ "$agent" == claude ]] && echo prompt || echo 0)" | tail -n +2)
+  fi
   [[ ${#extra[@]} -gt 0 ]] && start+=(-- "${extra[@]}")
   # agent_not_ready: the agent came up but is blocked at a startup dialog (usually the folder
   # trust prompt). herdr keeps the name for read/send-keys, so carry on to the trust handling

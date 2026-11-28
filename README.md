@@ -665,7 +665,7 @@ only: `hc:agy`, `herdr:agy`, or `node:agy` on a device where agy is signed in).
 | Backend | Runs in | Watch | Steering | Needs | Status |
 |---|---|---|---|---|---|
 | `hc:<agent>` | an herdr-core terminal, in its own tab of the Herdr app's `$CHARTROOM_WORKSPACE` space | yes (`chartroom attach`, or the app) | live | herdr-core running (the Herdr app, or `hc server start`); the window may be closed | `hc:claude` verified (hc 0.1.14, herdr-app 0.1.9, Claude Code 2.1.314); `hc:codex` implemented, not yet run against a real codex |
-| `hc:agy` | an herdr-core terminal running `agy -i <brief>` | yes | live (taken, not checked against its text) | agy signed in (`chartroom doctor` says) | verified (agy 1.5.17 and 1.5.18, hc 0.1.21). Only the pattern-kill guard hook: no permission cards or grants, never parked |
+| `hc:agy` | an herdr-core terminal running `agy -i <brief>` | yes | live (taken, not checked against its text) | agy signed in (`chartroom doctor` says) | verified (agy 1.5.18, hc 0.1.21 on macOS and 0.1.22 on Linux; no per-step prompts in bypass). Bypass by default, with permission cards, grants and the pattern-kill guard; never parked |
 | `herdr:<agent>` | a herdr tab (first class) | yes | live | herdr running | verified (herdr 0.9.1); `herdr:agy` built to the same rules, not run against a signed-in agy |
 | `cmux:<agent>` | a cmux tab (macOS) | yes | live | cmux app, automation socket mode if the XO runs outside cmux | **implemented, unverified on real cmux** |
 | `tmux:<agent>` | a tmux window | yes (`chartroom attach`) | live | tmux ≥ 3.0 | verified (tmux 3.x) |
@@ -832,6 +832,7 @@ machine), then `~/.config/chartroom/config` (`KEY=VALUE`, no shell evaluation;
 | `CHARTROOM_COMMAND` | *(empty)* | default template for the `command` backend |
 | `CHARTROOM_CODEX_SHIP_SANDBOX` / `_SCOUT_SANDBOX` | `danger-full-access` / `workspace-write` | |
 | `CHARTROOM_CODEX_MODEL` / `CHARTROOM_AGY_MODEL` | (the agent's own) | the model a Codex or agy worker gets when its task names none (`new --model` wins); usually in a home's `config`. A task on a device carries it there |
+| `CHARTROOM_AGY_PERMISSION` | `bypass` | agy runs with `--dangerously-skip-permissions`, with every tool gated by chartroom's permission broker. `auto`, `accept-edits`, or `plan` restores agy's own approvals; task `permission` wins and the resolved setting travels to nodes |
 | `CHARTROOM_CLAUDE_PERMISSION` | *(agent default)* | interactive Claude `--permission-mode` |
 | `CHARTROOM_CLAUDE_HEADLESS_PERMISSION` | `acceptEdits` | |
 | `CHARTROOM_CLAUDE_ALLOWED_TOOLS` | `Bash Read Edit Write Glob Grep WebFetch WebSearch` | headless Claude |
