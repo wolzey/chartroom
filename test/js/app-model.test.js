@@ -526,6 +526,10 @@ test("usageView: a reset that passed, an unknown reset, a window not started, a 
   assert.strictEqual(M.usageView(urow("codex", "desk", { state: "out", limit_reached: true }), NOW).note, "codex allows no more use for now");
   const u = M.usageView(urow("agy", "desk", { status: "unknown", state: "unknown", windows: [], reason: "agy not on PATH", plan: null, account: null, sampled_at: null }), NOW);
   assert.deepStrictEqual([u.stateText, u.note, u.plan, u.age], ["Not known", "agy not on PATH", "", "no reading yet"]);
+  const gu = M.usageView(urow("grok", "desk", { status: "unknown", state: "unknown", windows: [], reason: "grok usage needs Grok's background service (daemon route); on the shell route run /usage inside grok", plan: null, account: null }), NOW);
+  assert.deepStrictEqual([gu.agent, gu.state, gu.stateText, gu.note], ["grok", "unknown", "Not known", "grok usage needs Grok's background service (daemon route); on the shell route run /usage inside grok"]);
+  const go = M.usageView(urow("grok", "desk", { status: "unknown", state: "out", hit_active: true, out_resets_at: iso(3600), windows: [] }), NOW);
+  assert.deepStrictEqual([go.agent, go.state, go.stateText, go.note], ["grok", "out", "Out", "A worker hit the limit; it resets in 1h"]);
   const s = M.usageView(urow("claude", "mini", { stale: true, sampled_at: iso(-7200), per_machine: true }), NOW);
   assert.deepStrictEqual([s.stale, s.age, s.where], [true, "read 2h ago", "mini"]);
   assert.strictEqual(M.usageView(urow("claude", "desk", { machines: ["desk", "mini"] }), NOW).where, "desk, mini");
@@ -534,6 +538,8 @@ test("usageView: a reset that passed, an unknown reset, a window not started, a 
 test("usageSummary: who is out, who is near (by machine when split), else all within limits", () => {
   assert.deepStrictEqual(M.usageSummary([]), { level: "ok", text: "No usage reading yet" });
   assert.deepStrictEqual(M.usageSummary([urow("claude", "desk")]), { level: "ok", text: "Every agent is within its limits" });
+  assert.deepStrictEqual(M.usageSummary([urow("claude", "desk"), urow("grok", "desk", { status: "unknown", state: "unknown", windows: [] })]),
+    { level: "ok", text: "Every agent is within its limits" });
   assert.deepStrictEqual(M.usageSummary([urow("claude", "desk", { state: "near" }), urow("codex", "mini", { state: "out", per_machine: true })]),
     { level: "out", text: "codex on mini out; claude near the limit" });
   assert.strictEqual(M.untilText(iso(-5), NOW), "now");

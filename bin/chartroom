@@ -809,7 +809,7 @@ cmd_dispatch() {
       for pk in session_id thread_id model effort permission sandbox; do
         [[ -z "$(meta "$id" "$pk")" ]] || meta_set "$id" "$pk" ""
       done
-      if [[ "$kind" == ship && "$prev_agent" =~ ^(codex|agy)$ ]]; then
+      if [[ "$kind" == ship && "$prev_agent" =~ ^(codex|agy|grok)$ ]]; then
         meta_set "$id" review_required 1
       fi
       prev_agent="$agent"
@@ -1993,7 +1993,7 @@ cmd_doctor() {
         home_config:(if $hcfg=="" then null else $hcfg end),workspace:$ws,harness:$harness,
         bash:{version:$bv,path:$bp,rerun_from:(if $bf=="" then null else $bf end)},
         path:{thin:($added!=""),added:($added|split(" ")|map(select(.!="")))},
-        order:($o|split(" ")),auto:(if $auto=="" then null else $auto end),app:$app,pdf:$pdf,agents:($agents + {agy:($agents.agy + $agy), grok:$grok}),agent_nodes:$agent_nodes,usage:$usage,backends:.}'
+        order:($o|split(" ")),auto:(if $auto=="" then null else $auto end),app:$app,pdf:$pdf,agents:($agents + {agy:($agents.agy + $agy), grok:($agents.grok + $grok)}),agent_nodes:$agent_nodes,usage:$usage,backends:.}'
   else
     echo "chartroom $CR_VERSION"
     [[ "$CR_HOME_SOURCE" == "registered home"* ]] && hname=""
@@ -2014,7 +2014,7 @@ cmd_doctor() {
     app_doctor_brief_json | jq -r '"app:      " + (if .url then .url else (.why // "not running") end) + (if .old_dashboard then "; an old web dashboard still runs (pid \(.old_dashboard)): chartroom dashboard stop" else "" end)'
     page_doctor_json | jq -r 'if .chrome then "pdf:      \(.chrome) (chartroom artifact pdf)" else "pdf:      - \(.why)" end'
     agy_doctor_json | jq -r '"agy:      " + (if .path == null then "- not on PATH" else "\(.version // "?") at \(.path), \(if .signed_in then "signed in" else (.why // "not signed in") end)" end) + "; runs as \(.runners | join(", ")) only; \(.limits)"'
-    grok_doctor_json | jq -r '"grok:     " + (if .path == null then "- not on PATH" else "\(.version // "?") at \(.path), \(if .signed_in then "signed in" else (.why // "not signed in") end)" end) + "; runs as \(.runners | join(", ")) only, and only when a task names it (never picked automatically); \(.limits)"'
+    grok_doctor_json | jq -r '"grok:     " + (if .path == null then "- not on PATH" else "\(.version // "?") at \(.path), \(if .signed_in then "signed in" else (.why // "not signed in") end)" end) + "; runs as \(.runners | join(", ")) only; \(.limits)"'
     spread_doctor_json | jq -r 'to_entries[] | "agent:    \(.key): signed in=\(.value.signed_in), usable full session=\(.value.usable)\(if .value.reason != "" then " (\(.value.reason))" else "" end)"'
     spread_doctor_nodes | jq -r '.[] | .node as $n | .agents | to_entries[] | "agent:    \($n) / \(.key): signed in=\(.value.signed_in), usable=\(.value.usable)\(if .value.reason != "" then " (\(.value.reason))" else "" end)"'
     usage_doctor_lines
@@ -2053,7 +2053,7 @@ grok_doctor_json() {
   jq -cn --arg p "$b" --arg v "$v" --arg w "$why" --argjson s "$signed" --arg r "$GROK_RUNNERS" --arg l "$GROK_LIMITS" \
     '{path:(if $p=="" then null else $p end),version:(if $v=="" then null else $v end),signed_in:$s,
       why:(if $w=="" then null else $w end),runners:($r|split("|")|map(if . == "node" then "node (a device where grok is signed in)" else . + ":grok" end)),
-      automatic:false,limits:$l}'
+      limits:$l}'
 }
 
 cmd_version() { echo "chartroom $CR_VERSION (state schema $CR_SCHEMA)"; }
@@ -2126,9 +2126,9 @@ chartroom - run a crew of coding agents from one agent session (the XO)
                                           create a task record + brief scaffold. B is
                                           <runner>:<agent> (runners: hc herdr cmux tmux headless;
                                           agents: claude codex agy grok; agy and grok run in
-                                          hc and herdr only, and grok only when named here),
+                                          hc and herdr only),
                                           command, subagent, or auto
-                                          (omit --backend: balance codex, agy, claude in hc/herdr).
+                                          (omit --backend: balance codex, agy, grok, claude in hc/herdr).
                                           --grant (repeatable): push-branch, open-pr, merge-auto,
                                           comment-pr, prod-read, enforced by the permission hooks
                                           --node: pin it to an enrolled device (hc:claude,

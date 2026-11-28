@@ -22,8 +22,7 @@
 # What may run on a device (CHARTROOM_NODE_BACKENDS; the tests add command).
 # (hc:agy needs the device's chartroom to know agy: an older one reports no agy in its probe, so
 # placement never picks it, and a task pinned to it fails there; chartroom node update brings it.
-# hc:grok the same. Placement only moves a task whose --backend names one, so grok goes to a node
-# only when the commander asked for grok, and only to one that reports grok signed in.)
+# hc:grok the same: placement sends hc:grok only to a node that reports grok signed in.)
 node_backends() { cfg NODE_BACKENDS '' 'hc:claude|hc:codex|hc:agy|hc:grok'; }
 
 node_probe() { return 0; } # (whether the device can take it is decided at launch: away, it waits)

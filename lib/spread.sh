@@ -14,6 +14,7 @@ agent_login_why() { # <agent>, no credential contents in diagnostics
   b="$(agent_bin "$1")"; [[ -n "$b" ]] || { echo "$1 not on PATH"; return 1; }
   case "$1" in
     agy) agy_login_why ;;
+    grok) grok_login_why ;;
     codex) run_bounded 20 "$b" login status </dev/null >/dev/null 2>&1 || { echo 'codex is not signed in (codex login status failed)'; return 1; } ;;
     claude)
       out="$(run_bounded 20 "$b" auth status </dev/null 2>/dev/null)" || true
@@ -37,7 +38,7 @@ spread_facts() {
   done <<<"$docs"
 }
 spread_summary() {
-  spread_facts | jq -sc --arg exclude "${1:-}" '["codex","agy","claude"] as $order | [.[] | select(.id != $exclude)] as $tasks |
+  spread_facts | jq -sc --arg exclude "${1:-}" '["codex","agy","grok","claude"] as $order | [.[] | select(.id != $exclude)] as $tasks |
     [$order[] as $a | {agent:$a,
       live: ([$tasks[] | select((.backend // "" | sub("^herdr-"; "herdr:") | split(":") | last) == $a)
         | select(.spread_state | IN("review","done","closed","failed") | not)] | length),
@@ -47,17 +48,15 @@ spread_summary() {
 spread_line() {
   jq -r '"agents: " + (map("\(.agent) \(.live) live, reviews \(.clean) clean / \(.rework) rework") | join("; "))' <<<"$1"
 }
-# grok is never a candidate, whatever the counts or the available list hold: it runs only when
-# a task's --backend names it. Every automatic path (local, node rows, doctor) goes through here.
 spread_pick() { # <counts json> <available agents json> <claude-only 0|1>
   jq -er --argjson available "$2" --arg only "$3" '
-    [to_entries[] | select(.value.agent != "grok") | select(.value.agent as $a | $available | index($a))
+    [to_entries[] | select(.value.agent as $a | $available | index($a))
       | select($only != "1" or .value.agent == "claude")]
     | sort_by([.value.live,.key]) | .[0].value.agent // empty' <<<"$1"
 }
 spread_local_backends() {
   local a r
-  for a in codex agy claude; do
+  for a in codex agy grok claude; do
     agent_login_why "$a" >/dev/null || continue
     if declare -F usage_agent_out >/dev/null 2>&1 && usage_agent_out "$a" >/dev/null; then continue; fi
     for r in hc herdr; do
@@ -87,7 +86,7 @@ spread_node_agents() { # <rows json> -> rows with spread_agents
   jq -c --argjson local_agents "$(printf '%s\n' "$local_bs" | jq -Rsc 'split("\n") | map(select(length>0) | split(":")[1])')" \
     --argjson out "$out_map" '
     map(. as $r | . + {spread_agents: (if .local then $local_agents else
-      ["codex","agy","claude"] | map(. as $a
+      ["codex","agy","grok","claude"] | map(. as $a
         | select($r.device.status == "online" and $r.runner.hc == "up" and $r.tools[$a].status == "ok" and $r.logins[$a].status == "ok"
           and (($r.usage[$a].out // false) | not) and (($out["\($r.machine)|\($a)"] // false) | not))) end)})' <<<"$1"
 }
@@ -106,7 +105,7 @@ review_owner() { [[ "${CHARTROOM_GUEST:-}" != 1 && ! -f "$CR_HOME/.push/$1.json"
 review_eligible() {
   review_owner "$1" && [[ "$(cfg REVIEW_NON_CLAUDE '' opus)" != off && "$(meta "$1" review_gate)" == 1 && "$(meta "$1" kind)" == ship && "$(meta "$1" review_skipped)" != 1 ]] || return 1
   if [[ "$(meta "$1" review_required)" == 1 ]]; then return 0; fi
-  case "$(backend_agent "$1")" in codex|agy) return 0 ;; *) return 1 ;; esac
+  case "$(backend_agent "$1")" in codex|agy|grok) return 0 ;; *) return 1 ;; esac
 }
 review_count() { events_path "$1"; awk '$2=="done:" {n++} END {print n+0}' "$EVENTS_PATH"; }
 review_mark() { # Fast event path: no task creation, diff fetch, or dispatch.
@@ -273,7 +272,7 @@ review_ready() { # Read-only acceptance guard; never creates tasks, fetches a di
 spread_doctor_json() {
   local a why uwhy usable bs rows=()
   bs="$(spread_local_backends)"
-  for a in codex agy claude; do
+  for a in codex agy grok claude; do
     usable=false; [[ "$bs" != *":$a"* ]] || usable=true
     why="$(agent_login_why "$a")" || true
     uwhy=""
@@ -295,7 +294,7 @@ spread_doctor_nodes() {
   for ((i=0;i<n;i++)); do
     nodes_device_row "$(jq -c --argjson i "$i" '.[$i]' <<<"$devs")" "$(date +%s)"
   done | jq -sc --argjson out "$out_map" '[.[] | . as $r | {node:.machine, status:.device.status, agents:
-    (["codex","agy","claude"] | map(. as $a
+    (["codex","agy","grok","claude"] | map(. as $a
       | (($r.usage[$a].out // false) or ($out["\($r.machine)|\($a)"] != null)) as $uout
       | {key:$a,value:{signed_in:($r.logins[$a].status == "ok"),usage_out:$uout,
         reason:($r.usage[$a].out_reason // $out["\($r.machine)|\($a)"] // ""),

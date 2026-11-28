@@ -112,8 +112,8 @@ agy_args() { # <id>
 # grok reports its state over OSC 7501 to Herdr 2, which hc is (verified in hc 0.1.21: a grok
 # at its sign-in screen reads `blocked`, kind auth, "Sign in to Grok"; its docs: working, waiting
 # on an approval, a question or a sign-in, done, failed). So, as for agy, hc sees its prompts and
-# counts its turns, and herdr starts it itself (`--kind grok`, herdr 0.9.5). It is a crew agent
-# only when a task's --backend names it: grok is in no default order (the commander picks it).
+# counts its turns, and herdr starts it itself (`--kind grok`, herdr 0.9.5). Like agy, it joins
+# the automatic full-session spread wherever it is installed and signed in.
 # What chartroom does not give it: no permission cards, grants or holds (its own approvals come up
 # as `agent: awaiting-input`), its prompts are not checked against their text (no prompt hook), and
 # it is never parked (grok can resume a session by id, but chartroom's park is Claude's only).

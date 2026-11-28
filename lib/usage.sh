@@ -986,7 +986,7 @@ usage_available_agents() { # [exclude_agent] [exclude_machine]
   local excl="${1:-}" excl_m="${2:-$(usage_machine_name)}" here a bs="" out=() rec left
   here="$(usage_machine_name)"
   if declare -F spread_local_backends >/dev/null 2>&1; then bs="$(spread_local_backends 2>/dev/null || true)"; fi
-  for a in codex agy claude; do
+  for a in codex agy grok claude; do
     [[ "$a" != "$excl" || "$here" != "$excl_m" ]] || continue
     usage_agent_out "$a" "$here" >/dev/null && continue
     local usable=0
@@ -1022,7 +1022,7 @@ usage_available_agents() { # [exclude_agent] [exclude_machine]
       nodes_settings 2>/dev/null || true
       r="$(nodes_device_row "$d" "$(date +%s)" 2>/dev/null || true)"
       [[ -n "$r" ]] || continue
-      for na in codex agy claude; do
+      for na in codex agy grok claude; do
         [[ "$na" != "$excl" || "$nm" != "$excl_m" ]] || continue
         jq -e --arg a "$na" '.runner.hc == "up" and .tools[$a].status == "ok" and .logins[$a].status == "ok" and ((.usage[$a].out // false) | not)' <<<"$r" >/dev/null 2>&1 || continue
         usage_agent_out "$na" "$nm" >/dev/null && continue
@@ -1249,7 +1249,7 @@ usage_screen_limit() { # <agent> <screen_or_output> [screen|headless]
     # Strip [hc] notes, box dividers, and interactive prompt/status-bar footers, preserving blank
     # lines so paragraph boundaries after prose markers (● / • / ✦ / ⎿) stay visible across up to
     # 30 tail lines before evaluating only the bottom 4 non-blank output lines.
-    filtered="$(grep -vE '^\[hc\] |^[[:space:]]*[─━═┄┈-]{3,}[[:space:]]*$|^[[:space:]]*(❯|›|>)[[:space:]]*$|shift\+tab to cycle|for shortcuts|\? for help|esc to cancel|Ask Codex to do anything|Type a message|^[[:space:]]*[0-9]+% (left|context)|^[[:space:]]*ctx [[:space:]0-9]+%' <<<"$scr" | tail -n 30 || true)"
+    filtered="$(grep -vE '^\[hc\] |^[[:space:]]*[─━═┄┈-]{3,}[[:space:]]*$|^[[:space:]]*[╭╰][─━═┄┈].*[╮╯][[:space:]]*$|^[[:space:]]*│[[:space:]]*(❯|›|>)[[:space:]]*│[[:space:]]*$|^[[:space:]]*(❯|›|>)[[:space:]]*$|shift\+tab to cycle|Shift\+Tab:mode|for shortcuts|\? for help|esc to cancel|Ask Codex to do anything|Type a message|^[[:space:]]*[0-9]+% (left|context)|^[[:space:]]*ctx [[:space:]0-9]+%' <<<"$scr" | tail -n 30 || true)"
   fi
   [[ -n "$filtered" ]] || return 1
   local idx=0
@@ -1269,8 +1269,8 @@ usage_screen_limit() { # <agent> <screen_or_output> [screen|headless]
       # Real strings present in the agy 1.5.18 binary (live interactive stop layout unverified).
       rx="^(usage limit reached|individual quota reached|resource_exhausted:.*(quota|limit|exhausted your capacity)|.*exhausted your capacity)([[:space:].,:].*)?$" ;;
     grok)
-      # Real strings present in the grok binary.
-      rx="^(you hit your (free usage|weekly) limit\.?|you've hit the credit limit for your plan\.?|you've hit your spending cap\.?)([[:space:]].*)?$" ;;
+      # Real strings present in the grok 1.0.92 binary.
+      rx="^(you hit your (free usage|weekly) limit\.?|you've hit the (credit|rate) limit for your plan\.?|you've hit your spending cap\.?|you've hit your team's api rate limit\.?|you've reached your free grok build usage limit( for now)?\.?)([[:space:]].*)?$" ;;
     *)
       rx="^(you've hit your (usage )?limit|usage limit reached|quota exhausted)([[:space:].,:].*)?$" ;;
   esac
@@ -1633,7 +1633,7 @@ cmd_move() {
     fi
     if [[ "$needs_claude" == 1 && "$force" != 1 && "$same_machine" == 1 && "$old_agent" == claude ]]; then
       local cwhy; cwhy="$(usage_agent_out claude "$target_machine" || true)"
-      die "move: $id needs Claude (mcp/browser/claude) and cannot be moved to codex or agy${cwhy:+ ($cwhy)}; wait for reset or pass --agent A / --force to override"
+      die "move: $id needs Claude (mcp/browser/claude) and cannot be moved to codex, agy or grok${cwhy:+ ($cwhy)}; wait for reset or pass --agent A / --force to override"
     fi
     local avail pick only_cl=0
     [[ "$needs_claude" == 1 && "$force" != 1 ]] && only_cl=1
@@ -1716,8 +1716,8 @@ cmd_move() {
 
   # 2. Clear runner handles while preserving worktree, worktree_created, branch, base_sha, brief, grants.
   # When switching agents, also clear agent-specific launch settings (model, effort, permission, sandbox)
-  # so a Claude model name is never passed to Codex/agy (and vice versa), and preserve the non-Claude
-  # cold-review requirement whenever work started on codex or agy moves onto claude.
+  # so a Claude model name is never passed to Codex/agy/grok (and vice versa), and preserve the non-Claude
+  # cold-review requirement whenever work started on codex, agy or grok moves onto claude.
   local k cleared=()
   for k in hc_terminal hc_launched hc_space hc_tab herdr_pane herdr_tab tmux_session tmux_window tmux_pane cmux_workspace cmux_surface pid session_id thread_id parked brief_pending dispatched; do
     [[ -z "$(meta "$id" "$k")" ]] || meta_set "$id" "$k" ""
@@ -1730,7 +1730,7 @@ cmd_move() {
         cleared+=("$k=$oldv")
       fi
     done
-    if [[ "$(meta "$id" kind)" == ship && "$old_agent" =~ ^(codex|agy)$ ]]; then
+    if [[ "$(meta "$id" kind)" == ship && "$old_agent" =~ ^(codex|agy|grok)$ ]]; then
       meta_set "$id" review_required 1
     fi
   fi
