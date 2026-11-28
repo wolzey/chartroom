@@ -22,7 +22,8 @@ Build; full sessions only: `hc:grok`, `herdr:grok`, `node:grok`). Old names stil
 Last verified against: claude 2.1.289 (joined: 2.1.293; hc: 2.1.314), codex-cli 0.158.0, herdr 0.9.1,
 hc (herdr-core) 0.1.14 with herdr-app 0.1.9 (hc:codex: hc 0.1.16), tmux 3.x (October 2026); agy 1.5.17 and 1.5.18
 in hc 0.1.21 (November 2026; herdr:agy built to the same rules, not run against a signed-in agy);
-grok 1.0.92 with hc 0.1.21 (November 2026: verified live with an auto-picked `hc:grok` scout).
+grok 1.0.92 with hc 0.1.21 (November 2026: launch and turn reporting verified live on an auto-picked
+`hc:grok` scout; guard hook and limit-stop layout unverified live, see the grok section).
 cmux is implemented against its documented CLI but **unverified on a real cmux install**.
 
 ## Selection and fallback
@@ -206,8 +207,8 @@ which a chartroom worktree is (`--trust`). One side effect: grok's docs say that
 exists, folder trust asks in every new folder. Where the commander already has one for grok (a
 `~/.grok/hooks` file, or hooks in `~/.claude/settings.json`, which grok reads), nothing changes; on a
 machine with none (the Beelink, November 2026), the first grok worker there makes the commander's own
-grok sessions ask once per new folder. Tested against grok's documented payload; the live proof
-waits on a signed-in grok.
+grok sessions ask once per new folder. Tested against grok's documented payload; the live proof of
+the guard hook itself remains to be run on a grok worker.
 
 Not guarded: headless runs, subagents and joined sessions.
 
@@ -450,7 +451,10 @@ Verified on agy 1.5.17 and 1.5.18 in hc 0.1.21 on a Mac (November 2026), against
 
 Built against grok 1.0.92 (`curl -fsSL https://x.ai/cli/install.sh | bash`, binary `grok`; docs at
 https://docs.x.ai/build/overview and, after a first run, in `~/.grok/docs/user-guide`) and hc 0.1.21,
-November 2026. Verified live on a signed-in `hc:grok` scout (auto-picked via spread).
+November 2026. What was seen live: hc names a grok terminal agent `grok`, reads a signed-out grok
+as `blocked` (kind `auth`, "Sign in to Grok"), and ran an auto-picked `hc:grok` read-only scout
+through launch, prompt delivery, report, and `done`. The guard hook and interactive limit-stop
+layout follow grok's docs and binary strings and remain unverified live.
 
 - **Automatic spread.** Like agy, grok is in `CHARTROOM_BACKEND_ORDER`'s default (`hc:grok`,
   `herdr:grok`) and joins the automatic full-session spread wherever it is installed and signed in

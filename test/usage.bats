@@ -1431,7 +1431,10 @@ EOF
   [[ "$output" == *"usage:    grok: unknown"* ]]
   [[ "$output" == *"agent:    grok: signed in=true, usable full session=true"* ]]
 
-  # 2. A real grok rate-limit banner on an idle worker's screen marks grok out and wakes the XO.
+  # 2. Synthetic screen layout combining a real grok 1.0.92 binary rate-limit banner with the
+  #    grok 1.0.92 composer-box footer observed via `hc peek` (live limit-stop layout unverified).
+  #    Also verify the grok-only composer-box filter does not alter or hide limit detection for
+  #    other agents.
   gid="$(new_task --backend hc:grok)"
   set_meta "$gid" '.dispatched="2026-11-27T00:00:00Z"'
   run bash -c '
@@ -1443,6 +1446,9 @@ EOF
     load_config
     scr=$'\''Working on the task...\n\nYou’ve hit the rate limit for your plan. Upgrade your account or try again later.\n  ╭────────────────────╮\n  │ ❯                  │\n  ╰── Grok 4.7 · auto ─╯\n  Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+.:shortcuts\n'\''
     usage_limit_look "'"$gid"'" hc grok "$scr" idle desk
+    # Other agents keep their original footer filter and still detect their real limit lines.
+    usage_screen_limit claude "$(printf "%s\n%s\n" "You'\''ve hit your 5-hour limit · resets 3pm (America/Denver)" "❯ ")" screen >/dev/null
+    usage_screen_limit codex "$(printf "%s\n%s\n" "■ You'\''ve hit your usage limit. Try again at 3:05 PM." "› ")" screen >/dev/null
   '
   [ "$status" -eq 0 ]
   events "$gid" | grep -q 'agent: out-of-usage: grok '
@@ -1471,4 +1477,21 @@ EOF
   run cr dispatch "$id" --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"hc:grok"* ]]
+
+  # Move must never fall back to a signed-out hc:grok via CR_BACKEND_ORDER.
+  cid="$(new_task --backend hc:claude)"
+  set_meta "$cid" '.dispatched="2026-11-27T00:00:00Z"'
+  cat >"$BIN/grok" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  --version|-v) echo "grok 1.0.92-fake (fake)" ;;
+  models) echo "You are not authenticated." ;;
+  *) exit 0 ;;
+esac
+EOF
+  chmod +x "$BIN/grok"
+  run cr move "$cid" --dry-run
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"no other signed-in agent"* ]]
+  [[ "$output" != *"hc:grok"* ]]
 }

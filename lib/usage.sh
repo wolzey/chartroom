@@ -1249,7 +1249,11 @@ usage_screen_limit() { # <agent> <screen_or_output> [screen|headless]
     # Strip [hc] notes, box dividers, and interactive prompt/status-bar footers, preserving blank
     # lines so paragraph boundaries after prose markers (● / • / ✦ / ⎿) stay visible across up to
     # 30 tail lines before evaluating only the bottom 4 non-blank output lines.
-    filtered="$(grep -vE '^\[hc\] |^[[:space:]]*[─━═┄┈-]{3,}[[:space:]]*$|^[[:space:]]*[╭╰][─━═┄┈].*[╮╯][[:space:]]*$|^[[:space:]]*│[[:space:]]*(❯|›|>)[[:space:]]*│[[:space:]]*$|^[[:space:]]*(❯|›|>)[[:space:]]*$|shift\+tab to cycle|Shift\+Tab:mode|for shortcuts|\? for help|esc to cancel|Ask Codex to do anything|Type a message|^[[:space:]]*[0-9]+% (left|context)|^[[:space:]]*ctx [[:space:]0-9]+%' <<<"$scr" | tail -n 30 || true)"
+    local footer_re='^\[hc\] |^[[:space:]]*[─━═┄┈-]{3,}[[:space:]]*$|^[[:space:]]*(❯|›|>)[[:space:]]*$|shift\+tab to cycle|for shortcuts|\? for help|esc to cancel|Ask Codex to do anything|Type a message|^[[:space:]]*[0-9]+% (left|context)|^[[:space:]]*ctx [[:space:]0-9]+%'
+    if [[ "$agent" == grok ]]; then
+      footer_re+='|^[[:space:]]*[╭╰][─━═┄┈].*[╮╯][[:space:]]*$|^[[:space:]]*│[[:space:]]*(❯|›|>)[[:space:]]*│[[:space:]]*$|Shift\+Tab:mode'
+    fi
+    filtered="$(grep -vE "$footer_re" <<<"$scr" | tail -n 30 || true)"
   fi
   [[ -n "$filtered" ]] || return 1
   local idx=0
@@ -1663,6 +1667,7 @@ cmd_move() {
           [[ "$same_machine" != 1 || "$ca" != "$old_agent" ]] || continue
           [[ "$only_cl" != 1 || "$ca" == claude ]] || continue
           usage_agent_out "$ca" >/dev/null && continue
+          if declare -F agent_login_why >/dev/null 2>&1 && ! agent_login_why "$ca" >/dev/null 2>&1; then continue; fi
           if probe_backend "$cand" >/dev/null 2>&1; then
             new_backend="$cand"; new_agent="$ca"; break
           fi
