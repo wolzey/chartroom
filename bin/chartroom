@@ -908,7 +908,10 @@ cmd_hook() {
   # agy's "allow" would skip its own approval, and an empty JSON object would deny.
   if [[ "$what" =~ ^(pre-bash|pre-tool|guard|agy-pre-tool)$ ]]; then
     [[ -n "$payload" ]] || payload="$(cat 2>/dev/null || true)"
-    msg="$(jq -r 'if .toolCall then (select(.toolCall.name == "run_command") | .toolCall.args.CommandLine // empty)
+    msg="$(jq -r 'if .toolCall then
+        (if .toolCall.name == "run_command" then .toolCall.args.CommandLine
+         elif .toolCall.name == "manage_task" and .toolCall.args.Action == "send_input" then .toolCall.args.Input
+         else empty end) // empty
       elif .toolName then (select(.toolName == "run_terminal_command") | .toolInput.command // empty)
       else (select(.tool_name == null or .tool_name == "Bash" or .tool_name == "run_terminal_command") | .tool_input.command // empty) end' <<<"$payload" 2>/dev/null || true)"
     if [[ -n "$msg" ]] && pattern_kill "$msg"; then

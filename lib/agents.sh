@@ -41,16 +41,16 @@ agent_bin() {
 # refuses to type into a blocked agy (exit 9). So an agy worker needs no hooks for chartroom to see
 # it. Its PreToolUse hook gates every tool through chartroom's permission broker. There is
 # no prompt receipt hook, and no session id chartroom picks to resume.
-AGY_LIMITS="bypass by default; the broker gates all tools and cards hold calls needing an answer; no sandbox or verified plugin/subagent inheritance; steers are taken but not checked against their text; never parked (no resume)"
+AGY_LIMITS="bypass by default; the broker gates all tools and cards hold calls needing an answer; no sandbox; invoke_subagent, define_subagent and schedule denied in bypass; plugin inheritance unverified; steers are taken but not checked against their text; never parked (no resume)"
 
 # agy discovers hooks in every workspace folder, including the task's --add-dir. A catch-all
 # also gates MCP, browser, background input and future tools: unrecognized tools need a card.
 # Its hook timeout must outlast the broker's wait; the broker answers in agy's own protocol.
-agy_permit_hooks() { # <id>
+agy_permit_hooks() { # <id> <resolved permission>
   local d c; d="$(tdir "$1")/.agents"
   mkdir -p "$d"
-  c="CHARTROOM_HOME=$(printf '%q' "$CR_HOME") CHARTROOM_PERMIT_WAIT_SECONDS=$CR_PERMIT_WAIT $(printf '%q' "$CR_BIN") hook $1 agy-pre-tool"
-  # Pin the wait to this launch's timeout even if the home setting changes mid-session.
+  c="CHARTROOM_HOME=$(printf '%q' "$CR_HOME") CHARTROOM_PERMIT_WAIT_SECONDS=$CR_PERMIT_WAIT CHARTROOM_AGY_LAUNCH_PERMISSION=$2 $(printf '%q' "$CR_BIN") hook $1 agy-pre-tool"
+  # Pin the wait and permission mode to this launch, even if home/task settings change mid-session.
   # A missing/broken chartroom must deny too, before its shell can return a hook error.
   c+=" || printf '%s\\n' '{\"decision\":\"deny\",\"reason\":\"chartroom permission hook failed; this call is refused\"}'"
   jq -n --arg c "$c" \
@@ -106,7 +106,7 @@ agy_args() { # <id>
   [[ -n "$e" ]] && printf '%s\n' --effort "$e"
   if [[ "$p" == bypass ]]; then printf '%s\n' --dangerously-skip-permissions
   else printf '%s\n' --mode "$p"; fi
-  agy_permit_hooks "$1" || return 1
+  agy_permit_hooks "$1" "$p" || return 1
   printf '%s\n' --add-dir "$(phys_dir "$(tdir "$1")")"
 }
 

@@ -49,6 +49,7 @@ def work_roots($R): [$R.worktree, $R.task_dir, $R.scratch] + tmp_roots | map(sel
 def dev_roots: ["/dev/null", "/dev/stdout", "/dev/stderr", "/dev/stdin", "/dev/tty", "/dev/fd"];
 
 def control_files($R): [$R.task_dir + "/meta.json", $R.task_dir + "/claude-settings.json", $R.task_dir + "/launch.sh"]
+  + (if $R.agy then [$R.task_dir + "/.agents/hooks.json"] else [] end)
   + (if ($R.db // "") != "" then [$R.db, $R.db + "-wal", $R.db + "-journal"] else [] end);
 def control_tree($R): (if $R.agy then [$R.worktree + "/.agents", $R.worktree + "/.gemini"] else [] end) + [$R.worktree + "/.claude", $R.worktree + "/.mcp.json", $R.worktree + "/.git/config", $R.worktree + "/.git/hooks"];
 
@@ -618,6 +619,7 @@ def decide:
             elif $tool == "Bash" and ($q | bash_local($R)) then {verdict: "allow", rule: "local:bash", why: "inside the worktree"}
             elif $tool == "Bash" and $prodread and (cloud_reads($segs) | length) > 0 and ($q | bash_local($R; cloud_reads($segs)))
               then {verdict: "allow", rule: "grant:prod-read", why: "the task's grant covers it"}
+            elif $R.agy and $tool == "agy:own-task" then {verdict: "allow", rule: "local:own-task", why: "manages this conversation's own background task"}
             elif $tool == "WebSearch" then {verdict: "allow", rule: "local:search", why: "a web search reads only"}
             else {verdict: "card", rule: "commander:unlisted", why: "no rule covers it"}
             end

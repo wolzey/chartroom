@@ -23,10 +23,16 @@ Every Claude worker chartroom launches has three hooks in its per-task settings
 agy uses a catch-all `PreToolUse` hook in the task's `.agents/hooks.json`. It normalizes
 native and legacy file-tool arguments, then applies the same policy's guards, grants, local
 rules and commander classes. The hook holds the call until a card is answered or expires;
-it does not rely on an approval callback. Unknown tools, including MCP, browser and background
-input, require cards. agy defaults to bypass mode; `CHARTROOM_AGY_PERMISSION` or task
+it does not rely on an approval callback. Unknown tools, including MCP and browser calls, require
+cards. `manage_task` status, list,
+output and kill apply only to this conversation’s own background tasks and pass without cards;
+`send_input` is checked as Bash, including the pattern-kill guard. In bypass, `invoke_subagent`,
+`define_subagent` and `schedule` are denied until hook inheritance is verified. The hook pins the
+permission mode at launch, so changing a setting requires a relaunch to take effect. agy defaults
+to bypass mode; `CHARTROOM_AGY_PERMISSION` or task
 `permission` can select `auto`, `accept-edits` or `plan` to retain agy's approvals. In those
-modes an allowed hook returns no opinion, so agy still decides whether to prompt.
+modes an allowed hook returns no opinion, so agy still decides whether to prompt. An action can
+therefore ask twice: once on a chartroom card, then again in agy’s own approval dialog.
 
 The agy hook timeout is the card wait plus 60 seconds; the wait is pinned at launch. Invalid
 payloads, unavailable task records and broker errors deny. Its launcher refuses to start if

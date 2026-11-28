@@ -241,7 +241,7 @@ agy_trust() {
   grep -qF -- "--model gemini-fake-high --dangerously-skip-permissions --add-dir $(cd "$CHARTROOM_HOME/tasks/$id" && pwd -P) -i \"\$@\"" "$l"
   refute grep -q -- "--settings\|notify=\|--no-daemon" "$l"
   # its catch-all broker hook, in the task folder (never the worktree), outlasts the card
-  jq -e --arg c "hook $id agy-pre-tool" '."chartroom-permit".PreToolUse[0] | .matcher == ".*" and .hooks[0].timeout == 960 and (.hooks[0].command | contains($c))' \
+  jq -e --arg c "hook $id agy-pre-tool" '."chartroom-permit".PreToolUse[0] | .matcher == ".*" and .hooks[0].timeout == 960 and (.hooks[0].command | contains($c) and contains("CHARTROOM_AGY_LAUNCH_PERMISSION=bypass"))' \
     "$CHARTROOM_HOME/tasks/$id/.agents/hooks.json"
   # Execute the generated command with a missing executable: shell errors must deny too.
   local hook_cmd

@@ -297,15 +297,26 @@ permit_hook() { # <event> <id> <payload>
 # wait. A separate event selects the policy's local/unlisted rules and agy's reply protocol,
 # leaving Claude's and Codex's flows unchanged. Bad payloads/records/policy results deny.
 agy_permit_hook() { # <id> <agy payload>
-  local payload reply=""
+  local payload reply="" tool mode
   if [[ -n "$1" ]] && task_exists "$1" && [[ -z "$(meta "$1" closed 2>/dev/null)" ]]; then
     payload="$(jq -ce -f "$CR_ROOT/lib/agy-permit.jq" <<<"$2" 2>/dev/null)" || payload=""
-    if [[ -n "$payload" ]]; then reply="$(permit_hook agy-pre-tool "$1" "$payload")" || reply=""; fi
+    if [[ -n "$payload" ]]; then
+      tool="$(jq -r .tool_input.agy_tool <<<"$payload")"
+      # Match the running process even if the home's or task's setting changes after launch.
+      mode="${CHARTROOM_AGY_LAUNCH_PERMISSION:-$(agy_permission "$1")}" || mode=""
+      [[ "$mode" =~ ^(bypass|auto|accept-edits|plan)$ ]] || { permit_reply agy-pre-tool deny "invalid agy permission mode"; return 0; }
+      if [[ "$mode" == bypass && "$tool" =~ ^(invoke_subagent|define_subagent|schedule)$ ]]; then
+        permit_reply agy-pre-tool deny "chartroom refuses $tool in bypass: subagent and scheduled-work hook inheritance is not verified. Report the need to the XO."
+        permit_log "$1" "refused $tool in bypass (unverified hook inheritance)"
+        return 0
+      fi
+      reply="$(permit_hook agy-pre-tool "$1" "$payload")" || reply=""
+    fi
   fi
   if jq -e 'type == "object" and (.decision == "allow" or .decision == "deny")' >/dev/null 2>&1 <<<"$reply"; then
     # Empty output delegates to agy's own approvals in opt-out modes (older versions'
     # "allow" skipped those approvals). A deny is always explicit, in every mode.
-    if [[ "$(jq -r .decision <<<"$reply")" == allow && "$(agy_permission "$1")" != bypass ]]; then return 0; fi
+    if [[ "$(jq -r .decision <<<"$reply")" == allow && "$mode" != bypass ]]; then return 0; fi
     printf '%s\n' "$reply"
   else
     permit_reply agy-pre-tool deny "chartroom could not evaluate this call (invalid payload, unavailable task or broker error). It did not run; report the failure to the XO."

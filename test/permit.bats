@@ -701,10 +701,47 @@ agy_hook() { agy_payload "$1" "$2" | cr hook "$id" agy-pre-tool; }
   done
   [ "$(agy_hook run_command '{"CommandLine":"echo test","WaitMsBeforeAsync":5000}' | jq -r .decision)" = allow ]
   [ "$(agy_hook ask_question '{"questions":[]}' | jq -r .decision)" = allow ]
+  for t in status list output kill; do
+    input="$(jq -cn --arg a "$t" '{Action:$a,TaskId:"agy-test/task-4"}')"
+    [ "$(agy_hook manage_task "$input" | jq -r .decision)" = allow ]
+  done
+  # Captured verbatim on Studio and Beelink agy 1.5.18: list has no TaskId.
+  [ "$(agy_hook manage_task '{"Action":"list"}' | jq -r .decision)" = allow ]
+  [ "$(agy_hook manage_task '{"Action":"kill"}' | jq -r .decision)" = deny ]
+  for t in status output kill send_input; do
+    input="$(jq -cn --arg a "$t" '{Action:$a,TaskId:"another-conversation/task-4",Input:"echo test"}')"
+    [ "$(agy_hook manage_task "$input" | jq -r .decision)" = deny ]
+  done
+  [ "$(agy_hook manage_task '{"Action":"kill","TaskId":"agy-test/../other/task-4"}' | jq -r .decision)" = deny ]
+  [ "$(agy_hook manage_task '{"Action":"send_input","TaskId":"agy-test/task-4","Input":"echo test"}' | jq -r .decision)" = allow ]
+  [ "$(agy_hook manage_task '{"Action":"send_input","TaskId":"agy-test/task-4","Input":"pkill -f node"}' | jq -r .decision)" = deny ]
+  [ "$(agy_hook manage_task '{"Action":"send_input","TaskId":"agy-test/task-4"}' | jq -r .decision)" = deny ]
+  for t in invoke_subagent define_subagent schedule; do
+    [ "$(agy_hook "$t" '{}' | jq -r .decision)" = deny ]
+    input="$(jq -cn --arg k "$key" --arg p "$WT" '{Path:$p,($k):"/elsewhere/secret",Query:"test",Pattern:"*.txt"}')"
+    [ "$(agy_hook "$t" "$input" | jq -r .decision)" = deny ]
+  done
+  # Path and legacy aliases. These are synthetic compatibility shapes: the live 1.5.18
+  # toolset did not expose these three names (capture results are recorded in report.md).
+  while IFS='|' read -r t key; do
+    for c in Path "$key"; do
+      input="$(jq -cn --arg k "$c" --arg p "$WT" '{($k):$p,Query:"test",Pattern:"*.txt"}')"
+      [ "$(agy_hook "$t" "$input" | jq -r .decision)" = allow ]
+    done
+    [ "$(agy_hook "$t" '{}' | jq -r .decision)" = deny ]
+  done <<'EOF'
+list_dir|DirectoryPath
+find_by_name|SearchDirectory
+grep_search|SearchPath
+EOF
   cr set "$id" permission=auto
+  # A running bypass session keeps its launch mode after a home/task setting changes.
+  [ "$(CHARTROOM_AGY_LAUNCH_PERMISSION=bypass agy_hook invoke_subagent '{}' | jq -r .decision)" = deny ]
   [ -z "$(agy_hook run_command '{"CommandLine":"echo test"}')" ]
   [ "$(agy_hook run_command '{"CommandLine":"killall -l"}' | jq -r .decision)" = deny ]
+  [ "$(agy_hook manage_task '{"Action":"send_input","TaskId":"agy-test/task-4","Input":"killall -l"}' | jq -r .decision)" = deny ]
   cr set "$id" permission=bypass
+  [ -z "$(CHARTROOM_AGY_LAUNCH_PERMISSION=auto agy_hook run_command '{"CommandLine":"echo test"}')" ]
   [ "$(agy_hook run_command '{"CommandLine":"killall -l"}' | jq -r .decision)" = deny ]
   [ "$(agy_hook run_command '{"CommandLine":"chartroom permit answer p-1234 once"}' | jq -r .decision)" = deny ]
   input="$(jq -cn --arg p "$CHARTROOM_HOME/tasks/$id/.agents/hooks.json" '{Path:$p,Content:"{}"}')"
@@ -717,6 +754,8 @@ agy_hook() { agy_payload "$1" "$2" | cr hook "$id" agy-pre-tool; }
   # Every path that can escape local work waits on the same broker. No immediate "ask"
   # reply: the hook stays alive until the commander denies it, including unknown tools.
   while IFS='|' read -r t input; do
+    # Only bypass blocks delegation outright; opt-out sessions retain the card path.
+    [[ "$t" != invoke_subagent ]] || export CHARTROOM_AGY_LAUNCH_PERMISSION=auto
     agy_hook "$t" "$input" >"$out" & pid=$!
     wait_card
     kill -0 "$pid"
@@ -728,6 +767,7 @@ agy_hook() { agy_payload "$1" "$2" | cr hook "$id" agy-pre-tool; }
     [ "$(jq -r .decision "$out")" = deny ]
     [[ "$(jq -r .reason "$out")" == *"test refusal"* ]]
     rm -f "$CHARTROOM_HOME/permits/$id"/p-*.json
+    unset CHARTROOM_AGY_LAUNCH_PERMISSION
   done <<'EOF'
 run_command|{"CommandLine":"git push origin main"}
 write_file|{"Path":"/elsewhere/test.txt","Content":"test"}
@@ -736,7 +776,9 @@ write_to_file|{"Path":"/tmp/decoy","TargetFile":"/elsewhere/test.txt","CodeConte
 edit_file|{"Path":"/elsewhere/test.txt","TargetFile":"/tmp/decoy","Target":"old","Replacement":"new"}
 read_url_content|{"Url":"https://example.invalid"}
 mcp_example_send_message|{"message":"test"}
-manage_task|{"Action":"send_input","TaskId":"other","Input":"git push"}
+manage_task|{"Action":"send_input","TaskId":"agy-test/task-4","Input":"git push origin main"}
+manage_task|{"Action":"new-unknown-action","TaskId":"agy-test/task-4"}
+invoke_subagent|{"Prompt":"test"}
 future_tool|{}
 EOF
   # A once answer releases exactly the held call using agy's allow reply.

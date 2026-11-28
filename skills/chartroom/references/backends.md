@@ -406,18 +406,27 @@ Verified on agy 1.5.18 in hc 0.1.21 on macOS and hc 0.1.22 on Linux (November 20
   actions, writes elsewhere and unlisted tools raise blocking permission cards. The hook waits
   for the answer itself, then allows or denies, without an agy approval dialog in bypass mode.
   It denies on expiry (`CHARTROOM_PERMIT_WAIT_SECONDS`, default 900); its timeout is that wait
-  plus 60 seconds, and the wait is pinned at launch. Malformed payloads, unavailable task records
+  plus 60 seconds; both the wait and permission mode are pinned at launch. Malformed payloads, unavailable task records
   and broker errors deny. A card's existing push hold and device answer relay apply unchanged.
-  Opting back into agy's approvals retains the broker; agy can still ask after chartroom allows.
+  Opting back into agy's approvals retains the broker; an action can ask twice, first on a
+  chartroom card and then in agy's own approval dialog.
 - **Tool coverage.** The matcher is `.*`, including MCP and browser tools and future tool names.
   The adapter recognizes native `read_file` / `write_file` / `edit_file` (`Path`), and documented
   `view_file` (`AbsolutePath`), `write_to_file` / `replace_file_content` /
   `multi_replace_file_content` (`TargetFile`). `run_command` uses `CommandLine` and optional `Cwd`.
-  File searches, directory reads and web search map to the policy's read-only tools. Web fetches,
-  MCP calls, background-task input, subagents and other unrecognized tools require a card.
+  Directory/search tools accept `Path` and their legacy `DirectoryPath`, `SearchDirectory`, or
+  `SearchPath`; web search maps to the policy's read-only tools. `manage_task` status, list, output
+  and kill manage only this conversation's background tasks and pass without cards. Target IDs
+  must carry this conversation's prefix (`conversationId/task-N`); foreign IDs refuse. `send_input`
+  sends `Input` through the Bash policy and pattern-kill guard. Web fetches, MCP calls and other
+  unrecognized tools require a card. `invoke_subagent`, `define_subagent` and `schedule` are
+  denied in bypass until hook inheritance is verified.
   Original arguments stay on the card and in its signature. The task's hook directory is guarded.
   Google's [hook contract](https://antigravity.google/docs/hooks) documents the legacy names;
-  native file-tool names were captured from agy 1.5.18 in an interactive session.
+  native file-tool names were captured from agy 1.5.18 in an interactive session. The directory/search
+  aliases are compatibility mappings tested synthetically: those three tools were absent in live
+  1.5.18 capture attempts on macOS (Neon and Flash) and Linux (Neon). Native status includes task
+  output; a separate `manage_task output` action is also a compatibility mapping, not live-verified.
 - **Sign-in.** `agy models` lists the account's models, or says `Please sign in` and exits 1 at once.
   Doctor shows it (`agy: <version> at <path>, signed in`), an automatic pick skips agy while it is
   signed out, and a dispatch here stops before it starts a terminal (`agy is not signed in here`).
@@ -455,8 +464,8 @@ Verified on agy 1.5.18 in hc 0.1.21 on macOS and hc 0.1.22 on Linux (November 20
 - **Limits** (also in doctor). Hooks classify tool calls; they are not an operating-system sandbox.
   The shared shell policy does not inspect scripts or resolve symlink targets. An agy process
   failure or an agy hook timeout can prevent a reply, so the configured hook timeout must outlast
-  the broker wait. Arbitrary plugins and subagent tool inheritance have not been verified; their
-  initiating calls require cards. There is no prompt signature, and workers are never parked:
+  the broker wait. Arbitrary plugin and subagent tool inheritance has not been verified; plugins require cards,
+  while subagent definition/invocation and scheduling are denied in bypass. There is no prompt signature, and workers are never parked:
   chartroom does not pick agy's conversation id for resume.
 - `stop` is `hc interrupt` (Esc; verified: `stopped`), `close` ends the terminal, `attach` shows it.
 - Never `headless:agy` (`agy -p` is not a worker), `tmux:agy` or `cmux:agy`: `new` refuses them.
