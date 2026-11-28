@@ -2,3 +2,7 @@ You hit your free usage limit.
 You hit your weekly limit.
 You've hit the credit limit for your plan.
 You've hit your spending cap.
+You've hit the rate limit for your plan.
+You’ve hit the rate limit for your plan. Upgrade your account or try again later.
+You’ve hit your team’s API rate limit. Ask a team admin to purchase more credits for higher limits, or try again later. See https://docs.x.ai/developers/rate-limits#rate-limit-tiers
+You’ve reached your free Grok Build usage limit for now. Get SuperGrok for much higher limits, or try again later: https://grok.com/supergrok?referrer=grok-build

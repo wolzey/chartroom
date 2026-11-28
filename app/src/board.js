@@ -64,7 +64,7 @@ export function BoardPage({ all, list, filters, setFilters, selKey, setSelKey, p
 
 // With nothing selected: the board summed up, in the slim column.
 export function BoardSummary({ list, prs, snapshots = [], home }) {
-  const agents = ["codex", "agy", "claude"].map(agent => {
+  const agents = ["codex", "agy", "grok", "claude"].map(agent => {
     const rows = snapshots.flatMap(s => s.agents || []).filter(a => a.agent === agent);
     return { agent, live: rows.reduce((n, a) => n + a.live, 0), clean: rows.reduce((n, a) => n + a.clean, 0), rework: rows.reduce((n, a) => n + a.rework, 0) };
   });

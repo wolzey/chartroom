@@ -1397,3 +1397,101 @@ EOF
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "${lines[1]}" ]
 }
+
+@test "grok unknown usage never locks it out; a real grok rate-limit banner marks it out until clear, shows in doctor/nodes, and move preserves review_required" {
+  export CHARTROOM_MACHINE_NAME=desk CHARTROOM_NODES=none CHARTROOM_NODE_CONFIG="$BATS_TEST_TMPDIR/nodecfg/node"
+  use_fake hc
+  export FAKE_HC_DIR="$BATS_TEST_TMPDIR/hc"
+  mkdir -p "$FAKE_HC_DIR"
+  core_up
+  # grok fake: signed in (grok models), shell-route unknown on grok usage --json.
+  cat >"$BIN/grok" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  --version|-v) echo "grok 1.0.92-fake (fake)" ;;
+  models) printf 'Default model: grok-fake\n\nAvailable models:\n  * grok-fake (default)\n' ;;
+  usage) echo 'Error: `grok usage` can'\''t show your plan'\''s usage here yet. Run /usage inside grok instead.' >&2; exit 1 ;;
+  *) exit 0 ;;
+esac
+EOF
+  printf '#!/usr/bin/env bash\necho '\''{"loggedIn":true}'\''\n' >"$BIN/claude"
+  chmod +x "$BIN/grok" "$BIN/claude"
+
+  # 1. Refresh grok usage -> unknown; must NOT lock grok out of automatic dispatch.
+  run cr usage --agent grok --json --refresh
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.[0].state' <<<"$output")" = unknown ]
+  [ "$(jq -r '.[0].out' <<<"$output")" = false ]
+  new_task --backend hc:claude >/dev/null
+  id="$(new_task)"
+  run cr dispatch "$id" --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"hc:grok"* ]]
+  run cr doctor
+  [[ "$output" == *"usage:    grok: unknown"* ]]
+  [[ "$output" == *"agent:    grok: signed in=true, usable full session=true"* ]]
+
+  # 2. Synthetic screen layout combining a real grok 1.0.92 binary rate-limit banner with the
+  #    grok 1.0.92 composer-box footer observed via `hc peek` (live limit-stop layout unverified).
+  #    Also verify the grok-only composer-box filter does not alter or hide limit detection for
+  #    other agents.
+  gid="$(new_task --backend hc:grok)"
+  set_meta "$gid" '.dispatched="2026-11-27T00:00:00Z"'
+  run bash -c '
+    export CHARTROOM_HOME="'"$CHARTROOM_HOME"'" CHARTROOM_MACHINE_NAME=desk
+    source "'"$REPO_ROOT/lib/core.sh"'"
+    source "'"$REPO_ROOT/lib/agents.sh"'"
+    source "'"$REPO_ROOT/lib/spread.sh"'"
+    source "'"$REPO_ROOT/lib/usage.sh"'"
+    load_config
+    scr=$'\''Working on the task...\n\nYou’ve hit the rate limit for your plan. Upgrade your account or try again later.\n  ╭────────────────────╮\n  │ ❯                  │\n  ╰── Grok 4.7 · auto ─╯\n  Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+.:shortcuts\n'\''
+    usage_limit_look "'"$gid"'" hc grok "$scr" idle desk
+    # Other agents keep their original footer filter and still detect their real limit lines.
+    usage_screen_limit claude "$(printf "%s\n%s\n" "You'\''ve hit your 5-hour limit · resets 3pm (America/Denver)" "❯ ")" screen >/dev/null
+    usage_screen_limit codex "$(printf "%s\n%s\n" "■ You'\''ve hit your usage limit. Try again at 3:05 PM." "› ")" screen >/dev/null
+  '
+  [ "$status" -eq 0 ]
+  events "$gid" | grep -q 'agent: out-of-usage: grok '
+  run cr usage --agent grok --json
+  [ "$(jq -r '.[0].state' <<<"$output")" = out ]
+  [ "$(jq -r '.[0].out' <<<"$output")" = true ]
+
+  # Automatic dispatch now skips grok and picks claude; doctor and nodes show grok out.
+  run cr dispatch "$id" --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"hc:claude"* ]]
+  run cr doctor --json
+  [ "$(jq -r '.agents.grok.usage_out' <<<"$output")" = true ]
+  [ "$(jq -r '.agents.grok.usable' <<<"$output")" = false ]
+  run cr nodes
+  [[ "$output" == *"desk: grok hit usage limit"* ]]
+
+  # Moving the grok ship task onto claude preserves review_required=1.
+  cr worktree "$gid" >/dev/null
+  run cr move "$gid" --agent claude --no-dispatch
+  [ "$status" -eq 0 ]
+  [ "$(meta_of "$gid" review_required)" = 1 ]
+
+  # Clearing usage restores grok to automatic dispatch.
+  cr usage clear grok >/dev/null
+  run cr dispatch "$id" --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"hc:grok"* ]]
+
+  # Move must never fall back to a signed-out hc:grok via CR_BACKEND_ORDER.
+  cid="$(new_task --backend hc:claude)"
+  set_meta "$cid" '.dispatched="2026-11-27T00:00:00Z"'
+  cat >"$BIN/grok" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  --version|-v) echo "grok 1.0.92-fake (fake)" ;;
+  models) echo "You are not authenticated." ;;
+  *) exit 0 ;;
+esac
+EOF
+  chmod +x "$BIN/grok"
+  run cr move "$cid" --dry-run
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"no other signed-in agent"* ]]
+  [[ "$output" != *"hc:grok"* ]]
+}

@@ -56,7 +56,7 @@ core_up() {
   run cr status --spread --json --all-homes
   [ "$status" -eq 0 ]; [ "$(jq '.[0].result | map(.live) | add' <<<"$output")" -eq 6 ]
   run cr dashboard --json --all-homes
-  [ "$status" -eq 0 ]; [ "$(jq '.[0].result.agents | length' <<<"$output")" -eq 3 ]
+  [ "$status" -eq 0 ]; [ "$(jq '.[0].result.agents | length' <<<"$output")" -eq 4 ]
   run cr board --all-homes
   [ "$status" -eq 0 ]; [[ "$output" == *"agents:"* ]]
 }
@@ -209,14 +209,15 @@ review_runner() {
   check_verdict 'Verdict: Rework: clean once P1 is fixed' rework
 }
 
-@test "grok is never picked automatically: not by spread_pick, the automatic dispatch, doctor or the default order" {
-  # The picker itself: grok has the fewest live tasks and is listed available, and still loses.
-  counts='[{"agent":"grok","live":0},{"agent":"codex","live":5},{"agent":"claude","live":9}]'
-  run bash -c 'source "$1/lib/spread.sh"; spread_pick "$2" "$3" 0' _ "$REPO_ROOT" "$counts" '["grok","codex","claude"]'
-  [ "$status" -eq 0 ]; [ "$output" = codex ]
+@test "grok joins the spread rotation: spread_pick, auto dispatch, node placement, doctor and default order" {
+  # The picker itself: grok wins when it has the fewest live tasks, and when it is the only agent.
+  counts='[{"agent":"codex","live":2},{"agent":"agy","live":2},{"agent":"grok","live":0},{"agent":"claude","live":1}]'
+  run bash -c 'source "$1/lib/spread.sh"; spread_pick "$2" "$3" 0' _ "$REPO_ROOT" "$counts" '["codex","agy","grok","claude"]'
+  [ "$status" -eq 0 ]; [ "$output" = grok ]
   run bash -c 'source "$1/lib/spread.sh"; spread_pick "$2" "$3" 0' _ "$REPO_ROOT" "$counts" '["grok"]'
-  [ "$status" -ne 0 ]; [ -z "$output" ]
-  # A machine where grok is the only signed-in, usable agent: automatic work finds nothing.
+  [ "$status" -eq 0 ]; [ "$output" = grok ]
+
+  # A machine where grok is the only signed-in, usable agent: automatic dispatch picks hc:grok.
   use_fake hc grok
   export FAKE_HC_DIR="$BATS_TEST_TMPDIR/hc"
   mkdir -p "$FAKE_HC_DIR"
@@ -224,22 +225,90 @@ review_runner() {
   run cr doctor --json
   [ "$status" -eq 0 ]
   [ "$(jq -r '.backends[]|select(.backend=="hc:grok").available' <<<"$output")" = true ]
-  [ "$(jq -r '.auto' <<<"$output")" = null ]
-  [ "$(jq -r '.order | map(select(endswith(":grok"))) | length' <<<"$output")" = 0 ]
+  [ "$(jq -r '.auto' <<<"$output")" = hc:grok ]
+  [ "$(jq -r '.order | map(select(endswith(":grok"))) | join(" ")' <<<"$output")" = "hc:grok herdr:grok" ]
+  [ "$(jq -r '.agents.grok.signed_in' <<<"$output")" = true ]
+  [ "$(jq -r '.agents.grok.usable' <<<"$output")" = true ]
   id="$(new_task)"
   run cr dispatch "$id" --dry-run
-  [ "$status" -ne 0 ]; [[ "$output" == *"no backend available"* ]]; [[ "$output" != *"hc:grok"* ]]
-  # Named, it is usable: the refusal above is the picker's, not a broken grok.
-  named="$(new_task --backend hc:grok)"
-  run cr dispatch "$named" --dry-run
   [ "$status" -eq 0 ]; [[ "$output" == *"hc:grok"* ]]
-  # With every agent signed in and grok the least busy, the pick is still not grok.
+
+  # Signed out: automatic dispatch skips grok and doctor reports it unusable.
+  FAKE_GROK_SIGNED_OUT=1 run cr doctor --json
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.agents.grok.signed_in' <<<"$output")" = false ]
+  [ "$(jq -r '.agents.grok.usable' <<<"$output")" = false ]
+  [ "$(jq -r '.auto' <<<"$output")" = null ]
+  FAKE_GROK_SIGNED_OUT=1 run cr dispatch "$id" --dry-run
+  [ "$status" -ne 0 ]; [[ "$output" == *"no backend available"* ]]
+
+  # With all four agents signed in, fair share walks codex -> agy -> grok -> claude.
+  use_fake agy
   printf '#!/usr/bin/env bash\nexit 0\n' >"$BIN/codex"
   printf '#!/usr/bin/env bash\necho '\''{"loggedIn":true}'\''\n' >"$BIN/claude"
   chmod +x "$BIN/codex" "$BIN/claude"
-  new_task --backend hc:codex >/dev/null; new_task --backend hc:claude >/dev/null
+  new_task --backend hc:codex >/dev/null
+  new_task --backend hc:agy >/dev/null
   run cr dispatch "$id" --dry-run
-  [ "$status" -eq 0 ]; [[ "$output" == *"hc:c"* ]]; [[ "$output" != *"hc:grok"* ]]
-  run cr doctor --json
-  [[ "$(jq -r '.auto' <<<"$output")" != *grok* ]]
+  [ "$status" -eq 0 ]; [[ "$output" == *"hc:grok"* ]]
+  new_task --backend hc:grok >/dev/null
+  run cr dispatch "$id" --dry-run
+  [ "$status" -eq 0 ]; [[ "$output" == *"hc:claude"* ]]
+
+  # Node rows include grok when installed, signed in, and not out of usage; skip it when out.
+  rows='[{"machine":"mini","local":false,"device":{"status":"online"},"runner":{"hc":"up"},"tools":{"grok":{"status":"ok"}},"logins":{"grok":{"status":"ok"}},"usage":{"grok":{"out":false}}}]'
+  run bash -c 'source "$1/lib/core.sh"; source "$1/lib/spread.sh"; spread_local_backends() { :; }; spread_node_agents "$2"' _ "$REPO_ROOT" "$rows"
+  [ "$status" -eq 0 ]
+  [ "$(jq -c '.[0].spread_agents' <<<"$output")" = '["grok"]' ]
+  rows_out='[{"machine":"mini","local":false,"device":{"status":"online"},"runner":{"hc":"up"},"tools":{"grok":{"status":"ok"}},"logins":{"grok":{"status":"ok"}},"usage":{"grok":{"out":true}}}]'
+  run bash -c 'source "$1/lib/core.sh"; source "$1/lib/spread.sh"; spread_local_backends() { :; }; spread_node_agents "$2"' _ "$REPO_ROOT" "$rows_out"
+  [ "$status" -eq 0 ]
+  [ "$(jq -c '.[0].spread_agents' <<<"$output")" = '[]' ]
+}
+
+@test "grok ship tasks get automatic Opus cold reviews and tally clean/rework in spread and snapshot" {
+  id="$(new_task --backend hc:grok)"
+  cr worktree "$id"
+  wt="$(meta_of "$id" worktree)"
+  echo 'grok change' >>"$wt/README"
+  git -C "$wt" add README; git -C "$wt" commit -qm 'feat: grok change'
+  set_meta "$id" '.dispatched="2026-01-01T00:00:00Z"'
+  cr event "$id" done 'grok implementation ready'
+  [ "$(meta_of "$id" review_pending)" = 1 ]
+  run cr accept "$id"
+  [ "$status" -ne 0 ]
+  review_runner
+  cr review-sync "$id"
+  rid="$(meta_of "$id" review_task)"
+  [ -n "$rid" ]
+  [ "$(meta_of "$rid" backend)" = hc:claude ]
+  [ "$(meta_of "$rid" model)" = claude-opus-5-5 ]
+  [ "$(meta_of "$rid" review_agent)" = grok ]
+  cr event "$rid" done 'Verdict: Clean — no findings'
+  cr review-sync "$rid"
+  run cr accept "$id"
+  [ "$status" -eq 0 ]
+  run cr status --spread --json
+  [ "$status" -eq 0 ]
+  [ "$(jq -c '.[] | select(.agent=="grok") | [.clean,.rework]' <<<"$output")" = '[1,0]' ]
+  run cr status --spread
+  [[ "$output" == *"grok 0 live, reviews 1 clean / 0 rework"* ]]
+  run cr app snapshot --json
+  [ "$status" -eq 0 ]
+  [ "$(jq -c '.agents[] | select(.agent=="grok") | [.clean,.rework]' <<<"$output")" = '[1,0]' ]
+
+  # A second grok ship with a Rework verdict tallies rework alongside clean.
+  id2="$(new_task --backend hc:grok)"
+  cr worktree "$id2"
+  wt2="$(meta_of "$id2" worktree)"
+  echo 'grok rework' >>"$wt2/README"
+  git -C "$wt2" add README; git -C "$wt2" commit -qm 'feat: grok rework'
+  set_meta "$id2" '.dispatched="2026-01-01T00:00:00Z"'
+  cr event "$id2" done 'second grok change'
+  cr review-sync "$id2"
+  rid2="$(meta_of "$id2" review_task)"
+  cr event "$rid2" done 'Verdict: Rework — P1 edge case'
+  cr review-sync "$rid2"
+  run cr status --spread --json
+  [ "$(jq -c '.[] | select(.agent=="grok") | [.clean,.rework]' <<<"$output")" = '[1,1]' ]
 }

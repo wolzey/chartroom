@@ -395,17 +395,17 @@ agy_trust() {
   [ "$(jq -r '.agents.agy.signed_in' <<<"$output")" = true ]
 }
 
-@test "hc:grok: only when named; the brief as its first prompt with --trust; a guard outside the worktree for chartroom's workers alone; steer, peek, stop, close" {
+@test "hc:grok: joins default order; the brief as its first prompt with --trust; a guard outside the worktree for chartroom's workers alone; steer, peek, stop, close" {
   use_fake grok
   core_up
   export FAKE_HC_NO_HOOK=1 # (grok gets no prompt hook: hc reads its state itself)
-  # never picked on its own: no default order names it, so a machine with grok alone picks nothing
+  # grok is in the default order and auto-picked when it is the only signed-in agent
   rm -f "$BIN/claude"
   run cr doctor --json
   [ "$(jq -r '.backends[]|select(.backend=="hc:grok").available' <<<"$output")" = true ]
-  [ "$(jq -r '.order | map(select(endswith(":grok"))) | length' <<<"$output")" = 0 ]
-  [ "$(jq -r .auto <<<"$output")" = null ]
-  [ "$(jq -r '.agents.grok.automatic' <<<"$output")" = false ]
+  [ "$(jq -r '.order | map(select(endswith(":grok"))) | join(" ")' <<<"$output")" = "hc:grok herdr:grok" ]
+  [ "$(jq -r .auto <<<"$output")" = hc:grok ]
+  [ "$(jq -r '.agents.grok.usable' <<<"$output")" = true ]
   use_fake claude
   id="$(new_task --backend hc:grok --model grok-fake)"
   cr set "$id" effort=high permission=acceptEdits >/dev/null
@@ -453,7 +453,7 @@ agy_trust() {
   core_up
   export FAKE_HC_NO_HOOK=1
   run cr doctor
-  [[ "$output" == *"grok:     1.0.92-fake (fake) at $BIN/grok, signed in; runs as hc:grok, herdr:grok, node"*"only when a task names it"*"no permission cards"*"never parked"* ]]
+  [[ "$output" == *"grok:     1.0.92-fake (fake) at $BIN/grok, signed in; runs as hc:grok, herdr:grok, node"*"only;"*"no permission cards"*"never parked"* ]]
   id="$(new_task --backend hc:grok)"
   FAKE_HC_STATUS=working cr dispatch "$id" >/dev/null
   # blocked at an approval: hc carries grok's kind and words, and the XO is woken with them
@@ -511,7 +511,7 @@ agy_trust() {
   rm -f "$BIN/claude"
   core_up
   run cr doctor --json
-  [ "$(jq -r '.order|join(" ")' <<<"$output")" = "hc:claude hc:codex hc:agy herdr:claude herdr:codex herdr:agy cmux:claude cmux:codex tmux:claude tmux:codex headless:codex headless:claude command" ]
+  [ "$(jq -r '.order|join(" ")' <<<"$output")" = "hc:claude hc:codex hc:agy hc:grok herdr:claude herdr:codex herdr:agy herdr:grok cmux:claude cmux:codex tmux:claude tmux:codex headless:codex headless:claude command" ]
   [ "$(jq -r .auto <<<"$output")" = hc:codex ]
   id="$(new_task)"
   FAKE_HC_NO_HOOK=1 run cr dispatch "$id"

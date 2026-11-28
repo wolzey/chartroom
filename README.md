@@ -121,7 +121,7 @@ change in a minor release. The full list is in [CHANGELOG.md](CHANGELOG.md).
 - **It installs into your existing setup instead of being one.** chartroom is a CLI on your PATH
   plus a few skills linked into the agents you already use. Your home directory, config and other
   skills stay as they are.
-- **Full sessions for automatic work.** New work spreads across signed-in Codex, agy and
+- **Full sessions for automatic work.** New work spreads across signed-in Codex, agy, grok and
   Claude agents in hc or herdr. Other runners remain available through an explicit backend.
 - **Agent-native signals instead of screen scraping.** Turn ends, approval prompts and prompt
   receipt come from Claude Code hooks and Codex `notify`, not from pattern-matching the TUI.
@@ -664,13 +664,13 @@ that is recognised from Claude Code's own session record when its transcript is 
 
 A backend is `<runner>:<agent>`, where the agent is `claude`, `codex`, `agy` (Antigravity CLI; full sessions
 only: `hc:agy`, `herdr:agy`, or `node:agy` on a device where agy is signed in) or `grok` (xAI's Grok Build; full
-sessions only, and only when a task's `--backend` names it: `hc:grok`, `herdr:grok`, `node:grok`).
+sessions only: `hc:grok`, `herdr:grok`, or `node:grok` on a device where grok is signed in).
 
 | Backend | Runs in | Watch | Steering | Needs | Status |
 |---|---|---|---|---|---|
 | `hc:<agent>` | an herdr-core terminal, in its own tab of the Herdr app's `$CHARTROOM_WORKSPACE` space | yes (`chartroom attach`, or the app) | live | herdr-core running (the Herdr app, or `hc server start`); the window may be closed | `hc:claude` verified (hc 0.1.14, herdr-app 0.1.9, Claude Code 2.1.314); `hc:codex` implemented, not yet run against a real codex |
 | `hc:agy` | an herdr-core terminal running `agy -i <brief>` | yes | live (taken, not checked against its text) | agy signed in (`chartroom doctor` says) | verified (agy 1.5.18, hc 0.1.21 on macOS and 0.1.22 on Linux; no per-step prompts in bypass). Bypass by default, with permission cards, grants and the pattern-kill guard; never parked |
-| `hc:grok` | an herdr-core terminal running `grok <brief>` | yes | live (taken, not checked against its text) | grok signed in (`chartroom doctor` says) | built against grok 1.0.92 and hc 0.1.21 (hc reads its state; not yet run against a signed-in grok). Never picked automatically. Only the pattern-kill guard hook (`~/.grok/hooks/chartroom-guard.json`): no permission cards or grants, never parked |
+| `hc:grok` | an herdr-core terminal running `grok <brief>` | yes | live (taken, not checked against its text) | grok signed in (`chartroom doctor` says) | launch and turn reporting verified live on an auto-picked `hc:grok` scout (grok 1.0.92, hc 0.1.21); guard hook and limit-stop screen layout unverified live. Only the pattern-kill guard hook (`~/.grok/hooks/chartroom-guard.json`): no permission cards or grants, never parked |
 | `herdr:<agent>` | a herdr tab (first class) | yes | live | herdr running | verified (herdr 0.9.1); `herdr:agy` and `herdr:grok` built to the same rules, not run against a signed-in agy or grok |
 | `cmux:<agent>` | a cmux tab (macOS) | yes | live | cmux app, automation socket mode if the XO runs outside cmux | **implemented, unverified on real cmux** |
 | `tmux:<agent>` | a tmux window | yes (`chartroom attach`) | live | tmux ≥ 3.0 | verified (tmux 3.x) |
@@ -681,10 +681,9 @@ sessions only, and only when a task's `--backend` names it: `hc:grok`, `herdr:gr
 | `joined:<agent>` | a session you started yourself, that ran `chartroom join` | `peek`; `attach` if it is in tmux/herdr/cmux | mailbox | the `join` skill in that session | verified (Claude Code 2.1.293 in tmux) |
 
 Without `--backend`, dispatch first chooses a machine, then the agent with the fewest live tasks
-in this home among those signed in and usable there. Ties go to **Codex, agy, Claude**, in that
+in this home among those signed in and usable there. Ties go to **Codex, agy, grok, Claude**, in that
 order. Automatic work uses **hc or herdr full sessions only**; it never falls back to headless,
 tmux, cmux, or command. An explicit `--backend` wins and never silently downgrades.
-grok is never picked automatically: a task runs on grok only when its `--backend` says so.
 Drafts with an assigned backend and unfinished workers count toward the spread; review, done,
 failed and closed tasks do not. Existing workers keep their assignment.
 
@@ -748,7 +747,7 @@ chartroom move <id> --agent codex    # move to a specific agent (--dry-run previ
   or `--force` is given, and `--node <device>` refuses started tasks with local work so unpushed
   commits or edits are never stranded (use `--node here` to recall remote node work home).
 
-During the trial, `CHARTROOM_REVIEW_NON_CLAUDE=opus` (default) gates new Codex and agy ship
+During the trial, `CHARTROOM_REVIEW_NON_CLAUDE=opus` (default) gates new Codex, agy and grok ship
 tasks. Scouts and tasks created before the gate are exempt. A `done` event marks review pending;
 the watch creates and dispatches a linked **hc:claude, claude-opus-5-5** cold review in the
 background. Keep the watch running for reviews and retries. The reviewer receives a copy of the

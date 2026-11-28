@@ -525,7 +525,7 @@ herdr_trust_screen() {
 
 @test "default order is hc, herdr, cmux, tmux (every agent's), then headless, command" {
   run cr doctor --json
-  [ "$(jq -r '.order|join(" ")' <<<"$output")" = "hc:claude hc:codex hc:agy herdr:claude herdr:codex herdr:agy cmux:claude cmux:codex tmux:claude tmux:codex headless:codex headless:claude command" ]
+  [ "$(jq -r '.order|join(" ")' <<<"$output")" = "hc:claude hc:codex hc:agy hc:grok herdr:claude herdr:codex herdr:agy herdr:grok cmux:claude cmux:codex tmux:claude tmux:codex headless:codex headless:claude command" ]
 }
 
 @test "legacy backend names still work on old records" {

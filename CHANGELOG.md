@@ -7,9 +7,11 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
-- grok (xAI's Grok Build) as a crew agent, for full sessions only and only when a task names it:
-  `--backend hc:grok`, `herdr:grok`, or `node:grok` on a device where grok is signed in. It is in no
-  default order and the automatic spread never picks it. It starts as `grok <brief>` with `-m`,
+- grok (xAI's Grok Build) as a crew agent, for full sessions only (`hc:grok`, `herdr:grok`, or
+  `node:grok` on a device where grok is signed in). It is in the default backend order and joins
+  the automatic spread rotation alongside Codex, agy and Claude wherever it is signed in; unknown
+  usage never locks it out, real limit or rate-limit screen banners mark it out until reset/clear,
+  and new grok ship tasks are gated by automatic Opus cold reviews like Codex and agy. It starts as `grok <brief>` with `-m`,
   `--reasoning-effort` and `--permission-mode` from the task, `--no-auto-update`, and `--trust` for a worktree chartroom
   made (no `--add-dir`: grok refuses one). hc reads grok's state over OSC 7501: its prompts wake the XO
   with grok's words, an unreported turn wakes, and it is never typed into while blocked. Doctor and
@@ -25,7 +27,7 @@ are stable from 0.1.0.
   **Usage** page show what each subscription has left. The watch detects a worker's
   limit stop, wakes the XO once per stop with the agents that have room, and `chartroom move`
   re-dispatches the task onto one of them, keeping its branch, worktree and edits.
-- Automatic new work balances signed-in Codex, agy and Claude full sessions by live task count,
+- Automatic new work balances signed-in Codex, agy, grok and Claude full sessions by live task count,
   with fixed ties and a local Claude opt-out for MCP/browser needs. Status and dashboards show
   the spread and task-level review outcomes; doctor reports agent usability locally and on nodes.
 - New non-Claude ship tasks queue cold Opus 5.5 reviews through the watch before acceptance.
@@ -142,7 +144,7 @@ are stable from 0.1.0.
   `sweep --apply`) in each home and `chartroom install-skills`
   ([docs/upgrading.md](docs/upgrading.md)).
 - The default `CHARTROOM_BACKEND_ORDER` puts every agent's full sessions before any headless run:
-  `hc:claude hc:codex hc:agy herdr:claude herdr:codex herdr:agy cmux:claude cmux:codex tmux:claude tmux:codex headless:codex headless:claude command`.
+  `hc:claude hc:codex hc:agy hc:grok herdr:claude herdr:codex herdr:agy herdr:grok cmux:claude cmux:codex tmux:claude tmux:codex headless:codex headless:claude command`.
   With hc up and claude missing, a task with no `--backend` now runs as `hc:codex`, not `headless:codex`. The legacy name
   `--backend codex` still means `headless:codex`.
 

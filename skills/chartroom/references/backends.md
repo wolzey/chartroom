@@ -1,6 +1,6 @@
 # Backends
 
-Automatic dispatch balances the home's live tasks among signed-in Codex, agy and Claude
+Automatic dispatch balances the home's live tasks among signed-in Codex, agy, grok and Claude
 agents available on the selected machine, ties in that order. It uses hc or herdr only.
 `--backend` wins; `--needs mcp|browser` or a brief line `Needs: mcp|browser|claude` selects
 Claude for its tools and keeps the task on this machine. Agent selection waits until dispatch, after the brief has been filled.
@@ -15,26 +15,24 @@ A backend is `<runner>:<agent>`: **where** the worker runs × **which** agent ru
 `command` (any CLI) and `subagent` (the host harness), plus `joined`, which is never
 dispatched: a running session joins itself (see the last section). Agents are `claude`, `codex`,
 `agy` (Antigravity CLI; full sessions only: `hc:agy`, `herdr:agy`, `node:agy`) and `grok` (xAI's Grok
-Build; full sessions only, and only when a task's `--backend` names it: `hc:grok`, `herdr:grok`,
-`node:grok`). Old names still work: `codex` = `headless:codex`, `herdr-claude` = `herdr:claude`,
+Build; full sessions only: `hc:grok`, `herdr:grok`, `node:grok`). Old names still work: `codex` = `headless:codex`, `herdr-claude` = `herdr:claude`,
 `herdr-codex` = `herdr:codex`.
 
 `chartroom doctor` shows every backend, whether it can run here, why not, and how it steers.
 Last verified against: claude 2.1.289 (joined: 2.1.293; hc: 2.1.314), codex-cli 0.158.0, herdr 0.9.1,
 hc (herdr-core) 0.1.14 with herdr-app 0.1.9 (hc:codex: hc 0.1.16), tmux 3.x (October 2026); agy 1.5.17 and 1.5.18
 in hc 0.1.21 (November 2026; herdr:agy built to the same rules, not run against a signed-in agy);
-grok 1.0.92 with hc 0.1.21 (November 2026: built from grok's docs and a signed-out grok in hc; the
-live proof waits on a sign-in, see the grok section).
+grok 1.0.92 with hc 0.1.21 (November 2026: launch and turn reporting verified live on an auto-picked
+`hc:grok` scout; guard hook and limit-stop layout unverified live, see the grok section).
 cmux is implemented against its documented CLI but **unverified on a real cmux install**.
 
 ## Selection and fallback
 
 - `chartroom new` without `--backend` (or `--backend auto`) picks at dispatch time,
   after placement, by the home's live-task count. Candidates must be signed in and usable
-  on that machine; ties go to codex, agy, claude. Only hc and herdr are selected.
+  on that machine; ties go to codex, agy, grok, claude. Only hc and herdr are selected.
   `CHARTROOM_BACKEND_ORDER` remains a diagnostic order for explicit-backend alternatives;
-  it cannot turn automatic selection into a headless fallback. grok is never a candidate:
-  it runs only when a task's `--backend` names it (the commander decides when).
+  it cannot turn automatic selection into a headless fallback.
 - An explicit `--backend` never downgrades. If it is unavailable, dispatch exits non-zero with
   the reason and the next viable backend.
 - `CI=true` disables session runners. hc needs a running herdr-core (a live socket, checked
@@ -90,8 +88,11 @@ logged.
   on interactive screens, joining up to 2 wrapped lines to keep split reset times, and rejecting
   prose/tool blocks `●`/`⎿`/`•`/`✦` along with their indented continuations). agy's screen
   patterns use real strings from the `agy` binary (`Usage limit reached`, `individual quota
-  reached`, `RESOURCE_EXHAUSTED` / `exhausted your capacity`), though agy's live interactive
-  limit-stop screen layout has not been observed live yet. On a match, chartroom marks only that
+  reached`, `RESOURCE_EXHAUSTED` / `exhausted your capacity`), and grok's use real strings from the
+  `grok` 1.0.92 binary (`You hit your free usage limit.`, `You hit your weekly limit.`,
+  `You've hit the credit/rate limit for your plan.`, `You've hit your spending cap.`,
+  `You’ve hit your team’s API rate limit.`, `You’ve reached your free Grok Build usage limit`),
+  though neither agent's live interactive limit-stop screen layout has been observed live yet. On a match, chartroom marks only that
   machine's agent out until its reset time (a clock-only one such as "3am" or "3:05 PM", and a
   relative one, read from the earliest the stop can have happened: its transcript entry, its
   headless output, or the last look that saw the worker not stopped, never from when it was first
@@ -106,7 +107,7 @@ logged.
   remote task home with `chartroom move <id>` or `--node here` is lossless via `node_recall`).
   Clears runner handles (plus agent-specific `model`/`effort`/`permission`/`sandbox` when
   switching agents), preserves the non-Claude cold-review requirement (`review_required=1`)
-  whenever a Codex or agy ship task moves to Claude, records handoff notes in `tasks/<id>/inbox.md`,
+  whenever a Codex, agy or grok ship task moves to Claude, records handoff notes in `tasks/<id>/inbox.md`,
   and re-dispatches onto another available agent (`--agent` or `--backend` to choose explicitly;
   `--dry-run` to preview; `--force` to override exhaustion). Tasks with Claude-only needs
   (`mcp`/`browser`/`claude`) refuse automatic moves off Claude unless `--agent` or `--force` is
@@ -205,8 +206,8 @@ which a chartroom worktree is (`--trust`). One side effect: grok's docs say that
 exists, folder trust asks in every new folder. Where the commander already has one for grok (a
 `~/.grok/hooks` file, or hooks in `~/.claude/settings.json`, which grok reads), nothing changes; on a
 machine with none (the Beelink, November 2026), the first grok worker there makes the commander's own
-grok sessions ask once per new folder. Tested against grok's documented payload; the live proof
-waits on a signed-in grok.
+grok sessions ask once per new folder. Tested against grok's documented payload; the live proof of
+the guard hook itself remains to be run on a grok worker.
 
 Not guarded: headless runs, subagents and joined sessions.
 
@@ -474,13 +475,16 @@ Verified on agy 1.5.18 in hc 0.1.21 on macOS and hc 0.1.22 on Linux (November 20
 
 Built against grok 1.0.92 (`curl -fsSL https://x.ai/cli/install.sh | bash`, binary `grok`; docs at
 https://docs.x.ai/build/overview and, after a first run, in `~/.grok/docs/user-guide`) and hc 0.1.21,
-November 2026. What was seen live: hc names a grok terminal agent `grok` and reads a signed-out grok
-as `blocked`, kind `auth`, "Sign in to Grok". The rest follows grok's docs and waits on a live run
-with a signed-in grok (a throwaway scout).
+November 2026. What was seen live: hc names a grok terminal agent `grok`, reads a signed-out grok
+as `blocked` (kind `auth`, "Sign in to Grok"), and ran an auto-picked `hc:grok` read-only scout
+through launch, prompt delivery, report, and `done`. The guard hook and interactive limit-stop
+layout follow grok's docs and binary strings and remain unverified live.
 
-- **Only when named.** grok is not in `CHARTROOM_BACKEND_ORDER`'s default and no automatic pick
-  chooses it: a task runs on grok only when its `--backend` is `hc:grok` or `herdr:grok` (or it is
-  pinned or placed as `hc:grok` on a node). Doctor says so (`agents.grok.automatic: false`).
+- **Automatic spread.** Like agy, grok is in `CHARTROOM_BACKEND_ORDER`'s default (`hc:grok`,
+  `herdr:grok`) and joins the automatic full-session spread wherever it is installed and signed in
+  (locally and on enrolled nodes). An unknown usage reading does not lock it out; a real limit or
+  rate-limit banner on a worker's screen marks it out until reset (or fallback cooldown). New grok
+  ship tasks are gated on a linked Opus cold review, like Codex and agy.
 - **Install.** The installer puts the binary in `~/.grok/downloads`, links `grok` (and a generic
   `agent`) in `~/.grok/bin`, links those from `~/.local/bin` when that is on PATH, and adds
   `~/.grok/bin` to the shell's rc file. chartroom looks on PATH, then `~/.local/bin/grok`, then
