@@ -303,6 +303,15 @@ get() { curl -s --max-time "$CURL_MAX" "$@"; }
 code() { curl -s -o /dev/null --max-time "$CURL_MAX" -w '%{http_code}' "$@"; }
 # (an "end" line after them, so the last header keeps its newline through $(...))
 headers() { curl -s -D - -o /dev/null --max-time "$CURL_MAX" "$@" | tr -d '\r'; echo end; }
+app_state() { # the app's state once its home's first snapshot is read (a slow runner reads it late)
+  local i
+  for i in $(seq 1 150); do
+    get "$URL/api/v1/state" >"$BATS_TEST_TMPDIR/app-state"
+    jq -e '.homes[0].snapshot != null' "$BATS_TEST_TMPDIR/app-state" >/dev/null 2>&1 && { cat "$BATS_TEST_TMPDIR/app-state"; return 0; }
+    sleep 0.2
+  done
+  cat "$BATS_TEST_TMPDIR/app-state" >&2; return 1
+}
 # The app, for this machine's browser alone (--no-auth), with this home registered as acme; sets
 # URL (the app) and A (this home's artifacts in it).
 start_app() {
@@ -342,7 +351,7 @@ start_app() {
   [[ "$h" == *$'\nContent-Type: text/plain; charset=utf-8\n'* && "$h" == *"frame-ancestors 'none'"* ]]
   [ "$(get "$A/task/$ID/plain.md")" = plain ]
   # the snapshot names the page on its task, and the viewer is the app's own route
-  [ "$(curl -s "$URL/api/v1/state" | jq -r --arg id "$ID" '[.homes[0].snapshot.tasks[] | select(.id == $id) | .artifacts[] | select(.kind == "page") | .slug] | first')" = weekly-report ]
+  [ "$(app_state | jq -r --arg id "$ID" '[.homes[0].snapshot.tasks[] | select(.id == $id) | .artifacts[] | select(.kind == "page") | .slug] | first')" = weekly-report ]
   grep -q 'sandbox="allow-popups allow-popups-to-escape-sandbox"' "$REPO_ROOT/app/src/pages.js"
   # the ticket lists every artifact of its task, done ones too
   cr artifact done "$note" >/dev/null
