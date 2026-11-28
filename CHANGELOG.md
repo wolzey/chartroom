@@ -7,6 +7,30 @@ are stable from 0.1.0.
 ## [Unreleased]
 
 ### Added
+- grok (xAI's Grok Build) as a crew agent, for full sessions only and only when a task names it:
+  `--backend hc:grok`, `herdr:grok`, or `node:grok` on a device where grok is signed in. It is in no
+  default order and the automatic spread never picks it. It starts as `grok <brief>` with `-m`,
+  `--reasoning-effort` and `--permission-mode` from the task, `--no-auto-update`, and `--trust` for a worktree chartroom
+  made (no `--add-dir`: grok refuses one). hc reads grok's state over OSC 7501: its prompts wake the XO
+  with grok's words, an unreported turn wakes, and it is never typed into while blocked. Doctor and
+  the node probe show its version and sign-in (`grok models`: "You are not authenticated."), and a
+  signed-out grok never starts, because it would open a browser sign-in. Its one hook is the pattern
+  kill guard, in `~/.grok/hooks/chartroom-guard.json`, because grok loads no hooks from an added
+  folder. The guard acts only when `CHARTROOM_TASK` is set, so the commander's own grok sessions are
+  untouched. grok is never parked. Built against grok 1.0.92 and hc 0.1.21, and run live on the Studio.
+- Subscription usage awareness: `chartroom usage` reads each agent's real quota (Claude's OAuth
+  usage endpoint, Codex's app-server or session files, agy's `/usage`; grok reads unknown) on this
+  machine and, by heartbeat, on enrolled nodes. Automatic dispatch, re-dispatch, placement and
+  fallback skip an agent that is out until its reset; `doctor`, `nodes` and the app's
+  **Usage** page show what each subscription has left. The watch detects a worker's
+  limit stop, wakes the XO once per stop with the agents that have room, and `chartroom move`
+  re-dispatches the task onto one of them, keeping its branch, worktree and edits.
+- Automatic new work balances signed-in Codex, agy and Claude full sessions by live task count,
+  with fixed ties and a local Claude opt-out for MCP/browser needs. Status and dashboards show
+  the spread and task-level review outcomes; doctor reports agent usability locally and on nodes.
+- New non-Claude ship tasks queue cold Opus 5.5 reviews through the watch before acceptance.
+  Reviews retry unavailable Git or runners, reuse unchanged diffs, and accept case-insensitive
+  verdicts. Scouts and pre-gate tasks are exempt; `accept --skip-review` records a per-task bypass.
 - Codex and agy workers get the pattern kill guard too. agy: chartroom writes the task folder's
   `.agents/hooks.json` (a `PreToolUse` hook on `run_command`, `chartroom hook <id> guard`); agy loads
   it because the task folder is a workspace folder, so nothing goes into the worktree, and it needs no
@@ -99,10 +123,38 @@ are stable from 0.1.0.
   where it is installed; a machine on an older chartroom still shows how many agents, with no names.
 
 ### Changed
+- **The app replaces the web dashboard.** `chartroom dashboard` (and `dashboard open`) opens the
+  app, as `chartroom app open` does; from a client home it asks the brain for its app's tailnet
+  address and opens that here, with no ssh tunnel (an older brain that answers with a loopback
+  address gets an error saying to update chartroom there). `dashboard url | status` print the
+  app's address or why there is none, `dashboard stop` ends only an old web dashboard (and an old
+  client tunnel) left running from before, and `dashboard --json` is still the board's lanes.
+  `chartroom sweep` ends a leftover dashboard server by itself. `chartroom artifact open <ref>`
+  opens the page in the app's viewer (`#/p/<home>/<task|inbox>/<owner>/<slug>`), and `doctor`
+  prints an `app:` line instead of the dashboard's. The app gains what the dashboard had: a
+  **Usage** page (Fleet → Usage, `#/usage`, ⌘K) with each agent's plan, used and left per window,
+  resets, reading age and live workers, merged across homes; "Pages and drafts" on a ticket and
+  in Needs me (a sandboxed page viewer with Download PDF, a draft's text with Copy; ⌘K lists open
+  pages); and a ticket's "Terminal" (`chartroom peek`, read-only, every 10 s while open). The
+  app's files include `final.md`. `chartroom board` and `chartroom radar` stay in the terminal;
+  `init --dashboard-port` is ignored with a warning, and `chartroom homes` no longer shows the
+  PORT and DASHBOARD columns. After upgrading, run `chartroom dashboard stop` (or
+  `sweep --apply`) in each home and `chartroom install-skills`
+  ([docs/upgrading.md](docs/upgrading.md)).
 - The default `CHARTROOM_BACKEND_ORDER` puts every agent's full sessions before any headless run:
   `hc:claude hc:codex hc:agy herdr:claude herdr:codex herdr:agy cmux:claude cmux:codex tmux:claude tmux:codex headless:codex headless:claude command`.
   With hc up and claude missing, a task with no `--backend` now runs as `hc:codex`, not `headless:codex`. The legacy name
   `--backend codex` still means `headless:codex`.
+
+### Removed
+- **The web dashboard** (`lib/dashboard/server.py` and its board, task, radar and pages pages):
+  its per-home ports from 4517 (`CHARTROOM_DASHBOARD_PORT`), its themes (`chartroom`, `hud`;
+  `CHARTROOM_DASHBOARD_THEME`, `--theme`), `--daemon`, and its network mode (`--expose`, `--host`,
+  `CHARTROOM_DASHBOARD_HOST`, the access token in `.dashboard.token`). The app over Tailscale
+  replaces the network mode. The `/radar` page's robot scope, stacks and archive are gone with no
+  replacement; the app's Fleet shows every session per machine, and `chartroom radar` remains in
+  the terminal. A client home's `CHARTROOM_BRAIN_TUNNEL_WAIT` is gone with its tunnel.
+  `CHARTROOM_DASHBOARD_RECENT_HOURS` stays, as the board's recent-lane window.
 
 ### Fixed
 - `comment-pr` allows review replies under jq 1.8, and the quiet wake after an answered card works on Linux.

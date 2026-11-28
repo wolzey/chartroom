@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Pages: artifacts of kind page (lib/artifacts.sh), a report as HTML for the commander to read in
-# the dashboard instead of in chat, and to print to PDF.
+# the app instead of in chat, and to print to PDF.
 #
 # A page is one self-contained file, tasks/<id>/artifacts/<slug>.html: inline CSS, images as
 # data: URIs, no scripts, nothing fetched. `add` makes it so:
@@ -10,12 +10,12 @@
 #   - a whole document is kept as written, with the page policy (PAGE_CSP) put first in it;
 #   - images given as files beside the source (src="chart.png") are inlined as data: URIs;
 #   - text that looks like a secret is refused (relay_secret_kind; --no-secret-check overrides).
-# The HTML is crew-written, so it is untrusted wherever it is shown: the dashboard serves it
-# sandboxed under PAGE_CSP (lib/dashboard/server.py), and `pdf` prints a copy with scripts off.
+# The HTML is crew-written, so it is untrusted wherever it is shown: the app serves it sandboxed
+# under PAGE_CSP (lib/app/server.py), and `pdf` prints a copy with scripts off.
 
 PAGE_MAX_BYTES=$((16 * 1024 * 1024))
 # The policy a page is read under, everywhere: inline styles and data: images, fonts and media;
-# no scripts, nothing fetched. (server.py serves pages under the same, plus sandbox.)
+# no scripts, nothing fetched. (lib/app/server.py serves pages under the same, plus sandbox.)
 PAGE_CSP="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; base-uri 'none'; form-action 'none'"
 PAGE_PAPERS='letter legal ledger tabloid a3 a4 a5 b4 b5'
 # Chrome's flags for a print: headless (the new mode, where Chrome has one), in a throwaway profile
@@ -185,12 +185,24 @@ page_out_path() { # <--out value or ""> <default file name>
 
 # ---------------------------------------------------------------- commands
 
+# `artifact open`: the artifact on its page in the app (#/p/<home>/<task|inbox>/<owner>/<slug>), in
+# this machine's browser; for a client (through the brain's gate) only its address, which the client
+# opens there.
 artifact_open() { # <ref>
   [[ $# -eq 1 && "$1" != -* ]] || die "usage: chartroom artifact open <ref>"
   artifact_resolve "$1"
-  find_python
-  [[ ${#CR_PY[@]} -gt 0 ]] || die "artifact open shows it in the dashboard, which needs python3; chartroom artifact export $AR_REF (or pdf) works without it"
-  CR_DASHBOARD_PATH="pages/$AR_TYPE/$AR_OWNER/$AR_SLUG" dashboard_open
+  local home url opener
+  home="$(home_name_of "$CR_HOME")"
+  [[ -n "$home" ]] || die "the app shows registered homes only (chartroom homes add <name> $CR_HOME); chartroom artifact export $AR_REF (or pdf) works without it"
+  app_url || die "$APP_URL_WHY; chartroom artifact export $AR_REF (or pdf) works without the app"
+  url="${APP_URL%/}/#/p/$(jq -rn --arg s "$home" '$s|@uri')/$AR_TYPE/$AR_OWNER/$AR_SLUG"
+  if [[ -n "${CHARTROOM_GATE:-}" ]]; then echo "dashboard running: $url"; return 0; fi
+  opener="$(cfg OPENER '' '')"
+  if [[ -z "$opener" ]]; then
+    if [[ "$(uname -s)" == Darwin && -n "$(bin_of open)" ]]; then opener=open
+    elif [[ -n "$(bin_of xdg-open)" ]]; then opener=xdg-open; fi
+  fi
+  if [[ -n "$opener" ]] && $opener "$url" >/dev/null 2>&1; then echo "app open: $url"; else echo "app: $url (no browser opener found; open it yourself)"; fi
 }
 
 artifact_export() { # <ref> [--out FILE|DIR]

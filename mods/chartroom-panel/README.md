@@ -2,7 +2,7 @@
 
 A small Claude Code mod (function hooks; built and verified on Claude Code 2.1.312) that shows
 the commander's live Chartroom board in a **pane beside the chat**. It mirrors `chartroom board`
-and the dashboard exactly: the same five lanes, in the same order, under the same names, each card
+exactly: the same five lanes, in the same order, under the same names, each card
 with the board's own reason. From the focused pane the commander can **complete** (accept) or
 **close** a task, through the same CLI the XO uses.
 
@@ -37,9 +37,9 @@ own background in a dark or a light theme alike, with no hardcoded colour to bre
 
 ## What it shows
 
-The one source of truth is `chartroom board --json`, the board the dashboard and `chartroom board`
-draw (its lanes come from `lib/dashboard/lanes.jq`). The panel reads it and nothing else: it never
-reads a task file or decides a lane of its own, so it can never disagree with the dashboard.
+The one source of truth is `chartroom board --json`, the board `chartroom board`
+draws (its lanes come from `lib/lanes.jq`). The panel reads it and nothing else: it never
+reads a task file or decides a lane of its own, so it can never disagree with the board.
 
 - **Header** (bold, accent): `Chartroom · N need you` — N is the Needs you lane's count.
 - **Status** (dim): `Live · updated H:MM:SS AM`, the local time of the last successful read. On a

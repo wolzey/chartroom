@@ -135,7 +135,7 @@ EOF
   [[ "$output" == *"branch chartroom/$id kept (1 commit(s) ahead"* ]]
   [ ! -d "$wt" ]
   run cr status
-  [[ "$output" == "no open tasks" ]]
+  [[ "$output" == "no open tasks"$'\n'"agents: "* ]]
 }
 
 @test "decision, then steer between runs re-runs with the answer" {

@@ -71,7 +71,7 @@ trust_prompt_text() { # <id>
 
 # Bring the log in line with what is on screen: <what> is up (a new one wakes, through the event
 # scan, once) or, with "", nothing is. The log is the memory, so a restarted or --once watch does
-# not repeat a prompt, and status and the dashboard read it as every other prompt.
+# not repeat a prompt, and status and the app read it as every other prompt.
 prompt_sync() { # <id> <what or "">
   local id="$1" what="$2" st last
   st="$(hook_state "$id")"
@@ -121,6 +121,11 @@ prompt_look() { # <id> <runner> <agent> <live> <screen>
 steer_guard() { # <runner> <id>
   local r="$1" id="$2" what agent
   agent="$(backend_agent "$id")"
+  # grok says it is blocked itself (OSC 7501, to hc and herdr alike): its dialogs are never typed into.
+  if [[ "$agent" == grok ]]; then
+    [[ "$("${r}_live" "$id" 2>/dev/null)" != blocked ]] || die "the agent is blocked at a dialog (grok is waiting on an approval or a question); answer it first (chartroom attach $id), then steer again"
+    return 0
+  fi
   [[ "$agent" =~ ^(codex|agy)$ ]] || return 0
   what="$(screen_prompt "$id" "$agent" "$("${r}_screen" "$id" 2>/dev/null || true)")"
   if [[ -z "$what" && "$r" == tmux ]] && codex_title_prompt "$(tmux_title "$id")"; then what="$CODEX_TITLE_WHAT"; fi
@@ -296,16 +301,24 @@ watch_look() {
   (( NOW_MS >= ${LOOK_NEXT[$id]:-0} )) || return 0
   LOOK_NEXT[$id]=$((NOW_MS + LOOK_MS))
   live="$(live_of "$id")"
-  case "$live" in not-started|stopped|gone|parked|unknown) return 0 ;; esac
   agent="$(backend_agent "$id")"
+  # A headless worker that just stopped without reporting may have hit a usage limit.
+  if [[ "$r" == headless && "$live" == stopped ]] && ! reported_since_dispatch "$id"; then
+    if declare -F usage_limit_look >/dev/null 2>&1; then usage_limit_look "$id" "$r" "$agent" "" "$live"; fi
+    return 0
+  fi
+  case "$live" in not-started|stopped|gone|parked|unknown) return 0 ;; esac
   case "$r" in
     hc|herdr|tmux|cmux)
       # (No read of its terminal: nothing to compare. A blank screen is still a screen.)
       scr="$("${r}_screen" "$id" 2>/dev/null)" || return 0
       prompt_look "$id" "$r" "$agent" "$live" "$scr"
       brief_pending_look "$id" "$r" "$agent" "$scr"
+      if declare -F usage_limit_look >/dev/null 2>&1; then usage_limit_look "$id" "$r" "$agent" "$scr" "$live"; fi
       # (Its prompt may just have come or gone: the live word above is from before that.)
       if [[ "$r" != herdr ]]; then live="$(live_of "$id")"; fi ;;
+    headless)
+      if declare -F usage_limit_look >/dev/null 2>&1; then usage_limit_look "$id" "$r" "$agent" "" "$live"; fi ;;
   esac
   stall_look "$id" "$r" "$agent" "$live" "$scr"
 }

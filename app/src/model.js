@@ -7,7 +7,7 @@ var AppModel = (function () {
   "use strict";
   // eventfmt.js: the page loads it before this file; under node it is required beside the tests
   const EF_HEAD = typeof EventFmt !== "undefined" ? EventFmt
-    : typeof require === "function" ? (() => { try { return require("../../lib/dashboard/eventfmt.js"); } catch (e) { return null; } })() : null;
+    : typeof require === "function" ? (() => { try { return require("../shared/eventfmt.js"); } catch (e) { return null; } })() : null;
 
   // Kinds, as the snapshot names them, onto the design's glyphs and labels.
   const KINDS = {
@@ -125,8 +125,8 @@ var AppModel = (function () {
   }
 
   // A card's questions, the same shape for every kind: [{id, text, context, why, options: [{label,
-  // detail, rec}], free}]. A worker's ask is parsed by EventFmt (lib/dashboard/eventfmt.js), the
-  // dashboard's own reader of "Options: (1) ... (2) ... RECOMMENDED"; an ask with no options is one
+  // detail, rec}], free}]. A worker's ask is parsed by EventFmt (app/shared/eventfmt.js), the
+  // shared reader of "Options: (1) ... (2) ... RECOMMENDED"; an ask with no options is one
   // free-text question.
   function questions(it, EventFmt) {
     if (Array.isArray(it.questions)) {
@@ -810,6 +810,127 @@ var AppModel = (function () {
     return { line, more: lines.length > 1 || line.length > 40 }; // a long line is cut in the card: it unfolds too
   }
 
+  // Subscription usage (usage.js), from each home's snapshot `usage` (lib/usage.sh usage_rows_json:
+  // that home's own readings, its own live workers). Every home keeps its own readings, so one agent
+  // on one machine may be read in several homes: a live limit hit wins (a fresher "ok" elsewhere never
+  // hides it), then the newest sample. The readings are then grouped: one row per agent, and where its
+  // machines read differently, one row per reading, the machines that read the same sharing it (the
+  // CLI's table splits every machine instead). Live workers are counted over every
+  // home's tasks: dispatched, not closed, not review/done/failed (the CLI's rule), and with a session
+  // still open (Fleet's OPEN_LIVE), so a parked or gone worker, which uses nothing, is not counted.
+  const USAGE_AGENTS = ["claude", "codex", "agy", "grok"];
+  const USAGE_SKIP = ["review", "done", "closed", "failed"];
+  function usageHit(r, now) { return !!r.hit_active && !(r.out_resets_at && Date.parse(r.out_resets_at) <= now); }
+  // What makes two machines' readings "the same", as the CLI's table judges it: plan, account, status,
+  // state and each window's percentage. Not the reset times: one account's reset is read a second or,
+  // for an unused window, minutes apart on each machine, and the shared card shows the first's.
+  function usageSig(r) {
+    const w = (r.windows || []).map((x) => [x.label, x.used_pct == null ? -1 : x.used_pct].join("|")).sort();
+    return JSON.stringify([r.status, r.state, r.plan || "", r.account || "", r.out_resets_at || "", w]);
+  }
+  function usageRows(state, nowMs) {
+    const now = nowMs == null ? Date.now() : nowMs, best = {}, live = {};
+    for (const h of (state && state.homes) || []) {
+      const s = h.snapshot;
+      if (!s) continue;
+      for (const r of s.usage || []) {
+        if (!r || !r.agent) continue;
+        for (const m of r.machines && r.machines.length ? r.machines : [r.machine]) {
+          const k = r.agent + "|" + m, rec = Object.assign({}, r, { machine: m }), cur = best[k];
+          const hr = usageHit(rec, now), hc = cur && usageHit(cur, now);
+          if (!cur || (hr && !hc) || (hr === hc && (Date.parse(rec.sampled_at || "") || 0) > (Date.parse(cur.sampled_at || "") || 0))) best[k] = rec;
+        }
+      }
+      for (const t of s.tasks || []) {
+        if (t.closed || !t.dispatched || USAGE_SKIP.includes(t.state) || (t.live && !OPEN_LIVE.includes(t.live))) continue;
+        const b = String(t.backend || "").replace(/^herdr-/, "herdr:");
+        if (!b.includes(":")) continue;
+        const k = b.split(":").pop() + "|" + (t.machine || s.machine);
+        live[k] = (live[k] || 0) + 1;
+      }
+    }
+    const by = {};
+    for (const r of Object.values(best)) (by[r.agent] = by[r.agent] || []).push(r);
+    const rank = (a) => (USAGE_AGENTS.indexOf(a) + 1 || 99);
+    const order = (a, b) => (a.local ? 0 : 1) - (b.local ? 0 : 1) || (a.machine < b.machine ? -1 : a.machine > b.machine ? 1 : 0);
+    const out = [];
+    for (const agent of Object.keys(by)) {
+      const g = by[agent].sort(order);
+      // machines that read the same share a row; per_machine says the agent's readings differ elsewhere
+      const groups = {}, sigs = [];
+      for (const r of g) { const sg = usageSig(r); if (!groups[sg]) { groups[sg] = []; sigs.push(sg); } groups[sg].push(r); }
+      const split = sigs.length > 1;
+      const rows = sigs.map((sg) => Object.assign({}, groups[sg][0], { machines: groups[sg].map((r) => r.machine), per_machine: split }));
+      for (const r of rows) out.push(Object.assign(r, { live_workers: r.machines.reduce((n, m) => n + (live[agent + "|" + m] || 0), 0) }));
+    }
+    return out.sort((a, b) => rank(a.agent) - rank(b.agent) || order(a, b));
+  }
+  // Open artifacts in every home's snapshot (a task's, an inbox item's), each once, newest first, with
+  // its home: {home, ref, owner_type, owner, slug, title, kind, updated}.
+  function artifactsAll(state) {
+    const out = [], seen = {};
+    for (const h of (state && state.homes) || []) {
+      const s = h.snapshot;
+      if (!s) continue;
+      for (const x of (s.tasks || []).concat(s.needs || [])) for (const a of x.artifacts || []) {
+        const k = h.name + "|" + a.owner_type + "|" + a.owner + "|" + a.slug;
+        if (seen[k] || !a.slug) continue;
+        seen[k] = true;
+        out.push(Object.assign({ home: h.name }, a));
+      }
+    }
+    return out.sort((a, b) => String(b.updated || "").localeCompare(String(a.updated || "")));
+  }
+  function openPages(state) { return artifactsAll(state).filter((a) => a.kind === "page"); }
+  function artifactOf(state, home, type, owner, slug) {
+    return artifactsAll(state).find((a) => a.home === home && a.owner_type === type && a.owner === owner && a.slug === slug) || null;
+  }
+
+  // "in 3d 4h", "in 2h 5m", "in 12m": how long until <iso>; "now" once it has passed.
+  function untilText(iso, nowMs) {
+    const t = Date.parse(iso || "");
+    if (!isFinite(t)) return "";
+    const s = Math.round((t - (nowMs == null ? Date.now() : nowMs)) / 1000);
+    if (s <= 0) return "now";
+    const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+    return "in " + (d ? d + "d" + (h ? " " + h + "h" : "") : h ? h + "h" + (m ? " " + m + "m" : "") : Math.max(1, m) + "m");
+  }
+  function pctText(v) { return v == null ? "—" : (Number.isInteger(v) ? String(v) : v.toFixed(1).replace(/\.0$/, "")) + "%"; }
+  // One row as the page shows it. A model-only window (scoped: Claude's Opus or Sonnet week) is for
+  // information: it never reads as out or near, whatever its own state says; the row's state (the
+  // CLI's, which leaves those windows out) is what marks the agent.
+  const USAGE_STATE = { out: "Out", near: "Near its limit", ok: "Within limits", unknown: "Not known" };
+  function usageView(r, nowMs) {
+    const now = nowMs == null ? Date.now() : nowMs, st = USAGE_STATE[r.state] ? r.state : "unknown";
+    const where = r.machines && r.machines.length > 1 ? (r.machines.length > 3 ? r.machines.length + " machines" : r.machines.join(", ")) : r.machine || "";
+    const windows = (r.windows || []).map((w) => {
+      const scoped = !!w.scoped, used = w.used_pct == null ? null : Math.max(0, Math.min(100, w.used_pct));
+      const reset = w.reset_passed ? "reset; waiting for a new reading"
+        : w.resets_at ? "resets " + untilText(w.resets_at, now)
+        : w.active === false ? "not started" : "reset not known";
+      return { id: w.id || w.label, label: w.label || w.id || "limit", scoped, used, usedText: pctText(w.used_pct) + " used", leftText: pctText(w.left_pct) + " left",
+        level: scoped ? "info" : ["out", "near"].includes(w.state) ? w.state : "ok", reset, passed: !!w.reset_passed, resetsAt: w.resets_at || null };
+    });
+    let note = null;
+    if (r.hit_active && usageHit(r, now)) note = "A worker hit the limit" + (r.out_resets_at ? "; it resets " + untilText(r.out_resets_at, now) : "");
+    else if (st === "out" && r.limit_reached && !windows.some((w) => w.level === "out")) note = r.agent + " allows no more use for now" + (r.out_resets_at ? "; it resets " + untilText(r.out_resets_at, now) : "");
+    else if (st === "unknown") note = r.reason || "no usage reading yet";
+    const sampled = Date.parse(r.sampled_at || "");
+    const age = isFinite(sampled) ? ageText(Math.max(0, Math.round((now - sampled) / 1000))) : null;
+    return { key: r.agent + "|" + (r.machines && r.machines.length ? r.machines : [r.machine]).join(","), agent: r.agent, state: st, stateText: USAGE_STATE[st], where,
+      plan: [r.plan, r.account].filter(Boolean).join(" · "), windows, note, live: r.live_workers || 0,
+      age: age == null ? "no reading yet" : "read " + age + " ago", stale: !!r.stale, sampledAt: r.sampled_at || null };
+  }
+  // Fleet's line about usage: which agents are out or near, else that all are within their limits.
+  function usageSummary(rows) {
+    const name = (r) => (r.per_machine ? r.agent + " on " + (r.machines && r.machines.length ? r.machines : [r.machine]).join(" and ") : r.agent);
+    const out = rows.filter((r) => r.state === "out").map(name), near = rows.filter((r) => r.state === "near").map(name);
+    const parts = [];
+    if (out.length) parts.push(out.join(", ") + " out");
+    if (near.length) parts.push(near.join(", ") + " near the limit");
+    return { level: out.length ? "out" : near.length ? "near" : "ok", text: parts.length ? parts.join("; ") : rows.length ? "Every agent is within its limits" : "No usage reading yet" };
+  }
+
   // The page runs older code than the server now serves: "page" is what its own HTML said it is, the
   // state's is what is installed. Not told by the service worker's last copy, nor by an older server.
   function pageStale(own, state) {
@@ -820,6 +941,7 @@ var AppModel = (function () {
     permitReason, permitLead, permitScope, firstLine, standing, visible, ordered, counts, projects, questions, details,
     primary, answerBody, answered, move, ago, agoText, snoozes, search, askText, headline, bulkPlan, range, promote, linkParts, BOARD, boardItems, boardFilter, boardColumns, initiatives, milestones,
     freshItems, notice, noticeTarget, permitLeft, pageStale,
-    FLEET_STATES, REST_DAYS, SIGN_IN, fleetState, fleetMap, fleetMeters, fleetProblems, fullness, crewOf, agentLabel, ageText };
+    FLEET_STATES, REST_DAYS, SIGN_IN, fleetState, fleetMap, fleetMeters, fleetProblems, fullness, crewOf, agentLabel, ageText,
+    usageRows, usageView, usageSummary, untilText, openPages, artifactOf };
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = AppModel;

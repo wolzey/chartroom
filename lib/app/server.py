@@ -14,11 +14,16 @@ stdin), so the CLI stays the one writer of the records and a client home's rules
 
   /                         app/index.html
   /app/<path>               app/ files (styles, src, vendor)
-  /shared/<file>.js         lib/dashboard's shared scripts (eventfmt.js, markdown.js)
   /healthz                  "ok" (no identity needed)
   GET  /api/v1/state        {api, version, user, homes: [{name, path, ok, error, refreshed_at, snapshot}]}
   GET  /api/v1/stream       server-sent events: "version" when any home's snapshot changes
-  GET  /api/v1/homes/<home>/tasks/<id>/files/<brief.md|plan.md|report.md|events.log>
+  GET  /api/v1/homes/<home>/tasks/<id>/files/<brief.md|plan.md|report.md|final.md|events.log>
+  GET  /api/v1/homes/<home>/tasks/<id>/pane   the worker's recent events and terminal (`chartroom peek`), read-only
+  GET  /api/v1/homes/<home>/artifacts/<task|inbox>/<owner>/<slug>.md    a draft's text, plain
+  GET  /api/v1/homes/<home>/artifacts/<task|inbox>/<owner>/<slug>.html  a page: crew-written, so untrusted:
+                            served sandboxed under PAGE_CSP, framed only by the app itself
+  GET  /api/v1/homes/<home>/artifacts/<task|inbox>/<owner>/<slug>.pdf   that page printed now (`chartroom
+                            artifact pdf`), one at a time, never for another site's request
   POST /api/v1/homes/<home>/<tell|answer|accept|close|snooze|unsnooze|done|remove|restore>   (JSON body)
                             202 at once: the verb runs in the background, in order per home;
                             X-Chartroom-Action names it, so a retry is never a second run
@@ -48,6 +53,7 @@ import signal
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -71,7 +77,15 @@ INBOX_ID = re.compile(r"^i-[0-9a-f]{4,}$")
 ARTIFACT_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,127}/[a-z0-9][a-z0-9-]{0,79}$")
 DURATION = re.compile(r"^[0-9]{1,4}[mhd]$")
 UTC = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
-TASK_FILES = ("brief.md", "plan.md", "report.md", "events.log")
+TASK_FILES = ("brief.md", "plan.md", "report.md", "final.md", "events.log")
+ARTIFACT_FILE = re.compile(r"^([a-z0-9][a-z0-9-]{0,63})\.(md|html|pdf)$")
+# A page artifact (lib/pages.sh PAGE_CSP, plus sandbox): no scripts, nothing fetched, an opaque origin
+# even when opened by itself, and framed only by the app.
+PAGE_CSP = ("sandbox allow-popups allow-popups-to-escape-sandbox; default-src 'none'; style-src 'unsafe-inline'; "
+            "img-src data:; font-src data:; media-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'")
+PDF_SECONDS = 120  # a print (the CLI's own timeout is CHARTROOM_PDF_TIMEOUT, 60s) and the wait for the one before it
+PANE_SECONDS = 40
+PDF_LOCK = threading.Lock()  # one print at a time: each runs a Chrome
 ATT_ID = re.compile(r"^att-[0-9a-f]{4,}$")
 ATTACH_MAX = 25 * 1024 * 1024
 # An attachment is shown in the page only when it is a kind a browser renders without running
@@ -86,7 +100,6 @@ TICKET_CACHE = 2.0
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
                 ".svg": "image/svg+xml", ".png": "image/png", ".json": "application/json", ".webmanifest": "application/manifest+json",
                 ".txt": "text/plain; charset=utf-8", ".woff2": "font/woff2", ".ico": "image/x-icon"}
-SHARED = ("eventfmt.js", "markdown.js")
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
        "connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
 
@@ -1130,17 +1143,17 @@ def verb_for(action, body):
 
 
 class Page:
-    """What the page is made of (app/, and lib/dashboard's shared scripts), as one short hash. "/" carries
+    """What the page is made of (app/, its shared scripts included), as one short hash. "/" carries
     it, and so does the state: an open page whose own differs runs older code than is installed, and
     says so (app/src/main.js). Files are read again only when one's size or time moves."""
 
-    def __init__(self, app_dir, shared_dir):
-        self.app_dir, self.shared_dir = app_dir, shared_dir
+    def __init__(self, app_dir):
+        self.app_dir = app_dir
         self.lock = threading.Lock()
         self.stamp = self.value = None
 
     def rev(self):
-        files = [os.path.join(self.shared_dir, f) for f in SHARED]
+        files = []
         for d, dirs, names in os.walk(self.app_dir):
             dirs.sort()
             files += [os.path.join(d, f) for f in sorted(names) if os.path.splitext(f)[1].lower() in STATIC_TYPES]
@@ -1158,10 +1171,41 @@ class Page:
             return self.value
 
 
+def page_sidecar(path):
+    """True when <slug>.html beside its <slug>.json is a page artifact `artifact add` wrote, not a
+    worker's own file (the shape lib/artifacts.sh checks)."""
+    try:
+        with open(path[:-len(os.path.splitext(path)[1])] + ".json") as fh:
+            m = json.load(fh)
+    except (OSError, ValueError):
+        return False
+    return (isinstance(m, dict) and m.get("kind") == "page" and isinstance(m.get("title"), str)
+            and isinstance(m.get("schema"), (int, float)) and not isinstance(m.get("schema"), bool))
+
+
+def print_pdf(bin_, home, ref):
+    """The page <ref> printed now by `chartroom artifact pdf`, as bytes; RuntimeError says why not."""
+    if not PDF_LOCK.acquire(timeout=PDF_SECONDS):
+        raise RuntimeError("another PDF is still printing; try again in a moment")
+    fd, out = tempfile.mkstemp(prefix="chartroom-page-", suffix=".pdf")
+    os.close(fd)
+    try:
+        code, _, err = run([bin_, "artifact", "pdf", ref, "--out", out], home, timeout=PDF_SECONDS)
+        if code != 0:
+            raise RuntimeError(last_line(err).replace("chartroom: ", "") or "the print failed")
+        with open(out, "rb") as fh:
+            return fh.read()
+    finally:
+        PDF_LOCK.release()
+        try:
+            os.remove(out)
+        except OSError:
+            pass
+
+
 def make_handler(hub, args, root, actions, prs, fleet, pusher, devices=None):
     app_dir = os.path.join(root, "app")
-    shared_dir = os.path.join(root, "lib", "dashboard")
-    page = Page(app_dir, shared_dir)
+    page = Page(app_dir)
     user = (args.user or "").strip().lower()
     tickets = {}  # (home, task) -> (time, hub version, body): a ticket asked for twice in a row is read once
 
@@ -1182,7 +1226,7 @@ def make_handler(hub, args, root, actions, prs, fleet, pusher, devices=None):
             self.body_done = len(data) == n
             return data
 
-        def send(self, code, body, ctype, extra=()):
+        def send(self, code, body, ctype, extra=(), csp=CSP):
             if isinstance(body, str):
                 body = body.encode("utf-8")
             # A write answered before its body was read (refused, too large) ends its connection:
@@ -1197,7 +1241,7 @@ def make_handler(hub, args, root, actions, prs, fleet, pusher, devices=None):
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
-            self.send_header("Content-Security-Policy", CSP)
+            self.send_header("Content-Security-Policy", csp)
             for k, v in extra:
                 self.send_header(k, v)
             self.end_headers()
@@ -1236,8 +1280,6 @@ def make_handler(hub, args, root, actions, prs, fleet, pusher, devices=None):
                 return self.json(200, pusher.info())
             if path.startswith("/app/"):
                 return self.static(self.inside(app_dir, path[len("/app/"):]))
-            if path.startswith("/shared/") and path[len("/shared/"):] in SHARED:
-                return self.static(os.path.join(shared_dir, path[len("/shared/"):]))
             if path == "/api/v1/state":
                 hub.looked()
                 return self.json(200, dict(hub.state(), user=self.who(), actions=actions.recent(), prs=prs.states, gh_error=prs.error,
@@ -1251,6 +1293,12 @@ def make_handler(hub, args, root, actions, prs, fleet, pusher, devices=None):
             m = re.match(r"^/api/v1/homes/([^/]+)/tasks/([^/]+)$", path)
             if m:
                 return self.ticket(*[unquote(x) for x in m.groups()])
+            m = re.match(r"^/api/v1/homes/([^/]+)/tasks/([^/]+)/pane$", path)
+            if m:
+                return self.pane(*[unquote(x) for x in m.groups()])
+            m = re.match(r"^/api/v1/homes/([^/]+)/artifacts/(task|inbox)/([^/]+)/([^/]+)$", path)
+            if m:
+                return self.artifact(*[unquote(x) for x in m.groups()])
             m = re.match(r"^/api/v1/homes/([^/]+)/initiatives/(in-[0-9a-f]{4,})$", path)
             if m:
                 return self.initiative(*[unquote(x) for x in m.groups()])
@@ -1313,6 +1361,51 @@ def make_handler(hub, args, root, actions, prs, fleet, pusher, devices=None):
                 return self.json(500, {"error": last_line(err) or "could not read the task"})
             tickets[key] = (time.time(), hub.version, out.encode("utf-8"))
             return self.send(200, out, "application/json")
+
+        def pane(self, home, tid):
+            """The worker's recent events and its terminal's last lines, as `chartroom peek` prints them:
+            read-only, bounded, and only when the page asks (the ticket's Terminal, while it is open)."""
+            h = hub.homes.get(home)
+            if not h or not TASK_ID.match(tid) or not task_known(args.bin, h.path, tid):
+                return self.send(404, "not found\n", "text/plain; charset=utf-8")
+            code, out, err = run([args.bin, "peek", tid, "40"], h.path, timeout=PANE_SECONDS)
+            if code != 0 and not out:
+                return self.send(502, (last_line(err) or "could not read the worker's terminal") + "\n", "text/plain; charset=utf-8")
+            return self.send(200, out[-256 * 1024:], "text/plain; charset=utf-8")
+
+        def artifact(self, home, owner_type, owner, name):
+            """A draft's text, a page (sandboxed), or that page printed to PDF."""
+            h = hub.homes.get(home)
+            art = ARTIFACT_FILE.match(name)
+            ok_owner = TASK_ID.match(owner) if owner_type == "task" else INBOX_ID.match(owner)
+            if not h or not art or not ok_owner:
+                return self.send(404, "not found\n", "text/plain; charset=utf-8")
+            slug, ext = art.groups()
+            base = os.path.join(h.path, "tasks" if owner_type == "task" else "inbox", owner, "artifacts", slug)
+            if ext == "pdf":
+                # The one request that starts something (a Chrome): never for another site's page.
+                # Browsers say where a request comes from; curl and older browsers say nothing.
+                if self.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none"):
+                    return self.send(403, "a PDF is printed only from the app\n", "text/plain; charset=utf-8")
+                # printed from the page beside it, never a .pdf file that happens to be there
+                if not (os.path.isfile(base + ".html") and page_sidecar(base + ".html")):
+                    return self.send(404, "not found\n", "text/plain; charset=utf-8")
+                try:
+                    pdf = print_pdf(args.bin, h.path, owner + "/" + slug)
+                except RuntimeError as exc:
+                    return self.send(500, "could not print the PDF: %s\n" % exc, "text/plain; charset=utf-8")
+                return self.send(200, pdf, "application/pdf", extra=[("Content-Disposition", 'attachment; filename="%s.pdf"' % slug)])
+            f = base + "." + ext
+            if not os.path.isfile(f) or not os.path.isfile(base + ".json"):
+                return self.send(404, "not found\n", "text/plain; charset=utf-8")
+            if ext == "html":
+                if not page_sidecar(f):
+                    return self.send(404, "not found\n", "text/plain; charset=utf-8")
+                with open(f, "rb") as fh:
+                    return self.send(200, fh.read(4 * 1024 * 1024), "text/html; charset=utf-8", csp=PAGE_CSP,
+                                     extra=[("X-Frame-Options", "SAMEORIGIN")])
+            with open(f, "rb") as fh:
+                return self.send(200, fh.read(4 * 1024 * 1024), "text/plain; charset=utf-8")
 
         def initiative(self, home, iid):
             h = hub.homes.get(home)

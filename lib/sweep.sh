@@ -10,7 +10,7 @@
 #   close    a done task (accepted by the commander; one still in review never closes here):
 #            closeable when its worktree is clean and nothing on it is unlanded
 #   orphan   a chartroom loop left behind: `watch`/`listen` whose session is gone (its nearest
-#            real parent is init), a listener of a closed task, a second dashboard for the home
+#            real parent is init), a listener of a closed task, the retired web dashboard's server
 #   daemon   anything else running from a task's worktree (dev servers, watchers, daemons:
 #            found by working directory and argv, whatever the program), or from a chartroom
 #            worktree path that no longer exists
@@ -111,7 +111,12 @@ sweep_procs_json() {
   while IFS=$'\t' read -r pid ppid age cpu pcpu rss tty args; do
     cwd="${cwd_of[$pid]:-}"; root=""; gone=0
     if [[ "$cwd" == *" (deleted)" ]]; then cwd="${cwd% (deleted)}"; gone=1; fi
-    if [[ -n "$only" && "$cwd" != "$only"* && "$cwd" != "$only_p"* && "$args" != *"$only"* && "$args" != *"$only_p"* ]]; then continue; fi
+    if [[ -n "$only" && "$cwd" != "$only"* && "$cwd" != "$only_p"* && "$args" != *"$only"* && "$args" != *"$only_p"* ]]; then
+      # A user systemd/launchd can adopt the test's orphans without living under its
+      # temp directory. Keep that supervisor as context for orphaned in sweep.jq;
+      # it is neither a chartroom loop nor a task worker and cannot be a target.
+      case "${args%% *}" in systemd|*/systemd|init|*/init|launchd|*/launchd) ;; *) continue ;; esac
+    fi
     for ((i = 0; i < ${#prefixes[@]}; i++)); do
       pre="${prefixes[$i]}"
       [[ "$cwd" == "$pre"* ]] || continue
@@ -293,15 +298,14 @@ sweep_leftovers_apply() { # <plan-json> -> [{task, branch, result}]
 # ids whose close failed in this run, so nothing of theirs counts as safe.
 # .parkable: the workers at rest that --apply parks (lib/park.sh); their sessions are left to that.
 sweep_plan() { # [close-failed-json]
-  local procs tasks dash="" p _ parkable
+  local procs tasks parkable
   procs="$(sweep_procs_json | sweep_procs_to_json)"
   tasks="$(sweep_tasks_json)"
   parkable="$(park_due_json)"
-  read -r dash _ < <(dashboard_running) || true
   jq -n -c --argjson procs "$procs" --argjson tasks "$tasks" --argjson panes "$(sweep_herdr_panes)" \
     --argjson homes "$(sweep_forms "$CR_HOME" | jq -R -s -c 'split("\n") | map(select(length > 0))')" \
     --argjson self "$$" --argjson idle "$((CR_SWEEP_IDLE_HOURS * 3600))" \
-    --argjson failed "${1:-[]}" --arg dash "$dash" --argjson others "$(sweep_others_json)" --argjson parkable "$parkable" \
+    --argjson failed "${1:-[]}" --argjson others "$(sweep_others_json)" --argjson parkable "$parkable" \
     -f "$CR_ROOT/lib/sweep.jq" | jq -c --argjson p "$parkable" --argjson l "$(sweep_leftovers_json)" '.parkable = $p | .leftovers = $l'
 }
 

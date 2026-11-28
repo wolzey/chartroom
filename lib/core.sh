@@ -71,7 +71,7 @@ bin_of() { type -P "$1" 2>/dev/null || true; }
 # The config file is KEY=VALUE lines (no shell evaluation), at
 # ${XDG_CONFIG_HOME:-~/.config}/chartroom/config or $CHARTROOM_CONFIG. A home may hold its
 # own `config` in the same format (several homes on one machine: each its own workspace,
-# dashboard port, project roots); it can set any key but CHARTROOM_HOME, which is read before
+# project roots); it can set any key but CHARTROOM_HOME, which is read before
 # the home is known.
 
 CR_CONFIG_FILE="${CHARTROOM_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/chartroom/config}"
@@ -210,8 +210,10 @@ load_config() {
   cfg_set CR_WORKSPACE WORKSPACE CAP_CREW_WORKSPACE chartroom-crew
   cfg_set CR_WATCH_INTERVAL WATCH_INTERVAL CAP_WATCH_INTERVAL 3
   cfg_set CR_WATCH_HC_INTERVAL WATCH_HC_INTERVAL '' 60
-  # Every agent's full sessions before any headless run (the commander's rule r-851d: workers run as
-  # full sessions): a machine without claude starts Codex in hc, not `codex exec`.
+  # Diagnostic order for explicit-backend alternatives. Automatic selection is full-session
+  # balancing in lib/spread.sh; this order cannot enable a headless fallback.
+  # grok is in no order and never picked automatically: it runs only when a task's --backend
+  # names it (the commander picks when).
   cfg_set CR_BACKEND_ORDER BACKEND_ORDER '' 'hc:claude hc:codex hc:agy herdr:claude herdr:codex herdr:agy cmux:claude cmux:codex tmux:claude tmux:codex headless:codex headless:claude command'
   CR_BACKEND_ORDER="${CR_BACKEND_ORDER//,/ }"
   cfg_set CR_HARNESS HARNESS '' generic
@@ -249,6 +251,18 @@ load_config() {
   cfg_set CR_PERMIT_WAIT PERMIT_WAIT_SECONDS '' 900
   [[ "$CR_PERMIT_WAIT" =~ ^[0-9]+$ && "$CR_PERMIT_WAIT" -ge 1 ]] || die "CHARTROOM_PERMIT_WAIT_SECONDS must be whole seconds, such as 900"
   [[ "$CR_CODEX_HOOKS_DIALOG" =~ ^(ask|skip)$ ]] || die "CHARTROOM_CODEX_HOOKS_DIALOG must be ask or skip (got $CR_CODEX_HOOKS_DIALOG)"
+  # Subscription usage thresholds (lib/usage.sh): percent used at which an agent is considered out
+  # or near its limit, how old a reading may be before it is marked stale, how often cached
+  # readings refresh, and fallback cooldown when a usage-limit error carries no parseable reset.
+  cfg_set CR_USAGE_LIMIT_PCT USAGE_LIMIT_PCT '' 95
+  cfg_set CR_USAGE_WARN_PCT USAGE_WARN_PCT '' 80
+  cfg_set CR_USAGE_STALE_MIN USAGE_STALE_MINUTES '' 30
+  cfg_set CR_USAGE_REFRESH_MIN USAGE_REFRESH_MINUTES '' 5
+  cfg_set CR_USAGE_COOLDOWN_MIN USAGE_COOLDOWN_MINUTES '' 60
+  [[ "$CR_USAGE_LIMIT_PCT" =~ ^[0-9]+$ ]] && (( 10#$CR_USAGE_LIMIT_PCT >= 1 && 10#$CR_USAGE_LIMIT_PCT <= 100 )) || die "CHARTROOM_USAGE_LIMIT_PCT must be 1-100 (got $CR_USAGE_LIMIT_PCT)"
+  [[ "$CR_USAGE_WARN_PCT" =~ ^[0-9]+$ ]] && (( 10#$CR_USAGE_WARN_PCT >= 1 && 10#$CR_USAGE_WARN_PCT <= 100 )) || die "CHARTROOM_USAGE_WARN_PCT must be 1-100 (got $CR_USAGE_WARN_PCT)"
+  (( 10#$CR_USAGE_WARN_PCT <= 10#$CR_USAGE_LIMIT_PCT )) || die "CHARTROOM_USAGE_WARN_PCT ($CR_USAGE_WARN_PCT) must be <= CHARTROOM_USAGE_LIMIT_PCT ($CR_USAGE_LIMIT_PCT)"
+  [[ "$CR_USAGE_STALE_MIN" =~ ^[0-9]+$ && "$CR_USAGE_REFRESH_MIN" =~ ^[0-9]+$ && "$CR_USAGE_COOLDOWN_MIN" =~ ^[0-9]+$ ]] || die "CHARTROOM_USAGE_STALE_MINUTES, CHARTROOM_USAGE_REFRESH_MINUTES and CHARTROOM_USAGE_COOLDOWN_MINUTES must be whole minutes"
 }
 
 # Stop a process and its children.
@@ -310,6 +324,7 @@ log_event() {
   if is_store_task "$1"; then store_event "$1" "$2" "${3//$'\n'/ }"
   else printf '%s %s: %s\n' "$(now)" "$2" "${3//$'\n'/ }" >>"$(tdir "$1")/events.log"; fi
   stamp_changed; bell_ring "" watch
+  if [[ "$2" == "done" ]]; then review_mark "$1"; fi
 }
 # A line as another chartroom wrote it ("<ts> <kind>: <text>"), appended verbatim (a pinned
 # task's device: lib/backends/node.sh). A store task takes its kind and text (the store stamps it).
@@ -317,6 +332,8 @@ log_event_line() { # <id> <line>
   if is_store_task "$1"; then local rest="${2:21}"; store_event "$1" "${rest%%: *}" "${rest#*: }"
   else printf '%s\n' "$2" >>"$(tdir "$1")/events.log"; fi
   stamp_changed; bell_ring "" watch
+  # Remote pushes must return before the node can answer the review diff request.
+  # The watch consumes this done event and creates the review outside the push handler.
 }
 pid_alive() { [[ -n "${1:-}" ]] && kill -0 "$1" 2>/dev/null; }
 
@@ -337,7 +354,7 @@ run_bounded() { # <seconds> <cmd...>
   perl -e 'alarm shift; exec @ARGV or exit 127' "$s" "$@"
 }
 
-# gh as CHARTROOM_GH names it (as the dashboard reads it), else the one on PATH; nothing when absent.
+# gh as CHARTROOM_GH names it (as the app reads it), else the one on PATH; nothing when absent.
 gh_bin() { bin_of "$(cfg GH '' gh)"; }
 
 declare -gA LANDED_SEEN=() LANDED_HEADS=() LANDED_PRS=()
@@ -535,7 +552,14 @@ slugify() {
 }
 
 # The worker's single instruction, identical on every backend.
-task_prompt() { printf 'Read the brief at %s/brief.md and follow it exactly. Your task id is %s.' "$(tdir "$1")" "$1"; }
+task_prompt() {
+  local moved; moved="$(meta "$1" moved_from 2>/dev/null || true)"
+  if [[ -n "$moved" ]]; then
+    printf 'Read the brief at %s/brief.md and follow it exactly. Your task id is %s. This task was moved from %s; inspect git status/log and %s/inbox.md and continue from its existing commits.' "$(tdir "$1")" "$1" "$moved" "$(tdir "$1")"
+  else
+    printf 'Read the brief at %s/brief.md and follow it exactly. Your task id is %s.' "$(tdir "$1")" "$1"
+  fi
+}
 
 # A short signature of a prompt's text: whitespace runs collapsed and trimmed, so a typed
 # message and what the agent's prompt hook received compare equal; first 12 hex of sha256.

@@ -16,6 +16,7 @@ common_setup() {
   unset CAP_HOME CAP_PROJECT_ROOTS CAP_CREW_WORKSPACE CAP_WATCH_INTERVAL CHARTROOM_HARNESS CHARTROOM_BACKEND_ORDER CHARTROOM_COMMAND
   unset CHARTROOM_AGY_PERMISSION
   unset CHARTROOM_OPENER CHARTROOM_GATE SSH_CONNECTION SSH_CLIENT # (an ssh session changes where agy's sign-in is asked)
+  unset GROK_HOME # (grok_guard_file: the guard goes under this test's HOME)
   unset CI TMUX TMUX_PANE HERDR_ENV HERDR_PANE_ID CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_SOCKET_PATH
   # An XO running inside Herdr passes its herdr-core terminal's address and socket down.
   unset HC_TERMINAL_ID HC_TERMINAL_SOCKET HC_SCOPE HC_SOCKET HC_SESSION HERDR_APP_HOME
@@ -32,6 +33,8 @@ common_setup() {
   # no test starts the CPU sampler (lib/cpuload.sh) behind an agent or an app server; a probe's own
   # sample is short
   export CHARTROOM_CPU_SAMPLER=off CR_PROBE_SAMPLE=1
+  # No background usage refresh in unrelated tests (test/usage.bats enables it explicitly where tested).
+  export CHARTROOM_USAGE_REFRESH_MINUTES=0
   unset CHARTROOM_PLACEMENT CHARTROOM_PLACE_HOLD_SECONDS CHARTROOM_GUEST
   unset CHARTROOM_FLEET_DIR CHARTROOM_BRAIN_URL CHARTROOM_DEVICE_HEARTBEAT CHARTROOM_NODE_STALE_SECONDS CHARTROOM_NODE_LOST_MINUTES
   # (A runner's own would move herdr's socket away from this test's HOME: see herdr_sock_up.)

@@ -76,3 +76,37 @@ app_fixture() { # <dir> <project-repo>
   fi
   CHARTROOM_HOME="$g" "$CHARTROOM" ask --title "Ship the SDK as 2.0 or 1.9?" --option "2.0: the auth change breaks callers" --option "1.9 with a shim" --recommend 1 --project api >/dev/null
 }
+
+# app_usage_fixture <home> [machine-here]: invented subscription usage readings in <home>/usage, as
+# `chartroom usage` keeps them, timed from now: claude on desk and mini (the same reading, with a
+# model-only week at 100%), on laptop a stale one; codex out on desk and fine on laptop; agy not
+# known. Invented accounts and machines only.
+app_usage_fixture() {
+  local h="$1" here="${2:-desk}" now d
+  now="$(date +%s)"; d="$h/usage"; mkdir -p "$d"
+  at() { jq -rn --argjson s "$(( now + $1 ))" '$s | todate'; }
+  app_usage_rec() { # <machine> <agent> <json>
+    jq -c --arg m "$1" --arg a "$2" --argjson local "$([[ "$1" == "$here" ]] && echo true || echo false)" \
+      '{schema: 1, agent: $a, machine: $m, local: $local, status: "ok", source: "fixture", reason: null} + .' <<<"$3" >"$d/$1--$2.json"
+  }
+  local claude
+  claude="$(jq -cn --arg s "$(at -90)" --arg r5 "$(at 7900)" --arg r7 "$(at 280000)" '{plan: "max_20x", account: "claude.ai #a1b2",
+    sampled_at: $s, recorded_at: $s, windows: [
+      {id: "five_hour", label: "5h", used_pct: 42, resets_at: $r5, active: true, scoped: false},
+      {id: "seven_day", label: "7d", used_pct: 88, resets_at: $r7, active: true, scoped: false},
+      {id: "seven_day_opus", label: "7d opus", used_pct: 100, resets_at: $r7, active: true, scoped: true}]}')"
+  app_usage_rec "$here" claude "$claude"
+  app_usage_rec mini claude "$claude"
+  app_usage_rec laptop claude "$(jq -cn --arg s "$(at -14400)" --arg r7 "$(at 280000)" '{plan: "pro", account: "claude.ai #c3d4",
+    sampled_at: $s, recorded_at: $s, windows: [{id: "5h", label: "5h", used_pct: 12, resets_at: null, active: false},
+      {id: "7d", label: "7d", used_pct: 31, resets_at: $r7, active: true}]}')"
+  app_usage_rec "$here" codex "$(jq -cn --arg s "$(at -300)" --arg r5 "$(at 3300)" --arg r7 "$(at 400000)" '{plan: "plus", account: "chatgpt #e5f6",
+    sampled_at: $s, recorded_at: $s, windows: [{id: "primary", label: "5h", used_pct: 100, resets_at: $r5, active: true},
+      {id: "secondary", label: "7d", used_pct: 64, resets_at: $r7, active: true}]}')"
+  app_usage_rec laptop codex "$(jq -cn --arg s "$(at -600)" --arg r5 "$(at 9000)" --arg r7 "$(at 400000)" '{plan: "plus", account: "chatgpt #e5f6",
+    sampled_at: $s, recorded_at: $s, windows: [{id: "primary", label: "5h", used_pct: 18, resets_at: $r5, active: true},
+      {id: "secondary", label: "7d", used_pct: 64, resets_at: $r7, active: true}]}')"
+  app_usage_rec "$here" agy "$(jq -cn --arg s "$(at -60)" '{status: "unknown", reason: "agy is not signed in on this machine", plan: null, account: null,
+    sampled_at: $s, recorded_at: $s, windows: []}')"
+  unset -f at app_usage_rec
+}

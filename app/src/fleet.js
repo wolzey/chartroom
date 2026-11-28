@@ -2,10 +2,12 @@
 // disk), what they have in use against their limits, and the workers on them, from `chartroom app
 // fleet --json` (lib/app/fleet.jq, over `chartroom nodes`). A machine row selects it; its detail sits
 // in the slim column. Hand-offs and conn holders show as not tracked yet rather than as made-up data. The same
-// machines as an atom or a dashboard: fleetviews.js.
+// machines as an atom or a dashboard: fleetviews.js. What each subscription has left: usage.js (a
+// strip here, its own page at #/usage).
 import { html, useState } from "./html.js";
 import { Status, Linked, Tabs } from "./ui.js";
 import { ViewSwitch, savedView, saveView, AtomView, DashView } from "./fleetviews.js";
+import { UsageStrip } from "./usage.js";
 
 const M = window.AppModel;
 const STATE = { healthy: "Healthy", degraded: "Needs a look", down: "Unreachable" };
@@ -45,14 +47,14 @@ function Checks({ m }) {
     <span class="ck-i">${c.ok ? "✓" : c.ok === false ? (c.warn ? "!" : "✕") : "?"}</span>${c.label}</span>`)}</div>`;
 }
 
-export function FleetPage({ fleet, workers, tasks, sel, setSel, onRefresh, onSession, actionFor, toast }) {
+export function FleetPage({ fleet, data, workers, tasks, sel, setSel, onRefresh, onSession, actionFor, toast }) {
   const [tab, setTab] = useState("machines");
   const [view, setView] = useState(savedView);
   const pickView = (v) => { setView(v); saveView(v); onSession(null, false); };
   const ms = (fleet && fleet.machines) || [];
   if (!fleet) {
     return html`<main class="a-main"><header class="a-head"><div class="a-head-l"><h1>Fleet</h1></div></header>
-      <div class="page-body"><p class="dt-empty">Reading the machines… (this one's probe and each device's last heartbeat; a machine not enrolled yet over ssh, up to a minute)</p></div></main>`;
+      <div class="page-body"><${UsageStrip} data=${data} /><p class="dt-empty">Reading the machines… (this one's probe and each device's last heartbeat; a machine not enrolled yet over ssh, up to a minute)</p></div></main>`;
   }
   const bad = ms.filter((m) => m.state !== "healthy");
   const live = workers.length;
@@ -66,6 +68,7 @@ export function FleetPage({ fleet, workers, tasks, sel, setSel, onRefresh, onSes
       <button class="btn ghost sm" onClick=${onRefresh}>Check again</button></header>
     <div class="page-body">
       <div class="fleet-sum"><span class=${"glyph " + (bad.length ? "blocked" : "ok")}></span><p>${sum}</p></div>
+      <${UsageStrip} data=${data} />
       ${fleet.error ? html`<p class="err-t">${fleet.error}</p>` : null}
       <div class="fv-bar"><${ViewSwitch} view=${view} onPick=${pickView} /></div>
       ${view === "atom" ? html`<${AtomView} fleet=${fleet} tasks=${tasks} sel=${sel} onSelect=${setSel} onSession=${onSession} actionFor=${actionFor} />`

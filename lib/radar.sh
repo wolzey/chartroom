@@ -1,9 +1,9 @@
 # shellcheck shell=bash
-# radar.sh - `chartroom radar`: the data behind the dashboard's fleet radar (/radar). One record
+# radar.sh - `chartroom radar`: every agent on every machine, in the terminal. One record
 # per open crew task on every home of this machine (the rows `status --json` prints, read in each
 # home) and of other machines over ssh, plus each home's XO as an untracked "flagship" from herdr.
-# The state table lives in lib/dashboard/radar.jq; lib/dashboard/server.py only schedules these
-# calls (off the request path, only while the radar is open), caches them and serves the result.
+# The state table lives in lib/radar.jq. (The web dashboard's /radar page, which scheduled these
+# reads, is retired; `chartroom radar` reads on demand.)
 #
 # Other machines are only ever read. The only commands that run there are
 #   chartroom status --json --all-homes
@@ -25,8 +25,8 @@
 # into each machine's archive; a breaking report is never archived.
 
 CR_RADAR_REMOTE_PATH_DEFAULT='$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin'
-CR_RADAR_FILES='brief.md report.md plan.md final.md events.log' # = CR_DASHBOARD_FILES (lib/dashboard.sh)
-CR_RADAR_ID_RE='^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$'              # = TASK_ID (lib/dashboard/server.py)
+CR_RADAR_FILES='brief.md report.md plan.md final.md events.log' # = CR_TASK_FILES (lib/board.sh)
+CR_RADAR_ID_RE='^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$'              # (a task id, as every reader takes it)
 CR_RADAR_PATH_RE='^/[A-Za-z0-9_./ -]+$'
 CR_RADAR_PANE_RE='^[A-Za-z0-9:_-]{1,64}$'
 
@@ -127,7 +127,7 @@ radar_normalize() { # <status-file> <herdr-file> <machine> <local> <target> <via
   local f
   for f in "$1" "$2"; do jq -e . "$f" >/dev/null 2>&1 || echo null >"$f"; done
   jq -n --slurpfile st "$1" --slurpfile hd "$2" --arg machine "$3" --arg local "$4" --arg target "$5" \
-    --arg via "$6" --arg contact "$7" --arg error "$8" --argjson phys "$9" -f "$CR_ROOT/lib/dashboard/radar.jq"
+    --arg via "$6" --arg contact "$7" --arg error "$8" --argjson phys "$9" -f "$CR_ROOT/lib/radar.jq"
 }
 
 radar_snapshot_local() {

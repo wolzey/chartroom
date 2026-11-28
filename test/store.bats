@@ -71,7 +71,7 @@ db() { python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); [print("|
   [ ! -d "$wt" ]
   [ -n "$(meta_of "$id" closed)" ]
   run cr status
-  [[ "$output" == "no open tasks" ]]
+  [[ "$output" == "no open tasks"$'\n'"agents: "* ]]
   [ ! -e "$CHARTROOM_HOME/tasks/$id/meta.json" ]
 }
 
@@ -301,14 +301,13 @@ db() { python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); [print("|
 ^lib/migrate\.sh:
 ^lib/migrate-client\.sh:
 \$\{m%/meta\.json\}
-CR_(DASHBOARD|RADAR)_FILES=
+CR_(TASK|RADAR)_FILES=
 TASK_FILES = \(
 # <id> .*<events\.log offset
 \|tasks/\*/meta\.json\|tasks/\*/events\.log\|
 files\+=\(events\.log\)
 "\$file" == events\.log
 name == "events\.log"
-parts\[3\] == "events\.log"
 has no events\.log of its own
 ^lib/core\.sh:.*\$\{META_PATH:-\$CR_HOME/tasks/\$1/meta\.json\}
 ^lib/core\.sh:.*meta_cache_load\(\) \{ # \[meta\.json files
@@ -318,7 +317,6 @@ has no events\.log of its own
 ^bin/chartroom:.*d="\$\{f%/events\.log\}"
 ^bin/chartroom:.*\[\[ -f "\$d/meta\.json" \]\] \|\| continue
 ^bin/chartroom:.*for f in "\$CR_HOME"/tasks/\*/meta\.json; do \[\[ "\$f" -ot
-^lib/dashboard/server\.py:.*glob\.glob\(os\.path\.join\(base, "events\.log"\)\)
 ^lib/guest\.sh:[0-9]+:guest_(meta|log)_file\(\) \{
 ^lib/app/server\.py:.*GET  /api/v1/homes/<home>/tasks/<id>/files/
 ^lib/app/server\.py:.*FILE_RECORD = "meta\.json"

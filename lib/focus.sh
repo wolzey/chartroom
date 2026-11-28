@@ -6,7 +6,7 @@
 # No file, or an until in the past, means focus is off. While it is on, every item out of focus
 # that would ask something of the commander is held: a task in decision, blocked, failed,
 # awaiting-input or review, and an inbox "Waiting" item. Held items stay on the board and still
-# wake the XO (marked [held]); status, board, the dashboard and the crew views count them, so a
+# wake the XO (marked [held]); status, board, the app and the crew views count them, so a
 # focus is never left on by accident.
 #
 # An item is in focus when its project equals a focus name or starts with "<name>-"
@@ -105,7 +105,7 @@ focus_line() { # <focus json> <held count>
 # How many items the focus holds: the held task rows on stdin (status_rows) plus the held inbox
 # items. Closed tasks are never held, so open rows count the same as the board.
 focus_held_count() {
-  jq -s --argjson inbox "$(dashboard_inbox)" '([.[] | select(.held)] | length) + ([$inbox.waiting[] | select(.held)] | length)'
+  jq -s --argjson inbox "$(inbox_items_json)" '([.[] | select(.held)] | length) + ([$inbox.waiting[] | select(.held)] | length)'
 }
 
 # The held cards of a board, one line each, as `board` prints an item.
@@ -148,7 +148,7 @@ focus_show() { # <json 0|1>
     else echo "focus: off"; fi
     return 0
   fi
-  board="$(dashboard_json)"
+  board="$(board_json)"
   if [[ $1 -eq 1 ]]; then
     jq -c --argjson f "$focus" '$f + {on: true, held: .focus.held, items: [.lanes[][] | select(.held)
       | {type, id, short_id, project, title, state, reason}]}' <<<"$board"
@@ -168,7 +168,7 @@ focus_off() {
     else echo "focus: already off"; fi
     return 0
   fi
-  board="$(dashboard_json)" # before the file goes, so the held marks are this focus's
+  board="$(board_json)" # before the file goes, so the held marks are this focus's
   focus_write ""
   n="$(jq '.focus.held' <<<"$board")"
   jq -r --argjson n "$n" "$FOCUS_JQ"' "focus off: \(focus_name), on for \(now - (.since | fromdateiso8601) | focus_dur). "
@@ -204,7 +204,7 @@ focus_on() { # <duration or ""> <scope words, comma-separated, or ""> <name...>
   # when it is set; a focus that covers nothing is kept (a project may have no work yet).
   task_meta_files
   local metas=("${TASK_METAS[@]+"${TASK_METAS[@]}"}")
-  matches="$(jq -n -c --argjson f "$focus" --argjson inbox "$(dashboard_inbox)" "$FOCUS_JQ"'
+  matches="$(jq -n -c --argjson f "$focus" --argjson inbox "$(inbox_items_json)" "$FOCUS_JQ"'
     [inputs | select((.closed // "") == "") | {project: ((.project // "") | rtrimstr("/") | split("/") | last), title, id}] as $open
     | ([$open[].project | select(. != "")] | unique) as $projects
     | {projects: [$projects[] | select(focus_in($f))], other: [$projects[] | select(focus_in($f) | not)],

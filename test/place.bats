@@ -117,16 +117,18 @@ dry() { run cr dispatch "$1" --dry-run; echo "$output"; }
   [[ "$output" == *"no node can take $id now"*"studio: cpu 81% of 80%"* ]]
   [ -z "$(meta_of "$id" dispatched)" ] && [ ! -e "$FLEET/placed/acme.$id.json" ]
   events "$id" | grep -q " note: not dispatched: no node can take it now"
-  # --over-limit is the override
+  # Exercise the local limit override explicitly; a remote at its limit can still
+  # rank below this machine once limits are ignored. No remote responder runs here.
+  cr set "$id" node=here >/dev/null
   run cr dispatch "$id" --over-limit
   echo "$output"
   [ "$status" -eq 0 ]
-  # under its limit, but one more worker would go over it: not taken either
+  # Under its limit, but the recent placement plus one more worker goes over it.
   fake_use "$FAKE_NODE_DIR" "$XDG_STATE_HOME" 70 30
   id2="$(new_task --backend command)"
   dry "$id2"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"studio: cpu 70% of 80%, memory 30% of 75% (cpu 70% in use and about 15% for this worker"*"is over its 80% limit)"* ]]
+  [[ "$output" == *"studio: cpu 70% of 80%, memory 30% of 75% (cpu 70% in use and about 30% for this worker and 1 just placed"*"is over its 80% limit)"* ]]
   # this machine when its use cannot be read: the last resort, never a stop to all work here
   mv "$FAKE_NODE_DIR/vm_stat" "$FAKE_NODE_DIR/vm_stat.off"
   dry "$id2"; [[ "$output" == "$id2 would run here"*"studio: cpu 70% of 80%, memory ? of 75%;"* ]]
@@ -242,6 +244,31 @@ dry() { run cr dispatch "$1" --dry-run; echo "$output"; }
   dry "$id"; [[ "$output" == "$id would run here"*"its agent is older (chartroom node update m3)"* ]]
   beat m3 $M3; jq -c '.last_seen -= 400' "$FLEET/devices/$M3.seen.json" >"$FLEET/t" && mv "$FLEET/t" "$FLEET/devices/$M3.seen.json"
   dry "$id"; [[ "$output" == "$id would run here"*"it is stale"* ]]
+  # Automatic work may use a remote agent even when none is signed in locally.
+  cp "$BATS_TEST_TMPDIR/good" "$BATS_TEST_TMPDIR/m3.probe"; beat m3 $M3
+  auto="$(new_task)"
+  answering
+  run cr dispatch "$auto"
+  [ "$status" -eq 0 ]
+  [ "$(meta_of "$auto" backend)" = node:codex ]
+  [ "$(meta_of "$auto" node_backend)" = hc:codex ]
+  [ "$(meta_of "$auto" node)" = "$M3" ]
+  mcp="$(new_task --needs mcp)"
+  # Even a signed-in remote Claude cannot supply this machine's MCP tools.
+  dry "$mcp"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Claude-only tools are configured on this machine"* ]]
+  cr set "$mcp" node=m3 >/dev/null
+  run cr dispatch "$mcp" --dry-run
+  [ "$status" -ne 0 ]; [[ "$output" == *"set $mcp node=here"* ]]
+  # A pin still chooses its agent when automatic machine placement is off.
+  pinned="$(new_task --node m3)"
+  CHARTROOM_PLACEMENT=local run cr dispatch "$pinned"
+  [ "$status" -eq 0 ]
+  [ "$(meta_of "$pinned" backend)" = node:codex ]
+  [ "$(meta_of "$pinned" node_backend)" = hc:codex ]
+  explicit="$(new_task --backend node:codex --node m3)"
+  [ "$(meta_of "$explicit" node_backend)" = hc:codex ]
 }
 
 @test "placement: work that is here already, or that only this machine has, stays; a pin decides" {

@@ -4,7 +4,7 @@
 #
 # Each home is a whole chartroom of its own (tasks, preferences, inbox, worktrees), usually one
 # per company, with its own XO session. What would collide on one machine comes from the home's
-# own `config` (lib/core.sh): the herdr/cmux/tmux workspace, the dashboard port, the project
+# own `config` (lib/core.sh): the herdr/cmux/tmux workspace, the project
 # roots. The list of homes is $CR_HOMES_FILE, `homes` next to the config file:
 #   acme=~/chartroom/acme
 #   globex=~/chartroom/globex
@@ -14,7 +14,6 @@
 # Registering or unregistering never writes inside a home.
 
 CR_HOME_NAME_RE='^[a-z][a-z0-9-]{0,31}$'
-CR_HOME_PORT_FIRST=4518 # 4517, the dashboard's default, stays with a home that sets none
 
 # A path with $HOME written as ~ (the homes file stays readable and portable).
 home_tilde() { local p="$1"; if [[ "$p" == "$HOME" || "$p" == "$HOME"/* ]]; then printf '~%s' "${p#"$HOME"}"; else printf '%s' "$p"; fi; }
@@ -46,52 +45,44 @@ home_setting() { # <path> <SUFFIX> <default>
   printf '%s' "${v:-$3}"
 }
 
-# The dashboard of the home at <path> when it runs: "pid port host" (dashboard_running there).
-home_dashboard() { ( CR_HOME="$1"; dashboard_running ) 2>/dev/null || true; }
-
 # One JSON object per registered home, and one for this home when it is not registered:
-#   {name, path, current, registered, exists, is_home, workspace, port, open, dashboard}
-# open: tasks not closed; dashboard: the port it runs on, or null.
+#   {name, path, current, registered, exists, is_home, workspace, open, brain}
+# open: tasks not closed; brain: a client home's brain (lib/brain.sh), or null.
 homes_rows() {
-  local name p here phys open dash pid port _ seen=0
+  local name p here phys open seen=0
   here="$(phys_dir "$CR_HOME")"
   while IFS=$'\t' read -r name p; do
-    phys="$(phys_dir "$p")"; open=0; dash=""
+    phys="$(phys_dir "$p")"; open=0
     [[ "$phys" == "$here" ]] && seen=1
     if [[ -d "$p/tasks" ]]; then
       local metas=(); mapfile -d '' -t metas < <(task_meta_files_of "$p")
       [[ -e "${metas[0]-}" ]] && open="$(jq -r 'select((.closed // "") == "") | .id' "${metas[@]}" | grep -c . || true)"
     fi
-    read -r pid port _ < <(home_dashboard "$p") && dash="$port"
     jq -cn --arg n "$name" --arg p "$p" --argjson cur "$([[ "$phys" == "$here" ]] && echo true || echo false)" \
       --argjson ex "$([[ -d "$p" ]] && echo true || echo false)" --argjson ih "$([[ -d "$p/tasks" ]] && echo true || echo false)" \
-      --arg ws "$(home_setting "$p" WORKSPACE chartroom-crew)" --arg port "$(home_setting "$p" DASHBOARD_PORT "$CR_DASHBOARD_PORT_DEFAULT")" \
-      --argjson open "${open:-0}" --arg dash "$dash" --arg brain "$(cfg_value_in "$p/config" CHARTROOM_BRAIN)" \
-      '{name: $n, path: $p, current: $cur, registered: true, exists: $ex, is_home: $ih, workspace: $ws,
-        port: ($port | tonumber? // $port), open: $open, dashboard: (if $dash == "" then null else ($dash | tonumber? // $dash) end),
+      --arg ws "$(home_setting "$p" WORKSPACE chartroom-crew)" \
+      --argjson open "${open:-0}" --arg brain "$(cfg_value_in "$p/config" CHARTROOM_BRAIN)" \
+      '{name: $n, path: $p, current: $cur, registered: true, exists: $ex, is_home: $ih, workspace: $ws, open: $open,
         brain: (if $brain == "" then null else $brain end)}'
   done < <(homes_entries)
   if [[ $seen -eq 0 ]]; then
-    open=0; dash=""
+    open=0
     task_meta_files; local metas=("${TASK_METAS[@]+"${TASK_METAS[@]}"}")
     [[ -e "${metas[0]-}" ]] && open="$(jq -r 'select((.closed // "") == "") | .id' "${metas[@]}" | grep -c . || true)"
-    read -r pid port _ < <(home_dashboard "$CR_HOME") && dash="$port"
-    jq -cn --arg p "$CR_HOME" --arg ws "$CR_WORKSPACE" --arg port "$(cfg DASHBOARD_PORT '' "$CR_DASHBOARD_PORT_DEFAULT")" \
-      --argjson ih "$([[ -d "$CR_HOME/tasks" ]] && echo true || echo false)" --argjson open "${open:-0}" --arg dash "$dash" \
+    jq -cn --arg p "$CR_HOME" --arg ws "$CR_WORKSPACE" \
+      --argjson ih "$([[ -d "$CR_HOME/tasks" ]] && echo true || echo false)" --argjson open "${open:-0}" \
       --arg brain "${CR_HOME_CFG[CHARTROOM_BRAIN]:-}" \
-      '{name: null, path: $p, current: true, registered: false, exists: true, is_home: $ih, workspace: $ws,
-        port: ($port | tonumber? // $port), open: $open, dashboard: (if $dash == "" then null else ($dash | tonumber? // $dash) end),
+      '{name: null, path: $p, current: true, registered: false, exists: true, is_home: $ih, workspace: $ws, open: $open,
         brain: (if $brain == "" then null else $brain end)}'
   fi
 }
 
-# What would collide, one line each: a shared workspace or port, a home inside another, a path
+# What would collide, one line each: a shared workspace, a home inside another, a path
 # that is gone or not a home. <rows> is homes_rows as a JSON array.
 homes_warnings() { # <rows-json>
   local name p q n2
   jq -r '
     (group_by(.workspace)[] | select(length > 1) | "homes \(map(.name // "(this home)") | join(", ")) share the workspace \(.[0].workspace): their workers would share it"),
-    (group_by(.port)[] | select(length > 1) | "homes \(map(.name // "(this home)") | join(", ")) share the dashboard port \(.[0].port): only one dashboard can run"),
     (.[] | select(.registered and (.exists | not)) | "home \(.name): \(.path) does not exist (chartroom homes rm \(.name), or create it with chartroom init --name \(.name))"),
     (.[] | select(.registered and .exists and (.is_home | not)) | "home \(.name): \(.path) is not a chartroom home yet (CHARTROOM_HOME=\(.path) chartroom init --name \(.name))")' <<<"$1"
   while IFS=$'\t' read -r name p; do
@@ -133,14 +124,6 @@ homes_register() { # <name> <path>
   printf '%s=%s\n' "$name" "$(home_tilde "$path")" >>"$CR_HOMES_FILE"
 }
 
-# The first dashboard port from CR_HOME_PORT_FIRST up that no registered home uses.
-home_next_port() {
-  local used=" " name p port
-  while IFS=$'\t' read -r name p; do used+="$(home_setting "$p" DASHBOARD_PORT "$CR_DASHBOARD_PORT_DEFAULT") "; done < <(homes_entries)
-  port="$CR_HOME_PORT_FIRST"
-  while [[ "$used" == *" $port "* ]]; do port=$((port + 1)); done
-  printf '%s' "$port"
-}
 
 cmd_homes() {
   local sub="${1:-}" json=0 a rows name path
@@ -151,9 +134,9 @@ cmd_homes() {
       if [[ $json -eq 1 ]]; then jq . <<<"$rows"; return; fi
       if [[ "$(jq 'length' <<<"$rows")" -eq 0 ]]; then echo "no homes registered ($CR_HOMES_FILE)"; return; fi
       jq -r --arg home "$HOME" '.[] | [(if .current then "*" else "" end) + (.name // "(this home)"),
-          (.path | if . == $home or startswith($home + "/") then "~" + ltrimstr($home) else . end), .workspace, (.port | tostring), (.open | tostring),
-          (if .dashboard then "running on \(.dashboard)" elif .exists then "-" else "missing" end)] | @tsv' <<<"$rows" |
-        { printf 'NAME\tPATH\tWORKSPACE\tPORT\tOPEN\tDASHBOARD\n'; cat; } | table
+          (.path | if . == $home or startswith($home + "/") then "~" + ltrimstr($home) else . end), .workspace,
+          (if .exists then (.open | tostring) else "missing" end)] | @tsv' <<<"$rows" |
+        { printf 'NAME\tPATH\tWORKSPACE\tOPEN\n'; cat; } | table
       jq -r '.[] | select(.brain) | "client home: \(.name // "(this home)") lives on the brain \(.brain) (its OPEN count is this machine'"'"'s copy)"' <<<"$rows"
       jq -e 'any(.[]; .current and (.registered | not))' <<<"$rows" >/dev/null &&
         echo "this home ($CR_HOME) is not registered: chartroom homes add <name>"

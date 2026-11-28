@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# fake grok (xAI's Grok Build): only what chartroom asks of it outside a terminal. Interactive
+# sessions are the fake hc's and herdr's to simulate.
+#   --version            grok 1.0.92-fake (fake), as grok 1.0.92 prints it
+#   models               the models; FAKE_GROK_SIGNED_OUT=1: headed "You are not authenticated."
+#                        and still exit 0, as grok 1.0.92 says it with no sign-in
+printf '%s\n' "$*" >>"${FAKE_LOG:-/dev/null}"
+case "${1:-}" in
+  --version|-v) echo "grok 1.0.92-fake (fake)" ;;
+  models)
+    [[ -z "${FAKE_GROK_SIGNED_OUT:-}" ]] || printf 'You are not authenticated.\n\n'
+    printf 'Default model: grok-fake\n\nAvailable models:\n  * grok-fake (default)\n' ;;
+  *) echo "fake grok: interactive mode not simulated" >&2; exit 2 ;;
+esac

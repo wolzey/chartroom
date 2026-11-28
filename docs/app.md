@@ -8,8 +8,8 @@ One app for every home on the brain, served by chartroom and reached over the ta
 on **Needs me**, one inbox of every decision, plan to approve, blocker and report across every
 home, answered in place from a quick view beside the list. It is a React PWA in `app/`, shipped
 in this repo with no build step (React and htm are vendored), and served by `lib/app/server.py`
-(Python standard library). The [dashboard](dashboard.md#dashboard) keeps running beside it until the app
-covers everything it does.
+(Python standard library). It replaces the old web dashboard, which is retired
+([docs/dashboard.md](dashboard.md)): `chartroom dashboard` now opens the app.
 
 ```bash
 chartroom app serve --daemon     # 127.0.0.1:4516 (CHARTROOM_APP_PORT), for Tailscale Serve
@@ -56,6 +56,15 @@ chartroom app stop               # (or: status); the LaunchAgent only when it ru
   asks the XO). The board shows every home's tasks in seven columns, filtered by home, project,
   initiative and machine. `c` anywhere writes a new task, which goes to that home's XO as a
   request (`chartroom request`).
+- **Pages and drafts.** A ticket lists the task's [artifacts](../README.md#artifacts-drafts-that-outlive-the-chat)
+  under "Pages and drafts", and a Needs me item shows its own. A message or runbook draft unfolds
+  with its text and a Copy button. A [page](../README.md#pages-reports-to-read-and-print) opens in
+  the page viewer, `#/p/<home>/<task|inbox>/<owner>/<slug>`: the page in a sandboxed frame, with
+  **Download PDF** and **Open alone**. `chartroom artifact open <ref>` opens the same address, and
+  ⌘K lists every open page under "Pages". How a page is served: [Pages, drafts and the terminal](#pages-drafts-and-the-terminal).
+- **The worker's terminal.** A ticket's "Terminal" section shows the worker's recent events and
+  terminal (`chartroom peek`), read-only. It is read when you unfold it, and again every 10 s
+  while it stays open.
 - **Fleet.** The machines as a list, an atom or a dashboard; each device remembers its choice, and
   `?fleet=atom` or `?fleet=dash` in a link picks one.
   - **Atom:** a machine is a nucleus, named, with how full it is round it; its sessions orbit it, each
@@ -70,6 +79,13 @@ chartroom app stop               # (or: status); the LaunchAgent only when it ru
     machine takes no new task. Load (how many processes wanted to run) and workers are for information.
   - **Named, or only counted.** A machine names its agents, and measures its CPU and memory, once its own
     chartroom has this version; until then it has only how many there are.
+- **Usage.** What each subscription has left: Fleet's "Usage" strip, the Usage item in the
+  sidebar, ⌘K "Usage", or `#/usage`. One card per agent, split by machine only where the readings
+  differ, with its plan and account, what is used and left in each window, when each resets, how
+  old the reading is (stale ones flagged) and its live workers. An agent that is out of usage or
+  near its limit is marked, and the sidebar's Usage item carries a mark while one is out. A
+  window that covers one model only (Claude's Opus week) is shown as information and never makes
+  the agent "out". The readings are `chartroom usage`'s ([the README](../README.md#subscription-usage-and-moving-exhausted-work)).
 - **Every home.** It reads each registered home on the machine (`chartroom homes`) in the
   background with `chartroom app snapshot --json`, again whenever a home's records change. A
   client home is left out, and refuses `chartroom app`: the app runs on its brain.
@@ -129,9 +145,43 @@ On the brain itself, before Serve is set up, `chartroom app serve --daemon --no-
 - **Which homes.** The server reads every registered home on the machine (`chartroom homes --json`) and leaves out client homes, whose records live on their brain. A home registered later appears within a minute.
 - **How each home is read.** Each home has its own background thread running `chartroom app snapshot --json` in it. That is `lib/app.sh` plus `lib/app/snapshot.jq`: the task rows `status` builds, the inbox, open artifacts, cards and their answers, snoozes and the told messages, classified there and never in the server.
 - **When.** A thread looks every 2 s at the home's change stamp and the few files the app writes. It reads again when one moves, and at least every 20 s, because a worker's live state changes with no record written.
+- **Usage.** Each home's snapshot carries its subscription readings as `usage` (`lib/usage.sh`).
+  Every home keeps its own, so one agent on one machine may be read in several homes; `app/src/model.js`
+  merges them: a live limit hit wins (a fresher "ok" from another home never hides it), otherwise
+  the newest sample.
 - **Fleet.** One background thread runs `chartroom app fleet --json`: `chartroom nodes` (each machine's probe, over ssh for the others) through `lib/app/fleet.jq`, which decides each machine's health. It runs every 5 minutes while the app is open, and at once on `POST /api/v1/fleet/check` (the page's Check again; it starts ssh probes, so it passes a write's checks). The result rides in the state as `fleet`; a failed sign-in in it is a Needs me item of no home.
 - **Updates.** The page loads `GET /api/v1/state`. It loads again on each `version` event from `GET /api/v1/stream` (server-sent events), and polls every 10 s when the stream is down.
 - **A newer version.** A page that stays open keeps the code it loaded. The page and the state both carry a hash of the app's own files; when an open page's differs from the state's, it says a newer Chartroom is installed, with a Reload button. It never reloads by itself, so nothing half typed is lost.
+
+## Pages, drafts and the terminal
+
+A ticket's files, drafts, pages and terminal are read on their own routes, each a `GET` behind the same identity check as the rest of the app:
+
+| Route | What it serves |
+|---|---|
+| `/api/v1/homes/<home>/tasks/<id>/files/<file>` | `brief.md`, `plan.md`, `report.md`, `final.md` or `events.log`, and nothing else |
+| `/api/v1/homes/<home>/tasks/<id>/pane` | the worker's recent events and terminal (`chartroom peek`), read-only |
+| `/api/v1/homes/<home>/artifacts/<task\|inbox>/<owner>/<slug>.md` | a draft's text, as plain text |
+| `/api/v1/homes/<home>/artifacts/<task\|inbox>/<owner>/<slug>.html` | a page, sandboxed (below) |
+| `/api/v1/homes/<home>/artifacts/<task\|inbox>/<owner>/<slug>.pdf` | that page, printed now |
+
+- **Pages are untrusted.** A page is HTML a worker wrote. It is served only from its own route, and only when its sidecar says it is a page, under its own policy: `sandbox` (no scripts, an opaque origin, even when opened alone), nothing fetched (`default-src 'none'`, inline styles and `data:` images only), and framed only by the app itself (`frame-ancestors 'self'`). The viewer frames it with the `sandbox` attribute too, so its links open in a new tab and nothing in it can reach the app.
+- **Its PDF** is printed on request by `chartroom artifact pdf`, from the page beside it, never from a `.pdf` file that happens to be there. It is never printed for a request another site's page makes (a browser's `Sec-Fetch-Site` says so), since it is the one read that starts something. Nothing else ever runs a page.
+- **The terminal** is read only while its section is open on a ticket, every 10 s.
+
+## Readable events
+
+A worker's event is one line in `events.log`, often a long one. The app reads it with `app/shared/eventfmt.js`, a pure parser that only adds structure:
+
+- the kind, and `[breaking]` as a tag;
+- a **headline**: the first sentence or clause, up to the first ":" or ".";
+- labelled parts (`Cause:`, `Options:`, `Need:`, `Recommend:`, `Report:` and the like) as small headed blocks;
+- numbered options (`(1) ... (2)`, `(A) ... (B)`, `1) ... 2)`) as a list, the recommended one marked;
+- several `; `-separated facts as bullets.
+
+Needs me reads a worker's question and its options with it, and the ticket's activity reads each event line with it. Whatever it cannot place stays the worker's words as paragraphs, and every word comes back in order (`test/js/eventfmt.test.js` holds it to that, garbage included). Nothing it renders is HTML: markup in an event is shown as text. `app/shared/markdown.js` renders a brief, plan and report the same way, with raw HTML shown as text.
+
+**Better events in the first place.** The brief asks workers for a headline first (at most ~140 characters: what happened and what is needed), then the labelled parts, and the long part in report.md. `chartroom event <id> <kind> --detail "<the rest>" "<headline>"` writes the rest as the headline's `Details:` part on the same line, so the log format does not change.
 
 ## What it writes
 
@@ -189,18 +239,22 @@ A Claude worker's tool call that chartroom's policy would not answer by itself w
 ## The code
 
 ```
-app/index.html          the shell: vendored React, the dashboard's eventfmt.js and markdown.js, then src/
+app/index.html          the shell: vendored React, app/shared/eventfmt.js and markdown.js, then src/
+app/shared/eventfmt.js  a worker's event as a readable note, and its ask's options (test/js/eventfmt.test.js)
+app/shared/markdown.js  briefs, plans and reports as Markdown, raw HTML shown as text (test/js/markdown.test.js)
 app/src/model.js        what is shown, pure (test/js/app-model.test.js)
 app/src/main.js         routes, data, actions, keyboard
 app/src/needs.js        the list and the quick view
 app/src/round.js        a card of several questions
-app/src/ticket.js       a task as a ticket: its question, PRs, description, plan, report, attachments, activity
+app/src/ticket.js       a task as a ticket: its question, PRs, description, plan, report, pages and drafts, attachments, terminal, activity
+app/src/pages.js        drafts (their text, with Copy) and pages: the list, and the sandboxed viewer at #/p/...
 app/src/read.js         a ticket or an initiative, read one at a time and always shown
 app/src/outbox.js       every action queued, sent in the background, retried (pure)
 app/src/palette.js      ⌘K
 app/src/initiatives.js  initiatives: the list, the page (plan, stories, decisions, PRs), the approval checklist
 app/src/fleet.js        Fleet: the machines, their checks, use and limits, the workers
 app/src/fleetviews.js   Fleet as an atom and as a dashboard (model.js decides what is on each machine)
+app/src/usage.js        subscription usage: Fleet's strip and the page at #/usage (model.js merges and words the readings)
 app/src/notify.js       the service worker's registration, notifications, the push subscription
 app/sw.js               the service worker: the offline shell and last state, notifications
 app/manifest.webmanifest, app/icons/   what makes it installable

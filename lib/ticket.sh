@@ -12,7 +12,7 @@
 #     {"schema":1,"url":"...","kind":"pr"|"url","title":"..."|null,"by":"...","at":"<UTC>"}
 #     {"schema":1,"url":"...","removed":true,"at":"<UTC>"}
 #   meta.json: priority (urgent|high|medium|low), labels ([...]), initiative, milestone: all optional
-# A PR is also every PR URL a worker wrote in events.log or report.md, as the dashboard has
+# A PR is also every PR URL a worker wrote in events.log or report.md, as the board has
 # always found them; a link record adds to those, never replaces them.
 #
 # What the commander attaches or edits reaches the worker as a steer (attach --silent: not), in
@@ -290,11 +290,12 @@ ticket_json() { # <id>
   fi
   local answer=null
   if [[ "$ask" != null ]]; then answer="$(ask_answer_get "ev-$id-$off")"; [[ -n "$answer" ]] || answer=null; fi
-  jq -n -c --argjson row "$row" --argjson extra "$(dashboard_task_extra "$id")" --argjson meta "$(cat "$META_PATH")" \
+  jq -n -c --argjson row "$row" --argjson extra "$(task_extra_json "$id")" --argjson meta "$(cat "$META_PATH")" \
     --argjson sections "$(brief_sections_json "$id")" --argjson ask "$ask" --argjson answer "$answer" \
     --argjson attachments "$(attachments_json "$id")" --argjson links "$(links_json "$id")" \
     --argjson tells "$(tells_json --all | jq -c --arg id "$id" 'map(select(.re == $id))')" \
     --argjson decisions "$(decisions_json "$id")" \
+    --argjson artifacts "$(artifacts_json --owner task "$id" | jq -c 'map(del(.path))')" \
     --rawfile events "$EVENTS_PATH" --arg plan "$(cat "$d/plan.md" 2>/dev/null || true)" \
     --arg home "$(home_name_of "$CR_HOME")" '
     ($row.state) as $s
@@ -312,6 +313,6 @@ ticket_json() { # <id>
        plan_gate: (($meta.plan_gate // "") | tostring == "1"),
        sections: $sections, ask: (if $ask == null or ($s | test("^(decision|blocked|failed)$") | not) then null else $ask end),
        answer: $answer, plan: (if $plan == "" then null else $plan end), files: $extra.files,
-       attachments: $attachments, links: $links, tells: $tells, decisions: $decisions,
+       attachments: $attachments, artifacts: $artifacts, links: $links, tells: $tells, decisions: $decisions,
        events: ($events | split("\n") | map(select(length > 0)) | .[-400:])}'
 }

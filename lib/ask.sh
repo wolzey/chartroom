@@ -8,7 +8,7 @@
 #   ev-<task>-<offset>
 #            a worker's ask: the decision/blocked/failed (or agent awaiting-input) event at that byte
 #            offset of the task's events.log. Its options are the event's own words; the app parses
-#            them (lib/dashboard/eventfmt.js), so there is no record to write and no migration.
+#            them (app/shared/eventfmt.js), so there is no record to write and no migration.
 #   i-xxxx   an open "Waiting on the commander" inbox item.
 # An answer is questions/<id>.answer.json, created only if absent (noclobber): the first answer
 # wins, from the app or the terminal, and a second is refused with who answered and when.
@@ -170,7 +170,7 @@ ask_card_json() { # <id>
         '{id: $id, kind: "event", task: $task, event_kind: $k, line: $line,
           text: ($line | sub("^[^ ]+ [a-z-]+: ?"; "")), at: ($line[0:20])}' ;;
     inbox)
-      local row; row="$(dashboard_inbox | jq -c --arg id "$id" '.waiting[] | select(.short_id == $id)' | head -n 1)"
+      local row; row="$(inbox_items_json | jq -c --arg id "$id" '.waiting[] | select(.short_id == $id)' | head -n 1)"
       [[ -n "$row" ]] || return 1
       jq -c --arg id "$id" '{id: $id, kind: "inbox", text, date, project}' <<<"$row" ;;
     *) return 1 ;;

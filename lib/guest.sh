@@ -590,6 +590,7 @@ guest_push_task() { # <home> <id>
 GUEST_PARKED_AT=0
 # agy has no reporting hook (its broker gates tools) to report a prompt or a turn that ends unreported, and no watch runs here: every
 # 5 s a home with an hc:agy task asks hc (chartroom node agy-look), whose lines go up with its log.
+# grok is the same (no reporting hook, state over OSC 7501), so an hc:grok task counts too.
 GUEST_AGY_AT=0
 guest_agy_look_all() {
   local g sf now_s; now_s="$(date +%s)"
@@ -599,16 +600,30 @@ guest_agy_look_all() {
     [[ -d "$g/.push" ]] || continue
     for sf in "$g/.push"/*.json; do
       [[ -f "$sf" ]] || continue
-      if grep -qE '"backend": *"hc:agy"' "$(guest_meta_file "${g%/}" "$(basename "$sf" .json)")" 2>/dev/null; then
+      if grep -qE '"backend": *"hc:(agy|grok)"' "$(guest_meta_file "${g%/}" "$(basename "$sf" .json)")" 2>/dev/null; then
         guest_run "$(basename "$g")" node agy-look >/dev/null 2>&1 || true; break
       fi
     done
   done
 }
 
+GUEST_USAGE_AT=0
+guest_usage_look_all() {
+  local g now_s; now_s="$(date +%s)"
+  (( now_s - GUEST_USAGE_AT >= 30 )) || return 0
+  GUEST_USAGE_AT="$now_s"
+  for g in "$(guest_root)"/*/; do
+    [[ -d "$g/.push" ]] || continue
+    if compgen -G "$g/.push/*.json" >/dev/null 2>&1; then
+      guest_run "$(basename "$g")" node usage-look >/dev/null 2>&1 || true
+    fi
+  done
+}
+
 guest_push_all() {
   local g sf home id now_s
   guest_agy_look_all || true
+  guest_usage_look_all || true
   for g in "$(guest_root)"/*/; do
     [[ -d "$g/.push" ]] || continue
     home="$(basename "$g")"

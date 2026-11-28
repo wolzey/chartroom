@@ -1,5 +1,18 @@
 # Upgrading from chartroom's predecessor
 
+## After an upgrade that retired the web dashboard
+
+The [app](app.md) replaces the old web dashboard. After upgrading, in each home:
+
+- `chartroom dashboard stop` ends an old dashboard server still running from before (or
+  `chartroom sweep --apply`, which ends it too). In a client home, `dashboard stop` also ends the
+  old tunnel to the brain's dashboard.
+- Run `chartroom install-skills` again, so the XO's skills send you to the app (Needs me, a
+  task's ticket, Fleet, Usage) instead of the dashboard.
+- `chartroom dashboard` now opens the app; set the app up on the brain first
+  ([docs/app.md](app.md#run-it-on-the-brain)). `chartroom board` is the lanes in the terminal.
+- A `CHARTROOM_DASHBOARD_PORT`, `_THEME` or `_HOST` line in a config does nothing now and can go.
+
 # A home from before chartroom
 
 A home made by chartroom's predecessor (`~/.captain`, with `captain.md`, "Captain's intent"
@@ -27,12 +40,14 @@ that has one:
    ```bash
    #!/usr/bin/env bash
    export CHARTROOM_HOME="${CAP_HOME:-$HOME/.captain}"
-   [[ "${1:-}" == dashboard ]] && { shift; set -- dashboard open "$@"; }
    exec "$(command -v chartroom || echo "$HOME/.local/bin/chartroom")" "$@"
    ```
 
+   (`chartroom dashboard` with no arguments opens the app, so the helper needs no special case
+   for it.)
+
 4. Check: `chartroom status` lists the old tasks with their states, and `chartroom board`
-   shows the same lanes as the dashboard.
+   shows them in its lanes.
 5. Optional: move hand-written preferences into the rulings ledger (see Concepts).
    `chartroom rule draft > map.tsv` lists each bullet with a guessed topic and its date. Edit
    the topics so rulings that replace each other share one, set a row's topic to `keep` to

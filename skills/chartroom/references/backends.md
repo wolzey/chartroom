@@ -1,33 +1,117 @@
 # Backends
 
+Automatic dispatch balances the home's live tasks among signed-in Codex, agy and Claude
+agents available on the selected machine, ties in that order. It uses hc or herdr only.
+`--backend` wins; `--needs mcp|browser` or a brief line `Needs: mcp|browser|claude` selects
+Claude for its tools and keeps the task on this machine. Agent selection waits until dispatch, after the brief has been filled.
+`CHARTROOM_CODEX_MODEL` is unset by default; configure a model per home. A task's `--model` wins.
+`CHARTROOM_REVIEW_NON_CLAUDE=opus` (default; `off` disables) gates new non-Claude ship completion
+on a linked hc:claude Opus 5.5 cold review of the brief and diff, launched by the watch.
+Scouts and pre-gate tasks are exempt; unchanged diffs reuse their review. See README's Backends
+section for review verdicts, queued reviews and the spread counters.
+
 A backend is `<runner>:<agent>`: **where** the worker runs × **which** agent runs. Runners are
 `hc`, `herdr`, `cmux`, `tmux` (session runners: a terminal you can watch), `headless` (no terminal),
 `command` (any CLI) and `subagent` (the host harness), plus `joined`, which is never
-dispatched: a running session joins itself (see the last section). Agents are `claude`, `codex` and
-`agy` (Antigravity CLI; full sessions only: `hc:agy`, `herdr:agy`, `node:agy`). Old names still work: `codex` = `headless:codex`, `herdr-claude` = `herdr:claude`,
+dispatched: a running session joins itself (see the last section). Agents are `claude`, `codex`,
+`agy` (Antigravity CLI; full sessions only: `hc:agy`, `herdr:agy`, `node:agy`) and `grok` (xAI's Grok
+Build; full sessions only, and only when a task's `--backend` names it: `hc:grok`, `herdr:grok`,
+`node:grok`). Old names still work: `codex` = `headless:codex`, `herdr-claude` = `herdr:claude`,
 `herdr-codex` = `herdr:codex`.
 
 `chartroom doctor` shows every backend, whether it can run here, why not, and how it steers.
 Last verified against: claude 2.1.289 (joined: 2.1.293; hc: 2.1.314), codex-cli 0.158.0, herdr 0.9.1,
 hc (herdr-core) 0.1.14 with herdr-app 0.1.9 (hc:codex: hc 0.1.16), tmux 3.x (October 2026); agy 1.5.17 and 1.5.18
-in hc 0.1.21 (November 2026; herdr:agy built to the same rules, not run against a signed-in agy).
+in hc 0.1.21 (November 2026; herdr:agy built to the same rules, not run against a signed-in agy);
+grok 1.0.92 with hc 0.1.21 (November 2026: built from grok's docs and a signed-out grok in hc; the
+live proof waits on a sign-in, see the grok section).
 cmux is implemented against its documented CLI but **unverified on a real cmux install**.
 
 ## Selection and fallback
 
-- `chartroom new` without `--backend` (or `--backend auto`) picks at dispatch time: the first
-  available entry in `CHARTROOM_BACKEND_ORDER` (default
-  `hc:claude hc:codex hc:agy herdr:claude herdr:codex herdr:agy cmux:claude cmux:codex tmux:claude tmux:codex headless:codex headless:claude command`:
-  every agent's full sessions before any headless run, so a machine without claude starts Codex in hc).
-  An agy backend is skipped there while agy is not signed in here. Skipping
-  the first entry writes a `note: backend fallback: ...` event and prints it, because falling
-  from a session runner to headless changes what the commander can watch and steer.
+- `chartroom new` without `--backend` (or `--backend auto`) picks at dispatch time,
+  after placement, by the home's live-task count. Candidates must be signed in and usable
+  on that machine; ties go to codex, agy, claude. Only hc and herdr are selected.
+  `CHARTROOM_BACKEND_ORDER` remains a diagnostic order for explicit-backend alternatives;
+  it cannot turn automatic selection into a headless fallback. grok is never a candidate:
+  it runs only when a task's `--backend` names it (the commander decides when).
 - An explicit `--backend` never downgrades. If it is unavailable, dispatch exits non-zero with
   the reason and the next viable backend.
 - `CI=true` disables session runners. hc needs a running herdr-core (a live socket, checked
   without starting one); herdr needs its server reachable; cmux needs macOS and a
   running app that accepts our socket connection; tmux needs tmux ≥ 3.0; `subagent` needs
   `CHARTROOM_HARNESS=claude`; `command` needs a template.
+
+## Subscription usage, exhaustion, and moving work (lib/usage.sh)
+
+chartroom tracks real subscription/plan usage per agent (and per machine when remote nodes
+report different plans, accounts, or numbers) under `$CHARTROOM_HOME/usage/<machine>--<agent>.json`.
+The `account` field stores only a non-identifying label: an optional
+`CHARTROOM_USAGE_ACCOUNT_<AGENT>` alias (e.g. `work`, `personal`), or `<provider> #<6-hex>`
+derived in memory via SHA-256 of the org/account ID so separate subscriptions on different
+machines split cleanly — tokens, cookies, emails, and raw account/org UUIDs are never stored or
+logged.
+
+| Agent | Real usage source | When unavailable (`unknown`) |
+|---|---|---|
+| `claude` | 1) Claude OAuth usage API (`https://api.anthropic.com/api/oauth/usage`) using Claude Code's active OAuth token (macOS Keychain `"Claude Code-credentials"` first on macOS, else `~/.claude/.credentials.json`, verified against `claude auth status` `orgId` in memory so a stale file from another account is never queried), passed via stdin to `curl -K -`; account-wide windows (`five_hour`, `seven_day`) govern exhaustion, while model-scoped buckets (`seven_day_opus`, `seven_day_sonnet`) display as informational `scoped: true` windows without marking Claude out. 2) Claude Code `statusLine` JSON piped to `chartroom usage record claude` | API key / Bedrock / Vertex billing, signed out, missing or mismatched OAuth token, or HTTP error |
+| `codex` | 1) Live `codex app-server` JSON-RPC `account/rateLimits/read` (matches Codex `/status` in real time, reading only the primary `codex` bucket and ignoring model-scoped buckets). 2) Fallback: latest `event_msg` (`payload.type == "token_count"`) with `limit_id == "codex"` under `~/.codex/sessions/` | Not signed in, `app-server` unavailable, and no Codex session files with `rate_limits` |
+| `agy` | `agy --output-format json -p=/usage` (via `hc exec` in ssh on macOS); tracks the active model group's `5h` and `weekly` (`7d`) buckets (`remaining_fraction` and `reset_time`) | Not signed in, `GEMINI_API_KEY` mode, or ssh without a running hc core |
+| `grok` | `grok usage --json` (shell-route error and team-managed limits reported verbatim; daemon-route JSON parsing unverified until captured live) | Shell route (`grok usage` tells users to run `/usage` inside grok), team-managed limits, unverified daemon JSON, or not signed in |
+
+- **Never guessed; automatic refresh.** Unknown agents are reported as `unknown` with the exact
+  reason and are never treated as exhausted. `watch` refreshes local and synced node usage
+  automatically every `CHARTROOM_USAGE_REFRESH_MINUTES` (5; `0` disables; one refresh at a time), and enrolled nodes
+  refresh their own readings into `$XDG_STATE_HOME/chartroom/usage/` for every heartbeat, which
+  carries them as `usage` lines (`lib/nodeprobe.sh`: model-only windows marked `:s`, the agent's
+  own limit flag, and the last worker stop's reset and time); the brain reads those lines with
+  the same evaluator as its own readings, in `nodes` at once and in its kept records at each
+  refresh. Readings
+  older than `CHARTROOM_USAGE_STALE_MINUTES` (30) are flagged stale with their age. Once a
+  window's `resets_at` passes, it stops locking out the agent automatically (marked reset until a
+  fresh reading arrives; never estimated).
+- **Skipping exhausted agents.** An agent is out when any active account-wide window is at or
+  above `CHARTROOM_USAGE_LIMIT_PCT` (default 95; warn at `CHARTROOM_USAGE_WARN_PCT`, 80), when
+  the agent itself reports no more use allowed (Codex `ordinaryUsageAllowed: false`,
+  `rateLimitReachedType` or `spendControlReached`: `limit_reached`, while the reading is fresh), or after
+  a worker hits a usage-limit stop (`hit_limit`), until `resets_at` (or fallback cooldown
+  `CHARTROOM_USAGE_COOLDOWN_MINUTES`, 60). `spread_local_backends`, `spread_node_agents`,
+  re-dispatch of already-dispatched automatic tasks (placed on a node too), `place_remote_lacks`, and `$CR_BACKEND_ORDER`
+  fallback all skip out agents; an explicit `--backend` for an exhausted agent prints a warning
+  with its reset time. `chartroom doctor` and `chartroom nodes` report exhausted agents with their
+  reset times.
+- **Detecting worker limit stops.** `watch_look` (and `guest_usage_look_all` / `node usage-look`
+  on enrolled nodes) checks for usage-limit stops only on idle/stopped session workers (never
+  while mid-turn) or headless error output. For Claude workers with a readable session transcript,
+  it trusts the structured transcript (`isApiErrorMessage` with `apiError: "usage_limit_reached"`,
+  or `error: "rate_limit"` with a real limit banner) and never falls back to screen scraping when
+  the transcript confirms a normal turn. Otherwise it matches whole-line anchored limit banners in
+  the bottom 4 non-footer lines (normalizing curly apostrophes, requiring Codex's `■`/error prefix
+  on interactive screens, joining up to 2 wrapped lines to keep split reset times, and rejecting
+  prose/tool blocks `●`/`⎿`/`•`/`✦` along with their indented continuations). agy's screen
+  patterns use real strings from the `agy` binary (`Usage limit reached`, `individual quota
+  reached`, `RESOURCE_EXHAUSTED` / `exhausted your capacity`), though agy's live interactive
+  limit-stop screen layout has not been observed live yet. On a match, chartroom marks only that
+  machine's agent out until its reset time (a clock-only one such as "3am" or "3:05 PM", and a
+  relative one, read from the earliest the stop can have happened: its transcript entry, its
+  headless output, or the last look that saw the worker not stopped, never from when it was first
+  noticed) (or fallback cooldown / `chartroom usage clear`, never
+  wiped early by routine account-wide readings) and raises
+  `agent: out-of-usage: <agent>[ on <node>] resets <time>; available: <agents> (move with: chartroom move <id>)`
+  once per stop: again after a re-dispatch or steer, once the worker is seen working again however
+  it was resumed, or for a stop with another reset time.
+- **Moving work (`chartroom move <id>`).** Pre-checks target usage, brief readiness, and node
+  eligibility before stopping the old worker; refuses `--node <device>` for started tasks with
+  local commits or worktree edits so remote dispatch never strands unpushed work (recalling a
+  remote task home with `chartroom move <id>` or `--node here` is lossless via `node_recall`).
+  Clears runner handles (plus agent-specific `model`/`effort`/`permission`/`sandbox` when
+  switching agents), preserves the non-Claude cold-review requirement (`review_required=1`)
+  whenever a Codex or agy ship task moves to Claude, records handoff notes in `tasks/<id>/inbox.md`,
+  and re-dispatches onto another available agent (`--agent` or `--backend` to choose explicitly;
+  `--dry-run` to preview; `--force` to override exhaustion). Tasks with Claude-only needs
+  (`mcp`/`browser`/`claude`) refuse automatic moves off Claude unless `--agent` or `--force` is
+  given. The task's brief, branch, worktree, commits, and uncommitted changes are kept intact —
+  unlanded work is never discarded.
 
 ## Common to all
 
@@ -107,6 +191,23 @@ agy loads the hook even when its current directory is not recognized as a worksp
 The pattern-kill refusal still runs before the policy or task lookup. See the agy section for
 coverage and limits.
 
+Every grok worker (hc, herdr, node) gets it through grok's own hooks. grok loads hooks only from
+user-wide places (`~/.grok/hooks/*.json`, `~/.grok/hooks-paths`, `config.toml`, the Claude and Cursor
+settings files) and from the project, never from an `--add-dir` folder, and a `GROK_CONFIG` overlay may
+not add hooks (grok's docs, 10-hooks.md and 05-configuration.md). So chartroom keeps one file of its
+own, `~/.grok/hooks/chartroom-guard.json` (`$GROK_HOME/hooks` when that is set), rewritten at each grok
+launch: a `PreToolUse` hook on `run_terminal_command` whose command does nothing unless
+`CHARTROOM_TASK` is set (the launcher exports it), then runs `chartroom hook - guard`. The
+commander's own grok sessions are untouched, and nothing goes into the worktree. grok sends
+`toolName: "run_terminal_command"` and `toolInput.command`, and takes Claude's
+`hookSpecificOutput.permissionDecision: "deny"`. grok runs a user hook only in a folder it trusts,
+which a chartroom worktree is (`--trust`). One side effect: grok's docs say that while any user hook
+exists, folder trust asks in every new folder. Where the commander already has one for grok (a
+`~/.grok/hooks` file, or hooks in `~/.claude/settings.json`, which grok reads), nothing changes; on a
+machine with none (the Beelink, November 2026), the first grok worker there makes the commander's own
+grok sessions ask once per new folder. Tested against grok's documented payload; the live proof
+waits on a signed-in grok.
+
 Not guarded: headless runs, subagents and joined sessions.
 
 **The brief is never typed at a dialog.** The text is dropped and Enter answers the dialog
@@ -132,7 +233,7 @@ stall watchdog.
 | Wedged process | `stalled` | `stalled` | `stalled` | `stalled` | `stalled` |
 
 - **Prompts** log `agent: awaiting-input: <what>`, which wakes through the event scan, and
-  `agent: prompt-cleared` once gone, so status, the dashboard and a restarted or `--once` watch all
+  `agent: prompt-cleared` once gone, so status, the board, the app and a restarted or `--once` watch all
   read the same record. Codex sets its terminal title to `[ . ] Action Required | ...` and
   `[ ! ] ...` in turn while an approval is up (verified on codex-cli 0.158.0). `hc events` carries each
   title change, many a second under its spinner, so the stream's jq reduces them to the one fact
@@ -359,6 +460,61 @@ Verified on agy 1.5.18 in hc 0.1.21 on macOS and hc 0.1.22 on Linux (November 20
   chartroom does not pick agy's conversation id for resume.
 - `stop` is `hc interrupt` (Esc; verified: `stopped`), `close` ends the terminal, `attach` shows it.
 - Never `headless:agy` (`agy -p` is not a worker), `tmux:agy` or `cmux:agy`: `new` refuses them.
+
+## grok (xAI's Grok Build): hc:grok, herdr:grok, node:grok
+
+Built against grok 1.0.92 (`curl -fsSL https://x.ai/cli/install.sh | bash`, binary `grok`; docs at
+https://docs.x.ai/build/overview and, after a first run, in `~/.grok/docs/user-guide`) and hc 0.1.21,
+November 2026. What was seen live: hc names a grok terminal agent `grok` and reads a signed-out grok
+as `blocked`, kind `auth`, "Sign in to Grok". The rest follows grok's docs and waits on a live run
+with a signed-in grok (a throwaway scout).
+
+- **Only when named.** grok is not in `CHARTROOM_BACKEND_ORDER`'s default and no automatic pick
+  chooses it: a task runs on grok only when its `--backend` is `hc:grok` or `herdr:grok` (or it is
+  pinned or placed as `hc:grok` on a node). Doctor says so (`agents.grok.automatic: false`).
+- **Install.** The installer puts the binary in `~/.grok/downloads`, links `grok` (and a generic
+  `agent`) in `~/.grok/bin`, links those from `~/.local/bin` when that is on PATH, and adds
+  `~/.grok/bin` to the shell's rc file. chartroom looks on PATH, then `~/.local/bin/grok`, then
+  `~/.grok/bin/grok`, as a GUI launcher's or an ssh session's PATH may have neither.
+- **Start.** hc runs the launcher with the brief's line as grok's first positional argument (its
+  initial prompt). Its flags: `-m <model>`, `--reasoning-effort <effort>`, `--permission-mode <mode>`
+  (meta `permission`, in grok's words: `default`, `acceptEdits`, `auto`, `dontAsk`,
+  `bypassPermissions`, `plan`; anything else refuses at dispatch; none gives grok's own default,
+  `auto` in its terminal UI), `--trust` for a worktree chartroom created itself (grok's folder trust, which also gates the
+  hooks; any other folder's dialog is the commander's. grok records the trust for the repository's
+  main checkout, not the worktree, so the commander's own grok sessions in that checkout skip the
+  dialog too), and `--no-auto-update` (grok checks for an update at each launch; a worker must not stop for
+  one, so updating stays the commander's `grok update`). No `--add-dir`: grok 1.0.92 refuses one
+  ("additionalDirectories is not supported: a session works only in its cwd") and never starts the
+  session; with its sandbox off by default, the worker reaches its task folder by path. herdr starts it with `herdr agent start --kind grok` (herdr 0.9.5 knows grok) and the same
+  flags; chartroom then types the brief.
+- **Sign-in.** `grok models` lists the models, headed `You are not authenticated.` when there is no
+  sign-in, exit 0 either way (grok 1.0.92). Doctor shows it (`grok: <version> at <path>, signed in`,
+  or what to run: `grok login` in a terminal there and the browser sign-in, or
+  `grok login --device-auth` over ssh), and a dispatch stops before it starts a terminal (`grok is
+  not signed in here`): a grok session started signed out opens a browser sign-in on the machine. A
+  node reports grok's version and sign-in in its probe, so placement sends `hc:grok` only to a
+  machine where grok is signed in; sign-in is not a fleet health check. grok keeps its sign-in in
+  `~/.grok/auth.json`, a file, not the macOS keychain, so an ssh session reads it as the login session
+  does (its docs; to be confirmed on a signed-in Mac).
+- **State.** grok reports over OSC 7501 to Herdr 2, which hc is: working, waiting on an approval, a
+  question or a sign-in (blocked, with its kind and words), done, failed; hc counts its turns. So a
+  prompt wakes the XO as `agent: awaiting-input: hc: grok is waiting on a permission: <words>`, a turn
+  that ends unreported wakes as `hc: agent stopped its turn without reporting`, and the stall
+  watchdog covers a quiet one. A launch that finds grok blocked before any turn leaves the brief
+  queued behind it, and the watch raises the prompt.
+- **On a node** (`node:grok`): as for agy, the device agent asks hc about each guest `hc:grok` worker
+  every 5 s (`chartroom node agy-look`) and logs the same lines, which the relay carries to the brain.
+- **Steer.** `hc send` pastes and presses Enter; a grok that says it is blocked is never typed into
+  (chartroom refuses on hc and herdr alike: `the agent is blocked at a dialog`). A steer is
+  `submitted, not verified`: no prompt hook checks its text.
+- **What chartroom does not do for grok** (doctor says so): only the pattern kill guard (see "The
+  Bash guard"); no permission cards, grants or holds (its approvals reach the XO as
+  `awaiting-input`); steers are not checked against their text; never parked (grok can resume a
+  session by id, `-s`/`-r`, but chartroom's park and revive are Claude's only). grok also loads your
+  own Claude hooks and plugins (`~/.claude/settings.json`; `[compat.claude] hooks = false` in
+  `~/.grok/config.toml` turns that off), so a grok worker runs those too.
+- Never `headless:grok` (`grok -p` is not a worker), `tmux:grok` or `cmux:grok`: `new` refuses them.
 
 ## herdr:<agent> (first class)
 

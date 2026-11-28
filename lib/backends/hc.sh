@@ -25,6 +25,8 @@
 # agy reports its state over OSC 7501 as Claude does (verified on agy 1.5.17, hc 0.1.21): working,
 # idle, done, blocked with the dialog's kind and words, and hc counts its turns; it gets no reporting hooks
 # (its permission broker runs before tools), and its brief goes in as `agy -i <brief>` (lib/agents.sh).
+# grok reports over OSC 7501 the same way (hc 0.1.21 names it agent grok and reads its sign-in
+# screen as blocked, kind auth); its brief is its first positional argument, as Claude's is.
 # The terminal's address is recorded and every later call checks it still carries the task's name.
 
 declare -A HC_TURNS=() # watch: each task's hc turn count at the last look
@@ -199,6 +201,10 @@ hc_confirm_brief() { # <id> <text> <events.log offset before launch>
     hc_info "$id"
     [[ "$HC_STATE" == live ]] || return 1
     [[ -z "$want" ]] && hc_took_prompt "$id" "$before" 0 && return 2
+    # grok tells hc it waits (an approval, a question, a folder it does not trust) before any turn
+    # shows: the brief waits behind it, and the prompt is raised now with grok's own words (a watch
+    # that starts later would only ever see it blocked, never the change).
+    if [[ "$agent" == grok && "$HC_STATUS" == blocked ]]; then prompt_sync "$id" "hc: $(hc_agy_what "$id")"; return 3; fi
     # A dialog can come up later than handle_trust looked, or right after the one it answered.
     scr="$(hc_screen "$id" 2>/dev/null || true)"
     if [[ -n "$(screen_prompt "$id" "$agent" "$scr")" ]]; then
@@ -214,6 +220,8 @@ hc_launch() { # <id> <wt> <agent>
   local id="$1" wt="$2" agent="$3" argv=() launcher task tab out t before rc=0
   # (A worker that is not signed in would sit at agy's sign-in screen with its brief unread.)
   if [[ "$agent" == agy ]]; then local why; why="$(agy_login_why)" || die "$why"; fi
+  # (grok signed out would open a browser sign-in on this machine, its brief unread)
+  if [[ "$agent" == grok ]]; then local why; grok_mode_check "$id"; why="$(grok_login_why)" || die "$why"; fi
   hc_clear_stale "$id"; meta_set "$id" hc_launched ""
   # Claude starts under a session id of chartroom's choosing, fresh each dispatch, so a parked
   # worker can be resumed (lib/park.sh).
@@ -413,7 +421,7 @@ hc_watch() { # <id>
   # agy says blocked at its folder trust dialog too, which a launch still under way answers itself
   # (handle_trust raises any it will not answer): until the launch is done that is still starting,
   # so a prompt that follows it is a change the next look sees.
-  [[ "$W" == blocked && "$(meta "$id" hc_launched)" != 1 && "$(backend_agent "$id")" == agy ]] && W=starting
+  [[ "$W" == blocked && "$(meta "$id" hc_launched)" != 1 && "$(backend_agent "$id")" =~ ^(agy|grok)$ ]] && W=starting
   prev="${HST[$id]:-}"; pturn="${HC_TURNS[$id]:-}"
   if [[ "$W" != "$prev" || ( "$W" =~ ^(idle|done)$ && -n "$pturn" && "$HC_TURN" -gt "$pturn" ) ]]; then
     # (Recorded, so the log's account of a prompt ends with it: lib/stuck.sh reads it.)
@@ -423,6 +431,9 @@ hc_watch() { # <id>
         if [[ -n "$HC_TITLE_BLOCKED" ]]; then
           what="$(screen_prompt "$id" "$(backend_agent "$id")" "$(hc_screen "$id" 2>/dev/null || true)")"
           prompt_sync "$id" "${what:-$CODEX_TITLE_WHAT}"
+        elif [[ "$(backend_agent "$id")" == grok ]]; then
+          # (through prompt_sync: a launch may have raised this very prompt already)
+          prompt_sync "$id" "hc: $(hc_agy_what "$id")"
         elif [[ "$(backend_agent "$id")" == agy ]]; then
           # hc carries agy's own words for it: the kind (permission, question) and the dialog's line.
           log_event "$id" agent "awaiting-input: hc: $(hc_agy_what "$id")"
@@ -441,16 +452,16 @@ hc_watch() { # <id>
   HST[$id]="$W"; HC_TURNS[$id]="$HC_TURN"
   return 0
 }
-# hc carries agy's own words for a dialog: its kind (permission, question) and the dialog's line.
+# hc carries agy's (and grok's) own words for a dialog: its kind (permission, question) and the dialog's line.
 hc_agy_what() { # <id>
-  local what
-  what="$(hcx get "$(meta "$1" hc_terminal)" --json 2>/dev/null | jq -r '.status | [(.kind // "prompt"), (.msg // "" | gsub("[\n\t]"; " ") | .[0:160])] | if .[1] == "" then "agy is waiting on a \(.[0])" else "agy is waiting on a \(.[0]): \(.[1])" end' 2>/dev/null || true)"
-  printf '%s' "${what:-agy is waiting on an approval or question prompt}"
+  local what a; a="$(backend_agent "$1")"
+  what="$(hcx get "$(meta "$1" hc_terminal)" --json 2>/dev/null | jq -r --arg a "$a" '.status | [(.kind // "prompt"), (.msg // "" | gsub("[\n\t]"; " ") | .[0:160])] | if .[1] == "" then "\($a) is waiting on a \(.[0])" else "\($a) is waiting on a \(.[0]): \(.[1])" end' 2>/dev/null || true)"
+  printf '%s' "${what:-$a is waiting on an approval or question prompt}"
 }
 # On a device (a guest home: lib/guest.sh), where no watch runs: what hc_watch says of an agy
 # worker, written to its log as the lines Claude's and Codex's hooks write there, so the relay
 # carries them to the brain, whose watch wakes on them: `agent: awaiting-input: hc: agy is waiting
-# on a <kind>: <its words>` and `agent: turn-ended` for a turn that ends unreported. agy has no
+# on a <kind>: <its words>` and `agent: turn-ended` for a turn that ends unreported (grok's too). agy has no
 # hooks to say either. Its last look is kept beside its log (each look is a new process).
 hc_agy_look() { # <id>
   local id="$1" W f prev="" pturn=""

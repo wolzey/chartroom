@@ -1,13 +1,13 @@
 # The crew view and the Herdr panel
 
-Optional views of the crew outside the dashboard: a band and pane inside the XO's own Claude Code (or pi) session, and a side panel for the Herdr app.
+Optional views of the crew beside the [app](app.md) and `chartroom board`: a band and pane inside the XO's own Claude Code (or pi) session, and a side panel for the Herdr app.
 
 ## A live crew view in Claude Code (and pi)
 
 `mods/crew-view` is a Claude Code mod (verified on Claude Code 2.1.302, the todo list on 2.1.303) that draws the crew inside the XO's
 session: a one-line band above the prompt (`⚓ 🏃 3 · 🙋 2 [shop] 108a, [billing] 9c1e · ✅ 1`,
 one emoji per lane, every item that needs you labelled with its project) and a `/crew` pane that
-browses the board's items, the dashboard inside Claude Code. Tab or the arrows walk the items,
+browses the board's items inside Claude Code. Tab or the arrows walk the items,
 Enter opens one: its state, the commander's intent, the last events, the report's summary or the
 outcome, PRs, artifacts and where the worker runs. From there, `c` puts `/continue <id>` in the
 prompt (Enter runs it), `y` copies the id, `p` a PR URL, `a` an artifact, `r` reads the report,

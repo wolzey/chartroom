@@ -1,13 +1,13 @@
 // Pure helpers for chartroom-panel: no `$`, so the tests can call them directly.
 //
 // The heart of the mod is parseBoard: the panel shows exactly what `chartroom board` and the
-// dashboard show, from the same source (`chartroom board --json`, built by lib/dashboard/lanes.jq):
+// app shows, from the same source (`chartroom board --json`, built by lib/lanes.jq):
 // the same five lanes, in the same order, under the same names, each card with the board's reason.
 // The panel decides nothing about which lane a task belongs in.
 
 import type { Card, LaneKey, Snapshot, Tone } from '../types'
 
-/** The board's lanes, in its order and under its names (`chartroom board`, the dashboard page). */
+/** The board's lanes, in its order and under its names (`chartroom board`). */
 export const LANES: readonly { key: LaneKey; name: string }[] = [
   { key: 'needs_you', name: 'Needs you' },
   { key: 'in_progress', name: 'In progress' },

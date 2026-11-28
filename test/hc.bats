@@ -395,6 +395,117 @@ agy_trust() {
   [ "$(jq -r '.agents.agy.signed_in' <<<"$output")" = true ]
 }
 
+@test "hc:grok: only when named; the brief as its first prompt with --trust; a guard outside the worktree for chartroom's workers alone; steer, peek, stop, close" {
+  use_fake grok
+  core_up
+  export FAKE_HC_NO_HOOK=1 # (grok gets no prompt hook: hc reads its state itself)
+  # never picked on its own: no default order names it, so a machine with grok alone picks nothing
+  rm -f "$BIN/claude"
+  run cr doctor --json
+  [ "$(jq -r '.backends[]|select(.backend=="hc:grok").available' <<<"$output")" = true ]
+  [ "$(jq -r '.order | map(select(endswith(":grok"))) | length' <<<"$output")" = 0 ]
+  [ "$(jq -r .auto <<<"$output")" = null ]
+  [ "$(jq -r '.agents.grok.automatic' <<<"$output")" = false ]
+  use_fake claude
+  id="$(new_task --backend hc:grok --model grok-fake)"
+  cr set "$id" effort=high permission=acceptEdits >/dev/null
+  run cr dispatch "$id"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"hc grok worker running"* ]]
+  # grok's own argv: model, effort, mode, --trust (its own worktree), then the brief
+  l="$CHARTROOM_HOME/tasks/$id/launch.sh"
+  grep -qF -- "--no-auto-update -m grok-fake --reasoning-effort high --permission-mode acceptEdits --trust \"\$@\"" "$l"
+  # no --add-dir: grok 1.0.92 refuses it and the session never starts
+  ! grep -q -- '--add-dir' "$l"
+  refute grep -q -- "--settings\|notify=\|--no-daemon\| -i " "$l"
+  [ "$(term t1 '.argv[2]')" = "Read the brief at $CHARTROOM_HOME/tasks/$id/brief.md and follow it exactly. Your task id is $id." ]
+  events "$id" | grep -q "note: the agent took a prompt, but its text could not be checked (grok has no prompt hook)"
+  # the guard: one file in grok's own hooks folder, nothing in the worktree
+  g="$HOME/.grok/hooks/chartroom-guard.json"
+  [ "$(jq -r '.hooks.PreToolUse[0].matcher' "$g")" = run_terminal_command ]
+  refute ls -A "$(meta_of "$id" worktree)/.grok" 2>/dev/null
+  c="$(jq -r '.hooks.PreToolUse[0].hooks[0].command' "$g")"
+  kill_call='{"hookEventName":"pre_tool_use","toolName":"run_terminal_command","toolInput":{"command":"pkill -f node"}}'
+  # in chartroom's worker (the launcher exports CHARTROOM_TASK) a pattern kill is denied, in grok's words
+  out="$(CHARTROOM_TASK="$id" sh -c "$c" <<<"$kill_call")"
+  [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$out")" = deny ]
+  events "$id" | grep -q "note: blocked a pattern kill: pkill -f node"
+  [ -z "$(CHARTROOM_TASK="$id" sh -c "$c" <<<'{"toolName":"run_terminal_command","toolInput":{"command":"kill 4242"}}')" ]
+  # the commander's own grok sessions (no CHARTROOM_TASK) are untouched
+  [ -z "$(env -u CHARTROOM_TASK sh -c "$c" <<<"$kill_call")" ]
+  # steer types into it live, taken but not checked against its text
+  run cr steer "$id" "also list the tests folder"
+  [ "$status" -eq 0 ]
+  [[ "$output" == "submitted, not verified"*"grok: no prompt hook"* ]]
+  hc_calls | grep -qxF "send t1 --json also list the tests folder"
+  run cr peek "$id"
+  [[ "$output" == *"== terminal (recent)"* ]]
+  cr stop "$id" >/dev/null
+  hc_calls | grep -qx "interrupt t1 --json"
+  run cr close "$id"
+  [ "$status" -eq 0 ]
+  hc_calls | grep -qx "kill t1"
+  [ ! -f "$FAKE_HC_DIR/terms/t1.json" ]
+}
+
+@test "hc:grok: its prompts wake with grok's words and are never typed into; signed out it never starts; never headless; doctor says why" {
+  use_fake grok
+  core_up
+  export FAKE_HC_NO_HOOK=1
+  run cr doctor
+  [[ "$output" == *"grok:     1.0.92-fake (fake) at $BIN/grok, signed in; runs as hc:grok, herdr:grok, node"*"only when a task names it"*"no permission cards"*"never parked"* ]]
+  id="$(new_task --backend hc:grok)"
+  FAKE_HC_STATUS=working cr dispatch "$id" >/dev/null
+  # blocked at an approval: hc carries grok's kind and words, and the XO is woken with them
+  watch_after set_term t1 '.status = {app: "grok", state: "blocked", kind: "permission", msg: "Run ls -la?"}'
+  grep -q "^\[$id\] .*awaiting-input: hc: grok is waiting on a permission: Run ls -la?" "$BATS_TEST_TMPDIR/wake"
+  : >"$FAKE_HC_DIR/calls.log"
+  run cr steer "$id" "carry on"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"blocked at a dialog"*"chartroom attach $id"* ]]
+  refute grep -q "^send" "$FAKE_HC_DIR/calls.log"
+  # answered, then the turn ends with no report: that wakes too
+  set_term t1 '.status = {app: "grok", state: "working"}'
+  watch_after set_term t1 '.status = {app: "grok", state: "done"} | .turn += 1'
+  grep -q "^\[$id\] .*hc: agent stopped its turn without reporting" "$BATS_TEST_TMPDIR/wake"
+  # blocked before any turn (a dialog grok raises at its start): the launch raises it with grok's
+  # words, the brief waits behind it, and a watch that starts later does not raise it twice
+  id3="$(new_task --backend hc:grok)"
+  FAKE_HC_HOLD='{"app":"grok","state":"blocked","kind":"question","msg":"Trust this folder?"}' run cr dispatch "$id3"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"hc grok worker waiting at a startup dialog"* ]]
+  watch_after true
+  [ "$(events "$id3" | grep -c "agent: awaiting-input: hc: grok is waiting on a question: Trust this folder?$")" = 1 ]
+  grep -q "^\[$id3\] .*awaiting-input: hc: grok is waiting on a question: Trust this folder?" "$BATS_TEST_TMPDIR/wake"
+  # signed out: doctor says what to run, and a dispatch refuses before any terminal (grok would open a browser sign-in)
+  FAKE_GROK_SIGNED_OUT=1 run cr doctor --json
+  [ "$(jq -r '.backends[]|select(.backend=="hc:grok").available' <<<"$output")" = false ]
+  [ "$(jq -r '.agents.grok.why' <<<"$output")" = "grok is not signed in here (run grok login in a terminal on this machine and finish the browser sign-in, or grok login --device-auth over ssh)" ]
+  id2="$(new_task --backend hc:grok)"
+  : >"$FAKE_HC_DIR/calls.log"
+  FAKE_GROK_SIGNED_OUT=1 run cr dispatch "$id2"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"grok is not signed in here"* ]]
+  refute grep -q "^run" "$FAKE_HC_DIR/calls.log"
+  # never headless, tmux or cmux
+  for b in headless:grok tmux:grok cmux:grok; do
+    run cr new --project "$PROJECT" --title x --backend "$b"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"grok runs only as a full session"* ]]
+  done
+  # a mode grok does not have stops the dispatch before any terminal starts
+  id4="$(new_task --backend hc:grok --permission acceptEdit)"
+  : >"$FAKE_HC_DIR/calls.log"
+  run cr dispatch "$id4"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"grok has no permission mode 'acceptEdit'"* ]]
+  refute grep -q "^run" "$FAKE_HC_DIR/calls.log"
+  rm -f "$BIN/grok"
+  run cr doctor --json
+  [ "$(jq -r '.backends[]|select(.backend=="hc:grok").reason' <<<"$output")" = "grok not on PATH" ]
+  [ "$(jq -r '.agents.grok.path' <<<"$output")" = null ]
+}
+
 @test "default order: every agent's full sessions before any headless run, so codex without claude runs in hc" {
   use_fake codex
   rm -f "$BIN/claude"

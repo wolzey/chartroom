@@ -148,7 +148,7 @@ state() { # waits for both homes' first snapshot
   start --no-auth
   state
   [ "$(get "http://127.0.0.1:$PORT/app/src/model.js")" = 200 ]
-  [ "$(get "http://127.0.0.1:$PORT/shared/eventfmt.js")" = 200 ]
+  [ "$(get "http://127.0.0.1:$PORT/app/shared/eventfmt.js")" = 200 ]
   [ "$(get --path-as-is "http://127.0.0.1:$PORT/app/../lib/app/server.py")" = 404 ]
   [ "$(get "http://127.0.0.1:$PORT/app/%2e%2e/lib/app/server.py")" = 404 ]
   [ "$(get "http://127.0.0.1:$PORT/shared/server.py")" = 404 ]
@@ -167,12 +167,11 @@ state() { # waits for both homes' first snapshot
   # a copy of the app under a root of its own, so a file of it can change
   mkdir -p "$BATS_TEST_TMPDIR/root/lib"
   cp -R "$REPO_ROOT/app" "$BATS_TEST_TMPDIR/root/app"
-  cp -R "$REPO_ROOT/lib/dashboard" "$BATS_TEST_TMPDIR/root/lib/dashboard"
   run "$PY" - "$REPO_ROOT/lib/app/server.py" "$BATS_TEST_TMPDIR/root" <<'PYEOF'
 import importlib.util, os, sys
 spec = importlib.util.spec_from_file_location("server", sys.argv[1]); s = importlib.util.module_from_spec(spec); spec.loader.exec_module(s)
 app = os.path.join(sys.argv[2], "app")
-p = s.Page(app, os.path.join(sys.argv[2], "lib", "dashboard"))
+p = s.Page(app)
 a = p.rev(); f = os.path.join(app, "src", "model.js")
 assert len(a) == 12 and p.rev() == a
 os.utime(f, (1, 1)); assert p.rev() == a, "a new time alone is the same page"

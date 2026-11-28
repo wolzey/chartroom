@@ -4,7 +4,7 @@
 const assert = require("assert");
 const { test, run } = require("./harness");
 const M = require("../../app/src/model.js");
-const EF = require("../../lib/dashboard/eventfmt.js");
+const EF = require("../../app/shared/eventfmt.js");
 
 const ago = (s) => new Date(Date.now() - s * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
 const state = {
@@ -447,6 +447,97 @@ test("pageStale: only when the server says another page is installed", () => {
   assert.strictEqual(M.pageStale("aaa", { page: "bbb" }), true);
   assert.deepStrictEqual([M.pageStale("aaa", { page: "aaa" }), M.pageStale("aaa", { page: "bbb", offline: "x" }), M.pageStale("aaa", {}), M.pageStale("aaa", null), M.pageStale(null, { page: "bbb" })],
     [false, false, false, false, false]);
+});
+
+// ---------------------------------------------------------------- usage
+const NOW = Date.parse("2026-03-02T12:00:00Z");
+const iso = (s) => new Date(NOW + s * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+const win = (label, used, o) => Object.assign({ id: label, label, used_pct: used, left_pct: used == null ? null : 100 - used, resets_at: iso(3 * 3600 + 60), active: true, state: "ok" }, o || {});
+const urow = (agent, machine, o) => Object.assign({ schema: 1, agent, machine, machines: [machine], local: machine === "desk", status: "ok", state: "ok",
+  plan: "max", account: "acct #0001", sampled_at: iso(-120), windows: [win("5h", 40)], live_workers: 0, per_machine: false }, o || {});
+const uhome = (name, usage, tasks, machine) => ({ name, snapshot: { machine: machine || "desk", usage, tasks: tasks || [] } });
+
+test("usageRows: one agent read the same on two machines is one row; readings that differ split by machine", () => {
+  const same = M.usageRows({ homes: [uhome("a", [urow("claude", "desk"), urow("claude", "mini")])] }, NOW);
+  assert.deepStrictEqual(same.map((r) => [r.agent, r.machines, r.per_machine]), [["claude", ["desk", "mini"], false]]);
+  const split = M.usageRows({ homes: [uhome("a", [urow("claude", "desk"), urow("claude", "mini", { windows: [win("5h", 90, { state: "near" })], state: "near" })])] }, NOW);
+  assert.deepStrictEqual(split.map((r) => [r.machine, r.per_machine, r.state]), [["desk", true, "ok"], ["mini", true, "near"]]);
+});
+
+test("usageRows: machines that read the same share a row even when another machine reads differently", () => {
+  const near = { windows: [win("5h", 90, { state: "near" })], state: "near" };
+  const rows = M.usageRows({ homes: [uhome("a", [urow("claude", "desk", near), urow("claude", "laptop"), urow("claude", "mini", near)])] }, NOW);
+  assert.deepStrictEqual(rows.map((r) => [r.machines, r.per_machine, r.state]), [[["desk", "mini"], true, "near"], [["laptop"], true, "ok"]]);
+  assert.strictEqual(M.usageView(rows[0], NOW).where, "desk, mini");
+  assert.notStrictEqual(M.usageView(rows[0], NOW).key, M.usageView(rows[1], NOW).key);
+  assert.strictEqual(M.usageSummary(rows).text, "claude on desk and mini near the limit");
+});
+
+test("usageRows: one account's reset read a second or minutes apart on two machines is still the same reading", () => {
+  const a = urow("claude", "desk", { windows: [win("7d", 70, { resets_at: "2026-03-04T10:00:00Z" })] });
+  const b = urow("claude", "mini", { windows: [win("7d", 70, { resets_at: "2026-03-04T09:59:59Z" })] });
+  const c = urow("agy", "desk", { windows: [win("5h", 0, { resets_at: "2026-03-02T16:57:26Z" })] });
+  const d = urow("agy", "mini", { windows: [win("5h", 0, { resets_at: "2026-03-02T16:53:34Z" })] });
+  const rows = M.usageRows({ homes: [uhome("a", [a, b, c, d])] }, NOW);
+  assert.deepStrictEqual(rows.map((r) => [r.agent, r.machines, r.per_machine]), [["claude", ["desk", "mini"], false], ["agy", ["desk", "mini"], false]]);
+});
+
+test("usageRows: the same reading in several homes is shown once, the newest; a live limit hit is never hidden by a fresher ok", () => {
+  const old = urow("codex", "desk", { sampled_at: iso(-3600), windows: [win("5h", 10)] }), fresh = urow("codex", "desk", { sampled_at: iso(-60), windows: [win("5h", 55)] });
+  const rows = M.usageRows({ homes: [uhome("a", [old]), uhome("b", [fresh]), uhome("c", null), { name: "d", snapshot: null }] }, NOW);
+  assert.strictEqual(rows.length, 1);
+  assert.strictEqual(rows[0].windows[0].used_pct, 55);
+  const hit = urow("codex", "desk", { sampled_at: iso(-3600), state: "out", hit_active: true, out_resets_at: iso(1800) });
+  assert.strictEqual(M.usageRows({ homes: [uhome("a", [hit]), uhome("b", [fresh])] }, NOW)[0].state, "out");
+  // a hit whose reset has passed no longer wins
+  const over = Object.assign({}, hit, { out_resets_at: iso(-10) });
+  assert.strictEqual(M.usageRows({ homes: [uhome("a", [over]), uhome("b", [fresh])] }, NOW)[0].state, "ok");
+});
+
+test("usageRows: live workers are every home's dispatched tasks with a session open, by agent and machine; the CLI's order", () => {
+  const task = (id, backend, o) => Object.assign({ id, backend, dispatched: iso(-600), state: "working", live: "working", closed: null }, o || {});
+  const rows = M.usageRows({ homes: [
+    uhome("a", [urow("codex", "desk"), urow("claude", "desk"), urow("claude", "mini", { local: false, plan: "pro" })],
+      [task("t1", "hc:claude"), task("t2", "hc:claude", { machine: "mini" }), task("t3", "herdr-codex"), task("t4", "hc:claude", { state: "review" }),
+       task("t5", "hc:claude", { closed: iso(-5) }), task("t6", "hc:claude", { dispatched: null }), task("t7", "headless"),
+       task("t9", "hc:claude", { live: "parked" }), task("t10", "hc:claude", { live: "gone", state: "stopped-silent" }), task("t11", "hc:claude", { live: "blocked", state: "decision" })]),
+    uhome("b", [urow("claude", "desk")], [task("t8", "node:claude")]),
+  ] }, NOW);
+  // (t9 parked and t10 gone use nothing; t11 waits on its open session at a decision)
+  assert.deepStrictEqual(rows.map((r) => [r.agent, r.machine, r.live_workers]), [["claude", "desk", 3], ["claude", "mini", 1], ["codex", "desk", 1]]);
+});
+
+test("usageView: used, left and the reset per window; out and near marked; a model-only window is information, never out", () => {
+  const r = urow("claude", "desk", { state: "near", windows: [win("5h", 92, { state: "near" }), win("7d opus", 100, { state: "out", scoped: true, left_pct: 0 }), win("7d", 30, { resets_at: iso(2 * 86400 + 4 * 3600 + 30) })] });
+  const v = M.usageView(r, NOW);
+  assert.strictEqual(v.state, "near");
+  assert.deepStrictEqual(v.windows.map((w) => [w.label, w.level, w.usedText, w.leftText, w.reset]),
+    [["5h", "near", "92% used", "8% left", "resets in 3h 1m"], ["7d opus", "info", "100% used", "0% left", "resets in 3h 1m"], ["7d", "ok", "30% used", "70% left", "resets in 2d 4h"]]);
+  assert.strictEqual(v.plan, "max · acct #0001");
+  assert.strictEqual(v.age, "read 2m ago");
+  assert.strictEqual(v.note, null);
+});
+
+test("usageView: a reset that passed, an unknown reset, a window not started, a limit hit, a spend cap, an unknown agent, a stale reading", () => {
+  const w = M.usageView(urow("codex", "desk", { windows: [win("5h", 20, { reset_passed: true }), win("7d", 5, { resets_at: null }), win("1d", 0, { resets_at: null, active: false })] }), NOW);
+  assert.deepStrictEqual(w.windows.map((x) => x.reset), ["reset; waiting for a new reading", "reset not known", "not started"]);
+  assert.deepStrictEqual(w.windows.map((x) => x.passed), [true, false, false]);
+  assert.strictEqual(M.usageView(urow("claude", "desk", { state: "out", hit_active: true, out_resets_at: iso(5400) }), NOW).note, "A worker hit the limit; it resets in 1h 30m");
+  assert.strictEqual(M.usageView(urow("codex", "desk", { state: "out", limit_reached: true }), NOW).note, "codex allows no more use for now");
+  const u = M.usageView(urow("agy", "desk", { status: "unknown", state: "unknown", windows: [], reason: "agy not on PATH", plan: null, account: null, sampled_at: null }), NOW);
+  assert.deepStrictEqual([u.stateText, u.note, u.plan, u.age], ["Not known", "agy not on PATH", "", "no reading yet"]);
+  const s = M.usageView(urow("claude", "mini", { stale: true, sampled_at: iso(-7200), per_machine: true }), NOW);
+  assert.deepStrictEqual([s.stale, s.age, s.where], [true, "read 2h ago", "mini"]);
+  assert.strictEqual(M.usageView(urow("claude", "desk", { machines: ["desk", "mini"] }), NOW).where, "desk, mini");
+});
+
+test("usageSummary: who is out, who is near (by machine when split), else all within limits", () => {
+  assert.deepStrictEqual(M.usageSummary([]), { level: "ok", text: "No usage reading yet" });
+  assert.deepStrictEqual(M.usageSummary([urow("claude", "desk")]), { level: "ok", text: "Every agent is within its limits" });
+  assert.deepStrictEqual(M.usageSummary([urow("claude", "desk", { state: "near" }), urow("codex", "mini", { state: "out", per_machine: true })]),
+    { level: "out", text: "codex on mini out; claude near the limit" });
+  assert.strictEqual(M.untilText(iso(-5), NOW), "now");
+  assert.strictEqual(M.untilText(iso(20), NOW), "in 1m");
 });
 
 run();
